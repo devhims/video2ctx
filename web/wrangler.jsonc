@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "youtube-intelligence-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "PLATFORM",
+      "service": "youtube-intelligence-platform"
+    }
+  ],
+  "vars": {
+    "PLATFORM_API_BASE_URL": "http://localhost:8787"
+  },
+  "observability": { "enabled": true }
+}

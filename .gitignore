@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.open-next/
+.wrangler/
+dist/
+*.tsbuildinfo
+*.cpuprofile
+.DS_Store
+.env*
+!.env.example
+.dev.vars*
+!.dev.vars.example

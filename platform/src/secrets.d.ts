@@ -1,0 +1,11 @@
+interface Env {
+  BETTER_AUTH_SECRET: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  YOUTUBE_OAUTH_ENCRYPTION_KEY: string;
+  TURNSTILE_SECRET: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PRO_PRICE_ID: string;
+  CAPTION_API_TOKEN: string;
+}

@@ -1,0 +1,11 @@
+{
+  "name": "youtube-intelligence-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:web": "npm --prefix web run dev",
+    "dev:platform": "npm --prefix platform run dev",
+    "build": "npm --prefix platform run build && npm --prefix web run build",
+    "test": "npm --prefix platform run test"
+  }
+}

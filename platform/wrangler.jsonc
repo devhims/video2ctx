@@ -1,0 +1,104 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "youtube-intelligence-platform",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_ORIGIN": "http://localhost:3000",
+    "AUTH_BASE_URL": "http://localhost:3000/api/platform",
+    "EMAIL_FROM": "research@example.com",
+    "AI_GATEWAY_ID": "youtube-intelligence",
+    "PUBLIC_SEARCH_INSTANCE": "youtube-public",
+    "ADMIN_EMAILS": "",
+    "FREE_MONTHLY_CREDITS": "100",
+    "PRO_MONTHLY_CREDITS": "2000",
+    "FREE_PROJECT_LIMIT": "3",
+    "FREE_MONITOR_LIMIT": "1",
+    "FREE_DAILY_IMPORTS": "10",
+    "PRO_PROJECT_LIMIT": "100",
+    "PRO_MONITOR_LIMIT": "50",
+    "PRO_DAILY_IMPORTS": "200"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "youtube-intelligence"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RESEARCH",
+      "bucket_name": "youtube-intelligence-private"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  "ratelimits": [
+    {
+      "name": "PUBLIC_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
+  "ai_search_namespaces": [
+    {
+      "binding": "AI_SEARCH",
+      "namespace": "default",
+      "remote": true
+    }
+  ],
+  "services": [
+    {
+      "binding": "EXTRACTOR",
+      "service": "youtube-caption-extractor-api"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "TASKS", "queue": "youtube-intelligence-tasks" },
+      { "binding": "EMAIL_TASKS", "queue": "youtube-intelligence-email" }
+    ],
+    "consumers": [
+      {
+        "queue": "youtube-intelligence-tasks",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "dead_letter_queue": "youtube-intelligence-tasks-dlq",
+        "max_retries": 5
+      },
+      {
+        "queue": "youtube-intelligence-email",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "dead_letter_queue": "youtube-intelligence-email-dlq",
+        "max_retries": 5
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "binding": "IMPORT_WORKFLOW",
+      "name": "youtube-import-workflow",
+      "class_name": "ImportWorkflow"
+    },
+    {
+      "binding": "MONITOR_WORKFLOW",
+      "name": "youtube-monitor-workflow",
+      "class_name": "MonitorWorkflow"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "remote": true
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *", "0 8 * * *", "0 8 * * 1"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
