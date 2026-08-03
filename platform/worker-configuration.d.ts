@@ -14,7 +14,7 @@ interface __BaseEnv_Env {
 	APP_ORIGIN: "http://localhost:3000";
 	AUTH_BASE_URL: "http://localhost:3000/api/platform";
 	EMAIL_FROM: "research@example.com";
-	AI_GATEWAY_ID: "youtube-intelligence";
+	AI_GATEWAY_ID: "all-things-youtube";
 	PUBLIC_SEARCH_INSTANCE: "youtube-public";
 	ADMIN_EMAILS: "";
 	FREE_MONTHLY_CREDITS: "100";

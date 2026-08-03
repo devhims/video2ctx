@@ -1,5 +1,5 @@
 {
-  "name": "youtube-intelligence-platform",
+  "name": "all-things-youtube-platform",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,6 +13,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
+    "@scalar/hono-api-reference": "^0.11.12",
     "better-auth": "^1.4.15",
     "he": "^1.2.0",
     "hono": "^4.12.19",
@@ -23,6 +24,7 @@
     "@cloudflare/vitest-pool-workers": "^0.9.12",
     "@cloudflare/workers-types": "^5.20260731.1",
     "@types/he": "^1.2.0",
+    "@types/node": "^25.9.5",
     "typescript": "^6.0.3",
     "vitest": "^3.2.4",
     "wrangler": "^4.68.1"

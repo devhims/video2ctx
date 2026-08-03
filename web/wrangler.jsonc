@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "youtube-intelligence-web",
+  "name": "all-things-youtube-web",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
@@ -11,7 +11,7 @@
   "services": [
     {
       "binding": "PLATFORM",
-      "service": "youtube-intelligence-platform"
+      "service": "all-things-youtube-platform"
     }
   ],
   "vars": {

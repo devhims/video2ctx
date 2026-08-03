@@ -88,11 +88,15 @@ export interface SearchFilters {
 export interface SearchResponse extends ContinuationPage {
   query: string;
   results: SearchResult[];
+  videos: VideoSummary[];
+  channels: ChannelSummary[];
+  playlists: PlaylistSummary[];
   meta: SourceMetadata;
 }
 
 export interface BrowseOptions {
   browseId?: string;
+  params?: string;
   categoryId?: string;
   region?: string;
   language?: string;
@@ -100,9 +104,13 @@ export interface BrowseOptions {
 }
 
 export interface BrowseResponse extends ContinuationPage {
+  category?: string;
   browseId?: string;
   title?: string;
   results: SearchResult[];
+  videos: VideoSummary[];
+  channels: ChannelSummary[];
+  playlists: PlaylistSummary[];
   meta: SourceMetadata;
 }
 
@@ -225,6 +233,16 @@ export interface Video extends VideoSummary {
   };
   storyboards: Storyboard[];
   endscreen: EndscreenElement[];
+  meta: SourceMetadata;
+}
+
+export interface VideoSignals {
+  videoId: string;
+  publishDate?: string;
+  publishedTimeText?: string;
+  viewCount?: number;
+  commentCount?: number;
+  likeCount?: number;
   meta: SourceMetadata;
 }
 

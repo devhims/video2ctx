@@ -1,0 +1,117 @@
+import { readFileSync } from 'node:fs';
+import { Hono } from 'hono';
+import { documentationApp } from '../src/docs';
+import { openApiDocument } from '../src/openapi';
+
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head']);
+const mountedApp = new Hono().route('/', documentationApp);
+
+describe('OpenAPI and Scalar documentation', () => {
+  test('serves the OpenAPI 3.1 document', async () => {
+    const response = await mountedApp.request('/openapi.json');
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    await expect(response.json()).resolves.toMatchObject({
+      openapi: '3.1.0',
+      info: { title: 'all-things-youtube API' },
+      servers: [{ url: '/' }],
+    });
+  });
+
+  test('publishes the Next.js proxy base path when forwarded by the web app', async () => {
+    const response = await mountedApp.request('/openapi.json', {
+      headers: { 'x-forwarded-prefix': '/api/platform' },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      servers: [{ url: '/api/platform' }],
+    });
+  });
+
+  test('serves Scalar configured to load the relative contract URL', async () => {
+    const response = await mountedApp.request('/docs');
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(html).toContain('all-things-youtube API Reference');
+    expect(html).toContain('./openapi.json');
+  });
+
+  test('documents every concrete HTTP route declared by the Hono app', () => {
+    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const routePattern = /app\.(get|post|put|patch|delete)\(\s*['"]([^'"]+)['"]/g;
+    const declared = [...source.matchAll(routePattern)].map(([, method, route]) => ({
+      method: method!,
+      path: route!.replace(/:([A-Za-z0-9_]+)/g, '{$1}'),
+    }));
+    const paths = openApiDocument.paths as Record<string, Record<string, unknown>>;
+
+    expect(source).toContain("app.route('/', documentationApp)");
+    expect(declared.length).toBeGreaterThan(35);
+    for (const route of declared) {
+      expect(paths[route.path]?.[route.method], `${route.method.toUpperCase()} ${route.path}`).toBeDefined();
+    }
+  });
+
+  test('uses unique operation IDs and resolvable local component references', () => {
+    const paths = openApiDocument.paths as Record<string, Record<string, unknown>>;
+    const operationIds = Object.values(paths).flatMap((pathItem) =>
+      Object.entries(pathItem)
+        .filter(([method]) => HTTP_METHODS.has(method))
+        .map(([, operation]) => (operation as { operationId?: string }).operationId),
+    );
+    expect(operationIds.every(Boolean)).toBe(true);
+    expect(new Set(operationIds).size).toBe(operationIds.length);
+
+    const references: string[] = [];
+    walk(openApiDocument, (value) => {
+      if ('$ref' in value && typeof value.$ref === 'string') references.push(value.$ref);
+    });
+    expect(references.length).toBeGreaterThan(30);
+    for (const reference of references) {
+      expect(reference).toMatch(/^#\/components\/(schemas|responses)\/[A-Za-z0-9]+$/);
+      const parts = reference.slice(2).split('/');
+      let target: unknown = openApiDocument;
+      for (const part of parts) target = (target as Record<string, unknown>)[part];
+      expect(target, reference).toBeDefined();
+    }
+  });
+
+  test('documents categorized and paginated YouTube search responses', () => {
+    const searchOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
+      ['/v1/search']!.get;
+    const parameterNames = searchOperation.parameters.map((parameter: { name: string }) => parameter.name);
+    const searchSchema = (openApiDocument.components.schemas as Record<string, any>).SearchResponse;
+
+    expect(parameterNames).toContain('continuation');
+    expect(searchSchema.required).toEqual(expect.arrayContaining([
+      'query', 'results', 'videos', 'channels', 'playlists', 'meta',
+    ]));
+    expect(searchSchema.properties.videos.items.$ref).toBe('#/components/schemas/VideoSummary');
+    expect(searchSchema.properties.channels.items.$ref).toBe('#/components/schemas/ChannelSummary');
+    expect(searchSchema.properties.playlists.items.$ref).toBe('#/components/schemas/PlaylistSummary');
+  });
+
+  test('classifies the universal input resolver as an internal UI helper', () => {
+    const operation = (openApiDocument.paths as Record<string, Record<string, any>>)
+      ['/v1/resolve']!.post;
+
+    expect(operation.tags).toEqual(['UI Helpers']);
+    expect(operation['x-internal']).toBe(true);
+    expect(operation.description).toContain('not a primary public consumer API');
+  });
+});
+
+function walk(value: unknown, visit: (record: Record<string, unknown>) => void): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) walk(item, visit);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  visit(record);
+  for (const item of Object.values(record)) walk(item, visit);
+}

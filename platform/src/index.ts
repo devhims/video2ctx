@@ -17,10 +17,13 @@ import { disconnectYoutube, youtubeConnectUrl, youtubeOAuthCallback } from './li
 import { createCheckout, processStripeWebhook } from './lib/billing';
 import { queueDigests, unsubscribe } from './lib/digests';
 import { handleQueue } from './queues';
+import { researchTrendTopic } from './lib/trends';
+import { generateTrendPlan, normalizeTrendPlanSignals } from './lib/trend-plan';
+import { documentationApp } from './docs';
 export { ImportWorkflow, MonitorWorkflow } from './workflows';
 
 type App = { Bindings: Env; Variables: AppVariables };
-const app = new Hono<App>();
+export const app = new Hono<App>();
 
 app.use('*', async (c, next) => {
   c.set('requestId', c.req.header('cf-ray') ?? crypto.randomUUID());
@@ -29,6 +32,8 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   await next();
 });
+
+app.route('/', documentationApp);
 
 app.use('/api/auth/*', cors({
   origin: (origin, c) => origin === c.env.APP_ORIGIN ? origin : c.env.APP_ORIGIN,
@@ -59,7 +64,7 @@ app.use('/v1/*', async (c, next) => {
 });
 
 app.get('/', (c) => c.json({
-  service: 'youtube-intelligence-platform', version: 'v1', status: 'ok',
+  service: 'all-things-youtube-platform', version: 'v1', status: 'ok',
   capabilities: ['discover','inspect','save','search','compare','monitor','synthesize'],
 }));
 app.get('/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
@@ -89,6 +94,7 @@ app.get('/v1/search', async (c) => {
       sort: sort(c.req.query('sort')),
       captionsOnly: c.req.query('captions') === 'true' || undefined,
       live: live(c.req.query('live')),
+      continuation: text(c.req.query('continuation'), 10_000) || undefined,
     };
     return c.json(await searchYouTube(c.env, query, filters));
   }
@@ -109,6 +115,37 @@ app.get('/v1/browse', async (c) => {
     language: text(c.req.query('language'), 16) || undefined,
     continuation: text(c.req.query('continuation'), 4000) || undefined,
   }));
+});
+
+app.get('/v1/trends', async (c) => {
+  await enforcePublicRate(c);
+  const query = text(c.req.query('q'), 200);
+  if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A topic is required.');
+  const requestedLimit = Number(c.req.query('limit') ?? 20);
+  const includeAiInsights = c.req.query('insights') !== 'deterministic';
+  return c.json(await researchTrendTopic(
+    c.env,
+    query,
+    Number.isFinite(requestedLimit) ? requestedLimit : 20,
+    includeAiInsights
+  ));
+});
+
+app.post('/v1/trends/plan', async (c) => {
+  const user = requireUser(c);
+  const payload = await body<{ report?: unknown }>(c.req.raw);
+  const signals = normalizeTrendPlanSignals(payload.report);
+  const operationId = crypto.randomUUID();
+  const reserved = 32;
+  await reserveCredits(c.env, user.id, operationId, reserved, { mode: 'trend-plan', topic: signals.query });
+  try {
+    const plan = await generateTrendPlan(c.env, signals, operationId);
+    await settleCredits(c.env, user.id, operationId, reserved, 26, 0);
+    return c.json({ ...plan, operationId });
+  } catch (error) {
+    await releaseCredits(c.env, user.id, operationId, reserved);
+    throw error;
+  }
 });
 
 app.get('/v1/videos/:id', async (c) => c.json(await getVideo(c.env, asId(c.req.param('id')))));

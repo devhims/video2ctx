@@ -1,6 +1,11 @@
 import he from 'he';
 import striptags from 'striptags';
 import {
+  normalizeBrowseCategory,
+  normalizeBrowseLanguage,
+  normalizeBrowseRegion,
+} from './browse-contract';
+import {
   AllCommentOptions,
   Availability,
   BrowseOptions,
@@ -28,6 +33,7 @@ import {
   TranscriptSegment,
   TranslationLanguage,
   Video,
+  VideoSignals,
   VideoSummary,
   YouTubeClientError,
   YouTubeClientOptions,
@@ -108,6 +114,39 @@ const PLAYER_PROFILES: ClientProfile[] = [
 
 const API_ROOT = 'https://youtubei.googleapis.com/youtubei/v1';
 
+const BROWSE_DESTINATIONS: Record<string, { category: string; browseId: string }> = {
+  music: { category: 'music', browseId: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ' },
+  news: { category: 'news', browseId: 'UCYfdidRxbB8Qhf0Nx7ioOYw' },
+  sports: { category: 'sports', browseId: 'UCEgdi0XIXXZ-qJOFPf4JSKw' },
+  live: { category: 'live', browseId: 'UC4R8DWoMoI7CAwX8_LjQHig' },
+};
+
+export function browseDestination(categoryId?: string): { category: string; browseId: string } | undefined {
+  try {
+    const category = normalizeBrowseCategory(categoryId);
+    return category ? BROWSE_DESTINATIONS[category] : undefined;
+  } catch (cause) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      cause instanceof Error ? cause.message : 'Invalid browse category.'
+    );
+  }
+}
+
+function browseLocale(options: BrowseOptions): Pick<BrowseOptions, 'language' | 'region'> {
+  try {
+    return {
+      region: normalizeBrowseRegion(options.region),
+      language: normalizeBrowseLanguage(options.language),
+    };
+  } catch (cause) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      cause instanceof Error ? cause.message : 'Invalid browse locale.'
+    );
+  }
+}
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -136,6 +175,8 @@ function number(value: unknown): number | undefined {
 function rendererText(value: unknown): string | undefined {
   if (typeof value === 'string') return he.decode(striptags(value)).trim();
   const source = object(value);
+  const content = string(source.content);
+  if (content !== undefined) return he.decode(striptags(content)).trim();
   const simple = string(source.simpleText);
   if (simple !== undefined) return he.decode(striptags(simple)).trim();
   const runs = array(source.runs)
@@ -146,7 +187,12 @@ function rendererText(value: unknown): string | undefined {
 
 function rendererThumbnails(value: unknown): Thumbnail[] {
   const source = object(value);
-  const thumbnails = array(source.thumbnails ?? object(source.thumbnail).thumbnails);
+  const thumbnails = array(
+    source.thumbnails ??
+    object(source.thumbnail).thumbnails ??
+    source.sources ??
+    object(source.image).sources
+  );
   return thumbnails.flatMap((item): Thumbnail[] => {
       const thumbnail = object(item);
       const url = string(thumbnail.url);
@@ -253,13 +299,40 @@ function parseDuration(value: string | undefined): number | undefined {
   return parts.reduce((total, part) => total * 60 + part, 0);
 }
 
-function channelFromRuns(value: unknown): Pick<ChannelSummary, 'id' | 'name' | 'url'> {
+function channelFromRuns(
+  value: unknown,
+  navigationEndpoint?: unknown
+): Pick<ChannelSummary, 'id' | 'name' | 'url'> {
   const source = object(value);
   const firstRun = object(array(source.runs)[0]);
-  const id =
-    string(object(object(firstRun.navigationEndpoint).browseEndpoint).browseId) ?? '';
-  const name = string(firstRun.text) ?? rendererText(value) ?? 'Unknown channel';
+  const commandRun = object(array(source.commandRuns)[0]);
+  const navigationCandidates = [
+    firstRun.navigationEndpoint,
+    object(object(commandRun.onTap).innertubeCommand),
+    navigationEndpoint,
+    object(object(navigationEndpoint).innertubeCommand),
+  ];
+  const id = navigationCandidates
+    .map((candidate) => string(object(object(candidate).browseEndpoint).browseId))
+    .find(Boolean) ?? '';
+  const rawName = string(firstRun.text) ?? rendererText(value) ?? 'Unknown channel';
+  const name = id ? rawName.replace(/^by\s+/i, '') : rawName;
   return { id, name, url: id ? `https://www.youtube.com/channel/${id}` : '' };
+}
+
+function channelFromMetadataRows(
+  value: unknown
+): Pick<ChannelSummary, 'id' | 'name' | 'url'> | undefined {
+  for (const metadata of findRenderers(value, 'contentMetadataViewModel')) {
+    for (const row of array(metadata.metadataRows)) {
+      for (const partValue of array(object(row).metadataParts)) {
+        const part = object(partValue);
+        const channel = channelFromRuns(part.text);
+        if (channel.id) return channel;
+      }
+    }
+  }
+  return undefined;
 }
 
 function parseVideoRenderer(renderer: JsonObject): VideoSummary | null {
@@ -289,7 +362,9 @@ function parseVideoRenderer(renderer: JsonObject): VideoSummary | null {
         .map((snippet) => rendererText(object(snippet).snippetText))
         .filter(Boolean)
         .join(' '),
-    channel: channelFromRuns(renderer.ownerText ?? renderer.longBylineText),
+    channel: channelFromRuns(
+      renderer.ownerText ?? renderer.longBylineText ?? renderer.shortBylineText
+    ),
     thumbnails: rendererThumbnails(renderer.thumbnail),
     durationSeconds: parseDuration(durationText),
     durationText,
@@ -332,16 +407,83 @@ function parsePlaylistRenderer(renderer: JsonObject): PlaylistSummary | null {
     title,
     description: rendererText(renderer.descriptionSnippet),
     channel: channelFromRuns(renderer.longBylineText ?? renderer.shortBylineText),
-    thumbnails:
-      rendererThumbnails(renderer.thumbnail) ||
-      rendererThumbnails(object(array(renderer.thumbnails)[0])),
+    thumbnails: firstRendererThumbnails(
+      renderer.thumbnail,
+      object(array(renderer.thumbnails)[0])
+    ),
     videoCount: parseCompactNumber(videoCountText),
     videoCountText,
     url: `https://www.youtube.com/playlist?list=${id}`,
   };
 }
 
-function parseSearchResults(root: unknown): SearchResult[] {
+function parseLockupViewModel(
+  renderer: JsonObject,
+  fallbackChannel?: Pick<ChannelSummary, 'id' | 'name' | 'url'>
+): VideoSummary | PlaylistSummary | null {
+  const id = string(renderer.contentId);
+  const contentType = string(renderer.contentType);
+  const metadata = object(object(renderer.metadata).lockupMetadataViewModel);
+  const title = rendererText(metadata.title);
+  if (!id || !title) return null;
+
+  const contentMetadata = object(object(metadata.metadata).contentMetadataViewModel);
+  const metadataParts = array(contentMetadata.metadataRows).flatMap((row) =>
+    array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter(
+      (value): value is string => Boolean(value)
+    )
+  );
+  const thumbnailRenderer = findRenderers(renderer.contentImage, 'thumbnailViewModel')[0] ?? {};
+  const thumbnails = rendererThumbnails(thumbnailRenderer.image);
+  const badgeTexts = findRenderers(renderer.contentImage, 'thumbnailBadgeViewModel')
+    .map((badge) => rendererText(badge.text))
+    .filter((value): value is string => Boolean(value));
+
+  if (contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
+    const viewCountText = metadataParts.find((value) => /\bviews?$/i.test(value));
+    const publishedTimeText = metadataParts.find((value) =>
+      /\b(?:ago|streamed|premiered)\b/i.test(value)
+    );
+    const durationText = badgeTexts.find((value) => /^\d+(?::\d+)+$/.test(value));
+    const channel = channelFromMetadataRows(metadata) ??
+      fallbackChannel ?? { id: '', name: 'Unknown channel', url: '' };
+    return {
+      type: 'video',
+      id,
+      title,
+      channel,
+      thumbnails,
+      durationSeconds: parseDuration(durationText),
+      durationText,
+      publishedTimeText,
+      viewCount: parseCompactNumber(viewCountText),
+      viewCountText,
+      isLive: badgeTexts.some((value) => /\blive\b/i.test(value)),
+      url: `https://www.youtube.com/watch?v=${id}`,
+    };
+  }
+
+  if (contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' || contentType === 'LOCKUP_CONTENT_TYPE_PODCAST') {
+    const videoCountText = badgeTexts.find((value) => /\bvideos?$/i.test(value));
+    return {
+      type: 'playlist',
+      id,
+      title,
+      channel: fallbackChannel,
+      thumbnails,
+      videoCount: parseCompactNumber(videoCountText),
+      videoCountText,
+      url: `https://www.youtube.com/playlist?list=${id}`,
+    };
+  }
+
+  return null;
+}
+
+function parseSearchResults(
+  root: unknown,
+  fallbackChannel?: Pick<ChannelSummary, 'id' | 'name' | 'url'>
+): SearchResult[] {
   const results: SearchResult[] = [];
   for (const renderer of findRenderers(root, 'videoRenderer')) {
     const result = parseVideoRenderer(renderer);
@@ -359,6 +501,12 @@ function parseSearchResults(root: unknown): SearchResult[] {
       results.push(result);
     }
   }
+  for (const renderer of findRenderers(root, 'lockupViewModel')) {
+    const result = parseLockupViewModel(renderer, fallbackChannel);
+    if (result && !results.some((item) => item.type === result.type && item.id === result.id)) {
+      results.push(result);
+    }
+  }
   for (const renderer of findRenderers(root, 'channelRenderer')) {
     const result = parseChannelRenderer(renderer);
     if (result) results.push(result);
@@ -373,7 +521,104 @@ function parseSearchResults(root: unknown): SearchResult[] {
       results.push(result);
     }
   }
-  return results;
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    const key = `${result.type}:${result.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function channelTabBrowseOptions(root: unknown, suffix: '/videos' | '/playlists'): BrowseOptions | undefined {
+  for (const tab of findRenderers(root, 'tabRenderer')) {
+    const endpoint = object(tab.endpoint);
+    const commandUrl = string(object(object(endpoint.commandMetadata).webCommandMetadata).url);
+    const browse = object(endpoint.browseEndpoint);
+    const browseId = string(browse.browseId);
+    const params = string(browse.params);
+    if (commandUrl?.endsWith(suffix) && browseId && params) return { browseId, params };
+  }
+  return undefined;
+}
+
+function channelHeaderCounts(root: unknown): { subscriberCountText?: string; videoCountText?: string } {
+  const header = findRenderers(root, 'pageHeaderViewModel')[0];
+  const metadata = header ? findRenderers(header, 'contentMetadataViewModel')[0] : undefined;
+  const values = array(metadata?.metadataRows).flatMap((row) =>
+    array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter(
+      (value): value is string => Boolean(value)
+    )
+  );
+  return {
+    subscriberCountText: values.find((value) => /\bsubscribers?$/i.test(value)),
+    videoCountText: values.find((value) => /\bvideos?$/i.test(value)),
+  };
+}
+
+function playlistHeaderData(root: unknown): {
+  title?: string;
+  description?: string;
+  channel: Pick<ChannelSummary, 'id' | 'name' | 'url'>;
+  thumbnails: Thumbnail[];
+  videoCount?: number;
+  videoCountText?: string;
+} {
+  const legacy = findRenderers(root, 'playlistHeaderRenderer')[0] ?? {};
+  const pageHeader = findRenderers(root, 'pageHeaderRenderer')[0] ?? {};
+  const primary = findRenderers(root, 'playlistSidebarPrimaryInfoRenderer')[0] ?? {};
+  const secondary = findRenderers(root, 'playlistSidebarSecondaryInfoRenderer')[0] ?? {};
+  const ownerRenderer = findRenderers(secondary, 'videoOwnerRenderer')[0] ?? {};
+  const avatarStack = findRenderers(pageHeader, 'avatarStackViewModel')[0] ?? {};
+  const metadata = findRenderers(root, 'playlistMetadataRenderer')[0] ?? {};
+  const microformat = findRenderers(root, 'microformatDataRenderer')[0] ?? {};
+  const playlistThumbnail = findRenderers(primary.thumbnailRenderer, 'playlistVideoThumbnailRenderer')[0] ?? {};
+
+  const metadataValues = [
+    ...findRenderers(pageHeader, 'contentMetadataViewModel').flatMap((viewModel) =>
+      array(viewModel.metadataRows).flatMap((row) =>
+        array(object(row).metadataParts)
+          .map((part) => rendererText(object(part).text))
+          .filter((value): value is string => Boolean(value))
+      )
+    ),
+    ...array(primary.stats)
+      .map((stat) => rendererText(stat))
+      .filter((value): value is string => Boolean(value)),
+  ];
+  const videoCountText = rendererText(legacy.numVideosText) ??
+    metadataValues.find((value) => /^\s*[\d,.]+\s+videos?\s*$/i.test(value));
+
+  const channelCandidates = [
+    channelFromRuns(legacy.ownerText),
+    channelFromRuns(ownerRenderer.title, ownerRenderer.navigationEndpoint),
+    channelFromRuns(avatarStack.text),
+  ];
+  const channel = channelCandidates.find((candidate) => candidate.id) ??
+    channelCandidates.find((candidate) => candidate.name !== 'Unknown channel') ??
+    { id: '', name: 'Unknown channel', url: '' };
+
+  return {
+    title:
+      rendererText(legacy.title) ??
+      string(pageHeader.pageTitle) ??
+      rendererText(object(findRenderers(pageHeader, 'dynamicTextViewModel')[0]).text) ??
+      rendererText(primary.title) ??
+      string(metadata.title),
+    description:
+      rendererText(legacy.descriptionText) ??
+      rendererText(primary.description) ??
+      string(metadata.description) ??
+      string(microformat.description),
+    channel,
+    thumbnails: firstRendererThumbnails(
+      legacy.playlistHeaderBanner,
+      playlistThumbnail.thumbnail,
+      microformat.thumbnail
+    ),
+    videoCount: parseCompactNumber(videoCountText),
+    videoCountText,
+  };
 }
 
 function meta(warnings: string[] = [], partial = false): SourceMetadata {
@@ -400,6 +645,14 @@ function classifyHttpError(status: number, message: string): YouTubeClientError 
     status,
     retryable: status >= 500,
   });
+}
+
+function firstRendererThumbnails(...values: unknown[]): Thumbnail[] {
+  for (const value of values) {
+    const thumbnails = rendererThumbnails(value);
+    if (thumbnails.length) return thumbnails;
+  }
+  return [];
 }
 
 function captionTrackInfo(track: InternalCaptionTrack, index: number, defaultIndex = 0): CaptionTrackInfo {
@@ -618,10 +871,56 @@ function parseCommentEntity(payload: JsonObject): Comment | null {
   };
 }
 
+function firstRendererText(root: unknown, keys: string[]): string | undefined {
+  let result: string | undefined;
+  walkObjects(root, (candidate) => {
+    if (result) return;
+    for (const key of keys) {
+      const value = rendererText(candidate[key]);
+      if (value) {
+        result = value;
+        return;
+      }
+    }
+  });
+  return result;
+}
+
+function firstRendererNumber(root: unknown, keys: string[]): number | undefined {
+  let result: number | undefined;
+  walkObjects(root, (candidate) => {
+    if (result !== undefined) return;
+    for (const key of keys) {
+      const value = candidate[key];
+      const parsed = number(value) ?? parseCompactNumber(rendererText(value));
+      if (parsed !== undefined) {
+        result = parsed;
+        return;
+      }
+    }
+  });
+  return result;
+}
+
+function parseVideoSignals(videoId: string, raw: JsonObject): VideoSignals {
+  return {
+    videoId,
+    publishDate: firstRendererText(raw, ['publishDate', 'dateText']),
+    publishedTimeText: firstRendererText(raw, ['relativeDateText', 'publishedTimeText']),
+    viewCount: firstRendererNumber(raw, ['viewCountNumber', 'originalViewCount', 'viewCount']),
+    commentCount: firstRendererNumber(raw, ['commentsCount', 'commentCount']),
+    likeCount: firstRendererNumber(raw, [
+      'likeCountIfLikedNumber', 'likeCountIfIndifferentNumber', 'likeCountNotliked', 'likeCountA11y',
+    ]),
+    meta: meta([], false),
+  };
+}
+
 export interface YouTubeClient {
   search(query: string, filters?: SearchFilters): Promise<SearchResponse>;
   browse(options?: BrowseOptions): Promise<BrowseResponse>;
   getVideo(videoId: string): Promise<Video>;
+  getVideoSignals(videoId: string): Promise<VideoSignals>;
   getChannel(channelId: string, continuation?: string): Promise<Channel>;
   getPlaylist(playlistId: string, continuation?: string): Promise<Playlist>;
   getCaptionTracks(videoId: string): Promise<CaptionTrackList>;
@@ -644,12 +943,15 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     );
   }
 
-  const contextFor = (profile: ClientProfile): JsonObject => ({
+  const contextFor = (
+    profile: ClientProfile,
+    locale: Pick<BrowseOptions, 'language' | 'region'> = {}
+  ): JsonObject => ({
     client: {
       clientName: profile.clientName,
       clientVersion: profile.clientVersion,
-      hl: language,
-      gl: region,
+      hl: locale.language ?? language,
+      gl: locale.region ?? region,
       ...profile.context,
     },
     user: { lockedSafetyMode: false },
@@ -659,7 +961,8 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
   const call = async (
     endpoint: string,
     payload: JsonObject,
-    profile: ClientProfile = WEB_PROFILE
+    profile: ClientProfile = WEB_PROFILE,
+    locale: Pick<BrowseOptions, 'language' | 'region'> = {}
   ): Promise<JsonObject> => {
     const response = await fetchImpl(`${API_ROOT}/${endpoint}?prettyPrint=false`, {
       method: 'POST',
@@ -671,7 +974,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         'X-YouTube-Client-Version': profile.clientVersion,
         Origin: 'https://www.youtube.com',
       },
-      body: JSON.stringify({ context: contextFor(profile), ...payload }),
+      body: JSON.stringify({ context: contextFor(profile, locale), ...payload }),
     });
     if (!response.ok) {
       throw classifyHttpError(
@@ -722,10 +1025,21 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
   };
 
   const rawBrowse = async (browseOptions: BrowseOptions = {}): Promise<JsonObject> => {
+    const destination = browseDestination(browseOptions.categoryId);
+    const browseId = browseOptions.browseId ?? destination?.browseId;
+    if (!browseOptions.continuation && !browseId) {
+      throw new YouTubeClientError(
+        'INVALID_INPUT',
+        'A supported categoryId or browseId is required.'
+      );
+    }
     const payload = browseOptions.continuation
       ? { continuation: browseOptions.continuation }
-      : { browseId: browseOptions.browseId ?? 'FEtrending' };
-    return call('browse', payload);
+      : {
+          browseId,
+          ...(browseOptions.params ? { params: browseOptions.params } : {}),
+        };
+    return call('browse', payload, WEB_PROFILE, browseLocale(browseOptions));
   };
 
   const getCommentsPage = async (commentOptions: CommentOptions): Promise<CommentPage> => {
@@ -869,24 +1183,41 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
           (b.type === 'video' ? b.viewCount ?? 0 : 0) - (a.type === 'video' ? a.viewCount ?? 0 : 0)
         );
       }
+      const videos = results.filter((result): result is VideoSummary => result.type === 'video');
+      const channels = results.filter((result): result is ChannelSummary => result.type === 'channel');
+      const playlists = results.filter((result): result is PlaylistSummary => result.type === 'playlist');
       return {
         query,
         results,
+        videos,
+        channels,
+        playlists,
         continuation: continuationToken(raw),
         meta: meta([], allResults.length === 0),
       };
     },
 
     async browse(browseOptions = {}) {
+      const destination = browseDestination(browseOptions.categoryId);
       const raw = await rawBrowse(browseOptions);
       const results = parseSearchResults(raw);
+      const videos = results.filter((result): result is VideoSummary => result.type === 'video');
+      const channels = results.filter((result): result is ChannelSummary => result.type === 'channel');
+      const playlists = results.filter((result): result is PlaylistSummary => result.type === 'playlist');
       const titleRenderer = findRenderers(raw, 'channelMetadataRenderer')[0];
       return {
-        browseId: browseOptions.browseId,
+        category: destination?.category,
+        browseId: browseOptions.browseId ?? destination?.browseId,
         title:
           string(titleRenderer?.title) ??
-          rendererText(findRenderers(raw, 'pageHeaderRenderer')[0]?.pageTitle),
+          rendererText(findRenderers(raw, 'pageHeaderRenderer')[0]?.pageTitle) ??
+          (destination
+            ? `${destination.category[0]?.toUpperCase()}${destination.category.slice(1)}`
+            : undefined),
         results,
+        videos,
+        channels,
+        playlists,
         continuation: continuationToken(raw),
         meta: meta([], results.length === 0),
       };
@@ -958,32 +1289,53 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       };
     },
 
+    async getVideoSignals(videoId) {
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
+      }
+      return parseVideoSignals(videoId, await call('next', { videoId }));
+    },
+
     async getChannel(channelId, continuation) {
       if (!channelId && !continuation) {
         throw new YouTubeClientError('INVALID_INPUT', 'A channelId is required.');
       }
       const raw = await rawBrowse({ browseId: channelId, continuation });
       const metadata = findRenderers(raw, 'channelMetadataRenderer')[0] ?? {};
-      const results = parseSearchResults(raw);
       const name = string(metadata.title) ?? rendererText(metadata.title) ?? 'Unknown channel';
+      const resolvedId = string(metadata.externalId) ?? channelId;
+      const channelSummary = {
+        id: resolvedId,
+        name,
+        url: string(metadata.channelUrl) ?? `https://www.youtube.com/channel/${resolvedId}`,
+      };
+      const videoTab = continuation ? undefined : channelTabBrowseOptions(raw, '/videos');
+      const playlistTab = continuation ? undefined : channelTabBrowseOptions(raw, '/playlists');
+      const [videoRaw, playlistRaw] = await Promise.all([
+        videoTab ? rawBrowse(videoTab) : Promise.resolve(raw),
+        playlistTab ? rawBrowse(playlistTab) : Promise.resolve(raw),
+      ]);
+      const videos = parseSearchResults(videoRaw, channelSummary).filter(
+        (item): item is VideoSummary => item.type === 'video'
+      );
+      const playlists = parseSearchResults(playlistRaw, channelSummary).filter(
+        (item): item is PlaylistSummary => item.type === 'playlist'
+      );
+      const headerCounts = channelHeaderCounts(raw);
       return {
         type: 'channel',
-        id: string(metadata.externalId) ?? channelId,
+        id: resolvedId,
         name,
         description: string(metadata.description),
         handle: string(metadata.vanityChannelUrl)?.split('/').pop(),
-        subscriberCountText: rendererText(metadata.subscriberCountText),
-        videoCountText: rendererText(metadata.videoCountText),
+        subscriberCountText: headerCounts.subscriberCountText ?? rendererText(metadata.subscriberCountText),
+        videoCountText: headerCounts.videoCountText ?? rendererText(metadata.videoCountText),
         thumbnails: rendererThumbnails(metadata.avatar),
-        url:
-          string(metadata.channelUrl) ??
-          `https://www.youtube.com/channel/${channelId}`,
-        videos: results.filter((item): item is VideoSummary => item.type === 'video'),
-        playlists: results.filter(
-          (item): item is PlaylistSummary => item.type === 'playlist'
-        ),
-        continuation: continuationToken(raw),
-        meta: meta([], results.length === 0),
+        url: channelSummary.url,
+        videos,
+        playlists,
+        continuation: continuationToken(videoRaw),
+        meta: meta([], videos.length === 0 && playlists.length === 0),
       };
     },
 
@@ -995,24 +1347,25 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         browseId: continuation ? undefined : `VL${playlistId}`,
         continuation,
       });
-      const header =
-        findRenderers(raw, 'playlistHeaderRenderer')[0] ??
-        findRenderers(raw, 'playlistSidebarPrimaryInfoRenderer')[0] ??
-        {};
-      const results = parseSearchResults(raw);
+      const header = playlistHeaderData(raw);
+      const results = parseSearchResults(raw, header.channel);
       const videos = results.filter((item): item is VideoSummary => item.type === 'video');
+      const rawContinuation = continuationToken(raw);
       return {
         type: 'playlist',
         id: playlistId,
-        title: rendererText(header.title) ?? 'YouTube playlist',
-        description: rendererText(header.descriptionText),
-        channel: channelFromRuns(header.ownerText),
-        thumbnails: rendererThumbnails(header.playlistHeaderBanner),
-        videoCount: number(header.numVideosText) ?? videos.length,
-        videoCountText: rendererText(header.numVideosText),
+        title: header.title ?? 'YouTube playlist',
+        description: header.description,
+        channel: header.channel,
+        thumbnails: header.thumbnails,
+        videoCount: header.videoCount ?? videos.length,
+        videoCountText: header.videoCountText,
         url: `https://www.youtube.com/playlist?list=${playlistId}`,
         videos,
-        continuation: continuationToken(raw),
+        continuation:
+          header.videoCount !== undefined && videos.length >= header.videoCount
+            ? undefined
+            : rawContinuation,
         meta: meta([], videos.length === 0),
       };
     },
@@ -1141,6 +1494,13 @@ export async function getVideo(
   options: YouTubeClientOptions = {}
 ): Promise<Video> {
   return createYouTubeClient(options).getVideo(videoId);
+}
+
+export async function getVideoSignals(
+  videoId: string,
+  options: YouTubeClientOptions = {}
+): Promise<VideoSignals> {
+  return createYouTubeClient(options).getVideoSignals(videoId);
 }
 
 export async function getChannel(

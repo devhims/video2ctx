@@ -1,6 +1,6 @@
-# YouTube Intelligence Web
+# all-things-youtube Web
 
-The Next.js 16 and OpenNext frontend for the YouTube Intelligence Workspace.
+The Next.js 16 and OpenNext frontend for the all-things-youtube Workspace.
 
 ## Local development
 

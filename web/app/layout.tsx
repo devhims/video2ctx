@@ -20,7 +20,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'YouTube Intelligence',
+  title: 'all-things-youtube',
   description:
     'Evidence-first YouTube research: discover, inspect, compare, monitor, and synthesize.',
 };

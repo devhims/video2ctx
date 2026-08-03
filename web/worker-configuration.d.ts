@@ -4,7 +4,7 @@
 interface __BaseEnv_CloudflareEnv {
 	ASSETS: Fetcher;
 	PLATFORM_API_BASE_URL: "http://localhost:8787";
-	PLATFORM: Fetcher /* youtube-intelligence-platform */;
+	PLATFORM: Fetcher /* all-things-youtube-platform */;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

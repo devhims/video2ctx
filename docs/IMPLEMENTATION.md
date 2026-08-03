@@ -1,4 +1,4 @@
-# YouTube Intelligence Workspace
+# all-things-youtube Workspace
 
 This repository implements the beta with an internal adapter and two independently deployable layers:
 
@@ -38,7 +38,8 @@ Important routes:
 
 | Area | Routes |
 | --- | --- |
-| Discovery | `POST /v1/resolve`, `GET /v1/search`, `GET /v1/browse` |
+| UI helpers | `POST /v1/resolve` (first-party universal-input routing) |
+| Discovery | `GET /v1/search`, `GET /v1/browse` |
 | Entities | `/v1/videos/:id`, `/transcript`, `/captions`, `/comments`, `/storyboards`, `/endscreen`; `/v1/channels/:id`; `/v1/playlists/:id` |
 | Research | `/v1/projects`, `/v1/projects/:id/items`, `/v1/answers`, `/v1/comparisons`, `/v1/reports` |
 | Jobs | `POST /v1/imports`, `GET /v1/jobs/:id` |

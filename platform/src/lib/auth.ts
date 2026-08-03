@@ -5,7 +5,7 @@ import { escapeHtml } from './http';
 
 export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
   return betterAuth({
-    appName: 'YouTube Intelligence',
+    appName: 'all-things-youtube',
     baseURL: env.AUTH_BASE_URL,
     basePath: '/api/auth',
     secret: env.BETTER_AUTH_SECRET,
@@ -29,9 +29,9 @@ export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<
             type: 'magic-link',
             idempotencyKey: `magic:${await digest(url)}`,
             to: email,
-            subject: 'Sign in to YouTube Intelligence',
+            subject: 'Sign in to all-things-youtube',
             html: `<p>Use this secure link to sign in:</p><p><a href="${safeUrl}">Sign in</a></p><p>This link expires in 15 minutes and can be used once.</p>`,
-            text: `Sign in to YouTube Intelligence: ${url}\n\nThis link expires in 15 minutes and can be used once.`,
+            text: `Sign in to all-things-youtube: ${url}\n\nThis link expires in 15 minutes and can be used once.`,
           };
           await env.EMAIL_TASKS.send(message, { contentType: 'json' });
         },

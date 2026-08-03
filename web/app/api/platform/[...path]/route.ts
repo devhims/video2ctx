@@ -16,6 +16,7 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
   headers.set('accept-encoding', 'identity');
   headers.set('x-forwarded-host', source.host);
   headers.set('x-forwarded-proto', source.protocol.slice(0, -1));
+  headers.set('x-forwarded-prefix', '/api/platform');
   const init: RequestInit = {
     method: request.method,
     headers,

@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "youtube-intelligence-platform",
+  "name": "all-things-youtube-platform",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
@@ -9,7 +9,7 @@
     "APP_ORIGIN": "http://localhost:3000",
     "AUTH_BASE_URL": "http://localhost:3000/api/platform",
     "EMAIL_FROM": "research@example.com",
-    "AI_GATEWAY_ID": "youtube-intelligence",
+    "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
     "ADMIN_EMAILS": "",
     "FREE_MONTHLY_CREDITS": "100",
@@ -24,13 +24,13 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "youtube-intelligence"
+      "database_name": "all-things-youtube"
     }
   ],
   "r2_buckets": [
     {
       "binding": "RESEARCH",
-      "bucket_name": "youtube-intelligence-private"
+      "bucket_name": "all-things-youtube-private"
     }
   ],
   "ai": { "binding": "AI" },
@@ -56,22 +56,22 @@
   ],
   "queues": {
     "producers": [
-      { "binding": "TASKS", "queue": "youtube-intelligence-tasks" },
-      { "binding": "EMAIL_TASKS", "queue": "youtube-intelligence-email" }
+      { "binding": "TASKS", "queue": "all-things-youtube-tasks" },
+      { "binding": "EMAIL_TASKS", "queue": "all-things-youtube-email" }
     ],
     "consumers": [
       {
-        "queue": "youtube-intelligence-tasks",
+        "queue": "all-things-youtube-tasks",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "dead_letter_queue": "youtube-intelligence-tasks-dlq",
+        "dead_letter_queue": "all-things-youtube-tasks-dlq",
         "max_retries": 5
       },
       {
-        "queue": "youtube-intelligence-email",
+        "queue": "all-things-youtube-email",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "dead_letter_queue": "youtube-intelligence-email-dlq",
+        "dead_letter_queue": "all-things-youtube-email-dlq",
         "max_retries": 5
       }
     ]

@@ -1,6 +1,11 @@
 import {
+  browseDestination,
   createYouTubeClient,
 } from './youtube-client';
+import {
+  normalizeBrowseLanguage,
+  normalizeBrowseRegion,
+} from './browse-contract';
 import type {
   BrowseOptions,
   SearchFilters,
@@ -90,20 +95,42 @@ async function cached<T>(
 
 export async function searchYouTube(env: Env, query: string, filters: SearchFilters = {}) {
   const key = await hash(JSON.stringify({ query, filters }));
-  return cached(env, 'search', key, 5 * 60_000, () => client.search(query, filters));
+  return cached(env, 'search-v2', key, 5 * 60_000, () => client.search(query, filters));
 }
 
 export async function browseYouTube(env: Env, options: BrowseOptions = {}) {
-  const key = await hash(JSON.stringify(options));
-  return cached(env, 'browse', key, 5 * 60_000, () => client.browse(options));
+  let destination: ReturnType<typeof browseDestination>;
+  let region: string;
+  let language: string;
+  try {
+    destination = browseDestination(options.categoryId);
+    region = normalizeBrowseRegion(options.region);
+    language = normalizeBrowseLanguage(options.language);
+  } catch (error) {
+    throw new ApiError(422, 'INVALID_BROWSE_OPTIONS', error instanceof Error ? error.message : 'Invalid browse options.');
+  }
+  if (!destination) {
+    throw new ApiError(
+      422,
+      'BROWSE_CATEGORY_REQUIRED',
+      'Choose a browse category: music, news, sports, or live.'
+    );
+  }
+  const normalized = { ...options, categoryId: destination.category, region, language };
+  const key = await hash(JSON.stringify(normalized));
+  return cached(env, 'browse-v3', key, 5 * 60_000, () => client.browse(normalized));
 }
 
 export function getVideo(env: Env, id: string): Promise<Video> {
   return cached(env, 'video', id, 30 * 60_000, () => client.getVideo(id));
 }
 
+export function getVideoSignals(env: Env, id: string) {
+  return cached(env, 'video-signals', id, 15 * 60_000, () => client.getVideoSignals(id));
+}
+
 export function getChannel(env: Env, id: string) {
-  return cached(env, 'channel', id, 60 * 60_000, async () => {
+  return cached(env, 'channel-v3', id, 60 * 60_000, async () => {
     if (id.startsWith('@')) {
       const result = await client.search(id, { type: 'channel' });
       const channel = result.results.find((item) => item.type === 'channel');
@@ -115,7 +142,7 @@ export function getChannel(env: Env, id: string) {
 }
 
 export function getPlaylist(env: Env, id: string) {
-  return cached(env, 'playlist', id, 60 * 60_000, () => client.getPlaylist(id));
+  return cached(env, 'playlist-v2', id, 60 * 60_000, () => client.getPlaylist(id));
 }
 
 export function getComments(env: Env, id: string, continuation?: string) {
