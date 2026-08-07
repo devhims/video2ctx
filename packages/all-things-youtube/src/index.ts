@@ -1,4 +1,5 @@
 import { createYouTubeClient, type YouTubeClient } from './youtube-client';
+import { YouTubeClientError } from './youtube-types';
 import type {
   Channel,
   ChannelPlaylistSort,
@@ -15,7 +16,7 @@ import type {
   YouTubeClientOptions,
 } from './youtube-types';
 
-export { YouTubeClientError } from './youtube-types';
+export { YouTubeClientError };
 export type * from './youtube-types';
 export type * from './youtube-transport';
 
@@ -73,12 +74,45 @@ function optionsFrom(options: LibraryOptions): YouTubeClientOptions {
   };
 }
 
+function assertChannelVideoSort(sort: unknown): asserts sort is ChannelVideoSort | undefined {
+  if (sort !== undefined && !['latest', 'popular', 'oldest'].includes(String(sort))) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      'sort must be one of: latest, popular, oldest.'
+    );
+  }
+}
+
+function assertChannelPlaylistSort(
+  sort: unknown
+): asserts sort is ChannelPlaylistSort | undefined {
+  if (sort !== undefined && !['newest', 'last-video-added'].includes(String(sort))) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      'sort must be one of: newest, last-video-added.'
+    );
+  }
+}
+
+function assertPlaylistId(playlistId: string): void {
+  if (
+    !/^[A-Za-z0-9_-]{2,}$/.test(playlistId) ||
+    (playlistId.startsWith('PL') && playlistId.length !== 34)
+  ) {
+    throw new YouTubeClientError('INVALID_INPUT', 'playlistId is malformed.');
+  }
+}
+
 async function resolveChannelId(client: YouTubeClient, channelId: string): Promise<string> {
   if (!channelId.startsWith('@')) return channelId;
   const result = await client.search(channelId, { type: 'channel' });
   const channel = result.channels[0];
   if (!channel) {
-    throw new Error(`Could not resolve YouTube channel handle ${channelId}.`);
+    throw new YouTubeClientError(
+      'NOT_FOUND',
+      `Could not resolve YouTube channel handle ${channelId}.`,
+      { status: 404 }
+    );
   }
   return channel.id;
 }
@@ -132,6 +166,7 @@ export async function getChannelInfo(options: ChannelRequest): Promise<Channel> 
 
 /** Return one page from a channel's Videos tab. */
 export async function getChannelVideos(options: ChannelVideosRequest): Promise<ChannelVideos> {
+  assertChannelVideoSort(options.sort);
   const client = createYouTubeClient(optionsFrom(options));
   const channelId = await resolveChannelId(client, options.channelId);
   return client.getChannelVideos(channelId, options.continuation, options.sort);
@@ -141,14 +176,16 @@ export async function getChannelVideos(options: ChannelVideosRequest): Promise<C
 export async function getChannelPlaylists(
   options: ChannelPlaylistsRequest
 ): Promise<ChannelPlaylists> {
+  assertChannelPlaylistSort(options.sort);
   const client = createYouTubeClient(optionsFrom(options));
   const channelId = await resolveChannelId(client, options.channelId);
   return client.getChannelPlaylists(channelId, options.continuation, options.sort);
 }
 
 /** Return playlist metadata and one page of videos. */
-export function getPlaylist(options: PlaylistRequest): Promise<Playlist> {
-  return createYouTubeClient(optionsFrom(options)).getPlaylist(
+export async function getPlaylist(options: PlaylistRequest): Promise<Playlist> {
+  assertPlaylistId(options.playlistId);
+  return await createYouTubeClient(optionsFrom(options)).getPlaylist(
     options.playlistId,
     options.continuation
   );

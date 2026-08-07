@@ -125,11 +125,44 @@ describe('all-things-youtube public API', () => {
     );
   });
 
+  test('returns a typed not-found error when a channel handle cannot be resolved', async () => {
+    mocks.client.search.mockResolvedValue({ channels: [] });
+
+    await expect(getChannelInfo({ channelId: '@MissingChannel' })).rejects.toMatchObject({
+      name: 'YouTubeClientError',
+      code: 'NOT_FOUND',
+      status: 404,
+      retryable: false,
+    });
+  });
+
+  test('rejects unsupported channel sorts at runtime', async () => {
+    await expect(getChannelVideos({
+      channelId: 'UCxxxxxxxxxxxxxxxxxxxxxx',
+      sort: 'bogus' as never,
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(getChannelPlaylists({
+      channelId: 'UCxxxxxxxxxxxxxxxxxxxxxx',
+      sort: '' as never,
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+    expect(mocks.client.getChannelVideos).not.toHaveBeenCalled();
+    expect(mocks.client.getChannelPlaylists).not.toHaveBeenCalled();
+  });
+
   test('forwards playlist continuation', async () => {
     mocks.client.getPlaylist.mockResolvedValue({ videos: [] });
 
-    await getPlaylist({ playlistId: 'PL123', continuation: 'PLAYLIST_PAGE_2' });
+    const playlistId = 'PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+    await getPlaylist({ playlistId, continuation: 'PLAYLIST_PAGE_2' });
 
-    expect(mocks.client.getPlaylist).toHaveBeenCalledWith('PL123', 'PLAYLIST_PAGE_2');
+    expect(mocks.client.getPlaylist).toHaveBeenCalledWith(playlistId, 'PLAYLIST_PAGE_2');
+  });
+
+  test('rejects malformed playlist ids before making a request', async () => {
+    await expect(getPlaylist({ playlistId: 'PLnope_zzz_99887766' })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+    expect(mocks.client.getPlaylist).not.toHaveBeenCalled();
   });
 });

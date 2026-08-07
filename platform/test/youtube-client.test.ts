@@ -11,6 +11,45 @@ function htmlResponse(data: unknown): Response {
 }
 
 describe('normalized YouTube client', () => {
+  test('preserves the client locale on browse-backed requests', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as {
+        context: { client: { hl: string; gl: string } };
+      };
+      expect(payload.context.client).toMatchObject({ hl: 'de', gl: 'DE' });
+      return response({
+        contents: [{ lockupViewModel: {
+          contentId: 'abcdefghijk',
+          contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+          contentImage: { thumbnailViewModel: { image: { sources: [] } } },
+          metadata: { lockupMetadataViewModel: {
+            title: { content: 'Ein lokalisiertes Video' },
+            metadata: { contentMetadataViewModel: { metadataRows: [
+              { metadataParts: [{ text: { content: 'Ein Kanal' } }] },
+              { metadataParts: [
+                { text: { content: '44 Mio. Aufrufe' } },
+                { text: { content: 'vor 12 Tagen' } },
+              ] },
+            ] } },
+          } },
+        } }],
+      });
+    });
+
+    const playlist = await createYouTubeClient({
+      fetch: fetchMock as typeof fetch,
+      language: 'de',
+      region: 'DE',
+    }).getPlaylist('PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(playlist.videos[0]).toMatchObject({
+      publishedTimeText: 'vor 12 Tagen',
+      viewCountText: '44 Mio. Aufrufe',
+      viewCount: 44_000_000,
+    });
+  });
+
   test('normalizes modern playlist metadata and omits an exhausted continuation', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
       header: { pageHeaderRenderer: {
@@ -81,10 +120,10 @@ describe('normalized YouTube client', () => {
     }));
 
     const playlist = await createYouTubeClient({ fetch: fetchMock as typeof fetch })
-      .getPlaylist('PLMODERN');
+      .getPlaylist('PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
 
     expect(playlist).toMatchObject({
-      id: 'PLMODERN',
+      id: 'PLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
       title: 'Modern research playlist',
       description: 'A modern playlist response fixture.',
       channel: {
@@ -682,7 +721,15 @@ describe('normalized YouTube client', () => {
     const video = await createYouTubeClient({ fetch: fetchMock as typeof fetch }).getVideo('abcdefghijk');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(video).toMatchObject({ id: 'abcdefghijk', title: 'Evidence video', keywords: [] });
+    expect(video).toMatchObject({
+      id: 'abcdefghijk',
+      title: 'Evidence video',
+      durationSeconds: 90,
+      durationText: '1:30',
+      viewCount: 1000,
+      viewCountText: '1K views',
+      keywords: [],
+    });
     expect(video.meta.source).toBe('allthingsyoutube');
     expect(video).not.toHaveProperty('captionTracks');
     expect(video).not.toHaveProperty('translationLanguages');
@@ -801,6 +848,7 @@ describe('normalized YouTube client', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(result.comments.map((comment) => comment.id)).toEqual(['top-1', 'top-2', 'top-1.reply-1']);
+    expect(result.comments[0]?.replies.map((reply) => reply.id)).toEqual(['top-1.reply-1']);
     expect(result).toMatchObject({
       complete: true,
       totalCount: 3,
@@ -851,6 +899,10 @@ describe('normalized YouTube client', () => {
       'top-1.reply-1',
       'top-1.reply-2',
     ]);
+    expect(result.comments[0]?.replies.map((reply) => reply.id)).toEqual([
+      'top-1.reply-1',
+      'top-1.reply-2',
+    ]);
     expect(result).toMatchObject({ complete: true, topLevelCount: 1, replyCount: 2 });
   });
 
@@ -894,6 +946,16 @@ describe('normalized YouTube client', () => {
 
   test('returns stable invalid-input errors', async () => {
     await expect(createYouTubeClient({ fetch }).getVideo('bad')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(createYouTubeClient({ fetch }).getPlaylist('PLnope_zzz_99887766'))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  test('returns not-found for a well-formed channel id with no channel metadata', async () => {
+    const client = createYouTubeClient({ fetch: vi.fn(async () => response({})) as typeof fetch });
+    await expect(client.getChannel('UCxxxxxxxxxxxxxxxxxxxxxx')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      status: 404,
+    });
   });
 });
 

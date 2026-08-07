@@ -152,8 +152,9 @@ export function browseDestination(categoryId?: string): { category: string; brow
 function browseLocale(options: BrowseOptions): Pick<BrowseOptions, 'language' | 'region'> {
   try {
     return {
-      region: normalizeBrowseRegion(options.region),
-      language: normalizeBrowseLanguage(options.language),
+      region: options.region === undefined ? undefined : normalizeBrowseRegion(options.region),
+      language:
+        options.language === undefined ? undefined : normalizeBrowseLanguage(options.language),
     };
   } catch (cause) {
     throw new YouTubeClientError(
@@ -298,13 +299,24 @@ function commentContinuationTokens(root: unknown): {
 
 function parseCompactNumber(value: string | undefined): number | undefined {
   if (!value) return undefined;
-  const match = value.replace(/,/g, '').match(/([0-9.]+)\s*([KMB])?/i);
+  const normalized = value.replace(/\u00a0/g, ' ').trim();
+  const match = normalized.match(/([0-9]+(?:[.,][0-9]+)*)\s*([^\d\s]*)?/i);
   if (!match) return undefined;
-  const base = Number(match[1]);
+  const numericToken = match[1];
+  if (!numericToken) return undefined;
+  const suffix = (match[2] ?? '').replace(/\./g, '').toLowerCase();
+  const multiplier =
+    /^(?:k|tsd|тыс)$/.test(suffix) ? 1_000 :
+    /^(?:m|mio|mln|млн)$/.test(suffix) ? 1_000_000 :
+    /^(?:b|mrd|млрд)$/.test(suffix) ? 1_000_000_000 :
+    undefined;
+  const numericText = multiplier
+    ? numericToken.replace(',', '.')
+    : /^[0-9]{1,3}(?:[.,][0-9]{3})+$/.test(numericToken)
+      ? numericToken.replace(/[.,]/g, '')
+      : numericToken.replace(',', '.');
+  const base = Number(numericText);
   if (!Number.isFinite(base)) return undefined;
-  const multiplier = { K: 1_000, M: 1_000_000, B: 1_000_000_000 }[
-    (match[2] ?? '').toUpperCase()
-  ];
   return Math.round(base * (multiplier ?? 1));
 }
 
@@ -313,6 +325,85 @@ function parseDuration(value: string | undefined): number | undefined {
   const parts = value.split(':').map(Number);
   if (parts.some((part) => !Number.isFinite(part))) return undefined;
   return parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+function formatDuration(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || seconds < 0) return undefined;
+  const totalSeconds = Math.trunc(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
+    : `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
+function formatViewCount(
+  viewCount: number | undefined,
+  language: string,
+  region: string
+): string | undefined {
+  if (viewCount === undefined) return undefined;
+  let formatted: string;
+  try {
+    formatted = new Intl.NumberFormat(`${language}-${region}`, {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(viewCount);
+  } catch {
+    formatted = new Intl.NumberFormat('en-US', {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(viewCount);
+  }
+  return `${formatted} views`;
+}
+
+function attachCommentReplies(comments: Comment[]): Comment[] {
+  const parents = new Map(
+    comments
+      .filter((comment) => !comment.id.includes('.'))
+      .map((comment) => {
+        comment.replies = [];
+        return [comment.id, comment] as const;
+      })
+  );
+  for (const reply of comments) {
+    const separator = reply.id.indexOf('.');
+    if (separator < 1) continue;
+    const parent = parents.get(reply.id.slice(0, separator));
+    if (parent && !parent.replies.some((candidate) => candidate.id === reply.id)) {
+      parent.replies.push(reply);
+    }
+  }
+  return comments;
+}
+
+function assertChannelVideoSort(sort: unknown): asserts sort is ChannelVideoSort {
+  if (!['latest', 'popular', 'oldest'].includes(String(sort))) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      'sort must be one of: latest, popular, oldest.'
+    );
+  }
+}
+
+function assertChannelPlaylistSort(sort: unknown): asserts sort is ChannelPlaylistSort {
+  if (!['newest', 'last-video-added'].includes(String(sort))) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      'sort must be one of: newest, last-video-added.'
+    );
+  }
+}
+
+function assertPlaylistId(playlistId: string): void {
+  if (
+    !/^[A-Za-z0-9_-]{2,}$/.test(playlistId) ||
+    (playlistId.startsWith('PL') && playlistId.length !== 34)
+  ) {
+    throw new YouTubeClientError('INVALID_INPUT', 'playlistId is malformed.');
+  }
 }
 
 function channelFromRuns(
@@ -449,11 +540,12 @@ function parseLockupViewModel(
   if (!id || !title) return null;
 
   const contentMetadata = object(object(metadata.metadata).contentMetadataViewModel);
-  const metadataParts = array(contentMetadata.metadataRows).flatMap((row) =>
+  const metadataRows = array(contentMetadata.metadataRows).map((row) =>
     array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter(
       (value): value is string => Boolean(value)
     )
   );
+  const metadataParts = metadataRows.flat();
   const thumbnailRenderer = findRenderers(renderer.contentImage, 'thumbnailViewModel')[0] ?? {};
   const thumbnails = rendererThumbnails(thumbnailRenderer.image);
   const badgeTexts = findRenderers(renderer.contentImage, 'thumbnailBadgeViewModel')
@@ -465,10 +557,11 @@ function parseLockupViewModel(
   ]).filter((value): value is string => Boolean(value));
 
   if (contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
-    const viewCountText = metadataParts.find((value) => /\bviews?$/i.test(value));
+    const statsRow = metadataRows.find((row) => row.length >= 2 && row.some((value) => /\d/.test(value)));
+    const viewCountText = metadataParts.find((value) => /\bviews?$/i.test(value)) ?? statsRow?.[0];
     const publishedTimeText = metadataParts.find((value) =>
       /\b(?:ago|streamed|premiered)\b/i.test(value)
-    );
+    ) ?? statsRow?.[1];
     const durationText = badgeTexts.find((value) => /^\d+(?::\d+)+$/.test(value));
     const channel = channelFromMetadataRows(metadata) ??
       fallbackChannel ?? { id: '', name: 'Unknown channel', url: '' };
@@ -1326,6 +1419,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         tokens = commentContinuationTokens(raw);
       }
     }
+    attachCommentReplies(comments);
     return {
       videoId: commentOptions.videoId,
       totalCount,
@@ -1382,12 +1476,13 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       if (page.continuation) replyQueue.push(page.continuation);
     }
 
+    const normalizedComments = attachCommentReplies([...comments.values()]);
     const complete = !continuation && replyQueue.length === 0;
     const topLevelCount = [...comments.keys()].filter((id) => !id.includes('.')).length;
     return {
       videoId: allOptions.videoId,
       totalCount,
-      comments: [...comments.values()],
+      comments: normalizedComments,
       continuation: complete ? undefined : continuation,
       replyContinuations: [],
       newestContinuation: undefined,
@@ -1480,6 +1575,8 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       const author = string(details.author) ?? 'Unknown channel';
       const channelId = string(details.channelId) ?? '';
       const playability = string(status.status) ?? 'UNKNOWN';
+      const durationSeconds = number(details.lengthSeconds);
+      const viewCount = number(details.viewCount);
       const warnings: string[] = [];
       if (playability !== 'OK') warnings.push(string(status.reason) ?? playability);
       return {
@@ -1493,10 +1590,10 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
           url: channelId ? `https://www.youtube.com/channel/${channelId}` : '',
         },
         thumbnails: rendererThumbnails(details.thumbnail),
-        durationSeconds: number(details.lengthSeconds),
-        durationText: undefined,
-        viewCount: number(details.viewCount),
-        viewCountText: string(details.viewCount),
+        durationSeconds,
+        durationText: formatDuration(durationSeconds),
+        viewCount,
+        viewCountText: formatViewCount(viewCount, language, region),
         publishedTimeText: undefined,
         isLive: details.isLiveContent === true,
         url: `https://www.youtube.com/watch?v=${videoId}`,
@@ -1531,6 +1628,16 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       const raw = aboutRaw ?? await rawBrowse({ browseId: channelId });
       const metadata = findRenderers(raw, 'channelMetadataRenderer')[0] ?? {};
       const about = findRenderers(raw, 'aboutChannelViewModel')[0] ?? {};
+      if (
+        !string(metadata.externalId) &&
+        !string(metadata.title) &&
+        !rendererText(metadata.title) &&
+        !string(about.channelId)
+      ) {
+        throw new YouTubeClientError('NOT_FOUND', `YouTube channel ${channelId} was not found.`, {
+          status: 404,
+        });
+      }
       const name = string(metadata.title) ?? rendererText(metadata.title) ?? 'Unknown channel';
       const resolvedId = string(about.channelId) ?? string(metadata.externalId) ?? channelId;
       const headerCounts = channelHeaderCounts(raw);
@@ -1581,6 +1688,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       if (!channelId) {
         throw new YouTubeClientError('INVALID_INPUT', 'A channelId is required.');
       }
+      assertChannelVideoSort(sort);
       const channelRawPromise = rawBrowse({ browseId: channelId });
       const pagePromise = continuation
         ? rawBrowse({ continuation }).then((raw) => ({ raw, appliedSort: sort }))
@@ -1630,6 +1738,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       if (!channelId) {
         throw new YouTubeClientError('INVALID_INPUT', 'A channelId is required.');
       }
+      assertChannelPlaylistSort(sort);
       const channelRawPromise = rawBrowse({ browseId: channelId });
       const pagePromise = continuation
         ? rawBrowse({ continuation }).then((raw) => ({ raw, appliedSort: sort }))
@@ -1679,6 +1788,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       if (!playlistId && !continuation) {
         throw new YouTubeClientError('INVALID_INPUT', 'A playlistId is required.');
       }
+      assertPlaylistId(playlistId);
       const raw = await rawBrowse({
         browseId: continuation ? undefined : `VL${playlistId}`,
         continuation,
