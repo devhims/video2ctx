@@ -5,7 +5,10 @@
   "scripts": {
     "dev:web": "npm --prefix web run dev",
     "dev:platform": "npm --prefix platform run dev",
-    "build": "npm --prefix platform run build && npm --prefix web run build",
-    "test": "npm --prefix platform run test"
+    "build:library": "npm --prefix packages/all-things-youtube run build",
+    "test:library": "npm --prefix packages/all-things-youtube run test",
+    "pack:library": "npm --prefix packages/all-things-youtube pack",
+    "build": "npm run build:library && npm --prefix platform run build && npm --prefix web run build",
+    "test": "npm run test:library && npm --prefix platform run test"
   }
 }

@@ -1,16 +1,28 @@
 # all-things-youtube Workspace
 
-An evidence-first YouTube research application for discovering, inspecting, saving, searching, comparing, monitoring, and synthesizing YouTube sources.
+An evidence-first YouTube research application plus the standalone [`all-things-youtube`](./packages/all-things-youtube) npm library for normalized video, transcript, comment, channel, and playlist data.
 
-This project is intentionally separate from the published [`youtube-caption-extractor`](../youtube-caption-extractor) package. The application-specific normalized InnerTube client and data types live inside the platform Worker.
+The library and platform share one normalized YouTube implementation. The platform's compatibility modules re-export the package source, preventing API and npm behavior from drifting apart.
 
 ## Structure
 
 - `web/` — Next.js 16 application deployed through `@opennextjs/cloudflare`.
 - `platform/` — typed Hono Cloudflare Worker with D1, R2, queues, workflows, AI, auth, billing, and email boundaries.
-- `platform/src/lib/youtube-client.ts` and `youtube-types.ts` — application-internal normalized YouTube adapter.
+- `packages/all-things-youtube/` — publishable, typed npm library with the shared normalized YouTube client.
 - `docs/IMPLEMENTATION.md` — architecture, API examples, Postman requests, and deployment notes.
 - `docs/UI_API_REFERENCE.md` — the current UI-to-platform API contract and request flows.
+
+## Standalone library
+
+```bash
+cd packages/all-things-youtube
+npm install
+npm test
+npm run build
+npm pack
+```
+
+See the [package README](./packages/all-things-youtube/README.md) for installation, API examples, pagination, translation, retries, and error handling.
 
 ## Run locally
 

@@ -1,0 +1,69 @@
+{
+  "name": "all-things-youtube",
+  "version": "0.1.0",
+  "description": "TypeScript toolkit for YouTube data. Get transcripts/captions, comments, video details, channels, playlists, and more.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "npm test && npm run build"
+  },
+  "keywords": [
+    "youtube",
+    "youtube-api",
+    "youtube-transcript",
+    "youtube-captions",
+    "youtube-comments",
+    "youtube-channel",
+    "youtube-playlist",
+    "transcript",
+    "captions",
+    "subtitles",
+    "comments",
+    "metadata",
+    "typescript",
+    "scraper"
+  ],
+  "author": {
+    "name": "Himanshu Gupta",
+    "email": "thinktank.himanshu@gmail.com",
+    "url": "https://github.com/devhims"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devhims/all-things-youtube.git",
+    "directory": "packages/all-things-youtube"
+  },
+  "bugs": {
+    "url": "https://github.com/devhims/all-things-youtube/issues"
+  },
+  "homepage": "https://github.com/devhims/all-things-youtube/tree/main/packages/all-things-youtube#readme",
+  "license": "MIT",
+  "dependencies": {
+    "he": "^1.2.0",
+    "striptags": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/he": "^1.2.0",
+    "@types/node": "^25.9.5",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
