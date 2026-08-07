@@ -7,5 +7,4 @@ interface Env {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRO_PRICE_ID: string;
-  CAPTION_API_TOKEN: string;
 }

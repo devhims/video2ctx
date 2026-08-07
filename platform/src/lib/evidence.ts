@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from './youtube-types';
+import type { TranscriptSegment } from 'all-things-youtube';
 import type { Evidence } from './search';
 
 const WINDOW_MS = 30_000;

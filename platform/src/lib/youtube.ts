@@ -1,3 +1,14 @@
+import * as youtube from 'all-things-youtube';
+import type {
+  BrowseOptions,
+  ChannelPlaylistSort,
+  ChannelVideoSort,
+  LibraryOptions,
+  SearchFilters,
+  Transcript,
+  Video,
+  YouTubeRetryOptions,
+} from 'all-things-youtube';
 import {
   browseDestination,
   createYouTubeClient,
@@ -6,21 +17,13 @@ import {
   normalizeBrowseLanguage,
   normalizeBrowseRegion,
 } from './browse-contract';
-import type {
-  BrowseOptions,
-  ChannelPlaylistSort,
-  ChannelVideoSort,
-  SearchFilters,
-  Transcript,
-  Video,
-} from './youtube-types';
 import { ApiError, now } from './http';
 
-const client = createYouTubeClient({
-  retry: {
-    onRetry: (event) => console.warn('youtube_retry', event),
-  },
-});
+const retry: YouTubeRetryOptions = {
+  onRetry: (event) => console.warn('youtube_retry', event),
+};
+const packageOptions: LibraryOptions = { retry };
+const discoveryClient = createYouTubeClient({ retry });
 
 export type UniversalInput =
   | { kind: 'video'; id: string }
@@ -73,6 +76,16 @@ function publicMetadata<T>(value: T): T {
   } as T;
 }
 
+function packageError(error: youtube.YouTubeClientError): ApiError {
+  const status = error.code === 'INVALID_INPUT' ? 422
+    : error.code === 'NOT_FOUND' ? 404
+    : error.code === 'AUTH_REQUIRED' ? 401
+    : error.code === 'RATE_LIMITED' ? 429
+    : error.code === 'UNAVAILABLE' ? 503
+    : 502;
+  return new ApiError(status, error.code, error.message);
+}
+
 async function cached<T>(
   env: Env,
   type: string,
@@ -109,13 +122,14 @@ async function cached<T>(
         freshness: { state: 'stale', fetchedAt: existing.fetched_at, reason: 'UPSTREAM_UNAVAILABLE' },
       };
     }
+    if (error instanceof youtube.YouTubeClientError) throw packageError(error);
     throw new ApiError(502, 'YOUTUBE_UPSTREAM_ERROR', error instanceof Error ? error.message : 'YouTube is unavailable.');
   }
 }
 
 export async function searchYouTube(env: Env, query: string, filters: SearchFilters = {}) {
   const key = await hash(JSON.stringify({ query, filters }));
-  return cached(env, 'search-v2', key, 5 * 60_000, () => client.search(query, filters));
+  return cached(env, 'search-v2', key, 5 * 60_000, () => discoveryClient.search(query, filters));
 }
 
 export async function browseYouTube(env: Env, options: BrowseOptions = {}) {
@@ -138,28 +152,24 @@ export async function browseYouTube(env: Env, options: BrowseOptions = {}) {
   }
   const normalized = { ...options, categoryId: destination.category, region, language };
   const key = await hash(JSON.stringify(normalized));
-  return cached(env, 'browse-v3', key, 5 * 60_000, () => client.browse(normalized));
+  return cached(env, 'browse-v3', key, 5 * 60_000, () => discoveryClient.browse(normalized));
 }
 
 export function getVideo(env: Env, id: string): Promise<Video> {
-  return cached(env, 'video', `v2:${id}`, 30 * 60_000, () => client.getVideo(id));
+  return cached(env, 'video', `v2:${id}`, 30 * 60_000, () =>
+    youtube.getDetails({ ...packageOptions, videoId: id })
+  );
 }
 
 export function getVideoSignals(env: Env, id: string) {
-  return cached(env, 'video-signals', id, 15 * 60_000, () => client.getVideoSignals(id));
+  return cached(env, 'video-signals', id, 15 * 60_000, () =>
+    discoveryClient.getVideoSignals(id)
+  );
 }
 
-async function resolveChannelId(env: Env, id: string): Promise<string> {
-  if (!id.startsWith('@')) return id;
-  const result = await searchYouTube(env, id, { type: 'channel' });
-  const channel = result.results.find((item) => item.type === 'channel');
-  if (!channel) throw new ApiError(404, 'CHANNEL_NOT_FOUND', `Could not resolve ${id}.`);
-  return channel.id;
-}
-
-export async function getChannel(env: Env, id: string) {
-  return cached(env, 'channel-v5', id, 60 * 60_000, async () =>
-    client.getChannel(await resolveChannelId(env, id))
+export function getChannel(env: Env, id: string) {
+  return cached(env, 'channel-v5', id, 60 * 60_000, () =>
+    youtube.getChannelInfo({ ...packageOptions, channelId: id })
   );
 }
 
@@ -169,10 +179,9 @@ export async function getChannelVideos(
   continuation?: string,
   sort: ChannelVideoSort = 'latest'
 ) {
-  const channelId = await resolveChannelId(env, id);
-  const key = `${channelId}:${sort}:${continuation ?? 'first'}`;
+  const key = `${id}:${sort}:${continuation ?? 'first'}`;
   return cached(env, 'channel-videos-v2', key, 15 * 60_000, () =>
-    client.getChannelVideos(channelId, continuation, sort)
+    youtube.getChannelVideos({ ...packageOptions, channelId: id, continuation, sort })
   );
 }
 
@@ -182,72 +191,43 @@ export async function getChannelPlaylists(
   continuation?: string,
   sort: ChannelPlaylistSort = 'newest'
 ) {
-  const channelId = await resolveChannelId(env, id);
-  const key = `${channelId}:${sort}:${continuation ?? 'first'}`;
+  const key = `${id}:${sort}:${continuation ?? 'first'}`;
   return cached(env, 'channel-playlists-v2', key, 15 * 60_000, () =>
-    client.getChannelPlaylists(channelId, continuation, sort)
+    youtube.getChannelPlaylists({ ...packageOptions, channelId: id, continuation, sort })
   );
 }
 
 export function getPlaylist(env: Env, id: string) {
-  return cached(env, 'playlist-v2', id, 60 * 60_000, () => client.getPlaylist(id));
+  return cached(env, 'playlist-v2', id, 60 * 60_000, () =>
+    youtube.getPlaylist({ ...packageOptions, playlistId: id })
+  );
 }
 
 export function getComments(env: Env, id: string, continuation?: string) {
   const key = `v6:${id}:${continuation ?? 'first'}`;
-  return cached(env, 'comments', key, 15 * 60_000, () => client.getComments({ videoId: id, continuation }));
+  return cached(env, 'comments', key, 15 * 60_000, () =>
+    youtube.getComments({ ...packageOptions, videoId: id, continuation })
+  );
 }
 
 export function getAllComments(env: Env, id: string) {
   return cached(env, 'all-comments', `v5:${id}`, 15 * 60_000, () =>
-    client.getAllComments({ videoId: id, maxPages: 100 })
+    youtube.getComments({ ...packageOptions, videoId: id, all: true, maxPages: 100 })
   );
 }
 
-export async function getTranscript(env: Env, id: string, language?: string, translateTo?: string): Promise<Transcript> {
-  return cached(env, 'transcript-v3', `${id}:${language ?? 'auto'}:${translateTo ?? 'original'}`, 7 * 24 * 60 * 60_000, async () => {
-    const url = new URL('https://extractor.internal/api/subtitles');
-    url.searchParams.set('videoID', id);
-    if (language) url.searchParams.set('lang', language);
-    if (!translateTo && language) {
-      try {
-        const response = await env.EXTRACTOR.fetch(new Request(url, {
-          headers: { authorization: `Bearer ${env.CAPTION_API_TOKEN}` },
-        }));
-        if (response.ok) {
-          const data = await response.json<{ subtitles: Array<{ text: string; start: number; dur: number }> }>();
-          const segments = data.subtitles.map((segment) => ({
-            text: segment.text,
-            startMs: Math.round(segment.start * 1000),
-            durationMs: Math.round(segment.dur * 1000),
-            endMs: Math.round((segment.start + segment.dur) * 1000),
-          }));
-          return {
-            videoId: id,
-            track: {
-              id: `${language}:legacy`, languageCode: language, name: language,
-              kind: 'unknown', provenance: 'unknown', isTranslatable: false, isDefault: true,
-            },
-            granularity: 'segment' as const,
-            segments,
-            text: segments.map((segment) => segment.text).join('\n'),
-            meta: { source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
-          };
-        }
-      } catch (error) {
-        console.warn('extractor_service_fallback', { id, error });
-      }
-    }
-    return client.getTranscript({ videoId: id, language, translateTo, granularity: 'word' });
-  });
+export function getTranscript(env: Env, id: string, lang?: string): Promise<Transcript> {
+  return cached(env, 'transcript-v4', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, () =>
+    youtube.getTranscript({ ...packageOptions, videoId: id, lang, granularity: 'word' })
+  );
 }
 
 export function getCaptionTracks(id: string) {
-  return client.getCaptionTracks(id);
+  return youtube.getTracks({ ...packageOptions, videoId: id });
 }
 
 export function getEndscreen(id: string) {
-  return client.getEndscreen(id);
+  return youtube.getEndscreen({ ...packageOptions, videoId: id });
 }
 
 async function hash(value: string): Promise<string> {

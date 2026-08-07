@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@scalar/hono-api-reference": "^0.11.12",
+    "all-things-youtube": "^0.1.1",
     "better-auth": "^1.4.15",
     "he": "^1.2.0",
     "hono": "^4.12.19",

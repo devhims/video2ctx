@@ -2,7 +2,7 @@
 
 An evidence-first YouTube research application plus the standalone [`all-things-youtube`](./packages/all-things-youtube) npm library for normalized video, transcript, comment, channel, and playlist data.
 
-The library and platform share one normalized YouTube implementation. The platform's compatibility modules re-export the package source, preventing API and npm behavior from drifting apart.
+The platform uses the library's public helpers as its primary YouTube data interface, then adds backend-specific caching and HTTP routes around them.
 
 ## Structure
 
@@ -55,4 +55,4 @@ The platform publishes an OpenAPI 3.1 contract and an interactive Scalar client:
 
 Public APIs can be executed immediately from Scalar. For private APIs in local development, open Scalar's authentication controls and set `X-Demo-User` to any stable value, such as `scalar-local`. The platform creates an isolated demo account for that value when `ENVIRONMENT` is not `production`.
 
-The optional `EXTRACTOR` service binding can call the separately deployed caption extractor service without expanding the published library's API.
+Video, transcript, comment, channel, playlist, track, and end-screen routes use the local `all-things-youtube` package dependency.

@@ -48,12 +48,6 @@
       "remote": true
     }
   ],
-  "services": [
-    {
-      "binding": "EXTRACTOR",
-      "service": "youtube-caption-extractor-api"
-    }
-  ],
   "queues": {
     "producers": [
       { "binding": "TASKS", "queue": "all-things-youtube-tasks" },

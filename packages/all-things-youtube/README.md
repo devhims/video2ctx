@@ -225,6 +225,8 @@ console.log(collection.complete); // whether every discovered page was visited
 
 Page mode returns `CommentsPage`; collection mode returns `CommentsCollection` with `complete`, `pagesFetched`, `topLevelCount`, `replyCount`, and `remainingContinuations`.
 
+With `all: true`, top-level comment pages are visited before reply pages. On large videos, `maxPages` may be reached before replies are fetched; check `complete`, `replyCount`, and `remainingContinuations`.
+
 `totalCount` is YouTube's displayed total when available. It can be greater than the number returned because the displayed count may include deleted, moderated, or unavailable threads. No extra request is made solely to calculate that value.
 
 ### `getDetails(options)`
@@ -244,6 +246,8 @@ console.log(video.availability);
 ```
 
 The `Video` result includes description, channel, thumbnails, duration, publish and view information, live/caption flags, keywords, canonical URL, and playability. Tracks, transcripts, comments, and end-screen elements remain separate calls so you only pay for what you request.
+
+`availability.isPrivate` is `true` only when YouTube explicitly identifies the video as private. A `false` value does not prove the video is public; also check `availability.status`, `availability.reason`, and `meta.partial`.
 
 ### `getEndscreen(options)`
 

@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
-import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from './lib/youtube-types';
+import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from 'all-things-youtube';
 import type { AppUser, AppVariables, ImportPayload, MonitorPayload } from './types';
 import { createAuth } from './lib/auth';
 import { ApiError, asId, body, jsonError, now, sha256, text } from './lib/http';
@@ -96,7 +96,15 @@ app.get('/v1/search', async (c) => {
       live: live(c.req.query('live')),
       continuation: text(c.req.query('continuation'), 10_000) || undefined,
     };
-    return c.json(await searchYouTube(c.env, query, filters));
+    const search = await searchYouTube(c.env, query, filters);
+    return c.json({
+      query: search.query,
+      results: search.results,
+      continuation: search.continuation,
+      estimatedTotal: search.estimatedTotal,
+      meta: search.meta,
+      freshness: search.freshness,
+    });
   }
   const user = requireUser(c);
   if (mode === 'inside') return c.json({ query, results: await searchPrivate(c.env, user.id, query, c.req.query('projectId')) });
@@ -152,13 +160,10 @@ app.get('/v1/videos/:id', async (c) => c.json(await getVideo(c.env, asId(c.req.p
 app.get('/v1/videos/:id/tracks', async (c) => c.json(await getCaptionTracks(asId(c.req.param('id')))));
 app.get('/v1/videos/:id/transcript', async (c) => {
   const desiredLanguage = text(c.req.query('lang'), 20);
-  const legacySourceLanguage = text(c.req.query('language'), 20);
-  const legacyTranslationTarget = text(c.req.query('translateTo'), 20);
   return c.json(await getTranscript(
     c.env,
     asId(c.req.param('id')),
-    legacySourceLanguage || undefined,
-    desiredLanguage || legacyTranslationTarget || undefined,
+    desiredLanguage || undefined,
   ));
 });
 app.get('/v1/videos/:id/comments', async (c) => {
@@ -166,12 +171,7 @@ app.get('/v1/videos/:id/comments', async (c) => {
   const result = c.req.query('all') === 'true'
     ? await getAllComments(c.env, id)
     : await getComments(c.env, id, c.req.query('continuation'));
-  const {
-    replyContinuations: _internalReplyContinuations,
-    newestContinuation: _internalNewestContinuation,
-    ...publicResult
-  } = result;
-  return c.json(publicResult);
+  return c.json(result);
 });
 app.get('/v1/videos/:id/endscreen', async (c) => c.json(await getEndscreen(asId(c.req.param('id')))));
 app.get('/v1/channels/:id', async (c) => c.json(await getChannel(c.env, asId(c.req.param('id')))));

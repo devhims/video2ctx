@@ -46,6 +46,11 @@ describe('YouTube search route', () => {
 
     expect(response.status).toBe(200);
     expect(bindings[0]).toEqual(['search-v2', expectedKey]);
+    const payload = await response.json() as Record<string, unknown>;
+    expect(payload.results).toEqual([]);
+    expect(payload).not.toHaveProperty('videos');
+    expect(payload).not.toHaveProperty('channels');
+    expect(payload).not.toHaveProperty('playlists');
     warning.mockRestore();
   });
 });

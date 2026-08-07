@@ -1100,13 +1100,10 @@ export const openApiDocument = {
       SearchResult: { oneOf: [schemaRef('VideoSummary'), schemaRef('ChannelSummary'), schemaRef('PlaylistSummary')] },
       SearchResponse: {
         type: 'object',
-        required: ['query', 'results', 'videos', 'channels', 'playlists', 'meta'],
+        required: ['query', 'results', 'meta'],
         properties: {
           query: { type: 'string' },
           results: { type: 'array', items: schemaRef('SearchResult') },
-          videos: { type: 'array', items: schemaRef('VideoSummary') },
-          channels: { type: 'array', items: schemaRef('ChannelSummary') },
-          playlists: { type: 'array', items: schemaRef('PlaylistSummary') },
           continuation: { type: 'string' },
           estimatedTotal: { type: 'integer', minimum: 0 },
           meta: schemaRef('SourceMetadata'),

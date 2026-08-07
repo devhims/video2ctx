@@ -1,3 +1,5 @@
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+
 const mocks = vi.hoisted(() => {
   const client = {
     search: vi.fn(),

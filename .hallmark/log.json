@@ -1,0 +1,53 @@
+[
+  {
+    "date": "2026-08-03",
+    "macrostructure": "Workbench",
+    "theme": "existing-brand-DNA",
+    "theme_axes": "light / roman-serif display / warm",
+    "enrichment": "none",
+    "nav": "N3 Side-rail",
+    "footer": "none (application shell)",
+    "brief": "Dashboard workbench refinement with persistent research state and honest UI",
+    "knob_deltas": "navigation=side-rail; hierarchy=compact task headers; state=persistent sections; cards=flattened",
+    "pre_emit": "P5 H5 E5 S5 R5 V5",
+    "slop_test": "pass 58/58"
+  },
+  {
+    "date": "2026-08-03",
+    "macrostructure": "Map / Diagram",
+    "theme": "existing-brand-DNA",
+    "theme_axes": "light / roman-serif display / warm",
+    "enrichment": "Tier-A animated CSS source map",
+    "nav": "N9 Edge-aligned minimal",
+    "footer": "Ft2 Inline rule single line",
+    "brief": "Replace the hero research form with five one-shot typed use cases",
+    "knob_deltas": "form=non-interactive typed showcase; nav-action=Dashboard; motion=one-shot",
+    "pre_emit": "P5 H5 E5 S5 R5 V4",
+    "slop_test": "pass 58/58"
+  },
+  {
+    "date": "2026-08-03",
+    "macrostructure": "Map / Diagram",
+    "theme": "existing-brand-DNA",
+    "theme_axes": "light / roman-serif display / warm",
+    "enrichment": "Tier-A animated CSS source map",
+    "nav": "N9 Edge-aligned minimal",
+    "footer": "Ft2 Inline rule single line",
+    "brief": "Hero refinement with seamless canvas and restored source orbits",
+    "knob_deltas": "divider=none; diagram=max-26rem; motion=counter-rotating source rings",
+    "pre_emit": "P5 H5 E5 S5 R5 V5",
+    "slop_test": "pass 58/58"
+  },
+  {
+    "date": "2026-08-03",
+    "macrostructure": "Map / Diagram",
+    "theme": "existing-brand-DNA",
+    "theme_axes": "light / roman-serif display / warm",
+    "enrichment": "Tier-A CSS source map",
+    "nav": "N9 Edge-aligned minimal",
+    "footer": "Ft2 Inline rule single line",
+    "brief": "Homepage Hallmark improvements for evidence-first YouTube research",
+    "pre_emit": "P5 H5 E5 S5 R5 V5",
+    "slop_test": "pass 58/58"
+  }
+]

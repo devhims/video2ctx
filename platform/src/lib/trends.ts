@@ -1,4 +1,4 @@
-import type { Thumbnail, VideoSummary } from './youtube-types';
+import type { Thumbnail, VideoSummary } from 'all-things-youtube';
 import { getVideo, getVideoSignals, searchYouTube } from './youtube';
 import { generateTrendInsights, type TrendInsights } from './trend-insights';
 

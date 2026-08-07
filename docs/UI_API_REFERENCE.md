@@ -192,8 +192,8 @@ Additional filters:
 
 How it works:
 
-- Calls the platform's YouTube search adapter and returns deduplicated `videos`, `channels`, and `playlists` arrays.
-- Retains the deduplicated mixed `results` array for backward compatibility and returns a continuation token when another page is available.
+- Calls the platform's YouTube search adapter and returns one mixed `results` array of videos, channels, and playlists. Each item has a `type` discriminator.
+- Preserves YouTube's interleaved result order and returns a continuation token when another page is available.
 - Caches the query/filter combination in D1 for five minutes with stale fallback.
 - The UI currently exposes type, duration, and captions filters.
 

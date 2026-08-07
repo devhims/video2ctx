@@ -88,11 +88,12 @@ describe('OpenAPI and Scalar documentation', () => {
 
     expect(parameterNames).toContain('continuation');
     expect(searchSchema.required).toEqual(expect.arrayContaining([
-      'query', 'results', 'videos', 'channels', 'playlists', 'meta',
+      'query', 'results', 'meta',
     ]));
-    expect(searchSchema.properties.videos.items.$ref).toBe('#/components/schemas/VideoSummary');
-    expect(searchSchema.properties.channels.items.$ref).toBe('#/components/schemas/ChannelSummary');
-    expect(searchSchema.properties.playlists.items.$ref).toBe('#/components/schemas/PlaylistSummary');
+    expect(searchSchema.properties.results.items.$ref).toBe('#/components/schemas/SearchResult');
+    expect(searchSchema.properties).not.toHaveProperty('videos');
+    expect(searchSchema.properties).not.toHaveProperty('channels');
+    expect(searchSchema.properties).not.toHaveProperty('playlists');
   });
 
   test('documents tracks and transcript auto-translation', () => {

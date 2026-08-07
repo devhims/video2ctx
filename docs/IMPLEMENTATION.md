@@ -6,31 +6,25 @@ This repository implements the beta with a standalone library and two independen
 2. `platform/` is the typed Hono platform Worker and owns auth, private data, ingestion, retrieval, AI metering, monitoring, billing, notifications, and deletion.
 3. `web/` is the Next.js 16/OpenNext web application. Its same-origin BFF reaches the platform over a Cloudflare service binding and falls back to `PLATFORM_API_BASE_URL` locally.
 
-The platform modules under `platform/src/lib/youtube-{client,types,transport}.ts` are thin re-exports of the package source so both surfaces use the same implementation.
+The platform's core YouTube routes call the package's public helpers through `platform/src/lib/youtube.ts`. That adapter adds D1 caching and platform error handling without duplicating the package's normalization logic. Search, category browse, and trend-only signals remain on an internal discovery adapter because they are not part of the package's public interface.
 
-## Shared normalized client
+## Shared package interface
 
 ```ts
-import { createYouTubeClient } from 'all-things-youtube';
+import { getDetails, getTracks, getTranscript } from 'all-things-youtube';
 
-const youtube = createYouTubeClient({ language: 'en', region: 'US' });
-const results = await youtube.search('evidence-first research', {
-  type: 'video',
-  duration: 'medium',
-  captionsOnly: true,
-  sort: 'views',
-});
-const tracks = await youtube.getCaptionTracks('abcdefghijk');
-const transcript = await youtube.getTranscript({
+const video = await getDetails({ videoId: 'abcdefghijk' });
+const tracks = await getTracks({ videoId: 'abcdefghijk' });
+const transcript = await getTranscript({
   videoId: 'abcdefghijk',
-  language: 'en',
+  lang: 'hi',
   granularity: 'word',
 });
 ```
 
-`getCaptionTracks()` intentionally returns normalized track metadata, not caption URLs. `getTranscript()` makes the separate internal request to the selected track's `baseUrl`, requests JSON3, computes word time as `tStartMs + tOffsetMs`, and strips the signed URL before returning data.
+`getTracks()` intentionally returns normalized track metadata, not caption URLs. `getTranscript()` selects the source track, requests translation when `lang` is supplied, computes word timing where YouTube provides it, and strips signed caption URLs before returning data.
 
-The advanced client also provides `browse`, `getVideo`, `getChannel`, `getPlaylist`, `getComments`, and `getEndscreen`. Raw renderer objects, tracking values, tokens, attestation, ads, media URLs, and caption URLs are not primary API output. The published caption extractor remains a separate, unchanged service boundary.
+Raw renderer objects, tracking values, attestation, ads, media URLs, and caption URLs are not public API output. Continuation tokens remain opaque pagination values.
 
 ## Platform API
 
@@ -124,8 +118,8 @@ The `platform/wrangler.jsonc` file uses automatic resource provisioning for D1 a
 
 1. Enable Email Sending for the domain in `EMAIL_FROM` and update that address.
 2. Set `APP_ORIGIN`, `AUTH_BASE_URL`, `ENVIRONMENT=production`, Stripe price ID, admin emails, and plan limits per environment.
-3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, Stripe credentials, and `CAPTION_API_TOKEN`.
-4. Deploy the extractor service, platform Worker, and web Worker in that order so service bindings resolve.
+3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, and Stripe credentials.
+4. Deploy the platform Worker and web Worker in that order so service bindings resolve.
 5. Apply D1 migrations remotely and configure Google/Stripe callback URLs.
 
 Never commit `.dev.vars`. The web Worker does not receive provider secrets; it reaches the platform through `PLATFORM`.

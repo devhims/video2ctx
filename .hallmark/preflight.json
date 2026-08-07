@@ -1,0 +1,10 @@
+{
+  "date": "2026-08-03",
+  "scope": "web/app/page.tsx",
+  "font_stack": ["Fraunces display", "Inter body", "JetBrains Mono labels"],
+  "palette": "warm paper with vermilion accent",
+  "motion": "motion-cut; no animation library",
+  "spacing": "new 4-point semantic scale in web/tokens.css",
+  "framework": "Next.js 16 with Tailwind CSS v4",
+  "preserved": ["brand palette", "font families", "question flow", "CSS source-map concept"]
+}

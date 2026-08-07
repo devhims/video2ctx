@@ -33,7 +33,7 @@ describe('transcript route', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(getTranscript).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', undefined, 'hi');
+    expect(getTranscript).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', 'hi');
     warning.mockRestore();
   });
 });
