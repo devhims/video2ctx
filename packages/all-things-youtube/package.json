@@ -1,6 +1,6 @@
 {
   "name": "all-things-youtube",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript toolkit for YouTube data. Get transcripts/captions, comments, video details, channels, playlists, and more.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -55,7 +55,6 @@
   "bugs": {
     "url": "https://github.com/devhims/all-things-youtube/issues"
   },
-  "homepage": "https://github.com/devhims/all-things-youtube/tree/main/packages/all-things-youtube#readme",
   "license": "MIT",
   "dependencies": {
     "he": "^1.2.0",
