@@ -1,15 +1,17 @@
 # all-things-youtube Workspace
 
-This repository implements the beta with an internal adapter and two independently deployable layers:
+This repository implements the beta with a standalone library and two independently deployable application layers:
 
-1. `platform/src/lib/youtube-client.ts` and `youtube-types.ts` contain the application-internal normalized InnerTube client and data model.
+1. `packages/all-things-youtube/` contains the publishable normalized YouTube client, public helpers, retry transport, and data model.
 2. `platform/` is the typed Hono platform Worker and owns auth, private data, ingestion, retrieval, AI metering, monitoring, billing, notifications, and deletion.
 3. `web/` is the Next.js 16/OpenNext web application. Its same-origin BFF reaches the platform over a Cloudflare service binding and falls back to `PLATFORM_API_BASE_URL` locally.
 
-## Internal normalized client
+The platform modules under `platform/src/lib/youtube-{client,types,transport}.ts` are thin re-exports of the package source so both surfaces use the same implementation.
+
+## Shared normalized client
 
 ```ts
-import { createYouTubeClient } from './lib/youtube-client';
+import { createYouTubeClient } from 'all-things-youtube';
 
 const youtube = createYouTubeClient({ language: 'en', region: 'US' });
 const results = await youtube.search('evidence-first research', {
@@ -28,7 +30,7 @@ const transcript = await youtube.getTranscript({
 
 `getCaptionTracks()` intentionally returns normalized track metadata, not caption URLs. `getTranscript()` makes the separate internal request to the selected track's `baseUrl`, requests JSON3, computes word time as `tStartMs + tOffsetMs`, and strips the signed URL before returning data.
 
-The internal client also provides `browse`, `getVideo`, `getChannel`, `getPlaylist`, `getComments`, `getStoryboards`, and `getEndscreen`. Raw renderer objects, tracking values, tokens, attestation, ads, media URLs, and caption URLs are not primary API output. The published caption extractor remains a separate, unchanged service boundary.
+The advanced client also provides `browse`, `getVideo`, `getChannel`, `getPlaylist`, `getComments`, and `getEndscreen`. Raw renderer objects, tracking values, tokens, attestation, ads, media URLs, and caption URLs are not primary API output. The published caption extractor remains a separate, unchanged service boundary.
 
 ## Platform API
 
@@ -40,7 +42,7 @@ Important routes:
 | --- | --- |
 | UI helpers | `POST /v1/resolve` (first-party universal-input routing) |
 | Discovery | `GET /v1/search`, `GET /v1/browse` |
-| Entities | `/v1/videos/:id`, `/transcript`, `/captions`, `/comments`, `/storyboards`, `/endscreen`; `/v1/channels/:id`; `/v1/playlists/:id` |
+| Entities | `/v1/videos/:id`, `/tracks`, `/transcript`, `/comments`, `/endscreen`; `/v1/channels/:id`, `/v1/channels/:id/videos`, `/v1/channels/:id/playlists`; `/v1/playlists/:id` |
 | Research | `/v1/projects`, `/v1/projects/:id/items`, `/v1/answers`, `/v1/comparisons`, `/v1/reports` |
 | Jobs | `POST /v1/imports`, `GET /v1/jobs/:id` |
 | Exports | `POST /v1/projects/:id/exports`, `GET /v1/exports/:id/download` |
@@ -75,10 +77,21 @@ Content-Type: application/json
 Inspect caption tracks and fetch the transcript:
 
 ```http
-GET http://localhost:8787/v1/videos/abcdefghijk/captions
+GET http://localhost:8787/v1/videos/abcdefghijk/tracks
 
-GET http://localhost:8787/v1/videos/abcdefghijk/transcript?language=en
+GET http://localhost:8787/v1/videos/abcdefghijk/transcript
+
+GET http://localhost:8787/v1/videos/abcdefghijk/transcript?lang=hi
 ```
+
+The tracks response exposes both the legacy `tracks` / `translationLanguages` fields and the clearer
+`sourceTracks` / `autoTranslationTargets` aliases. Pass the desired output language as `lang`; the backend
+selects the video's default source track and requests auto-translation only when the languages differ.
+
+All outbound YouTube traffic uses a shared transport retry policy. It retries network failures, `429`, `408`,
+`425`, and transient `5xx` responses up to five attempts, honors bounded `Retry-After` values, and otherwise
+uses exponential backoff with full jitter. Each attempt rebuilds its request; translated-caption retries also
+refresh the signed caption URL and anonymous visitor session. Permanent client errors are not retried.
 
 Fetch every available top-level comment and reply (up to the explicit crawl safety limit):
 
@@ -119,7 +132,7 @@ Never commit `.dev.vars`. The web Worker does not receive provider secrets; it r
 
 ## Reliability and privacy
 
-- Public entity snapshots are shared and stale cache is returned when an InnerTube section fails.
+- Public entity snapshots are shared and stale cache is returned when an upstream YouTube section fails.
 - Private documents use one AI Search instance per user and project metadata filters; D1/R2 remain authoritative.
 - Public transcript imports grow the shared hybrid corpus. Channel and playlist workflows eagerly fan out recent videos, with lazy access still supported.
 - Queue tasks and Stripe webhooks have deterministic replay records. Credit reservation is a single conditional D1 mutation, followed by settlement or release.

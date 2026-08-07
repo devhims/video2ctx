@@ -2,7 +2,7 @@ import { citedAnswer, validCitationIndexes } from '../src/lib/analysis';
 import { youtubeOAuthCallback } from '../src/lib/oauth';
 import { searchPrivate } from '../src/lib/search';
 import { transcriptEvidence } from '../src/lib/evidence';
-import { routeInput } from '../src/lib/youtube';
+import { getVideo, routeInput } from '../src/lib/youtube';
 
 describe('universal input routing', () => {
   test.each([
@@ -13,6 +13,34 @@ describe('universal input routing', () => {
     ['best AI research channels', { kind: 'search', query: 'best AI research channels' }],
   ])('routes %s', (input, expected) => expect(routeInput(input)).toEqual(expected));
   test('rejects non-YouTube URLs', () => expect(() => routeInput('https://example.com/watch?v=abcdefghijk')).toThrow('Only YouTube URLs'));
+});
+
+describe('public source metadata', () => {
+  test('brands cached provider metadata as allthingsyoutube', async () => {
+    const snapshot = {
+      type: 'video', id: 'abcdefghijk', title: 'Cached video', channel: { id: '', name: '', url: '' },
+      thumbnails: [], isLive: false, url: 'https://youtube.com/watch?v=abcdefghijk', keywords: [],
+      availability: { status: 'OK', playable: true },
+      meta: { source: 'legacy-provider', fetchedAt: '2026-08-06T00:00:00.000Z', partial: false, warnings: [] },
+    };
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => ({
+              data_json: JSON.stringify(snapshot),
+              fetched_at: Date.now(),
+              expires_at: Date.now() + 60_000,
+            }),
+          }),
+        }),
+      },
+    } as unknown as Env;
+
+    const video = await getVideo(env, 'abcdefghijk');
+
+    expect(video.meta.source).toBe('allthingsyoutube');
+  });
 });
 
 describe('citation safety', () => {
@@ -70,7 +98,10 @@ describe('private search isolation', () => {
     await searchPrivate(env, 'Alice-123', 'q', 'project-a');
     await searchPrivate(env, 'Bob-456', 'q', 'project-b');
     expect(requested[0]).not.toBe(requested[2]);
-    expect(filters).toEqual([{ project_id: 'project-a' }, { project_id: 'project-b' }]);
+    expect(filters).toEqual([
+      { project_id: 'project-a' }, { project_id: 'project-a' },
+      { project_id: 'project-b' }, { project_id: 'project-b' },
+    ]);
   });
 
   test('creates private indexes with a supported chunk overlap', async () => {
@@ -82,6 +113,31 @@ describe('private search isolation', () => {
     };
     await searchPrivate({ AI_SEARCH: namespace } as unknown as Env, 'new-user', 'question');
     expect(createInput?.chunk_overlap).toBeLessThanOrEqual(30);
+  });
+
+  test('retries without reranking when strict reranking removes all evidence', async () => {
+    const search = vi.fn()
+      .mockResolvedValueOnce({ chunks: [] })
+      .mockResolvedValueOnce({
+        chunks: [{
+          id: 'scalar-result',
+          score: 0.61,
+          text: '[2673559] Swagger UI is based on OpenAPI.\n[2701800] The newer tool is Scalar.',
+          item: {
+            key: 'project-document.md',
+            metadata: { entity_id: 'video-id', project_id: 'project-a', start_ms: 0 },
+          },
+        }],
+      });
+    const instance = { info: async () => ({ id: 'user-alice' }), search };
+    const env = { AI_SEARCH: { get: () => instance } } as unknown as Env;
+
+    const evidence = await searchPrivate(env, 'Alice', 'what api interface is being used?', 'project-a');
+
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[0]?.[0].ai_search_options.reranking.enabled).toBe(true);
+    expect(search.mock.calls[1]?.[0].ai_search_options.reranking.enabled).toBe(false);
+    expect(evidence[0]).toMatchObject({ id: 'scalar-result', startMs: 2673559 });
   });
 });
 

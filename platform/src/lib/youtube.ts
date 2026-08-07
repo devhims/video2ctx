@@ -8,13 +8,19 @@ import {
 } from './browse-contract';
 import type {
   BrowseOptions,
+  ChannelPlaylistSort,
+  ChannelVideoSort,
   SearchFilters,
   Transcript,
   Video,
 } from './youtube-types';
 import { ApiError, now } from './http';
 
-const client = createYouTubeClient();
+const client = createYouTubeClient({
+  retry: {
+    onRetry: (event) => console.warn('youtube_retry', event),
+  },
+});
 
 export type UniversalInput =
   | { kind: 'video'; id: string }
@@ -56,6 +62,17 @@ function validId(value: string, max = 64): string {
   return value;
 }
 
+function publicMetadata<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  const metadata = record.meta;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return value;
+  return {
+    ...record,
+    meta: { ...metadata, source: 'allthingsyoutube' },
+  } as T;
+}
+
 async function cached<T>(
   env: Env,
   type: string,
@@ -68,11 +85,14 @@ async function cached<T>(
   ).bind(type, id).first<{ data_json: string; fetched_at: number; expires_at: number }>();
   const timestamp = now();
   if (existing && existing.expires_at > timestamp) {
-    return { ...JSON.parse(existing.data_json), freshness: { state: 'fresh', fetchedAt: existing.fetched_at } };
+    return {
+      ...publicMetadata(JSON.parse(existing.data_json)),
+      freshness: { state: 'fresh', fetchedAt: existing.fetched_at },
+    };
   }
   try {
-    const loaded = await loader();
-    const provenance = { provider: 'innertube', fetchedAt: timestamp };
+    const loaded = publicMetadata(await loader());
+    const provenance = { provider: 'allthingsyoutube', fetchedAt: timestamp };
     await env.DB.prepare(
       `INSERT INTO entity_snapshots
        (entity_type, entity_id, data_json, provenance_json, fetched_at, expires_at)
@@ -85,7 +105,7 @@ async function cached<T>(
   } catch (error) {
     if (existing) {
       return {
-        ...JSON.parse(existing.data_json),
+        ...publicMetadata(JSON.parse(existing.data_json)),
         freshness: { state: 'stale', fetchedAt: existing.fetched_at, reason: 'UPSTREAM_UNAVAILABLE' },
       };
     }
@@ -122,23 +142,51 @@ export async function browseYouTube(env: Env, options: BrowseOptions = {}) {
 }
 
 export function getVideo(env: Env, id: string): Promise<Video> {
-  return cached(env, 'video', id, 30 * 60_000, () => client.getVideo(id));
+  return cached(env, 'video', `v2:${id}`, 30 * 60_000, () => client.getVideo(id));
 }
 
 export function getVideoSignals(env: Env, id: string) {
   return cached(env, 'video-signals', id, 15 * 60_000, () => client.getVideoSignals(id));
 }
 
-export function getChannel(env: Env, id: string) {
-  return cached(env, 'channel-v3', id, 60 * 60_000, async () => {
-    if (id.startsWith('@')) {
-      const result = await client.search(id, { type: 'channel' });
-      const channel = result.results.find((item) => item.type === 'channel');
-      if (!channel) throw new ApiError(404, 'CHANNEL_NOT_FOUND', `Could not resolve ${id}.`);
-      return client.getChannel(channel.id);
-    }
-    return client.getChannel(id);
-  });
+async function resolveChannelId(env: Env, id: string): Promise<string> {
+  if (!id.startsWith('@')) return id;
+  const result = await searchYouTube(env, id, { type: 'channel' });
+  const channel = result.results.find((item) => item.type === 'channel');
+  if (!channel) throw new ApiError(404, 'CHANNEL_NOT_FOUND', `Could not resolve ${id}.`);
+  return channel.id;
+}
+
+export async function getChannel(env: Env, id: string) {
+  return cached(env, 'channel-v5', id, 60 * 60_000, async () =>
+    client.getChannel(await resolveChannelId(env, id))
+  );
+}
+
+export async function getChannelVideos(
+  env: Env,
+  id: string,
+  continuation?: string,
+  sort: ChannelVideoSort = 'latest'
+) {
+  const channelId = await resolveChannelId(env, id);
+  const key = `${channelId}:${sort}:${continuation ?? 'first'}`;
+  return cached(env, 'channel-videos-v2', key, 15 * 60_000, () =>
+    client.getChannelVideos(channelId, continuation, sort)
+  );
+}
+
+export async function getChannelPlaylists(
+  env: Env,
+  id: string,
+  continuation?: string,
+  sort: ChannelPlaylistSort = 'newest'
+) {
+  const channelId = await resolveChannelId(env, id);
+  const key = `${channelId}:${sort}:${continuation ?? 'first'}`;
+  return cached(env, 'channel-playlists-v2', key, 15 * 60_000, () =>
+    client.getChannelPlaylists(channelId, continuation, sort)
+  );
 }
 
 export function getPlaylist(env: Env, id: string) {
@@ -146,58 +194,56 @@ export function getPlaylist(env: Env, id: string) {
 }
 
 export function getComments(env: Env, id: string, continuation?: string) {
-  const key = `v5:${id}:${continuation ?? 'first'}`;
+  const key = `v6:${id}:${continuation ?? 'first'}`;
   return cached(env, 'comments', key, 15 * 60_000, () => client.getComments({ videoId: id, continuation }));
 }
 
 export function getAllComments(env: Env, id: string) {
-  return cached(env, 'all-comments', `v4:${id}`, 15 * 60_000, () =>
+  return cached(env, 'all-comments', `v5:${id}`, 15 * 60_000, () =>
     client.getAllComments({ videoId: id, maxPages: 100 })
   );
 }
 
-export async function getTranscript(env: Env, id: string, language = 'en'): Promise<Transcript> {
-  return cached(env, 'transcript', `${id}:${language}`, 7 * 24 * 60 * 60_000, async () => {
+export async function getTranscript(env: Env, id: string, language?: string, translateTo?: string): Promise<Transcript> {
+  return cached(env, 'transcript-v3', `${id}:${language ?? 'auto'}:${translateTo ?? 'original'}`, 7 * 24 * 60 * 60_000, async () => {
     const url = new URL('https://extractor.internal/api/subtitles');
     url.searchParams.set('videoID', id);
-    url.searchParams.set('lang', language);
-    try {
-      const response = await env.EXTRACTOR.fetch(new Request(url, {
-        headers: { authorization: `Bearer ${env.CAPTION_API_TOKEN}` },
-      }));
-      if (response.ok) {
-        const data = await response.json<{ subtitles: Array<{ text: string; start: number; dur: number }> }>();
-        const segments = data.subtitles.map((segment) => ({
-          text: segment.text,
-          startMs: Math.round(segment.start * 1000),
-          durationMs: Math.round(segment.dur * 1000),
-          endMs: Math.round((segment.start + segment.dur) * 1000),
+    if (language) url.searchParams.set('lang', language);
+    if (!translateTo && language) {
+      try {
+        const response = await env.EXTRACTOR.fetch(new Request(url, {
+          headers: { authorization: `Bearer ${env.CAPTION_API_TOKEN}` },
         }));
-        return {
-          videoId: id,
-          track: {
-            id: `${language}:legacy`, languageCode: language, name: language,
-            kind: 'unknown', provenance: 'unknown', isTranslatable: false, isDefault: true,
-          },
-          granularity: 'segment' as const,
-          segments,
-          text: segments.map((segment) => segment.text).join('\n'),
-          meta: { source: 'innertube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
-        };
+        if (response.ok) {
+          const data = await response.json<{ subtitles: Array<{ text: string; start: number; dur: number }> }>();
+          const segments = data.subtitles.map((segment) => ({
+            text: segment.text,
+            startMs: Math.round(segment.start * 1000),
+            durationMs: Math.round(segment.dur * 1000),
+            endMs: Math.round((segment.start + segment.dur) * 1000),
+          }));
+          return {
+            videoId: id,
+            track: {
+              id: `${language}:legacy`, languageCode: language, name: language,
+              kind: 'unknown', provenance: 'unknown', isTranslatable: false, isDefault: true,
+            },
+            granularity: 'segment' as const,
+            segments,
+            text: segments.map((segment) => segment.text).join('\n'),
+            meta: { source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+          };
+        }
+      } catch (error) {
+        console.warn('extractor_service_fallback', { id, error });
       }
-    } catch (error) {
-      console.warn('extractor_service_fallback', { id, error });
     }
-    return client.getTranscript({ videoId: id, language, granularity: 'word' });
+    return client.getTranscript({ videoId: id, language, translateTo, granularity: 'word' });
   });
 }
 
 export function getCaptionTracks(id: string) {
   return client.getCaptionTracks(id);
-}
-
-export function getStoryboards(id: string) {
-  return client.getStoryboards(id);
 }
 
 export function getEndscreen(id: string) {

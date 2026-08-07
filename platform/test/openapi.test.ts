@@ -95,6 +95,51 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(searchSchema.properties.playlists.items.$ref).toBe('#/components/schemas/PlaylistSummary');
   });
 
+  test('documents tracks and transcript auto-translation', () => {
+    const schemas = openApiDocument.components.schemas as Record<string, any>;
+    const paths = openApiDocument.paths as Record<string, Record<string, any>>;
+    const tracksOperation = paths['/v1/videos/{id}/tracks']!.get;
+    const transcriptOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
+      ['/v1/videos/{id}/transcript']!.get;
+    const parameterNames = transcriptOperation.parameters.map((parameter: { name: string }) => parameter.name);
+
+    expect(tracksOperation.operationId).toBe('getVideoTracks');
+    expect(tracksOperation.deprecated).not.toBe(true);
+    expect(paths['/v1/videos/{id}/captions']).toBeUndefined();
+    expect(parameterNames).toContain('lang');
+    expect(parameterNames).not.toContain('translateTo');
+    expect(parameterNames).not.toContain('language');
+    expect(schemas.CaptionTrackList.required).toEqual(expect.arrayContaining([
+      'tracks', 'sourceTracks', 'translationLanguages', 'autoTranslationTargets',
+    ]));
+    expect(schemas.Transcript.properties.translatedTo.$ref).toBe('#/components/schemas/TranslationLanguage');
+    expect(schemas.CommentResponse.properties.totalCount).toMatchObject({ type: 'integer', minimum: 0 });
+    expect(schemas.CommentResponse.properties.estimatedTotal).toBeUndefined();
+    expect(schemas.Video.required).toBeUndefined();
+    expect(schemas.Video.allOf[1].required).toEqual(['keywords', 'availability', 'meta']);
+    expect(schemas.Video.allOf[1].properties).not.toHaveProperty('captionTracks');
+    expect(schemas.Video.allOf[1].properties).not.toHaveProperty('translationLanguages');
+    expect(schemas.Video.allOf[1].properties).not.toHaveProperty('media');
+    expect(schemas.Video.allOf[1].properties).not.toHaveProperty('storyboards');
+    expect(schemas.Video.allOf[1].properties).not.toHaveProperty('endscreen');
+    expect(schemas.SourceMetadata.properties.source).toEqual({
+      type: 'string', const: 'allthingsyoutube',
+    });
+    expect(schemas.Channel.required).toEqual([
+      'type', 'id', 'name', 'thumbnails', 'url', 'about', 'meta',
+    ]);
+    expect(schemas.Channel.properties).not.toHaveProperty('videos');
+    expect(schemas.Channel.properties).not.toHaveProperty('playlists');
+    expect(schemas.ChannelAbout.required).toEqual(['links', 'moreInfo']);
+    expect(schemas.ChannelMoreInfo.properties.businessEmailAvailable.type).toBe('boolean');
+    expect(schemas.ChannelVideos.required).toEqual(['channelId', 'sort', 'videos', 'meta']);
+    expect(schemas.ChannelPlaylists.required).toEqual(['channelId', 'sort', 'playlists', 'meta']);
+    expect(paths['/v1/channels/{id}/videos']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+      .toContain('continuation');
+    expect(paths['/v1/channels/{id}/playlists']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+      .toContain('continuation');
+  });
+
   test('classifies the universal input resolver as an internal UI helper', () => {
     const operation = (openApiDocument.paths as Record<string, Record<string, any>>)
       ['/v1/resolve']!.post;

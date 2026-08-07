@@ -1,12 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
-import type { SearchFilters } from './lib/youtube-types';
+import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from './lib/youtube-types';
 import type { AppUser, AppVariables, ImportPayload, MonitorPayload } from './types';
 import { createAuth } from './lib/auth';
 import { ApiError, asId, body, jsonError, now, sha256, text } from './lib/http';
 import {
-  browseYouTube, getAllComments, getCaptionTracks, getChannel, getComments, getEndscreen, getPlaylist,
-  getStoryboards, getTranscript, getVideo, routeInput, searchYouTube,
+  browseYouTube, getAllComments, getCaptionTracks, getChannel, getChannelPlaylists, getChannelVideos,
+  getComments, getEndscreen, getPlaylist, getTranscript, getVideo, routeInput, searchYouTube,
 } from './lib/youtube';
 import { creditBalance, enforceCount, enforceImportLimit, entitlements, releaseCredits, reserveCredits, settleCredits } from './lib/entitlements';
 import { requireEvidence, searchPrivate, searchPublic } from './lib/search';
@@ -149,8 +149,18 @@ app.post('/v1/trends/plan', async (c) => {
 });
 
 app.get('/v1/videos/:id', async (c) => c.json(await getVideo(c.env, asId(c.req.param('id')))));
-app.get('/v1/videos/:id/captions', async (c) => c.json(await getCaptionTracks(asId(c.req.param('id')))));
-app.get('/v1/videos/:id/transcript', async (c) => c.json(await getTranscript(c.env, asId(c.req.param('id')), text(c.req.query('language'), 20) || 'en')));
+app.get('/v1/videos/:id/tracks', async (c) => c.json(await getCaptionTracks(asId(c.req.param('id')))));
+app.get('/v1/videos/:id/transcript', async (c) => {
+  const desiredLanguage = text(c.req.query('lang'), 20);
+  const legacySourceLanguage = text(c.req.query('language'), 20);
+  const legacyTranslationTarget = text(c.req.query('translateTo'), 20);
+  return c.json(await getTranscript(
+    c.env,
+    asId(c.req.param('id')),
+    legacySourceLanguage || undefined,
+    desiredLanguage || legacyTranslationTarget || undefined,
+  ));
+});
 app.get('/v1/videos/:id/comments', async (c) => {
   const id = asId(c.req.param('id'));
   const result = c.req.query('all') === 'true'
@@ -163,9 +173,20 @@ app.get('/v1/videos/:id/comments', async (c) => {
   } = result;
   return c.json(publicResult);
 });
-app.get('/v1/videos/:id/storyboards', async (c) => c.json(await getStoryboards(asId(c.req.param('id')))));
 app.get('/v1/videos/:id/endscreen', async (c) => c.json(await getEndscreen(asId(c.req.param('id')))));
 app.get('/v1/channels/:id', async (c) => c.json(await getChannel(c.env, asId(c.req.param('id')))));
+app.get('/v1/channels/:id/videos', async (c) => c.json(await getChannelVideos(
+  c.env,
+  asId(c.req.param('id')),
+  c.req.query('continuation'),
+  channelVideoSort(c.req.query('sort')),
+)));
+app.get('/v1/channels/:id/playlists', async (c) => c.json(await getChannelPlaylists(
+  c.env,
+  asId(c.req.param('id')),
+  c.req.query('continuation'),
+  channelPlaylistSort(c.req.query('sort')),
+)));
 app.get('/v1/playlists/:id', async (c) => c.json(await getPlaylist(c.env, asId(c.req.param('id')))));
 
 app.get('/v1/projects', async (c) => {
@@ -443,6 +464,16 @@ function finiteNumber(value: unknown): number | null { const number = Number(val
 function entityType(value?: string): SearchFilters['type'] { return ['video','channel','playlist'].includes(value ?? '') ? value as SearchFilters['type'] : 'all'; }
 function duration(value?: string): SearchFilters['duration'] { return ['short','medium','long'].includes(value ?? '') ? value as SearchFilters['duration'] : undefined; }
 function sort(value?: string): SearchFilters['sort'] { return ['relevance','date','views','rating'].includes(value ?? '') ? value as SearchFilters['sort'] : undefined; }
+function channelVideoSort(value?: string): ChannelVideoSort {
+  if (!value) return 'latest';
+  if (['latest', 'popular', 'oldest'].includes(value)) return value as ChannelVideoSort;
+  throw new ApiError(422, 'INVALID_CHANNEL_VIDEO_SORT', 'Use latest, popular, or oldest.');
+}
+function channelPlaylistSort(value?: string): ChannelPlaylistSort {
+  if (!value) return 'newest';
+  if (['newest', 'last-video-added'].includes(value)) return value as ChannelPlaylistSort;
+  throw new ApiError(422, 'INVALID_CHANNEL_PLAYLIST_SORT', 'Use newest or last-video-added.');
+}
 function live(value?: string): SearchFilters['live'] { return ['live','upcoming','completed'].includes(value ?? '') ? value as SearchFilters['live'] : undefined; }
 
 export default {

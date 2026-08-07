@@ -13,7 +13,7 @@ describe('YouTube search route', () => {
       videos: [],
       channels: [],
       playlists: [],
-      meta: { source: 'innertube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
     };
     const env = {
       PUBLIC_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },

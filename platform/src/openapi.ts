@@ -44,7 +44,7 @@ const sourceMetadata: Schema = {
   type: 'object',
   required: ['source', 'fetchedAt', 'partial', 'warnings'],
   properties: {
-    source: { type: 'string', enum: ['innertube', 'youtube-data-api', 'cache', 'derived'] },
+    source: { type: 'string', const: 'allthingsyoutube' },
     fetchedAt: { type: 'string', format: 'date-time' },
     partial: { type: 'boolean' },
     warnings: { type: 'array', items: { type: 'string' } },
@@ -108,7 +108,7 @@ const videoSummary: Schema = {
 
 const playlistSummary: Schema = {
   type: 'object',
-  required: ['type', 'id', 'title', 'thumbnails', 'url'],
+  required: ['type', 'id', 'title', 'thumbnails', 'isPodcast', 'url'],
   properties: {
     type: { const: 'playlist' },
     id: { type: 'string' },
@@ -118,6 +118,9 @@ const playlistSummary: Schema = {
     thumbnails: { type: 'array', items: schemaRef('Thumbnail') },
     videoCount: { type: 'integer', minimum: 0 },
     videoCountText: { type: 'string' },
+    updatedTimeText: { type: 'string', description: 'YouTube’s display text, such as “Updated 4 days ago”.' },
+    isPodcast: { type: 'boolean' },
+    playUrl: { type: 'string', format: 'uri', description: 'Starts playback from the item represented by the playlist card.' },
     url: { type: 'string', format: 'uri' },
   },
 };
@@ -448,14 +451,15 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/videos/{id}/captions': {
+    '/v1/videos/{id}/tracks': {
       get: {
         tags: ['Videos'],
-        operationId: 'getVideoCaptions',
-        summary: 'List caption tracks',
+        operationId: 'getVideoTracks',
+        summary: 'List transcript tracks',
+        description: 'Lists the source caption tracks and auto-translation targets available to the transcript endpoint. This endpoint returns metadata, not caption text.',
         parameters: [pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ')],
         responses: {
-          '200': jsonResponse('Caption track information.', schemaRef('CaptionTrackList')),
+          '200': jsonResponse('Transcript track information.', schemaRef('CaptionTrackList')),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
@@ -469,7 +473,7 @@ export const openApiDocument = {
         summary: 'Get a timed transcript',
         parameters: [
           pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ'),
-          queryParameter('language', 'Requested language code.', { type: 'string', default: 'en' }),
+          queryParameter('lang', 'Desired transcript language. The backend selects the default source track and translates only when necessary.', { type: 'string', example: 'hi' }),
         ],
         responses: {
           '200': jsonResponse('Normalized timed transcript.', schemaRef('Transcript')),
@@ -497,19 +501,6 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/videos/{id}/storyboards': {
-      get: {
-        tags: ['Videos'],
-        operationId: 'getVideoStoryboards',
-        summary: 'Get storyboard metadata',
-        parameters: [pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ')],
-        responses: {
-          '200': jsonResponse('Video storyboard levels.', { type: 'array', items: schemaRef('Storyboard') }),
-          '422': responseRef('ValidationError'),
-          '500': responseRef('ServerError'),
-        },
-      },
-    },
     '/v1/videos/{id}/endscreen': {
       get: {
         tags: ['Videos'],
@@ -530,7 +521,43 @@ export const openApiDocument = {
         summary: 'Inspect a channel',
         parameters: [pathParameter('id', 'YouTube channel ID or handle.', '@YouTube')],
         responses: {
-          '200': jsonResponse('Normalized channel and catalog.', schemaRef('Channel')),
+          '200': jsonResponse('Normalized channel metadata.', schemaRef('Channel')),
+          '404': responseRef('NotFound'),
+          '422': responseRef('ValidationError'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/v1/channels/{id}/videos': {
+      get: {
+        tags: ['Channels'],
+        operationId: 'getChannelVideos',
+        summary: 'List channel videos',
+        parameters: [
+          pathParameter('id', 'YouTube channel ID or handle.', '@YouTube'),
+          queryParameter('sort', 'YouTube Videos-tab ordering.', { type: 'string', enum: ['latest', 'popular', 'oldest'], default: 'latest' }),
+          queryParameter('continuation', 'Opaque token returned by the previous channel videos response.', { type: 'string' }),
+        ],
+        responses: {
+          '200': jsonResponse('A page of channel videos.', schemaRef('ChannelVideos')),
+          '404': responseRef('NotFound'),
+          '422': responseRef('ValidationError'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/v1/channels/{id}/playlists': {
+      get: {
+        tags: ['Channels'],
+        operationId: 'getChannelPlaylists',
+        summary: 'List channel playlists',
+        parameters: [
+          pathParameter('id', 'YouTube channel ID or handle.', '@YouTube'),
+          queryParameter('sort', 'YouTube Playlists-tab ordering.', { type: 'string', enum: ['newest', 'last-video-added'], default: 'newest' }),
+          queryParameter('continuation', 'Opaque token returned by the previous channel playlists response.', { type: 'string' }),
+        ],
+        responses: {
+          '200': jsonResponse('A page of channel playlists.', schemaRef('ChannelPlaylists')),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
@@ -1116,12 +1143,22 @@ export const openApiDocument = {
           isTranslatable: { type: 'boolean' }, isDefault: { type: 'boolean' },
         },
       },
+      TranslationLanguage: {
+        type: 'object',
+        required: ['languageCode', 'name'],
+        properties: {
+          languageCode: { type: 'string' },
+          name: { type: 'string' },
+        },
+      },
       CaptionTrackList: {
         type: 'object',
-        required: ['tracks', 'translationLanguages', 'meta'],
+        required: ['tracks', 'sourceTracks', 'translationLanguages', 'autoTranslationTargets', 'meta'],
         properties: {
           tracks: { type: 'array', items: schemaRef('CaptionTrack') },
-          translationLanguages: { type: 'array', items: { type: 'object', required: ['languageCode', 'name'], properties: { languageCode: { type: 'string' }, name: { type: 'string' } } } },
+          sourceTracks: { type: 'array', items: schemaRef('CaptionTrack') },
+          translationLanguages: { type: 'array', items: schemaRef('TranslationLanguage') },
+          autoTranslationTargets: { type: 'array', items: schemaRef('TranslationLanguage') },
           defaultTrackId: { type: 'string' },
           meta: schemaRef('SourceMetadata'),
         },
@@ -1140,6 +1177,7 @@ export const openApiDocument = {
         required: ['videoId', 'track', 'segments', 'text', 'meta'],
         properties: {
           videoId: { type: 'string' }, track: schemaRef('CaptionTrack'),
+          translatedTo: schemaRef('TranslationLanguage'),
           segments: { type: 'array', items: schemaRef('TranscriptSegment') },
           granularity: { type: 'string', enum: ['segment', 'word'] }, text: { type: 'string' }, meta: schemaRef('SourceMetadata'),
         },
@@ -1147,26 +1185,13 @@ export const openApiDocument = {
       Video: {
         allOf: [schemaRef('VideoSummary'), {
           type: 'object',
-          required: ['keywords', 'availability', 'captionTracks', 'translationLanguages', 'media', 'storyboards', 'endscreen', 'meta'],
+          required: ['keywords', 'availability', 'meta'],
           properties: {
             keywords: { type: 'array', items: { type: 'string' } },
             availability: { type: 'object', additionalProperties: true },
-            captionTracks: { type: 'array', items: schemaRef('CaptionTrack') },
-            translationLanguages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-            media: { type: 'object', additionalProperties: true },
-            storyboards: { type: 'array', items: schemaRef('Storyboard') },
-            endscreen: { type: 'array', items: schemaRef('EndscreenElement') },
             meta: schemaRef('SourceMetadata'),
           },
         }],
-      },
-      Storyboard: {
-        type: 'object',
-        required: ['levels'],
-        properties: {
-          recommendedLevel: { type: 'integer', minimum: 0 },
-          levels: { type: 'array', items: { type: 'object', additionalProperties: true } },
-        },
       },
       EndscreenElement: {
         type: 'object',
@@ -1184,18 +1209,82 @@ export const openApiDocument = {
         required: ['videoId', 'comments', 'meta'],
         properties: {
           videoId: { type: 'string' }, comments: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          continuation: { type: 'string' }, estimatedTotal: { type: 'integer' }, complete: { type: 'boolean' },
+          totalCount: { type: 'integer', minimum: 0, description: 'Total comments reported by YouTube when available.' },
+          continuation: { type: 'string' }, complete: { type: 'boolean' },
           pagesFetched: { type: 'integer' }, topLevelCount: { type: 'integer' }, replyCount: { type: 'integer' },
           remainingContinuations: { type: 'integer' }, meta: schemaRef('SourceMetadata'),
         },
       },
       Channel: {
-        allOf: [schemaRef('ChannelSummary'), {
-          type: 'object', required: ['videos', 'playlists', 'meta'], properties: {
-            videos: { type: 'array', items: schemaRef('VideoSummary') }, playlists: { type: 'array', items: schemaRef('PlaylistSummary') },
-            continuation: { type: 'string' }, estimatedTotal: { type: 'integer' }, meta: schemaRef('SourceMetadata'),
-          },
-        }],
+        type: 'object',
+        required: ['type', 'id', 'name', 'thumbnails', 'url', 'about', 'meta'],
+        properties: {
+          type: { const: 'channel' },
+          id: { type: 'string' },
+          name: { type: 'string' },
+          handle: { type: 'string' },
+          thumbnails: { type: 'array', items: schemaRef('Thumbnail') },
+          url: { type: 'string', format: 'uri' },
+          about: schemaRef('ChannelAbout'),
+          meta: schemaRef('SourceMetadata'),
+        },
+      },
+      ChannelLink: {
+        type: 'object',
+        required: ['title', 'displayUrl', 'url'],
+        properties: {
+          title: { type: 'string' },
+          displayUrl: { type: 'string' },
+          url: { type: 'string', format: 'uri' },
+        },
+      },
+      ChannelMoreInfo: {
+        type: 'object',
+        required: ['canonicalChannelUrl', 'businessEmailAvailable'],
+        properties: {
+          canonicalChannelUrl: { type: 'string', format: 'uri' },
+          displayCanonicalChannelUrl: { type: 'string' },
+          joinedDate: { type: 'string', format: 'date' },
+          joinedDateText: { type: 'string' },
+          subscriberCount: { type: 'integer', minimum: 0, description: 'Normalized value of YouTube’s displayed, potentially rounded subscriber count.' },
+          subscriberCountText: { type: 'string' },
+          videoCount: { type: 'integer', minimum: 0 },
+          videoCountText: { type: 'string' },
+          viewCount: { type: 'integer', minimum: 0 },
+          viewCountText: { type: 'string' },
+          businessEmailAvailable: { type: 'boolean', description: 'Whether YouTube presents its protected business-email action. The email itself is not accessed.' },
+        },
+      },
+      ChannelAbout: {
+        type: 'object',
+        required: ['links', 'moreInfo'],
+        properties: {
+          description: { type: 'string' },
+          links: { type: 'array', items: schemaRef('ChannelLink') },
+          moreInfo: schemaRef('ChannelMoreInfo'),
+        },
+      },
+      ChannelVideos: {
+        type: 'object',
+        required: ['channelId', 'sort', 'videos', 'meta'],
+        properties: {
+          channelId: { type: 'string' },
+          sort: { type: 'string', enum: ['latest', 'popular', 'oldest'] },
+          videos: { type: 'array', items: schemaRef('VideoSummary') },
+          continuation: { type: 'string' },
+          meta: schemaRef('SourceMetadata'),
+        },
+      },
+      ChannelPlaylists: {
+        type: 'object',
+        required: ['channelId', 'sort', 'playlists', 'meta'],
+        properties: {
+          channelId: { type: 'string' },
+          sort: { type: 'string', enum: ['newest', 'last-video-added'] },
+          playlists: { type: 'array', items: schemaRef('PlaylistSummary') },
+          continuation: { type: 'string' },
+          meta: schemaRef('SourceMetadata'),
+        },
       },
       Playlist: {
         allOf: [schemaRef('PlaylistSummary'), {

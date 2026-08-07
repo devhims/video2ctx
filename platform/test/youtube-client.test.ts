@@ -4,6 +4,12 @@ function response(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 }
 
+function htmlResponse(data: unknown): Response {
+  return new Response(`<!doctype html><script>var ytInitialData = ${JSON.stringify(data)};</script>`, {
+    headers: { 'content-type': 'text/html' },
+  });
+}
+
 describe('normalized YouTube client', () => {
   test('normalizes modern playlist metadata and omits an exhausted continuation', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
@@ -101,8 +107,36 @@ describe('normalized YouTube client', () => {
     expect(playlist.continuation).toBeUndefined();
   });
 
-  test('loads modern channel video and playlist tabs and normalizes lockup view models', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+  test('separates channel metadata, videos, and playlists into independent resources', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/channel/UC123/about')) return htmlResponse({
+        metadata: { channelMetadataRenderer: {
+          externalId: 'UC123', title: 'Research Lab', description: 'Evidence-first videos.',
+          vanityChannelUrl: 'https://www.youtube.com/@ResearchLab',
+          channelUrl: 'https://www.youtube.com/channel/UC123',
+          avatar: { thumbnails: [{ url: 'https://img.test/channel.jpg', width: 900, height: 900 }] },
+        } },
+        contents: [{ aboutChannelRenderer: { metadata: { aboutChannelViewModel: {
+          channelId: 'UC123',
+          description: 'Evidence-first videos.\nContact: research@example.com',
+          subscriberCountText: '2.04M subscribers',
+          videoCountText: '218 videos',
+          viewCountText: '460,922,610 views',
+          joinedDateText: { content: 'Joined May 8, 2012' },
+          canonicalChannelUrl: 'http://www.youtube.com/@ResearchLab',
+          displayCanonicalChannelUrl: 'www.youtube.com/@ResearchLab',
+          signInForBusinessEmail: { content: 'Sign in to see email address' },
+          links: [{ channelExternalLinkViewModel: {
+            title: { content: 'Patreon' },
+            link: {
+              content: 'patreon.com/ResearchLab',
+              commandRuns: [{ onTap: { innertubeCommand: { urlEndpoint: {
+                url: 'https://www.youtube.com/redirect?redir_token=temporary&q=https%3A%2F%2Fwww.patreon.com%2FResearchLab',
+              } } } }],
+            },
+          } }],
+        } } } }],
+      });
       const payload = JSON.parse(String(init?.body)) as { params?: string };
       if (payload.params === 'VIDEOS_TAB') return response({
         contents: [{ richItemRenderer: { content: { lockupViewModel: {
@@ -114,9 +148,14 @@ describe('normalized YouTube client', () => {
           } },
           metadata: { lockupMetadataViewModel: {
             title: { content: 'The Future of Research' },
-            metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [
-              { text: { content: '621K views' } }, { text: { content: '2 months ago' } },
-            ] }] } },
+            metadata: { contentMetadataViewModel: { metadataRows: [
+              { metadataParts: [
+                { text: { content: '621K views' } }, { text: { content: '2 months ago' } },
+              ] },
+              { badges: [{ badgeViewModel: { badgeText: 'CC', rendererContext: {
+                accessibilityContext: { label: 'Closed captions' },
+              } } }] },
+            ] } },
           } },
         } } } }],
         continuationContents: { richGridContinuation: { contents: [{
@@ -132,11 +171,25 @@ describe('normalized YouTube client', () => {
               image: { sources: [{ url: 'https://img.test/playlist.jpg', width: 480, height: 270 }] },
               overlays: [{ thumbnailOverlayBadgeViewModel: { thumbnailBadges: [{ thumbnailBadgeViewModel: { text: '6 videos' } }] } }],
             } } } },
-            metadata: { lockupMetadataViewModel: { title: { content: 'Dune Research' } } },
+            metadata: { lockupMetadataViewModel: {
+              title: { content: 'Dune Research' },
+              metadata: { contentMetadataViewModel: { metadataRows: [
+                { metadataParts: [{ text: { content: 'Updated 4 days ago' } }] },
+                { metadataParts: [{ text: { content: 'View full playlist' } }] },
+              ] } },
+            } },
+            rendererContext: { commandContext: { onTap: { innertubeCommand: {
+              watchEndpoint: { videoId: 'abcdefghijk', playlistId: 'PL123' },
+            } } } },
           } },
           { lockupViewModel: {
             contentId: 'PLPODCAST',
             contentType: 'LOCKUP_CONTENT_TYPE_PODCAST',
+            contentImage: { collectionThumbnailViewModel: { primaryThumbnail: { thumbnailViewModel: {
+              overlays: [{ thumbnailOverlayBadgeViewModel: { thumbnailBadges: [
+                { thumbnailBadgeViewModel: { text: '181 episodes' } },
+              ] } }],
+            } } } },
             metadata: { lockupMetadataViewModel: { title: { content: 'Research videos' } } },
           } },
         ],
@@ -179,25 +232,175 @@ describe('normalized YouTube client', () => {
       });
     });
 
-    const channel = await createYouTubeClient({ fetch: fetchMock as typeof fetch }).getChannel('UC123');
+    const client = createYouTubeClient({ fetch: fetchMock as typeof fetch });
+    const channel = await client.getChannel('UC123');
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(channel).toMatchObject({
       id: 'UC123',
       name: 'Research Lab',
       handle: '@ResearchLab',
-      subscriberCountText: '2.04M subscribers',
-      videoCountText: '218 videos',
+      url: 'https://www.youtube.com/@ResearchLab',
+      about: {
+        description: 'Evidence-first videos.\nContact: research@example.com',
+        links: [{
+          title: 'Patreon',
+          displayUrl: 'patreon.com/ResearchLab',
+          url: 'https://www.patreon.com/ResearchLab',
+        }],
+        moreInfo: {
+          canonicalChannelUrl: 'https://www.youtube.com/@ResearchLab',
+          displayCanonicalChannelUrl: 'www.youtube.com/@ResearchLab',
+          joinedDate: '2012-05-08',
+          joinedDateText: 'Joined May 8, 2012',
+          subscriberCount: 2040000,
+          subscriberCountText: '2.04M subscribers',
+          videoCount: 218,
+          viewCount: 460922610,
+          businessEmailAvailable: true,
+        },
+      },
+    });
+    expect(channel).not.toHaveProperty('videos');
+    expect(channel).not.toHaveProperty('playlists');
+    expect(channel).not.toHaveProperty('continuation');
+
+    const videoPage = await client.getChannelVideos('UC123');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(videoPage).toMatchObject({
+      channelId: 'UC123',
+      sort: 'latest',
       continuation: 'MORE_VIDEOS',
       videos: [{
         id: 'abcdefghijk', title: 'The Future of Research', viewCount: 621000,
         viewCountText: '621K views', publishedTimeText: '2 months ago', durationSeconds: 2389,
-        channel: { id: 'UC123', name: 'Research Lab' },
+        channel: { id: 'UC123', name: 'Research Lab' }, hasCaptions: true,
       }],
+    });
+
+    const playlistPage = await client.getChannelPlaylists('UC123');
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(playlistPage).toMatchObject({
+      channelId: 'UC123',
+      sort: 'newest',
+      continuation: 'MORE_PLAYLISTS',
       playlists: [
-        { id: 'PL123', title: 'Dune Research', videoCount: 6, videoCountText: '6 videos' },
-        { id: 'PLPODCAST', title: 'Research videos' },
+        {
+          id: 'PL123', title: 'Dune Research', videoCount: 6, videoCountText: '6 videos',
+          updatedTimeText: 'Updated 4 days ago', isPodcast: false,
+          playUrl: 'https://www.youtube.com/watch?v=abcdefghijk&list=PL123',
+        },
+        {
+          id: 'PLPODCAST', title: 'Research videos', videoCount: 181,
+          videoCountText: '181 episodes', isPodcast: true,
+        },
       ],
+    });
+  });
+
+  test('paginates channel videos with the video-specific continuation', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as { continuation?: string };
+      if (payload.continuation === 'VIDEO_PAGE_2') {
+        return response({
+          contents: [{ richItemRenderer: { content: { videoRenderer: {
+            videoId: 'abcdefghijk', title: { simpleText: 'Second page video' },
+            thumbnail: { thumbnails: [] },
+          } } } }],
+          continuationContents: { richGridContinuation: { contents: [{
+            continuationItemRenderer: { continuationEndpoint: { continuationCommand: { token: 'VIDEO_PAGE_3' } } },
+          }] } },
+        });
+      }
+      return response({ metadata: { channelMetadataRenderer: {
+        externalId: 'UC123', title: 'Research Lab', channelUrl: 'https://www.youtube.com/channel/UC123',
+      } } });
+    });
+
+    const page = await createYouTubeClient({ fetch: fetchMock as typeof fetch })
+      .getChannelVideos('UC123', 'VIDEO_PAGE_2');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(page).toMatchObject({
+      channelId: 'UC123',
+      sort: 'latest',
+      continuation: 'VIDEO_PAGE_3',
+      videos: [{ id: 'abcdefghijk', title: 'Second page video' }],
+    });
+  });
+
+  test('applies the same channel catalog sorts exposed by the YouTube tabs', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as {
+        browseId?: string; params?: string; continuation?: string;
+      };
+      if (payload.params === 'VIDEOS_TAB') return response({
+        header: { feedFilterChipBarRenderer: { contents: [
+          { chipViewModel: { text: 'Latest', selected: true } },
+          { chipViewModel: { text: 'Popular', tapCommand: { innertubeCommand: {
+            continuationCommand: { token: 'POPULAR_SORT' },
+          } } } },
+          { chipViewModel: { text: 'Oldest', tapCommand: { innertubeCommand: {
+            continuationCommand: { token: 'OLDEST_SORT' },
+          } } } },
+        ] } },
+      });
+      if (payload.continuation === 'POPULAR_SORT') return response({
+        contents: [{ lockupViewModel: {
+          contentId: 'popular12345', contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+          metadata: { lockupMetadataViewModel: { title: { content: 'Most popular' } } },
+        } }],
+        continuationContents: { richGridContinuation: { contents: [{
+          continuationItemRenderer: { continuationEndpoint: {
+            continuationCommand: { token: 'MORE_POPULAR' },
+          } },
+        }] } },
+      });
+      if (payload.params === 'PLAYLISTS_TAB') return response({
+        menu: { sortFilterSubMenuRenderer: { subMenuItems: [
+          { title: 'Date added (newest)', selected: true },
+          { title: 'Last video added', navigationEndpoint: { browseEndpoint: {
+            browseId: 'UC123', params: 'LAST_VIDEO_ADDED',
+          } } },
+        ] } },
+      });
+      if (payload.params === 'LAST_VIDEO_ADDED') return response({
+        contents: [{ lockupViewModel: {
+          contentId: 'PLRECENT', contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+          metadata: { lockupMetadataViewModel: { title: { content: 'Recently updated' } } },
+        } }],
+      });
+      return response({
+        metadata: { channelMetadataRenderer: {
+          externalId: 'UC123', title: 'Research Lab',
+          channelUrl: 'https://www.youtube.com/channel/UC123',
+        } },
+        contents: { twoColumnBrowseResultsRenderer: { tabs: [
+          { tabRenderer: { endpoint: {
+            commandMetadata: { webCommandMetadata: { url: '/@ResearchLab/videos' } },
+            browseEndpoint: { browseId: 'UC123', params: 'VIDEOS_TAB' },
+          } } },
+          { tabRenderer: { endpoint: {
+            commandMetadata: { webCommandMetadata: { url: '/@ResearchLab/playlists' } },
+            browseEndpoint: { browseId: 'UC123', params: 'PLAYLISTS_TAB' },
+          } } },
+        ] } },
+      });
+    });
+    const client = createYouTubeClient({ fetch: fetchMock as typeof fetch });
+
+    const videos = await client.getChannelVideos('UC123', undefined, 'popular');
+    const playlists = await client.getChannelPlaylists('UC123', undefined, 'last-video-added');
+
+    expect(videos).toMatchObject({
+      sort: 'popular', continuation: 'MORE_POPULAR',
+      videos: [{ id: 'popular12345', title: 'Most popular' }],
+    });
+    expect(playlists).toMatchObject({
+      sort: 'last-video-added',
+      playlists: [{ id: 'PLRECENT', title: 'Recently updated' }],
     });
   });
 
@@ -218,6 +421,29 @@ describe('normalized YouTube client', () => {
     expect(result.results[0]).toMatchObject({ type: 'video', id: 'abcdefghijk', hasCaptions: true, durationSeconds: 750 });
     expect(result.continuation).toBe('NEXT_PAGE');
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/search'), expect.objectContaining({ method: 'POST' }));
+  });
+
+  test('retries rate-limited InnerTube search requests through the shared transport', async () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    const fetchMock = vi.fn(async () => {
+      attempts += 1;
+      if (attempts < 5) return new Response('limited', { status: 429 });
+      return response({ contents: [{ videoRenderer: {
+        videoId: 'abcdefghijk', title: { simpleText: 'Recovered result' },
+        ownerText: { runs: [{ text: 'Research Lab' }] }, thumbnail: { thumbnails: [] },
+      } }] });
+    });
+    const client = createYouTubeClient({
+      fetch: fetchMock as typeof fetch,
+      retry: { wait: async (delayMs) => { waits.push(delayMs); }, random: () => 0 },
+    });
+
+    const result = await client.search('research');
+
+    expect(result.videos[0]?.title).toBe('Recovered result');
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(waits).toHaveLength(4);
   });
 
   test('deduplicates search entities and returns explicit result categories', async () => {
@@ -310,8 +536,14 @@ describe('normalized YouTube client', () => {
   });
 
   test('computes ASR word timestamps from tStartMs + tOffsetMs and preserves translation provenance', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input).includes('/player')) return response(playerFixture('asr'));
+      if (String(input).startsWith('https://www.youtube.com/watch')) {
+        return new Response(
+          `<!doctype html><script>var ytInitialPlayerResponse = ${JSON.stringify(playerFixture('asr'))};</script>`,
+          { headers: { 'content-type': 'text/html', 'set-cookie': 'VISITOR_INFO1_LIVE=test-visitor; Path=/; Secure' } },
+        );
+      }
       return response({ events: [{ tStartMs: 1200, dDurationMs: 900, segs: [
         { utf8: 'Hello ', tOffsetMs: 0 }, { utf8: 'world', tOffsetMs: 420 },
       ] }] });
@@ -320,14 +552,17 @@ describe('normalized YouTube client', () => {
       videoId: 'abcdefghijk', language: 'en', translateTo: 'es', granularity: 'word',
     });
     expect(transcript.track).toMatchObject({ kind: 'asr', provenance: 'asr', languageCode: 'en' });
+    expect(transcript.translatedTo).toEqual({ languageCode: 'es', name: 'Spanish' });
     expect(transcript.granularity).toBe('word');
     expect(transcript.segments[0]!.words).toEqual([
       { text: 'Hello ', startMs: 1200, offsetMs: 0 },
       { text: 'world', startMs: 1620, offsetMs: 420 },
     ]);
     const captionUrl = String(fetchMock.mock.calls.at(-1)?.[0]);
+    const captionHeaders = fetchMock.mock.calls.at(-1)?.[1]?.headers as Record<string, string>;
     expect(captionUrl).toContain('fmt=json3');
     expect(captionUrl).toContain('tlang=es');
+    expect(captionHeaders.Cookie).toBe('VISITOR_INFO1_LIVE=test-visitor');
   });
 
   test('reports manual caption tracks and available translation languages', async () => {
@@ -337,6 +572,99 @@ describe('normalized YouTube client', () => {
     expect(tracks.translationLanguages).toContainEqual({ languageCode: 'hi', name: 'Hindi' });
   });
 
+  test('supplements the mobile caption catalog with every desktop translation target', async () => {
+    const desktopFixture = playerFixture('manual');
+    const renderer = (desktopFixture.captions as any).playerCaptionsTracklistRenderer;
+    renderer.translationLanguages = [
+      { languageCode: 'af', languageName: { simpleText: 'Afrikaans' } },
+      { languageCode: 'hi', languageName: { simpleText: 'Hindi' } },
+      { languageCode: 'zu', languageName: { simpleText: 'Zulu' } },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('https://www.youtube.com/watch')) {
+        return new Response(`<!doctype html><script>var ytInitialPlayerResponse = ${JSON.stringify(desktopFixture)};</script>`, {
+          headers: { 'content-type': 'text/html' },
+        });
+      }
+      return response(playerFixture('manual'));
+    });
+
+    const result = await createYouTubeClient({ fetch: fetchMock as typeof fetch })
+      .getCaptionTracks('abcdefghijk');
+
+    expect(result.translationLanguages).toEqual(expect.arrayContaining([
+      { languageCode: 'af', name: 'Afrikaans' },
+      { languageCode: 'hi', name: 'Hindi' },
+      { languageCode: 'zu', name: 'Zulu' },
+    ]));
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('youtube.com/watch?v=abcdefghijk'),
+      expect.any(Object),
+    );
+  });
+
+  test('uses the default source track when only a translation target is requested', async () => {
+    const fixture = playerFixture('manual');
+    const renderer = (fixture.captions as any).playerCaptionsTracklistRenderer;
+    renderer.defaultAudioTrackIndex = 1;
+    renderer.captionTracks = [
+      {
+        baseUrl: 'https://captions.test/en?lang=en', vssId: '.en', languageCode: 'en',
+        name: { simpleText: 'English' }, isTranslatable: true,
+      },
+      {
+        baseUrl: 'https://captions.test/es?lang=es', vssId: '.es', languageCode: 'es',
+        name: { simpleText: 'Spanish' }, isTranslatable: true,
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/player')) return response(fixture);
+      if (String(input).startsWith('https://www.youtube.com/watch')) {
+        return new Response(`<!doctype html><script>var ytInitialPlayerResponse = ${JSON.stringify(fixture)};</script>`, {
+          headers: { 'content-type': 'text/html', 'set-cookie': 'VISITOR_INFO1_LIVE=test-visitor; Path=/; Secure' },
+        });
+      }
+      return response({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'नमस्ते' }] }] });
+    });
+
+    const transcript = await createYouTubeClient({ fetch: fetchMock as typeof fetch }).getTranscript({
+      videoId: 'abcdefghijk', translateTo: 'hi', granularity: 'segment',
+    });
+
+    expect(transcript.track.languageCode).toBe('es');
+    expect(transcript.translatedTo).toEqual({ languageCode: 'hi', name: 'Hindi' });
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('/es?');
+  });
+
+  test('retries translated captions with a refreshed visitor session after upstream rate limiting', async () => {
+    const fixture = playerFixture('asr');
+    let captionAttempts = 0;
+    let watchAttempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/player')) return response(fixture);
+      if (String(input).startsWith('https://www.youtube.com/watch')) {
+        watchAttempts += 1;
+        return new Response(`<!doctype html><script>var ytInitialPlayerResponse = ${JSON.stringify(fixture)};</script>`, {
+          headers: { 'content-type': 'text/html', 'set-cookie': `VISITOR_INFO1_LIVE=visitor-${watchAttempts}; Path=/; Secure` },
+        });
+      }
+      captionAttempts += 1;
+      if (captionAttempts < 5) return new Response('rate limited', { status: 429 });
+      return response({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'नमस्ते' }] }] });
+    });
+
+    const transcript = await createYouTubeClient({
+      fetch: fetchMock as typeof fetch,
+      retry: { wait: async () => {}, random: () => 0 },
+    }).getTranscript({
+      videoId: 'abcdefghijk', translateTo: 'hi',
+    });
+
+    expect(transcript.text).toBe('नमस्ते');
+    expect(captionAttempts).toBe(5);
+    expect(watchAttempts).toBe(5);
+  });
+
   test('normalizes unavailable/private/live video state without leaking signed media URLs', async () => {
     const fixture = playerFixture('manual');
     fixture.playabilityStatus = { status: 'LOGIN_REQUIRED', reason: 'Private video' };
@@ -344,7 +672,23 @@ describe('normalized YouTube client', () => {
     const video = await createYouTubeClient({ fetch: vi.fn(async () => response(fixture)) as typeof fetch }).getVideo('abcdefghijk');
     expect(video.availability).toMatchObject({ playable: false, isPrivate: true, isLive: true });
     expect(video.isLive).toBe(true);
-    expect(JSON.stringify(video.media)).not.toContain('https://signed.test');
+    expect(JSON.stringify(video)).not.toContain('https://signed.test');
+  });
+
+  test('returns core video metadata without fetching or embedding subresources', async () => {
+    const fixture = playerFixture('manual');
+    const fetchMock = vi.fn(async () => response(fixture));
+
+    const video = await createYouTubeClient({ fetch: fetchMock as typeof fetch }).getVideo('abcdefghijk');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(video).toMatchObject({ id: 'abcdefghijk', title: 'Evidence video', keywords: [] });
+    expect(video.meta.source).toBe('allthingsyoutube');
+    expect(video).not.toHaveProperty('captionTracks');
+    expect(video).not.toHaveProperty('translationLanguages');
+    expect(video).not.toHaveProperty('media');
+    expect(video).not.toHaveProperty('storyboards');
+    expect(video).not.toHaveProperty('endscreen');
   });
 
   test('normalizes public trend signals from the watch-next response', async () => {
@@ -377,8 +721,12 @@ describe('normalized YouTube client', () => {
         ] } } } },
         { continuationItemRenderer: { continuationEndpoint: { continuationCommand: { token: 'MORE_COMMENTS' } } } },
       ] } }],
+      engagementPanels: [{ engagementPanelSectionListRenderer: {
+        content: { commentsHeaderRenderer: { commentsCount: { simpleText: '234' } } },
+      } }],
     })) as typeof fetch });
     const page = await client.getComments({ videoId: 'abcdefghijk' });
+    expect(page.totalCount).toBe(234);
     expect(page.comments[0]).toMatchObject({ id: 'comment-1', text: 'Can you explain the evidence?', replyCount: 3 });
     expect(page.continuation).toBe('MORE_COMMENTS');
     expect(page.replyContinuations).toEqual(['COMMENT_REPLIES']);
@@ -390,6 +738,9 @@ describe('normalized YouTube client', () => {
         onResponseReceivedEndpoints: [{ reloadContinuationItemsCommand: { continuationItems: [
           { continuationItemRenderer: { continuationEndpoint: { continuationCommand: { token: 'COMMENTS_BOOTSTRAP' } } } },
         ] } }],
+        engagementPanels: [{ engagementPanelSectionListRenderer: {
+          content: { commentsHeaderRenderer: { commentsCount: { simpleText: '1.2K' } } },
+        } }],
       }))
       .mockResolvedValueOnce(response({
         onResponseReceivedEndpoints: [{ appendContinuationItemsAction: { continuationItems: [
@@ -404,6 +755,7 @@ describe('normalized YouTube client', () => {
     const page = await createYouTubeClient({ fetch: fetchMock as typeof fetch }).getComments({ videoId: 'abcdefghijk' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(page.comments).toHaveLength(1);
+    expect(page.totalCount).toBe(1200);
     expect(page.comments[0]).toMatchObject({ id: 'comment-2', text: 'This was useful.' });
     expect(page.continuation).toBe('NEXT_COMMENTS');
   });
@@ -422,6 +774,9 @@ describe('normalized YouTube client', () => {
       .mockResolvedValueOnce(response({
         onResponseReceivedEndpoints: [{ reloadContinuationItemsCommand: {
           continuationItems: [continuationItem('COMMENTS_BOOTSTRAP')],
+        } }],
+        engagementPanels: [{ engagementPanelSectionListRenderer: {
+          content: { commentsHeaderRenderer: { commentsCount: { simpleText: '3' } } },
         } }],
       }))
       .mockResolvedValueOnce(response({
@@ -448,6 +803,7 @@ describe('normalized YouTube client', () => {
     expect(result.comments.map((comment) => comment.id)).toEqual(['top-1', 'top-2', 'top-1.reply-1']);
     expect(result).toMatchObject({
       complete: true,
+      totalCount: 3,
       topLevelCount: 2,
       replyCount: 1,
       remainingContinuations: 0,
@@ -559,7 +915,10 @@ function playerFixture(kind: 'manual' | 'asr'): Record<string, unknown> {
         baseUrl: 'https://captions.test/api?lang=en', vssId, languageCode: 'en',
         kind: kind === 'asr' ? 'asr' : undefined, name: { simpleText: 'English' }, isTranslatable: true,
       }],
-      translationLanguages: [{ languageCode: 'hi', languageName: { simpleText: 'Hindi' } }],
+      translationLanguages: [
+        { languageCode: 'hi', languageName: { simpleText: 'Hindi' } },
+        { languageCode: 'es', languageName: { simpleText: 'Spanish' } },
+      ],
     } },
   };
 }

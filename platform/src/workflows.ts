@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import type { ImportPayload, MonitorPayload } from './types';
 import { indexPrivateDocument, indexPublicDocument } from './lib/search';
-import { getAllComments, getChannel, getComments, getPlaylist, getTranscript, getVideo, searchYouTube } from './lib/youtube';
+import { getAllComments, getChannel, getChannelVideos, getComments, getPlaylist, getTranscript, getVideo, searchYouTube } from './lib/youtube';
 import { now } from './lib/http';
 
 export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
@@ -68,7 +68,8 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
 
     if (input.kind === 'channel') {
       const channel = await getChannel(this.env, input.entityId);
-      const eager = channel.videos.slice(0, 25);
+      const catalog = await getChannelVideos(this.env, channel.id);
+      const eager = catalog.videos.slice(0, 25);
       for (const video of eager) {
         await this.env.TASKS.send({
           type: 'snapshot-statistics',
@@ -79,8 +80,8 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
       await this.enqueueVideoImports(input, eager.slice(0, 10).map((video) => video.id));
       return {
         entityType: 'channel', entityId: input.entityId, title: channel.name,
-        discovered: channel.videos.length, eager: eager.length,
-        partial: Boolean(channel.continuation), continuation: channel.continuation,
+        discovered: catalog.videos.length, eager: eager.length,
+        partial: Boolean(catalog.continuation), continuation: catalog.continuation,
       };
     }
 

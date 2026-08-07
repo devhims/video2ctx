@@ -67,6 +67,8 @@ The UI loads these requests concurrently:
 | `GET` | `/v1/search` | Search YouTube, private evidence, or ask a question | Mixed |
 | `GET` | `/v1/videos/:id` | Inspect a video | Public |
 | `GET` | `/v1/channels/:id` | Inspect a channel | Public |
+| `GET` | `/v1/channels/:id/videos` | Load a channel's videos | Public |
+| `GET` | `/v1/channels/:id/playlists` | Load a channel's playlists | Public |
 | `GET` | `/v1/playlists/:id` | Inspect a playlist | Public |
 | `GET` | `/v1/videos/:id/transcript` | Load timed transcript evidence | Public |
 | `GET` | `/v1/videos/:id/comments` | Load audience comments | Public |
@@ -158,7 +160,7 @@ Query parameters:
 
 How it works:
 
-- Calls the internal InnerTube `browse` adapter; it does not use the official YouTube Data API.
+- Calls the platform's normalized YouTube browse adapter; it does not use the official YouTube Data API.
 - Uses current public YouTube destination IDs rather than the retired anonymous Trending feed.
 - Normalizes videos, channels, and playlists into application entities.
 - Returns both a mixed `results` list and explicit `videos`, `channels`, and `playlists` arrays.
@@ -190,7 +192,7 @@ Additional filters:
 
 How it works:
 
-- Calls InnerTube search and returns deduplicated `videos`, `channels`, and `playlists` arrays.
+- Calls the platform's YouTube search adapter and returns deduplicated `videos`, `channels`, and `playlists` arrays.
 - Retains the deduplicated mixed `results` array for backward compatibility and returns a continuation token when another page is available.
 - Caches the query/filter combination in D1 for five minutes with stale fallback.
 - The UI currently exposes type, duration, and captions filters.
@@ -221,23 +223,52 @@ How it works:
 
 ### `GET /v1/videos/:id`
 
-Returns normalized video metadata for the inspector: title, channel, description, thumbnails, duration, views, keywords, formats, availability, and URL.
+Returns core normalized video metadata: title, channel, description, thumbnails, duration, views, keywords, availability, and URL.
 
 How it works:
 
-- Calls InnerTube’s player data through fallback client profiles when necessary.
+- Calls YouTube player data through fallback client profiles when necessary.
 - Caches the normalized record in D1 for 30 minutes.
-- Does not expose raw renderer data, tracking data, signed caption URLs, ads, or media URLs as the primary contract.
+- Track metadata and endscreen elements are available from their dedicated video subresources.
+- Does not fetch the desktop caption catalog or expose media-format data, raw renderer data, tracking data, signed URLs, or ads.
 
 ### `GET /v1/channels/:id`
 
-Returns a normalized channel and its visible catalog for the channel inspector.
+Returns channel identity plus an `about` object aligned to YouTube's About UI:
+
+- `description`: the complete public channel description
+- `links`: every public link with its title, display URL, and direct destination URL
+- `moreInfo`: canonical channel URL, joined date, subscriber/video/view totals, their display text,
+  and whether YouTube offers its protected business-email action
 
 How it works:
 
-- A channel ID loads directly through InnerTube browse.
+- A channel ID loads directly through the platform's YouTube browse adapter.
 - An `@handle` is first resolved through channel search and then loaded by channel ID.
+- YouTube redirect links are unwrapped; temporary redirect tokens are never returned.
+- The protected business email is not accessed. Public email addresses written into the description remain part of the description.
 - Results are cached in D1 for one hour.
+
+### `GET /v1/channels/:id/videos`
+
+Returns one page of normalized video summaries from the channel's Videos tab.
+
+- Accepts `sort=latest|popular|oldest`, matching the three controls in YouTube's UI. The default is `latest`.
+- Accepts the optional `continuation` token returned by the previous response.
+- Returns `channelId`, the effective `sort`, `videos`, `continuation`, and `meta`.
+- Each video carries the UI card data: title, thumbnail, duration, views, published age, caption state, and canonical watch URL.
+- Pages are cached in D1 for 15 minutes.
+
+### `GET /v1/channels/:id/playlists`
+
+Returns one page of normalized playlist summaries from the channel's Playlists tab.
+
+- Accepts `sort=newest|last-video-added`, matching YouTube's Sort by menu. The default is `newest`.
+- Accepts the optional `continuation` token returned by the previous response.
+- Returns `channelId`, the effective `sort`, `playlists`, `continuation`, and `meta`.
+- Each card includes its title, thumbnail, displayed video/episode count, optional `updatedTimeText`,
+  `isPodcast`, canonical playlist URL, and the optional `playUrl` used by the card itself.
+- Pages are cached in D1 for 15 minutes.
 
 ### `GET /v1/playlists/:id`
 
@@ -245,8 +276,18 @@ Returns playlist metadata, videos, and a continuation when more items are availa
 
 How it works:
 
-- Uses the internal InnerTube playlist adapter.
+- Uses the platform's normalized YouTube playlist adapter.
 - Normalizes the catalog and caches it in D1 for one hour.
+
+### `GET /v1/videos/:id/tracks`
+
+Returns the video's actual source caption tracks and available auto-translation targets.
+
+How it works:
+
+- Returns source-track metadata as both `tracks` and the clearer `sourceTracks` alias.
+- Merges the desktop player catalog used by Chrome so `translationLanguages` and `autoTranslationTargets` contain the complete auto-translation target list exposed for the video.
+- Does not expose signed caption URLs or caption text.
 
 ### `GET /v1/videos/:id/transcript`
 
@@ -254,18 +295,24 @@ Returns the synchronized transcript displayed beside the video.
 
 Optional query parameter:
 
-- `language`: requested language; defaults to `en`
+- `lang`: desired output language from the tracks API's auto-translation targets
 
 How it works:
 
-- First requests the bound caption-extractor service using its service binding and bearer token.
-- Falls back to the internal InnerTube caption-track/JSON3 implementation when the extractor is unavailable.
+- The backend selects YouTube's default source caption track automatically.
+- If `lang` differs from that source, the platform requests YouTube's translated caption data and normalizes the result.
+- Without `lang`, it returns the original default-track transcript.
 - Normalizes every segment to `text`, `startMs`, `durationMs`, and `endMs`.
+- Returns the source `track` plus `translatedTo` when auto-translation was requested.
 - Caches transcripts in D1 for seven days.
 
 ### `GET /v1/videos/:id/comments`
 
 Returns comments for the audience-evidence panel.
+
+The response includes `totalCount` when YouTube reports it in the initial comments payload. This is the
+video's displayed total; `comments.length`, `topLevelCount`, and `replyCount` describe the comments actually
+returned or crawled by this request.
 
 Parameters:
 
@@ -274,7 +321,7 @@ Parameters:
 
 How it works:
 
-- Uses InnerTube continuation tokens and normalizes comment/thread renderers.
+- Uses YouTube continuation tokens and normalizes comment/thread data.
 - The UI currently requests `all=true` but only displays the first three comments.
 - Full comment collections are cached for 15 minutes.
 - Internal reply/newest continuation bookkeeping is removed from the public response.
@@ -389,7 +436,7 @@ Parameters:
 
 How it works:
 
-- Searches up to three InnerTube pages and limits over-representation by any one channel.
+- Searches up to three YouTube result pages and limits over-representation by any one channel.
 - Enriches the sample in bounded batches with video, engagement, and publication signals.
 - Persists views, likes, and comments in `analytics_snapshots`; later scans calculate observed velocity and acceleration.
 - Scores freshness, engagement, topic-relative velocity, acceleration, and channel-relative performance, with per-video and report confidence.
@@ -461,9 +508,10 @@ How it works:
 These platform contracts exist, but no current UI action calls them:
 
 - `GET /health`
-- `GET /v1/videos/:id/captions`
-- `GET /v1/videos/:id/storyboards`
+- `GET /v1/videos/:id/tracks`
 - `GET /v1/videos/:id/endscreen`
+- `GET /v1/channels/:id/videos`
+- `GET /v1/channels/:id/playlists`
 - `GET /v1/projects/:id`
 - `DELETE /v1/projects/:id`
 - `GET /v1/jobs/:id`

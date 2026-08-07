@@ -52,7 +52,7 @@ export async function indexPrivateDocument(
     metadata: {
       project_id: input.projectId,
       entity_id: input.entityId,
-      start_ms: input.startMs ?? 0,
+      start_ms: String(input.startMs ?? 0),
     },
   });
   await env.DB.prepare(
@@ -93,7 +93,7 @@ export async function indexPublicDocument(
     });
   }
   await instance.items.upload(`${input.entityId}-${documentId}.md`, body, {
-    metadata: { entity_id: input.entityId, start_ms: input.startMs ?? 0, language: input.language ?? 'und' },
+    metadata: { entity_id: input.entityId, start_ms: String(input.startMs ?? 0), language: input.language ?? 'und' },
   });
   await env.DB.prepare(
     `INSERT OR REPLACE INTO documents
@@ -113,7 +113,7 @@ export async function searchPrivate(
   projectId?: string
 ): Promise<Evidence[]> {
   const instance = await getOrCreatePrivateInstance(env, userId);
-  const result = await instance.search({
+  const runSearch = (rerankingEnabled: boolean) => instance.search({
     query,
     ai_search_options: {
       retrieval: {
@@ -123,15 +123,17 @@ export async function searchPrivate(
         return_on_failure: true,
         ...(projectId ? { filters: { project_id: projectId } } : {}),
       },
-      reranking: { enabled: true, model: '@cf/baai/bge-reranker-base' },
+      reranking: { enabled: rerankingEnabled, model: '@cf/baai/bge-reranker-base' },
     },
   });
+  let result = await runSearch(true);
+  if (!result.chunks.length) result = await runSearch(false);
   return result.chunks.map((chunk) => ({
     id: chunk.id,
     score: chunk.score,
     text: chunk.text,
     entityId: stringMetadata(chunk.item.metadata, 'entity_id'),
-    startMs: numberMetadata(chunk.item.metadata, 'start_ms'),
+    startMs: evidenceStartMs(chunk.text, chunk.item.metadata),
     projectId: stringMetadata(chunk.item.metadata, 'project_id'),
     sourceKey: chunk.item.key,
   }));
@@ -148,7 +150,7 @@ export async function searchPublic(env: Env, query: string): Promise<Evidence[]>
       score: chunk.score,
       text: chunk.text,
       entityId: stringMetadata(chunk.item.metadata, 'entity_id'),
-      startMs: numberMetadata(chunk.item.metadata, 'start_ms'),
+      startMs: evidenceStartMs(chunk.text, chunk.item.metadata),
       sourceKey: chunk.item.key,
     }));
   } catch (error) {
@@ -170,4 +172,13 @@ function stringMetadata(metadata: Record<string, unknown> | undefined, key: stri
 function numberMetadata(metadata: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = metadata?.[key];
   return typeof value === 'number' ? value : undefined;
+}
+
+function evidenceStartMs(text: string, metadata: Record<string, unknown> | undefined): number | undefined {
+  const timestamp = text.match(/(?:^|\n)\[(\d+)]\s/)?.[1];
+  if (timestamp !== undefined) {
+    const value = Number(timestamp);
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+  }
+  return numberMetadata(metadata, 'start_ms');
 }
