@@ -1,0 +1,108 @@
+/* Hallmark · macrostructure: Map / Diagram · tone: technical-austere · anchor hue: vermilion
+ * pre-emit critique: P5 H5 E5 S5 R5 V5
+ * genre: modern-minimal · theme: existing-brand-DNA
+ */
+:root {
+  --color-home-paper: oklch(96.5% 0.012 83);
+  --color-home-paper-raised: oklch(98.5% 0.008 83);
+  --color-home-paper-muted: oklch(93% 0.014 83);
+  --color-home-ink: oklch(20% 0.012 75);
+  --color-home-ink-soft: oklch(43% 0.012 80);
+  --color-home-muted: oklch(49% 0.012 82);
+  --color-home-rule: oklch(80% 0.012 83);
+  --color-home-rule-strong: oklch(60% 0.012 80);
+  --color-home-accent: oklch(64% 0.19 31);
+  --color-home-accent-ink: oklch(19% 0.012 75);
+  --color-home-mark: oklch(98.5% 0.008 83);
+  --color-home-focus: oklch(48% 0.2 31);
+  --color-home-danger: oklch(48% 0.2 31);
+  --color-home-disabled: oklch(86% 0.01 83);
+  --color-home-disabled-ink: oklch(51% 0.01 82);
+
+  --font-home-display: var(--font-serif);
+  --font-home-body: var(--font-sans);
+  --font-home-wordmark: var(--font-serif);
+  --font-home-mono: var(--font-mono);
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+  --space-4xl: 9rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.953rem;
+  --text-2xl: 2.441rem;
+  --text-3xl: 3.052rem;
+  --text-display: clamp(3rem, 5vw + 0.5rem, 5.25rem);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-orbit: linear;
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+  --dur-orbit: 36s;
+
+  --rule-home: 1px;
+  --radius-home-sm: 0.5rem;
+  --radius-home-md: 0.75rem;
+  --radius-home-pill: 999px;
+
+  --z-home-base: 1;
+  --z-home-raised: 10;
+
+  --color-dashboard-paper: oklch(96.5% 0.012 83);
+  --color-dashboard-surface: oklch(98.5% 0.008 83);
+  --color-dashboard-surface-muted: oklch(93% 0.014 83);
+  --color-dashboard-sidebar: oklch(94% 0.012 83);
+  --color-dashboard-ink: oklch(20% 0.012 75);
+  --color-dashboard-ink-soft: oklch(42% 0.012 80);
+  --color-dashboard-muted: oklch(45% 0.012 82);
+  --color-dashboard-rule: oklch(79% 0.012 83);
+  --color-dashboard-rule-strong: oklch(62% 0.014 80);
+  --color-dashboard-accent: oklch(57% 0.2 31);
+  --color-dashboard-accent-hover: oklch(52% 0.2 31);
+  --color-dashboard-accent-soft: oklch(92% 0.035 31);
+  --color-dashboard-accent-ink: var(--color-dashboard-surface);
+  --color-dashboard-focus: oklch(47% 0.21 31);
+  --color-dashboard-dark: oklch(20% 0.01 75);
+  --color-dashboard-dark-raised: oklch(25% 0.012 75);
+  --color-dashboard-dark-ink: oklch(94% 0.008 83);
+  --color-dashboard-success: oklch(47% 0.1 145);
+  --color-dashboard-success-soft: oklch(92% 0.03 145);
+  --color-dashboard-warning: oklch(48% 0.08 78);
+  --color-dashboard-warning-soft: oklch(94% 0.03 78);
+  --color-dashboard-danger: oklch(48% 0.2 31);
+  --color-dashboard-surface-glass: oklch(98.5% 0.008 83 / 0.94);
+  --color-dashboard-paper-glass: oklch(96.5% 0.012 83 / 0.94);
+  --color-dashboard-dark-glass: oklch(20% 0.01 75 / 0.86);
+  --color-dashboard-dark-wash: oklch(20% 0.01 75 / 0.18);
+  --color-dashboard-accent-wash: oklch(61% 0.2 31 / 0.16);
+  --color-dashboard-success-wash: oklch(47% 0.1 145 / 0.16);
+  --color-dashboard-overlay: oklch(18% 0.01 75 / 0.55);
+  --color-dashboard-shadow-subtle: oklch(20% 0.01 75 / 0.06);
+  --color-dashboard-shadow: oklch(20% 0.01 75 / 0.12);
+  --color-dashboard-shadow-strong: oklch(20% 0.01 75 / 0.18);
+  --shadow-dashboard-modal: 0 1.5rem 5rem oklch(20% 0.01 75 / 0.25);
+
+  --font-dashboard-display: var(--font-serif);
+  --font-dashboard-body: var(--font-sans);
+  --font-dashboard-label: var(--font-home-body);
+  --font-dashboard-mono: var(--font-home-body);
+
+  --radius-dashboard-sm: 0.375rem;
+  --radius-dashboard-md: 0.625rem;
+  --radius-dashboard-lg: 0.875rem;
+  --radius-dashboard-pill: 999px;
+}

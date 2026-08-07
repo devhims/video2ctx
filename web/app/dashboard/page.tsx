@@ -14,7 +14,7 @@ type SearchItem = {
 type Segment = { text: string; startMs: number; endMs: number; durationMs: number };
 type Transcript = { videoId: string; segments: Segment[]; text: string; track: { name: string; kind: string; languageCode: string } };
 type Project = { id: string; name: string; description?: string; item_count?: number };
-type ProjectItem = { id: string; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number; created_at?: number };
+type ProjectItem = { id: string; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
 type ProjectDetail = Project & { items: ProjectItem[] };
 type Monitor = { id: string; kind: string; target: string; enabled: number; last_checked_at?: number };
 type Citation = { index: number; text: string; entityId?: string; startMs?: number; score: number };
@@ -45,6 +45,22 @@ type AiTrendPlan = {
   titleIdeas: string[]; hashtags: string[]; differentiation: string[];
   evidence: Array<{ claim: string; videoIds: string[] }>; caveats: string[];
 };
+
+type IconName = 'home' | 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus';
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const paths: Record<IconName, React.ReactNode> = {
+    home: <><path d='M3.5 10.5 12 3.75l8.5 6.75' /><path d='M5.5 9.5v10h13v-10M9.5 19.5v-6h5v6' /></>,
+    trend: <><path d='M4 17 9 12l3 3 8-9' /><path d='M15 6h5v5' /></>,
+    search: <><circle cx='10.5' cy='10.5' r='5.75' /><path d='m15 15 4.5 4.5' /></>,
+    folder: <><path d='M3.5 6.5h6l2 2h9v10.5h-17z' /><path d='M3.5 9h17' /></>,
+    monitor: <><circle cx='12' cy='12' r='2.5' /><circle cx='12' cy='12' r='6.5' /><path d='M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2' /></>,
+    user: <><circle cx='12' cy='8' r='3.25' /><path d='M5.5 20c.6-4 2.8-6 6.5-6s5.9 2 6.5 6' /></>,
+    spark: <path d='M12 3.5c.6 4.7 2.8 6.9 7.5 7.5-4.7.6-6.9 2.8-7.5 7.5-.6-4.7-2.8-6.9-7.5-7.5 4.7-.6 6.9-2.8 7.5-7.5Z' />,
+    plus: <path d='M12 5v14M5 12h14' />,
+  };
+  return <svg className='ui-icon' width={size} height={size} viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.75' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>{paths[name]}</svg>;
+}
 
 const DEMO_HEADERS = { 'x-demo-user': 'local-beta' };
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -90,7 +106,8 @@ export default function WorkspacePage() {
   const [entityFilter, setEntityFilter] = useState('all');
   const [duration, setDuration] = useState('');
   const [captionsOnly, setCaptionsOnly] = useState(false);
-  const [items, setItems] = useState<SearchItem[]>(() => featuredFallback);
+  const [items, setItems] = useState<SearchItem[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [answer, setAnswer] = useState<Answer | null>(null);
@@ -133,6 +150,12 @@ export default function WorkspacePage() {
   const navigateTo = useCallback((nextSection: Section) => {
     if (nextSection !== section) cancelOperation();
     setSection(nextSection);
+    const params = new URLSearchParams(window.location.search);
+    if (nextSection === 'trends') params.delete('section');
+    else params.set('section', nextSection);
+    const suffix = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}`);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [cancelOperation, section]);
 
   const refreshPrivateData = useCallback(async () => {
@@ -147,9 +170,9 @@ export default function WorkspacePage() {
   useEffect(() => {
     void refreshPrivateData();
     api<{ results: SearchItem[] }>('/v1/browse')
-      .then((data) => { setItems(data.results.length ? data.results.slice(0, 12) : featuredFallback); setSourceState('live'); })
+      .then((data) => { setItems(data.results.slice(0, 12)); setSourceState('live'); })
       .catch(() => {
-        setItems(featuredFallback); setSourceState('degraded');
+        setItems([]); setSourceState('degraded');
       });
   }, [refreshPrivateData]);
 
@@ -187,6 +210,7 @@ export default function WorkspacePage() {
     if (!query.trim()) return;
     const activeMode = requestedMode ?? mode;
     const controller = beginOperation('Resolving your query…');
+    setHasSearched(true);
     setAnswer(null); setInspector(null); setSection('discover');
     try {
       const resolved = await api<{ kind: EntityType | 'search'; id?: string; query?: string }>('/v1/resolve', {
@@ -292,35 +316,41 @@ export default function WorkspacePage() {
     return normalized ? segments.filter((segment) => segment.text.toLowerCase().includes(normalized)) : segments;
   }, [inspector, transcriptQuery]);
 
+  const searchCopy = {
+    youtube: { label: 'Search YouTube', placeholder: 'Search topics and channels, or paste a YouTube URL…', action: 'Find sources' },
+    inside: { label: 'Search captions', placeholder: 'Find a claim, phrase, or example across indexed videos…', action: 'Find moments' },
+    ask: { label: 'Ask with citations', placeholder: 'Ask a research question about your indexed sources…', action: 'Ask YouTube' },
+  }[mode];
+
   return (
     <main className='workspace-shell'>
-      <Sidebar section={section} setSection={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} />
+      <Sidebar section={section} setSection={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} />
       <div className='workspace-main'>
         <header className='topbar'>
-          <div><p className='eyebrow'>PUBLIC SIGNALS · PRIVATE RESEARCH</p><h1>{section === 'trends' ? 'Topic Trend Lab' : section === 'discover' ? 'YouTube, with receipts.' : section === 'projects' ? 'Your research projects' : 'Signals worth watching'}</h1></div>
-          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'checking' ? 'Checking sources' : 'Sources limited'}</span><button className='icon-button' aria-label='Notifications'>◌<span className='status-dot' /></button><button className='avatar' aria-label='Open account and sign-in options' onClick={() => setShowSignIn(true)}>HG</button></div>
+          <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : 'Monitors'}</h1></div>
+          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'checking' ? 'Checking sources' : 'Sources limited'}</span><button className='signin-button' aria-label='Sign in' onClick={() => setShowSignIn(true)}><Icon name='user' size={16} /><span>Sign in</span></button></div>
         </header>
 
-        {section === 'trends' && <TrendLab onInspect={(id) => { setSection('discover'); void inspect('video', id); }} />}
-        {section === 'discover' && (
+        <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
+        <div className='workspace-view' hidden={section !== 'discover'}>
           <>
             <section className='search-stage'>
               <div className='search-intro'>
                 <div>
-                  <span className='search-badge'><i />Evidence workspace</span>
-                  <h2>Research the video, not just the title.</h2>
-                  <p>Search across YouTube, inspect the exact moments, and keep every conclusion connected to its source.</p>
+                  <h2>Find sources. Keep the evidence attached.</h2>
+                  <p>Search YouTube, inspect exact moments, and ask questions without losing the source trail.</p>
                 </div>
-                <div className='intro-note'><span>01</span><p>Paste any video, channel, or playlist to open a cited workspace.</p></div>
               </div>
               <div className='search-console'>
                 <form onSubmit={runSearch} className='universal-search'>
-                  <span className='search-glyph'>⌕</span>
-                  <input ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='Search, ask a question, or paste any YouTube URL…' aria-label='Search all-things-youtube' />
-                  <kbd>⌘ K</kbd><button disabled={loading}>{loading ? 'Gathering…' : 'Explore sources'} <span>→</span></button>
+                  <div className='search-entry'>
+                    <label htmlFor='workspace-search'>{searchCopy.label}</label>
+                    <div><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={searchCopy.placeholder} /><kbd>⌘ K</kbd></div>
+                  </div>
+                  <button disabled={loading}>{loading ? 'Gathering…' : searchCopy.action} <span aria-hidden='true'>→</span></button>
                 </form>
                 <div className='search-controls'>
-                  <div className='mode-tabs' role='tablist' aria-label='Search mode'>{(['youtube','inside','ask'] as Mode[]).map((value) => <button type='button' role='tab' aria-selected={mode === value} key={value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}>{value === 'youtube' ? 'YouTube' : value === 'inside' ? 'Inside videos' : 'Ask YouTube'}</button>)}</div>
+                  <div className='mode-tabs' role='tablist' aria-label='Search mode'>{(['youtube','inside','ask'] as Mode[]).map((value) => <button type='button' role='tab' aria-selected={mode === value} key={value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}>{value === 'youtube' ? 'YouTube' : value === 'inside' ? 'Captions' : 'Ask'}</button>)}</div>
                   {mode === 'youtube' && <div className='filter-row'><select aria-label='Source type' value={entityFilter} onChange={(event) => setEntityFilter(event.target.value)}><option value='all'>All types</option><option value='video'>Videos</option><option value='channel'>Channels</option><option value='playlist'>Playlists</option></select><select aria-label='Video duration' value={duration} onChange={(event) => setDuration(event.target.value)}><option value=''>Any duration</option><option value='short'>Under 4 min</option><option value='medium'>4–20 min</option><option value='long'>Over 20 min</option></select><label><input type='checkbox' checked={captionsOnly} onChange={(event) => setCaptionsOnly(event.target.checked)} /> Captions only</label></div>}
                 </div>
               </div>
@@ -334,12 +364,12 @@ export default function WorkspacePage() {
             {inspector ? (
               <InspectorPanel inspector={inspector} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => setInspector(null)} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} />
             ) : !answer && (
-              <DiscoveryGrid items={items} projects={projects} monitors={monitors} sourceState={sourceState} onInspect={(type, id) => void inspect(type, id)} loading={loading} />
+              <DiscoveryGrid items={items} projects={projects} monitors={monitors} sourceState={sourceState} onInspect={(type, id) => void inspect(type, id)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
             )}
           </>
-        )}
-        {section === 'projects' && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { setSection('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { setSection('discover'); void inspect(item.entity_type, item.entity_id); }} />}
-        {section === 'monitors' && <MonitorsView monitors={monitors} onFindSource={() => { setSection('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); setMode('youtube'); setSection('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} />}
+        </div>
+        <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id); }} /></div>
+        <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); setMode('youtube'); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
@@ -347,14 +377,14 @@ export default function WorkspacePage() {
   );
 }
 
-function Sidebar({ section, setSection, projects, onNewProject, onOpenProject }: { section: Section; setSection: (value: Section) => void; projects: Project[]; onNewProject: () => void; onOpenProject: (project: Project) => void }) {
+function Sidebar({ section, setSection, projects, onNewProject, onOpenProject, onSignIn }: { section: Section; setSection: (value: Section) => void; projects: Project[]; onNewProject: () => void; onOpenProject: (project: Project) => void; onSignIn: () => void }) {
   return <aside className='sidebar'>
-    <a className='brand brand-button' aria-label='Open homepage' href='/'><span className='brand-mark'>YT</span><span>YouTube<br /><strong>Intelligence</strong></span></a>
-    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'>✦</span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'>⌁</span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'>⌕</span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'>□</span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'>◉</span>Monitors</button></nav>
+    <a className='brand workspace-brand' aria-label='all things youtube home' href='/'><span className='lens-brand-mark' aria-hidden='true'><i /></span><span className='lens-brand-type'><b>all things</b><strong>youtube</strong></span></a>
+    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'><Icon name='trend' /></span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'><Icon name='search' /></span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'><Icon name='folder' /></span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'><Icon name='monitor' /></span>Monitors</button></nav>
     <div className='sidebar-rule' />
     <div className='sidebar-label'><span>RECENT PROJECTS</span><button aria-label='Create a new project' onClick={onNewProject}>＋</button></div>
     <div className='project-links'>{projects.slice(0,5).map((project, index) => <button key={project.id} onClick={() => onOpenProject(project)}><span aria-hidden='true' className={`project-color c${index % 4}`} />{project.name}</button>)}{!projects.length && <p>Save a source to start.</p>}</div>
-    <div className='plan-card'><div><span>PRO</span><strong>1,684 credits</strong></div><div className='meter'><i /></div><small>Renews Aug 18</small></div>
+    <div className='account-card'><strong>Keep your research private</strong><p>Sign in to sync projects and monitors across devices.</p><button onClick={onSignIn}><Icon name='user' size={15} />Sign in</button></div>
   </aside>;
 }
 
@@ -416,21 +446,21 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
   const maxDurationCount = Math.max(...(report?.durationMix.map((bucket) => bucket.videos) ?? [1]), 1);
 
   return <section className='trend-lab'>
-    <div className='trend-hero'>
-      <div className='trend-hero-copy'><span className='search-badge'><i />Live topic intelligence</span><h2>Find momentum before it becomes obvious.</h2><p>Compare fresh videos by public view velocity, see the patterns spreading across a topic, then turn the evidence into a video brief.</p></div>
+    <header className='trend-command'>
+      <div><h2>Compare topic momentum</h2><p>Scan fresh videos, inspect the strongest signals, and turn the evidence into a brief.</p></div>
       <form className='trend-search' onSubmit={(event) => { event.preventDefault(); void runTopic(topic); }}>
-        <label htmlFor='trend-topic'>TOPIC OR NICHE</label><div><input id='trend-topic' value={topic} onChange={(event) => setTopic(event.target.value)} placeholder='e.g. AI coding agents' /><button disabled={loading}>{loading ? 'Scanning…' : 'Research topic'} <span aria-hidden='true'>→</span></button></div>
-        <small>No official YouTube API · public signals only</small>
+        <label htmlFor='trend-topic'>Topic or niche</label><div><input id='trend-topic' value={topic} onChange={(event) => setTopic(event.target.value)} placeholder='e.g. AI coding agents' /><button disabled={loading}>{loading ? 'Scanning…' : 'Research topic'} <span aria-hidden='true'>→</span></button></div>
+        <small>Public signals only · no official YouTube API</small>
       </form>
-    </div>
-    <div className='trend-presets'><span>QUICK SCANS</span>{['AI agents','Claude Code','faceless YouTube','personal finance'].map((preset) => <button key={preset} onClick={() => void runTopic(preset)}>{preset}</button>)}</div>
+    </header>
+    <div className='trend-presets'><span>Quick scans</span>{['AI agents','Claude Code','faceless YouTube','personal finance'].map((preset) => <button key={preset} onClick={() => void runTopic(preset)}>{preset}</button>)}</div>
 
     {error && <div className='trend-alert' role='alert'><span>{error}</span><button onClick={() => void runTopic(topic)}>Retry scan</button></div>}
     {loading && !report && <TrendLoading onCancel={cancelTrend} />}
-    {!loading && !report && !error && <div className='trend-empty'><div><span aria-hidden='true'>⌁</span><p className='eyebrow'>READY WHEN YOU ARE</p><h3>Start with a topic you want to understand.</h3><p>We’ll compare a fresh public sample, surface momentum patterns, and keep the evidence attached.</p><button onClick={() => void runTopic(topic)}>Research “{topic}”</button></div></div>}
+    {!loading && !report && !error && <div className='trend-empty'><div><span aria-hidden='true'><Icon name='trend' size={21} /></span><h3>Start with a topic you want to understand.</h3><p>We’ll compare a fresh public sample, surface momentum patterns, and keep the evidence attached.</p><button onClick={() => void runTopic(topic)}>Research “{topic}”</button></div></div>}
     {report && <>
       {loading && <div className='trend-refresh-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>Refreshing the topic sample…</strong><small>The previous report remains visible.</small></div><button onClick={cancelTrend}>Cancel</button></div>}
-      <div className='trend-report-head'><div><p className='eyebrow'>LIVE SAMPLE · {report.sampleSize} VIDEOS</p><h3>Momentum around “{report.query}”</h3></div><span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
+      <div className='trend-report-head'><div><p className='panel-label'>Live sample · {report.sampleSize} videos</p><h3>Momentum around “{report.query}”</h3></div><span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
       <div className='trend-kpis'>
         <article><span>MEDIAN PUBLISH-ADJUSTED REACH</span><strong>{formatNumber(report.summary.medianViewsPerHour)}</strong><small>average views/hour</small></article>
         <article><span>FRESH THIS WEEK</span><strong>{report.summary.publishedLast7Days}/{report.sampleSize}</strong><small>sampled videos</small></article>
@@ -440,12 +470,12 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
 
       <div className='trend-dashboard-grid'>
         <article className='trend-card velocity-card'>
-          <div className='trend-card-head'><div><p className='eyebrow'>MOMENTUM</p><h4>Average views/hour since publish</h4></div><span>First-scan estimate</span></div>
+          <div className='trend-card-head'><div><p className='panel-label'>Momentum</p><h4>Average views/hour since publish</h4></div><span>First-scan estimate</span></div>
           <div className='velocity-chart'>{report.videos.slice(0,6).map((video) => <button key={video.id} onClick={() => onInspect(video.id)} title={video.title}><span>{video.title}</span><i><b style={{width:`${Math.max(4,((video.viewsPerHour ?? 0)/maxVelocity)*100)}%`}} /></i><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong></button>)}</div>
         </article>
 
         <article className='trend-card scatter-card'>
-          <div className='trend-card-head'><div><p className='eyebrow'>OPPORTUNITY MAP</p><h4>Freshness × relative momentum</h4></div><span>Hover to inspect</span></div>
+          <div className='trend-card-head'><div><p className='panel-label'>Opportunity map</p><h4>Freshness × relative momentum</h4></div><span>Select a point to inspect</span></div>
           <div className='scatter-plot'><span className='axis-y'>More momentum</span><span className='axis-x'>Fresher →</span>{report.videos.map((video) => {
             const freshness = video.ageHours === undefined ? 10 : Math.max(5, 96 - Math.log10(video.ageHours + 1) * 29);
             const size = Math.max(12, Math.min(28, 12 + Math.log10(video.viewCount + 1) * 2.2));
@@ -455,12 +485,12 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
         </article>
 
         <article className='trend-card pattern-card'>
-          <div className='trend-card-head'><div><p className='eyebrow'>FORMAT SIGNAL</p><h4>Which lengths are surfacing</h4></div><span>{report.sampleSize} videos</span></div>
+          <div className='trend-card-head'><div><p className='panel-label'>Format signal</p><h4>Which lengths are surfacing</h4></div><span>{report.sampleSize} videos</span></div>
           <div className='duration-chart'>{report.durationMix.map((bucket) => <div key={bucket.label}><span>{bucket.label}</span><i><b style={{height:`${Math.max(4,(bucket.videos/maxDurationCount)*100)}%`}} /></i><strong>{bucket.videos}</strong><small>{formatNumber(bucket.averageViewsPerHour)}/h avg</small></div>)}</div>
         </article>
 
         <article className='trend-card hashtag-card'>
-          <div className='trend-card-head'><div><p className='eyebrow'>DISCOVERY LANGUAGE</p><h4>Observed hashtags & title terms</h4></div><span>Correlation, not causation</span></div>
+          <div className='trend-card-head'><div><p className='panel-label'>Discovery language</p><h4>Observed hashtags & title terms</h4></div><span>Correlation, not causation</span></div>
           {report.hashtags.length ? <div className='hashtag-list'>{report.hashtags.slice(0,6).map((item) => <div key={item.tag}><strong>{item.tag}</strong><span>{item.videos} video{item.videos === 1 ? '' : 's'}</span><b>{item.lift ? `${item.lift.toFixed(1)}×` : '—'} velocity</b></div>)}</div> : <p className='no-hashtags'>No repeated visible hashtags appeared in this sample. Don’t force them—the topic and title pattern are stronger signals here.</p>}
           <div className='term-cloud'>{report.titlePatterns.slice(0,7).map((item, index) => <span key={item.term} style={{fontSize:`${11 + Math.max(0,4-index)}px`}}>{item.term}<small>{item.videos}</small></span>)}</div>
         </article>
@@ -468,12 +498,12 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
 
       <div className='trend-bottom-grid'>
         <article className='trend-leaders'>
-          <div className='trend-card-head'><div><p className='eyebrow'>VIDEOS TO STUDY</p><h4>Current sample leaders</h4></div><span>Open any source</span></div>
+          <div className='trend-card-head'><div><p className='panel-label'>Videos to study</p><h4>Current sample leaders</h4></div><span>Open any source</span></div>
           <div className='leader-list'>{report.videos.slice(0,5).map((video, index) => <button key={video.id} onClick={() => onInspect(video.id)}><span className='leader-rank'>{String(index+1).padStart(2,'0')}</span><div className='leader-thumb'>{video.thumbnails[0]?.url ? <img src={video.thumbnails[0].url} alt='' /> : <span>YT</span>}</div><div><strong>{video.title}</strong><small>{video.channel.name} · {video.publishedTimeText ?? video.publishDate ?? 'Published recently'}</small></div><span className={`signal-pill ${video.trendBand.toLowerCase()}`}>{video.trendBand}</span><div className='leader-metric'><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong><small>{formatNumber(video.viewCount)} views</small></div></button>)}</div>
         </article>
 
         <aside className={`video-plan ${aiPlan ? 'ai-ready' : ''}`}>
-          <div className='plan-head'><div><p className='eyebrow'>YOUR VIDEO PLAN</p><h3>{aiPlan ? 'An AI-shaped brief, grounded in this sample.' : 'Turn these signals into a sharper brief.'}</h3></div>{aiPlan && <span>GPT-OSS 120B</span>}</div>
+          <div className='plan-head'><div><p className='panel-label'>Your video plan</p><h3>{aiPlan ? 'An AI-shaped brief, grounded in this sample.' : 'Turn these signals into a sharper brief.'}</h3></div>{aiPlan && <span>GPT-OSS 120B</span>}</div>
           {aiPlan ? <>
             <blockquote>{aiPlan.angle}</blockquote>
             <div className='plan-pair'><div className='plan-detail'><span>AUDIENCE</span><strong>{aiPlan.audience}</strong></div><div className='plan-detail'><span>RECOMMENDED LENGTH</span><strong>{formatDuration(aiPlan.recommendedDurationSeconds)}</strong></div></div>
@@ -503,23 +533,24 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Searching, enriching, and comparing public video signals. This stops automatically if the source takes too long.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, loading }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: 'checking' | 'live' | 'degraded'; onInspect: (type: EntityType, id: string) => void; loading: boolean }) {
+function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: 'checking' | 'live' | 'degraded'; onInspect: (type: EntityType, id: string) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
   const savedSources = projects.reduce((total, project) => total + (project.item_count ?? 0), 0);
   const activeMonitors = monitors.filter((monitor) => monitor.enabled).length;
   return <section className='content-section discovery-section'>
     <div className='research-layout'>
       <div className='source-inbox'>
-        <div className='section-heading'><div><p className='eyebrow'>{items.length ? 'SOURCE INBOX' : 'NO RESULTS'}</p><h2>{items.length ? 'Fresh evidence to explore' : 'Try a broader search'}</h2></div><span>{items.length} sources · {loading ? 'previous results' : 'current results'}</span></div>
-        <div className='source-grid'>{loading && !items.length ? Array.from({length:6}).map((_,i)=><div className='source-card skeleton' key={i}/>) : items.map((item, index) => <button className={`source-card ${index === 0 ? 'featured' : ''}`} key={`${item.type}-${item.id}`} onClick={() => onInspect(item.type,item.id)}>
+        <div className='section-heading'><div><h2>{items.length ? 'Evidence to explore' : hasSearched ? 'No matching sources' : 'Open a source workspace'}</h2><p>{items.length ? 'Choose a result to inspect its captions, comments, and source details.' : hasSearched ? 'Try a broader topic, remove a filter, or paste a direct YouTube URL.' : 'Paste a video, channel, or playlist URL to begin with real source data.'}</p></div>{items.length ? <span>{items.length} sources · {loading ? 'previous results' : 'current results'}</span> : null}</div>
+        {!items.length && !loading ? <div className='source-onboarding'><Icon name='search' size={22} /><div><strong>{hasSearched ? 'Nothing matched this search.' : 'Your source inbox is empty.'}</strong><p>{hasSearched ? 'Change the query or filters and search again.' : 'Start with a URL or search term. The result will replace this guide.'}</p></div><button onClick={onStart}>{hasSearched ? 'Edit search' : 'Paste a YouTube URL'}</button></div> : null}
+        <div className='source-grid'>{loading && !items.length ? Array.from({length:4}).map((_,i)=><div className='source-card skeleton' key={i}/>) : items.map((item, index) => <button className={`source-card ${index === 0 ? 'featured' : ''}`} key={`${item.type}-${item.id}`} onClick={() => onInspect(item.type,item.id)}>
           <div className='thumbnail'>{item.thumbnails?.[0]?.url ? <img src={item.thumbnails[0].url} alt='' /> : <div className='thumb-placeholder'>YT</div>}<span className={`type-pill ${item.type}`}>{item.type}</span>{item.durationText && <time>{item.durationText}</time>}</div>
           <div className='card-copy'><span className='evidence-label'><i />Ready to inspect</span><h3>{item.title ?? item.name}</h3><p>{item.channel?.name ?? item.description ?? `${item.videoCountText ?? ''}`}</p><div><span>{item.viewCountText ?? item.publishedTimeText ?? 'Source ready'}</span><b>Open evidence <span>→</span></b></div></div>
         </button>)}</div>
       </div>
       <aside className='research-pulse'>
-        <div className='pulse-head'><div><p className='eyebrow'>RESEARCH PULSE</p><h3>Your workspace</h3></div><span className={`live-pill ${sourceState}`}><i />{sourceState === 'live' ? 'Live' : sourceState === 'checking' ? 'Checking' : 'Limited'}</span></div>
+        <div className='pulse-head'><div><p className='panel-label'>Workspace status</p><h3>Your research</h3></div><span className={`live-pill ${sourceState}`}><i />{sourceState === 'live' ? 'Live' : sourceState === 'checking' ? 'Checking' : 'Limited'}</span></div>
         <div className='pulse-stats'><article><strong>{projects.length}</strong><span>active projects</span></article><article><strong>{savedSources}</strong><span>saved sources</span></article><article><strong>{activeMonitors}</strong><span>signal monitors</span></article></div>
         <div className='pipeline-card'><div><span>Evidence pipeline</span><b>{sourceState === 'live' ? 'Healthy' : sourceState === 'checking' ? 'Checking' : 'Limited'}</b></div><ol><li className={sourceState === 'live' ? 'complete' : ''}><i>{sourceState === 'live' ? '✓' : '1'}</i><span><b>Source discovery</b><small>{sourceState === 'live' ? 'Live YouTube catalog' : sourceState === 'checking' ? 'Checking source access' : 'Retry a search to reconnect'}</small></span></li><li className='complete'><i>✓</i><span><b>Transcript index</b><small>Exact moments retained</small></span></li><li><i>3</i><span><b>Cited synthesis</b><small>Ready when you ask</small></span></li></ol></div>
-        <blockquote>“The useful unit isn’t the video. It’s the claim, the moment, and the source.”</blockquote>
+        <p className='pulse-note'>Keep claims connected to the moment and source they came from.</p>
       </aside>
     </div>
   </section>;
@@ -534,14 +565,14 @@ function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQue
     window.setTimeout(() => chatSection.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }), 350);
   };
   return <section className='inspector'>
-    <div className='inspector-head'><button className='back' onClick={onClose}>← Back to discovery</button><div className='inspector-actions'><button onClick={onMonitor}>◉ Monitor</button><button onClick={onSave}>＋ Save to project</button>{inspector.type === 'video' && <button className='primary' onClick={openChat}>✦ Open cited chat</button>}</div></div>
+    <div className='inspector-head'><button className='back' onClick={onClose}>← Back to discovery</button><div className='inspector-actions'><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor</button><button onClick={onSave}><Icon name='plus' size={15} />Save to project</button>{inspector.type === 'video' && <button className='primary' onClick={openChat}><Icon name='spark' size={15} />Open cited chat</button>}</div></div>
     <div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{channel?.name ?? String(inspector.data.description ?? '').slice(0,160)}</p></div><div className='data-health'><i /> Fresh from YouTube<br /><small>Partial sections degrade safely</small></div></div>
     {inspector.type === 'video' ? <>
       <div className='source-research-layout'>
         <section className='caption-workspace' aria-labelledby='caption-workspace-title'>
-          <header className='workspace-panel-head'><div><p className='eyebrow'>SOURCE</p><h3 id='caption-workspace-title'>Captions</h3></div><span>{inspector.transcript?.segments.length ?? 0} moments</span></header>
+          <header className='workspace-panel-head'><div><p className='panel-label'>Source captions</p><h3 id='caption-workspace-title'>Transcript</h3></div><span>{inspector.transcript?.segments.length ?? 0} moments</span></header>
           <div className='caption-player'><div className='player'><iframe src={`https://www.youtube-nocookie.com/embed/${inspector.id}`} title={title} allowFullScreen /></div><div className='signal-strip'><span><b>{formatNumber(inspector.data.viewCount)}</b> views</span><span><b>{inspector.transcript?.segments.length ?? 0}</b> captions</span><span><b>{inspector.comments?.length ?? 0}</b> comments</span></div></div>
-          <div className='transcript-toolbar'><div><p className='eyebrow'>SYNCHRONIZED TRANSCRIPT</p><strong>{inspector.transcript?.track.name ?? 'No caption track'}</strong> <span>{inspector.transcript?.track.kind}</span></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event)=>setTranscriptQuery(event.target.value)} placeholder='Search captions…' /></label></div>
+          <div className='transcript-toolbar'><div><p className='panel-label'>Synchronized transcript</p><strong>{inspector.transcript?.track.name ?? 'No caption track'}</strong> <span>{inspector.transcript?.track.kind}</span></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event)=>setTranscriptQuery(event.target.value)} placeholder='Search captions…' /></label></div>
           <div className='segments'>{segments.slice(0,300).map((segment) => <a key={`${segment.startMs}-${segment.text}`} href={`https://youtube.com/watch?v=${inspector.id}&t=${Math.floor(segment.startMs/1000)}s`} target='_blank' rel='noreferrer'><time>{formatTime(segment.startMs)}</time><p>{highlight(segment.text, transcriptQuery)}</p></a>)}{!segments.length && <div className='empty-state'>No matching caption moments.</div>}</div>
         </section>
         <div className='chat-workspace' ref={chatSection}><SourceChat key={inspector.id} inspector={inspector} /></div>
@@ -614,24 +645,24 @@ function SourceChat({ inspector }: { inspector: Inspector }) {
   };
 
   return <section className='source-chat' aria-labelledby='source-chat-title'>
-    <div className='chat-heading'><div><p className='eyebrow'>RESEARCH ASSISTANT</p><h3 id='source-chat-title'>Chat</h3><p>Ask, follow up, and keep every answer attached to the source.</p></div><span><i />{inspector.transcript?.segments.length ?? 0} source moments</span></div>
+    <div className='chat-heading'><div><p className='panel-label'>Research assistant</p><h3 id='source-chat-title'>Cited chat</h3><p>Ask, follow up, and keep every answer attached to the source.</p></div><span><i />{inspector.transcript?.segments.length ?? 0} source moments</span></div>
     <div className='chat-session-bar'><div className='chat-tabs' role='tablist' aria-label='Chat sessions'>{sessions.map((session) => <button type='button' role='tab' aria-selected={session.id === activeSessionId} className={session.id === activeSessionId ? 'active' : ''} key={session.id} onClick={() => setActiveSessionId(session.id)}><span aria-hidden='true'>◇</span>{session.title}</button>)}</div><button type='button' className='new-chat-button' aria-label='Start a new chat session' onClick={newChat}><b aria-hidden='true'>＋</b><span>New chat</span></button></div>
     <div className='chat-surface'>
       <div className='chat-log' ref={chatLog} role='log' aria-live='polite' aria-label={`Messages in ${activeSession.title}`}>
-        {!activeSession.messages.length && pendingSessionId !== activeSession.id && <div className='chat-empty'><div className='chat-empty-mark' aria-hidden='true'>✦</div><h4>Ask this video anything</h4><p>Answers stay grounded in the captions.</p><div>{['Summarize with evidence','Show the strongest claims','Find a concrete example'].map((prompt) => <button key={prompt} onClick={() => { setQuestion(prompt); composer.current?.focus(); }}>{prompt}</button>)}</div></div>}
+        {!activeSession.messages.length && pendingSessionId !== activeSession.id && <div className='chat-empty'><div className='chat-empty-mark' aria-hidden='true'><Icon name='spark' size={17} /></div><h4>Ask this video anything</h4><p>Answers stay grounded in the captions.</p><div>{['Summarize with evidence','Show the strongest claims','Find a concrete example'].map((prompt) => <button key={prompt} onClick={() => { setQuestion(prompt); composer.current?.focus(); }}>{prompt}</button>)}</div></div>}
         {activeSession.messages.map((message) => <ChatMessageBubble key={message.id} message={message} sourceId={inspector.id} onReuse={reuseFailedQuestion} />)}
         {pendingSessionId === activeSession.id && <article className='chat-message assistant pending'><div className='chat-avatar' aria-hidden='true'>✦</div><div className='chat-bubble'><span>Evidence assistant</span><div className='chat-thinking' role='status'><i /><i /><i /><b>Reading source moments…</b></div><button className='stop-answer' onClick={stopAnswer}>Stop generating</button></div></article>}
       </div>
       <form className='chat-composer' onSubmit={(event) => void sendQuestion(event)}>
         <label className='sr-only' htmlFor={`chat-question-${inspector.id}`}>Ask a question about this video</label><textarea ref={composer} id={`chat-question-${inspector.id}`} rows={2} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendQuestion(); } }} placeholder='Ask a follow-up about this video…' />
-        <div><small>Enter to send · Shift + Enter for a new line</small><button disabled={!question.trim() || Boolean(pendingSessionId)}><span>✦</span>{pendingSessionId ? 'Answering…' : 'Ask with citations'}</button></div>
+        <div><small>Enter to send · Shift + Enter for a new line</small><button disabled={!question.trim() || Boolean(pendingSessionId)}><Icon name='spark' size={14} />{pendingSessionId ? 'Answering…' : 'Ask with citations'}</button></div>
       </form>
     </div>
   </section>;
 }
 
 function ChatMessageBubble({ message, sourceId, onReuse }: { message: ChatMessage; sourceId: string; onReuse: (question: string) => void }) {
-  return <article className={`chat-message ${message.role}${message.failedQuestion ? ' failed' : ''}`}><div className='chat-avatar' aria-hidden='true'>{message.role === 'user' ? 'You' : '✦'}</div><div className='chat-bubble'><span>{message.role === 'user' ? 'You' : 'Evidence assistant'}</span><p>{message.content}</p>{message.citations?.length ? <div className='chat-citations' aria-label='Sources cited in this answer'>{message.citations.map((citation) => <a key={`${message.id}-${citation.index}`} href={`https://youtube.com/watch?v=${citation.entityId ?? sourceId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}`} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,120)}{citation.text.length > 120 ? '…' : ''}</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div> : null}{message.failedQuestion && <button className='retry-chat' onClick={() => onReuse(message.failedQuestion ?? '')}>Put question back in composer</button>}</div></article>;
+  return <article className={`chat-message ${message.role}${message.failedQuestion ? ' failed' : ''}`}><div className='chat-avatar' aria-hidden='true'>{message.role === 'user' ? 'You' : <Icon name='spark' size={15} />}</div><div className='chat-bubble'><span>{message.role === 'user' ? 'You' : 'Evidence assistant'}</span><p>{message.content}</p>{message.citations?.length ? <div className='chat-citations' aria-label='Sources cited in this answer'>{message.citations.map((citation) => <a key={`${message.id}-${citation.index}`} href={`https://youtube.com/watch?v=${citation.entityId ?? sourceId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}`} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,120)}{citation.text.length > 120 ? '…' : ''}</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div> : null}{message.failedQuestion && <button className='retry-chat' onClick={() => onReuse(message.failedQuestion ?? '')}>Put question back in composer</button>}</div></article>;
 }
 
 function compactChatTitle(value: string) {
@@ -645,21 +676,21 @@ function CatalogEntity({ inspector }: { inspector: Inspector }) {
 }
 
 function CommentSample({ comments }: { comments: Array<Record<string,unknown>> }) {
-  return <div className='comments-card'><div className='section-heading compact'><div><p className='eyebrow'>AUDIENCE EVIDENCE</p><h3>Comment preview</h3></div><span>Showing {Math.min(3, comments.length)} of {comments.length}</span></div>{comments.slice(0,3).map((comment,index)=><blockquote key={String(comment.id ?? index)}><p>{String(comment.text ?? '')}</p><footer>{String((comment.author as {name?:string})?.name ?? 'Viewer')} · {String(comment.likeCountText ?? 'recent')}</footer></blockquote>)}{!comments.length&&<p className='muted'>No comments returned.</p>}</div>;
+  return <div className='comments-card'><div className='section-heading compact'><div><p className='panel-label'>Audience evidence</p><h3>Comment preview</h3></div><span>Showing {Math.min(3, comments.length)} of {comments.length}</span></div>{comments.slice(0,3).map((comment,index)=><blockquote key={String(comment.id ?? index)}><p>{String(comment.text ?? '')}</p><footer>{String((comment.author as {name?:string})?.name ?? 'Viewer')} · {String(comment.likeCountText ?? 'recent')}</footer></blockquote>)}{!comments.length&&<p className='muted'>No comments returned.</p>}</div>;
 }
 
 function AnswerPanel({ answer }: { answer: Answer }) {
-  return <section className='answer-panel'><div className='answer-mark'>✦</div><div><p className='eyebrow'>CITED SYNTHESIS</p><h2>Answer grounded in source moments</h2><div className='answer-copy'>{answer.answer}</div><div className='citations'>{answer.citations.map((citation)=><a key={citation.index} href={citation.entityId ? `https://youtube.com/watch?v=${citation.entityId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}` : '#'} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,140)}…</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div></div></section>;
+  return <section className='answer-panel'><div className='answer-mark'><Icon name='spark' size={17} /></div><div><p className='panel-label'>Cited synthesis</p><h2>Answer grounded in source moments</h2><div className='answer-copy'>{answer.answer}</div><div className='citations'>{answer.citations.map((citation)=><a key={citation.index} href={citation.entityId ? `https://youtube.com/watch?v=${citation.entityId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}` : '#'} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,140)}…</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div></div></section>;
 }
 
 function ProjectsView({ projects, selectedProject, loading, error, onCreate, onOpen, onBack, onFindSources, onOpenItem }: { projects: Project[]; selectedProject: ProjectDetail | null; loading: boolean; error: string; onCreate:()=>void; onOpen:(project:Project)=>void; onBack:()=>void; onFindSources:()=>void; onOpenItem:(item:ProjectItem)=>void }) {
-  if (selectedProject) return <section className='content-section standalone project-detail'><div className='section-heading'><div><button className='back' onClick={onBack}>← All projects</button><p className='eyebrow'>PRIVATE PROJECT</p><h2>{selectedProject.name}</h2></div><button className='button primary' onClick={onFindSources}>＋ Add sources</button></div><p className='project-description'>{selectedProject.description || 'Saved sources, transcript moments, and evidence for this line of inquiry.'}</p><div className='project-item-list'>{selectedProject.items.map((item)=><article key={item.id}><span className={`type-pill ${item.entity_type}`}>{item.entity_type}</span><div><h3>{item.title || item.entity_id}</h3><p>{item.note || (item.start_ms !== undefined ? `Saved moment at ${formatTime(item.start_ms)}` : 'Saved source')}</p></div><button onClick={() => onOpenItem(item)}>Open evidence →</button></article>)}{!selectedProject.items.length&&<div className='big-empty'><strong>This project is ready for evidence</strong><p>Find a video, channel, or playlist and save it here.</p><button className='button primary' onClick={onFindSources}>Find sources</button></div>}</div></section>;
-  return <section className='content-section standalone'><div className='section-heading'><div><p className='eyebrow'>PRIVATE BY DEFAULT</p><h2>Projects turn watching into research</h2></div><button className='button primary' onClick={onCreate}>＋ New project</button></div>{loading&&<div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}{error&&<div className='alert error' role='alert'>{error}</div>}<div className='project-grid'>{projects.map((project,index)=><article key={project.id}><span className={`project-color c${index%4}`}/><h3>{project.name}</h3><p>{project.description || 'Videos, transcript moments, notes, and cited intelligence.'}</p><footer><b>{project.item_count ?? 0} sources</b><button onClick={() => onOpen(project)}>Open project →</button></footer></article>)}{!projects.length&&<div className='big-empty'><strong>No projects yet</strong><p>Create a project, then collect videos, channels, playlists, and exact transcript moments.</p><div className='empty-actions'><button className='button primary' onClick={onCreate}>Create first project</button><button className='button secondary' onClick={onFindSources}>Find sources</button></div></div>}</div></section>;
+  if (selectedProject) return <section className='content-section standalone project-detail'><div className='section-heading'><div><button className='back' onClick={onBack}>← All projects</button><h2>{selectedProject.name}</h2></div><button className='button primary' onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></div><p className='project-description'>{selectedProject.description || 'Saved sources, transcript moments, and evidence for this line of inquiry.'}</p><div className='project-item-list'>{selectedProject.items.map((item)=><article key={item.id}><span className={`type-pill ${item.entity_type}`}>{item.entity_type}</span><div><h3>{item.title || item.entity_id}</h3><p>{item.note || (item.start_ms != null ? `Saved moment at ${formatTime(item.start_ms)}` : 'Saved source')}</p></div><button onClick={() => onOpenItem(item)}>Open evidence →</button></article>)}{!selectedProject.items.length&&<div className='big-empty'><strong>This project is ready for evidence</strong><p>Find a video, channel, or playlist and save it here.</p><button className='button primary' onClick={onFindSources}>Find sources</button></div>}</div></section>;
+  return <section className='content-section standalone'><div className='section-heading'><div><h2>Projects turn watching into research</h2><p>Group sources, transcript moments, and notes around one line of inquiry.</p></div>{projects.length>0&&<button className='button primary' onClick={onCreate}><Icon name='plus' size={15} />New project</button>}</div>{loading&&<div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}{error&&<div className='alert error' role='alert'>{error}</div>}<div className='project-grid'>{projects.map((project,index)=><article key={project.id}><span className={`project-color c${index%4}`}/><h3>{project.name}</h3><p>{project.description || 'Videos, transcript moments, notes, and cited intelligence.'}</p><footer><b>{project.item_count ?? 0} sources</b><button onClick={() => onOpen(project)}>Open project →</button></footer></article>)}{!projects.length&&<div className='big-empty'><strong>No projects yet</strong><p>Create a project, then collect videos, channels, playlists, and exact transcript moments.</p><button className='button primary' onClick={onCreate}>Create first project</button></div>}</div></section>;
 }
 
 function MonitorsView({ monitors, onFindSource, onOpenTarget }: { monitors: Monitor[]; onFindSource:()=>void; onOpenTarget:(target:string)=>void }) {
   const activeCount = monitors.filter((monitor) => monitor.enabled).length;
-  return <section className='content-section standalone'><div className='section-heading'><div><p className='eyebrow'>HOURLY SIGNAL SCAN</p><h2>Know what changed without refreshing</h2></div><span>{activeCount} active</span></div><div className='monitor-list'>{monitors.map((monitor)=><article key={monitor.id}><span className='pulse'/><div><small>{monitor.kind.toUpperCase()}</small><h3>{monitor.target}</h3><p>New uploads, keyword mentions, view velocity, and audience-theme changes.</p></div><div><b>{monitor.enabled ? 'Active' : 'Paused'}</b><small>{monitor.last_checked_at ? `Checked ${new Date(monitor.last_checked_at).toLocaleString()}` : 'First scan queued'}</small><button onClick={() => onOpenTarget(monitor.target)}>Open in Sources →</button></div></article>)}{!monitors.length&&<div className='big-empty'><strong>No monitors yet</strong><p>Start from a channel or topic, inspect it, then choose Monitor.</p><button className='button primary' onClick={onFindSource}>Find a source to monitor</button></div>}</div></section>;
+  return <section className='content-section standalone'><div className='section-heading'><div><h2>Know what changed without refreshing</h2><p>Track new uploads and shifts in topic momentum.</p></div><span>{activeCount} active</span></div><div className='monitor-list'>{monitors.map((monitor)=><article key={monitor.id}><span className='pulse'/><div><small>{monitor.kind.toUpperCase()}</small><h3>{monitor.target}</h3><p>New uploads, keyword mentions, view velocity, and audience-theme changes.</p></div><div><b>{monitor.enabled ? 'Active' : 'Paused'}</b><small>{monitor.last_checked_at ? `Checked ${new Date(monitor.last_checked_at).toLocaleString()}` : 'First scan queued'}</small><button onClick={() => onOpenTarget(monitor.target)}>Open in Sources →</button></div></article>)}{!monitors.length&&<div className='big-empty'><strong>No monitors yet</strong><p>Start from a channel or topic, inspect it, then choose Monitor.</p><button className='button primary' onClick={onFindSource}>Find a source to monitor</button></div>}</div></section>;
 }
 
 function SignInDialog({ onClose }: { onClose:()=>void }) {
@@ -667,10 +698,10 @@ function SignInDialog({ onClose }: { onClose:()=>void }) {
   const [email,setEmail]=useState(''); const [message,setMessage]=useState('');
   const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/platform/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:'/'})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
   const google=async()=>{const response=await fetch('/api/platform/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:'/'})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
-  return <div className='dialog-backdrop' onMouseDown={onClose}><div ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='sign-in-title' onMouseDown={(event)=>event.stopPropagation()}><button className='dialog-close' aria-label='Close sign-in dialog' onClick={onClose}>×</button><p className='eyebrow'>WELCOME BACK</p><h2 id='sign-in-title'>Sign in to your research</h2><p>Projects, notes, monitors, and YouTube sync stay private to you.</p><button className='google-button' onClick={()=>void google()}>G&nbsp;&nbsp; Continue with Google</button><div className='or'><span/>or<span/></div><form onSubmit={magic}><label className='sr-only' htmlFor='sign-in-email'>Email address</label><input id='sign-in-email' type='email' required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder='you@example.com'/><button>Send magic link</button></form>{message&&<small className='dialog-message' role='status'>{message}</small>}</div></div>;
+  return <div className='dialog-backdrop' onMouseDown={onClose}><div ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='sign-in-title' onMouseDown={(event)=>event.stopPropagation()}><button className='dialog-close' aria-label='Close sign-in dialog' onClick={onClose}>×</button><p className='panel-label'>Private workspace</p><h2 id='sign-in-title'>Sign in to your research</h2><p>Projects, notes, monitors, and YouTube sync stay private to you.</p><button className='google-button' onClick={()=>void google()}>Continue with Google</button><div className='or'><span/>or<span/></div><form onSubmit={magic}><label className='field-label' htmlFor='sign-in-email'>Email address</label><input id='sign-in-email' type='email' required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder='you@example.com'/><button>Send magic link</button></form><small className='dialog-message' role='status' aria-live='polite'>{message || '\u00a0'}</small></div></div>;
 }
 
-function NewProjectDialog({ onClose,onCreate }: { onClose:()=>void;onCreate:(name:string)=>void }) { const dialogRef=useDialogFocus<HTMLFormElement>(onClose);const [name,setName]=useState('');return <div className='dialog-backdrop' onMouseDown={onClose}><form ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='new-project-title' onMouseDown={(event)=>event.stopPropagation()} onSubmit={(event)=>{event.preventDefault();if(name.trim())onCreate(name.trim());}}><button type='button' className='dialog-close' aria-label='Close new-project dialog' onClick={onClose}>×</button><p className='eyebrow'>NEW PROJECT</p><h2 id='new-project-title'>Name this line of inquiry</h2><label className='sr-only' htmlFor='project-name'>Project name</label><input id='project-name' autoFocus value={name} onChange={(event)=>setName(event.target.value)} placeholder='e.g. AI video research'/><button className='button primary' disabled={!name.trim()}>Create project</button></form></div>; }
+function NewProjectDialog({ onClose,onCreate }: { onClose:()=>void;onCreate:(name:string)=>void }) { const dialogRef=useDialogFocus<HTMLFormElement>(onClose);const [name,setName]=useState('');return <div className='dialog-backdrop' onMouseDown={onClose}><form ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='new-project-title' onMouseDown={(event)=>event.stopPropagation()} onSubmit={(event)=>{event.preventDefault();if(name.trim())onCreate(name.trim());}}><button type='button' className='dialog-close' aria-label='Close new-project dialog' onClick={onClose}>×</button><p className='panel-label'>New project</p><h2 id='new-project-title'>Name this line of inquiry</h2><label className='field-label' htmlFor='project-name'>Project name</label><input id='project-name' autoFocus value={name} onChange={(event)=>setName(event.target.value)} placeholder='e.g. AI video research'/><button className='button primary' disabled={!name.trim()}>Create project</button></form></div>; }
 
 function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
   const dialogRef = useRef<T>(null);
@@ -701,9 +732,3 @@ function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.fl
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}
 function highlight(value:string,query:string){if(!query.trim())return value;const parts=value.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`,'ig'));return parts.map((part,index)=>part.toLowerCase()===query.toLowerCase()?<mark key={index}>{part}</mark>:part);}
-
-const featuredFallback: SearchItem[] = [
-  {type:'video',id:'dQw4w9WgXcQ',title:'Search live YouTube data to begin',description:'Paste a video, channel, or playlist URL above.',thumbnails:[]},
-  {type:'channel',id:'@GoogleDevelopers',name:'Channel intelligence',description:'Catalogs, publishing cadence, outliers, and gaps.',thumbnails:[]},
-  {type:'playlist',id:'PL590L5WQmH8fJ54FqQOZ2g',title:'Playlist research',description:'Combined transcript search and learning paths.',thumbnails:[]},
-];
