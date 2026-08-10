@@ -30,7 +30,12 @@ The Worker routes each cache miss to a random member of its fixed container pool
 ```sh
 npm install
 npm test
-docker build -f Dockerfile -t all-things-youtube-processor ../..
+docker build -t all-things-youtube-processor .
 ```
 
-Wrangler builds the same Dockerfile from the repository root during platform deployment.
+The container installs the exact `all-things-youtube` version recorded in
+`package.json` and `package-lock.json`. Local library source is never copied into
+the production image. Publish a library release first, then deliberately update
+both platform manifests and lockfiles before deploying it.
+
+Wrangler builds the same Dockerfile from the processor directory during platform deployment.

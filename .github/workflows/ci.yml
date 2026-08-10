@@ -21,7 +21,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            packages/all-things-youtube/package-lock.json
             platform/package-lock.json
             platform/youtube-processor/package-lock.json
       - run: npm ci
