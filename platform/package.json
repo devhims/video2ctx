@@ -8,7 +8,7 @@
     "dev:local": "wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
     "build": "tsc --noEmit",
     "test": "vitest run && npm --prefix youtube-processor test",
-    "verify": "npm ci --prefix youtube-processor && npm run build && npm test",
+    "verify": "npm ci --prefix ../packages/all-things-youtube && npm ci --prefix youtube-processor && npm run build && npm test",
     "test:container": "npm --prefix youtube-processor test",
     "types": "wrangler types",
     "deploy": "wrangler deploy",
