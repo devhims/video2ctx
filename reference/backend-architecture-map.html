@@ -1,0 +1,39 @@
+<article style="max-width: 900px; margin: 0 auto; padding: 32px; font: 16px/1.55 system-ui, sans-serif; color: #172033;">
+  <style>
+    .architecture-map h1 { font-size: 1.8rem; margin: 0 0 8px; }
+    .architecture-map h2 { font-size: 1.15rem; margin: 28px 0 12px; }
+    .architecture-map p { margin: 6px 0; }
+    .architecture-map code { background: #f1f4f8; padding: 2px 5px; border-radius: 4px; }
+    .architecture-map .flow { display: grid; gap: 8px; margin: 18px 0; }
+    .architecture-map .node { border: 1px solid #cbd5e1; padding: 12px 14px; border-radius: 8px; background: #fff; }
+    .architecture-map .arrow { text-align: center; color: #64748b; }
+    .architecture-map table { width: 100%; border-collapse: collapse; }
+    .architecture-map th, .architecture-map td { text-align: left; vertical-align: top; padding: 9px; border-bottom: 1px solid #dbe2ea; }
+    @media print { .architecture-map { padding: 0; } }
+  </style>
+  <div class="architecture-map">
+    <h1>Backend architecture map</h1>
+    <p>The Worker is the outer runtime. Hono is the HTTP application inside it.</p>
+
+    <div class="flow" aria-label="Backend hierarchy">
+      <div class="node"><strong>Cloudflare Worker</strong><br>Receives HTTP, queue, and scheduled events.</div>
+      <div class="arrow">↓ HTTP requests use <code>fetch: app.fetch</code></div>
+      <div class="node"><strong>Hono app</strong><br>Contains middleware, routers, routes, and error handlers.</div>
+      <div class="arrow">↓ matching route</div>
+      <div class="node"><strong>Route handler</strong><br>Validates input and coordinates authentication, metering, services, and storage.</div>
+    </div>
+
+    <h2>Terms</h2>
+    <table>
+      <thead><tr><th>Term</th><th>Meaning here</th></tr></thead>
+      <tbody>
+        <tr><td>Worker</td><td>The deployed Cloudflare program containing all event handlers.</td></tr>
+        <tr><td>Hono app</td><td>The HTTP router created with <code>new Hono&lt;App&gt;()</code>.</td></tr>
+        <tr><td>Middleware</td><td>A function that runs around matching handlers and may continue with <code>next()</code>.</td></tr>
+        <tr><td>Route handler</td><td>The endpoint-specific function such as the search or project handler.</td></tr>
+        <tr><td>Service</td><td>Reusable business or integration logic called by a route.</td></tr>
+        <tr><td>Context</td><td>The per-request Hono object containing the request, environment, principal, and response helpers.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</article>

@@ -1,0 +1,53 @@
+<article style="max-width: 900px; margin: 0 auto; padding: 32px; font: 16px/1.6 system-ui, sans-serif; color: #172033;">
+  <style>
+    .backend-lesson h1 { font-size: 2rem; margin: 0 0 8px; }
+    .backend-lesson h2 { font-size: 1.25rem; margin: 30px 0 10px; }
+    .backend-lesson p, .backend-lesson li { max-width: 72ch; }
+    .backend-lesson code { background: #f1f4f8; padding: 2px 5px; border-radius: 4px; }
+    .backend-lesson .flow { display: grid; gap: 8px; margin: 18px 0; }
+    .backend-lesson .node { border: 1px solid #cbd5e1; padding: 12px 14px; border-radius: 8px; background: #fff; }
+    .backend-lesson .arrow { text-align: center; color: #64748b; }
+    .backend-lesson .question { border-left: 4px solid #4467d8; padding: 10px 14px; background: #f5f7ff; }
+    @media print { .backend-lesson { padding: 0; } }
+  </style>
+  <div class="backend-lesson">
+    <h1>Follow one backend request</h1>
+    <p><strong>Goal:</strong> trace a request without confusing the Cloudflare Worker, Hono app, middleware, and endpoint handler.</p>
+
+    <h2>Use the building analogy</h2>
+    <ul>
+      <li><strong>Cloudflare Worker:</strong> the building receiving several kinds of deliveries.</li>
+      <li><strong>Hono app:</strong> the HTTP reception desk and directory.</li>
+      <li><strong>Middleware:</strong> checkpoints in the hallway.</li>
+      <li><strong>Route handler:</strong> the department that does the requested job.</li>
+      <li><strong>Services and storage:</strong> the tools and filing systems used by that department.</li>
+    </ul>
+
+    <div class="flow" aria-label="HTTP request flow">
+      <div class="node">Browser or API client sends <code>GET /v1/videos/:id</code></div>
+      <div class="arrow">↓</div>
+      <div class="node">Cloudflare chooses the Worker's <code>fetch</code> handler</div>
+      <div class="arrow">↓ <code>fetch: app.fetch</code></div>
+      <div class="node">Hono runs request context, CORS, and authentication middleware</div>
+      <div class="arrow">↓ route is classified as a data route</div>
+      <div class="node">The video route validates the ID and reserves credits</div>
+      <div class="arrow">↓</div>
+      <div class="node">The YouTube service uses D1 cache or the upstream provider</div>
+      <div class="arrow">↓</div>
+      <div class="node">Credits settle, JSON returns, and the outer middleware writes the access log</div>
+    </div>
+
+    <h2>The key distinction</h2>
+    <p><code>app</code> is only the HTTP portion. The default Worker export wraps it because the same deployed program also has <code>queue</code> and <code>scheduled</code> entry points.</p>
+
+    <div class="question">
+      <strong>Retrieval check:</strong> If a cron trigger fires, does it enter Hono middleware? Answer before reading on.<br><br>
+      <strong>Answer:</strong> No. Cloudflare calls <code>scheduled()</code> directly. Only HTTP requests enter <code>app.fetch()</code> and the Hono chain.
+    </div>
+
+    <h2>Primary source</h2>
+    <p>Read the short official section <a href="https://hono.dev/docs/getting-started/cloudflare-workers#using-hono-with-other-event-handlers">Using Hono with other event handlers</a>, then compare its example with <code>platform/src/index.ts</code>.</p>
+
+    <p><a href="../reference/backend-architecture-map.html">Open the architecture reference map</a>. Ask your agent about any step that still feels fuzzy.</p>
+  </div>
+</article>
