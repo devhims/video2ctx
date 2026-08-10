@@ -56,13 +56,12 @@ export default function HomePage() {
   return (
     <main className='lens-home'>
       <header className='lens-home-nav'>
-        <a className='lens-brand' href='/' aria-label='all things youtube home'>
+        <a className='lens-brand' href='/' aria-label='Video2ctx home'>
           <span className='lens-brand-mark' aria-hidden='true'>
-            <i />
+            <img src='/brand/video2ctx-mark-red.svg' alt='' width='32' height='32' />
           </span>
           <span className='lens-brand-type'>
-            <b>all things</b>
-            <strong>youtube</strong>
+            <strong>video2ctx</strong>
           </span>
         </a>
         <button
@@ -204,7 +203,7 @@ export default function HomePage() {
 
       <footer className='lens-home-footer'>
         <p>
-          <strong>all things youtube</strong>
+          <strong>Video2ctx</strong>
           <span>Evidence-first research.</span>
         </p>
         <div>
@@ -212,6 +211,8 @@ export default function HomePage() {
           <button onClick={() => openDashboard('discover')}>
             Research library
           </button>
+          <a href='/privacy'>Privacy</a>
+          <a href='/terms'>Terms</a>
         </div>
       </footer>
     </main>

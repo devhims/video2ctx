@@ -20,9 +20,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'all-things-youtube',
+  title: 'Video2ctx',
   description:
-    'Evidence-first YouTube research: discover, inspect, compare, monitor, and synthesize.',
+    'Evidence-first video research: discover, inspect, compare, monitor, and synthesize.',
 };
 
 export default function RootLayout({

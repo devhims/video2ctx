@@ -67,28 +67,19 @@
 }
 
 .lens-brand-mark {
-  position: relative;
   width: 2rem;
-  height: 1.625rem;
+  height: 2rem;
   flex: none;
-  border: var(--rule-home) solid var(--color-home-ink);
-  border-radius: var(--radius-home-sm);
-  background: var(--color-home-accent);
-  box-shadow: var(--space-2xs) var(--space-2xs) 0 var(--color-home-ink);
-  transform: rotate(-3deg);
   display: grid;
   place-items: center;
 }
 
-.lens-brand-mark::before {
-  content: '';
-  position: absolute;
-  inset: var(--space-2xs);
-  border: var(--rule-home) solid color-mix(in oklch, var(--color-home-paper-raised) 45%, transparent);
-  border-radius: calc(var(--radius-home-sm) - var(--space-2xs));
+.lens-brand-mark img {
+  width: 2rem;
+  height: 2rem;
+  display: block;
 }
 
-.lens-brand-mark i,
 .lens-core i {
   width: 0;
   height: 0;
@@ -101,15 +92,6 @@
   display: grid;
   gap: var(--space-3xs);
   line-height: 1;
-}
-
-.lens-brand-type b {
-  font-family: var(--font-home-mono);
-  font-size: 0.625rem;
-  font-weight: 650;
-  letter-spacing: 0.13em;
-  line-height: 1;
-  text-transform: uppercase;
 }
 
 .lens-brand-type strong {
@@ -247,7 +229,8 @@
 }
 
 .lens-paths button,
-.lens-home-footer button {
+.lens-home-footer button,
+.lens-home-footer a {
   min-height: 2.75rem;
   border: 0;
   border-block-end: var(--rule-home) solid var(--color-home-rule-strong);
@@ -256,6 +239,7 @@
   color: var(--color-home-ink-soft);
   font-size: var(--text-sm);
   font-weight: 650;
+  text-decoration: none;
   transition: color var(--dur-short) var(--ease-out), transform var(--dur-micro) var(--ease-out);
 }
 
@@ -573,7 +557,8 @@
   }
 
   .lens-paths button:hover:not(:disabled),
-  .lens-home-footer button:hover:not(:disabled) {
+  .lens-home-footer button:hover:not(:disabled),
+  .lens-home-footer a:hover {
     color: var(--color-home-accent);
   }
 }
