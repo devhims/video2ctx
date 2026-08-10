@@ -1,22 +1,16 @@
 import type { Metadata } from 'next';
-import { Inter, Fraunces, JetBrains_Mono } from 'next/font/google';
+import { Geist, Geist_Mono } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
-const inter = Inter({
+const geistSans = Geist({
   subsets: ['latin'],
-  variable: '--font-sans',
+  variable: '--font-geist-sans',
 });
 
-const fraunces = Fraunces({
+const geistMono = Geist_Mono({
   subsets: ['latin'],
-  variable: '--font-serif',
-  axes: ['opsz', 'SOFT'],
-});
-
-const jetbrains = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono',
+  variable: '--font-geist-mono',
 });
 
 export const metadata: Metadata = {
@@ -32,7 +26,7 @@ export default function RootLayout({
   return (
     <html
       lang='en'
-      className={`${inter.variable} ${fraunces.variable} ${jetbrains.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable}`}
     >
       {/* suppressHydrationWarning silences benign mismatches caused by browser
           extensions (Grammarly, 1Password, etc.) that mutate <body> attributes
