@@ -67,16 +67,16 @@
 }
 
 .lens-brand-mark {
-  width: 2rem;
-  height: 2rem;
+  width: 2.75rem;
+  height: 2.75rem;
   flex: none;
   display: grid;
   place-items: center;
 }
 
 .lens-brand-mark img {
-  width: 2rem;
-  height: 2rem;
+  width: 2.25rem;
+  height: 2.25rem;
   display: block;
 }
 
@@ -156,10 +156,11 @@
 .lens-copy h1 {
   max-width: 10ch;
   margin: 0;
+  font-family: var(--font-home-pixel);
   font-size: var(--text-display);
-  font-weight: 750;
+  font-weight: 500;
   line-height: 0.98;
-  letter-spacing: -0.055em;
+  letter-spacing: -0.025em;
   word-spacing: 0.04em;
 }
 
@@ -207,6 +208,9 @@
 
 .lens-question-showcase-head span:last-child {
   color: var(--color-home-accent);
+  font-family: var(--font-home-pixel);
+  font-weight: 500;
+  letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -474,8 +478,9 @@
 
 .lens-workflow li > span {
   color: var(--color-home-accent);
-  font-family: var(--font-home-mono);
-  font-size: var(--text-xs);
+  font-family: var(--font-home-pixel);
+  font-size: var(--text-sm);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 

@@ -9,7 +9,7 @@
  * tokens: pass (48) · responsive: pass (49) · icons: pass (30) · mobile: pass (34, 49, 50–57)
  */
 
-@theme { --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui; --font-serif: var(--font-geist-sans), ui-sans-serif, system-ui; --font-mono: var(--font-geist-mono), ui-monospace, monospace; }
+@theme { --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui; --font-serif: var(--font-geist-sans), ui-sans-serif, system-ui; --font-mono: var(--font-geist-mono), ui-monospace, monospace; --font-pixel-grid: var(--font-geist-pixel-grid), ui-monospace, monospace; }
 :root { --paper:#f7f6f2; --panel:#ffffff; --ink:#1d1d1b; --muted:#70716c; --line:#e2e0da; --red:#e64b3c; --red-dark:#c7382b; --red-soft:#f8e7e3; --sage:#6f9874; --sage-soft:#e7eee6; --yellow:#f4dbd6; --charcoal:#262624; --sidebar:#efeee9; }
 *{box-sizing:border-box} html,body{margin:0;background:var(--paper);color:var(--ink)} body{font-family:var(--font-sans)} button,input,select{font:inherit} button{color:inherit} ::selection{background:var(--yellow)}
 .workspace-shell{min-height:100vh;display:grid;grid-template-columns:244px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--sidebar);color:var(--ink);padding:27px 20px;display:flex;flex-direction:column;border-right:1px solid var(--line)}.brand{display:flex;align-items:center;gap:12px;font-size:13px;line-height:1.05;letter-spacing:.01em}.brand strong{font-family:var(--font-serif);font-size:17px;font-weight:550}.brand-mark{width:38px;height:32px;background:var(--red);color:#fff;display:grid;place-items:center;border-radius:7px;font:800 13px var(--font-mono);transform:rotate(-2deg);box-shadow:0 7px 18px rgba(230,75,60,.18)}

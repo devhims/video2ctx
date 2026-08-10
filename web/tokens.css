@@ -23,6 +23,7 @@
   --font-home-body: var(--font-geist-sans);
   --font-home-wordmark: var(--font-geist-sans);
   --font-home-mono: var(--font-geist-mono);
+  --font-home-pixel: var(--font-geist-pixel-grid);
 
   --space-3xs: 0.125rem;
   --space-2xs: 0.25rem;

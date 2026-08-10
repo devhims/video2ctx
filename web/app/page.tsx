@@ -63,12 +63,9 @@ export default function HomePage() {
             <img
               src='/brand/video2ctx-mark-red.svg'
               alt=''
-              width='32'
-              height='32'
+              width='36'
+              height='36'
             />
-          </span>
-          <span className='lens-brand-type'>
-            <strong>video2ctx</strong>
           </span>
         </a>
         <button
