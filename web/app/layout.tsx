@@ -22,7 +22,8 @@ const jetbrains = JetBrains_Mono({
 export const metadata: Metadata = {
   title: 'video2ctx',
   description:
-    'Evidence-first video research: discover, inspect, compare, monitor, and synthesize.',
+    'Connect agents to video data through one evidence-aware API and research workspace.',
+  applicationName: 'video2ctx',
 };
 
 export default function RootLayout({

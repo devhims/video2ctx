@@ -58,7 +58,12 @@ export default function HomePage() {
       <header className='lens-home-nav'>
         <a className='lens-brand' href='/' aria-label='video2ctx home'>
           <span className='lens-brand-mark' aria-hidden='true'>
-            <img src='/brand/video2ctx-mark-red.svg' alt='' width='32' height='32' />
+            <img
+              src='/brand/video2ctx-mark-red.svg'
+              alt=''
+              width='32'
+              height='32'
+            />
           </span>
           <span className='lens-brand-type'>
             <strong>video2ctx</strong>
@@ -75,10 +80,11 @@ export default function HomePage() {
       <section className='lens-map-hero' aria-labelledby='lens-title'>
         <div className='lens-copy'>
           {/* <p className='lens-orientation'>Question → sources → evidence.</p> */}
-          <h1 id='lens-title'>Ask what YouTube knows</h1>
+          <h1 id='lens-title'>video2ctx</h1>
+          <p className='lens-tagline'>Connect agents to video data</p>
           <p className='lens-subtitle'>
-            A unified research layer for videos, channels, transcripts,
-            playlists, and the conversations around them.
+            Search videos, channels, playlists, transcripts, and comments
+            through one evidence-aware API and research workspace.
           </p>
 
           <section

@@ -163,9 +163,20 @@
   word-spacing: 0.04em;
 }
 
+.lens-tagline {
+  max-width: 24ch;
+  margin: var(--space-md) 0 0;
+  color: var(--color-home-ink);
+  font-family: var(--font-home-display);
+  font-size: clamp(var(--text-lg), 3vw, var(--text-2xl));
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
 .lens-subtitle {
   max-width: 62ch;
-  margin: var(--space-lg) 0 0;
+  margin: var(--space-md) 0 0;
   color: var(--color-home-ink-soft);
   font-size: var(--text-base);
   line-height: 1.65;
