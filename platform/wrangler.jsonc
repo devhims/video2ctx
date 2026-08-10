@@ -30,6 +30,7 @@
   "containers": [
     {
       "class_name": "YouTubeProcessorContainer",
+      "name": "all-things-youtube-platform-youtubeprocessorcontainer",
       "image": "./youtube-processor/Dockerfile",
       "image_build_context": "./youtube-processor",
       "instance_type": "lite",
