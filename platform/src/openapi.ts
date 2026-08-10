@@ -259,11 +259,11 @@ const storedRecord: Schema = {
 export const openApiDocument = {
   openapi: '3.1.0',
   info: {
-    title: 'Video2ctx API',
+    title: 'video2ctx API',
     version: '1.0.0',
     license: { name: 'Proprietary' },
     description: [
-      'Interactive contract for the Video2ctx platform Worker.',
+      'Interactive contract for the video2ctx platform Worker.',
       'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',
       'Product routes accept either a Better Auth session cookie or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
       'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',

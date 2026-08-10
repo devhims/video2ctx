@@ -16,6 +16,6 @@ export const documentationApp = new Hono()
   })
   .get('/docs', Scalar({
     url: './openapi.json',
-    pageTitle: 'Video2ctx API Reference',
+    pageTitle: 'video2ctx API Reference',
     favicon: video2ctxFavicon,
   }));

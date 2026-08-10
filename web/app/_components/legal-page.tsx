@@ -14,7 +14,7 @@ export function LegalPage({ title, eyebrow, effectiveDate, summary, children }: 
   return (
     <main className={styles.shell}>
       <header className={styles.header}>
-        <Link className={styles.brand} href='/' aria-label='Video2ctx home'>
+        <Link className={styles.brand} href='/' aria-label='video2ctx home'>
           <img src='/brand/video2ctx-mark-red.svg' alt='' width='36' height='36' />
           <span>video2ctx</span>
         </Link>
@@ -35,7 +35,7 @@ export function LegalPage({ title, eyebrow, effectiveDate, summary, children }: 
       </article>
 
       <footer className={styles.footer}>
-        <p>Video2ctx · Evidence-first video research.</p>
+        <p>video2ctx · Evidence-first video research.</p>
         <div>
           <Link href='/'>Home</Link>
           <a href='mailto:privacy@video2ctx.dev'>privacy@video2ctx.dev</a>

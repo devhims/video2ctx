@@ -20,7 +20,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Video2ctx',
+  title: 'video2ctx',
   description:
     'Evidence-first video research: discover, inspect, compare, monitor, and synthesize.',
 };

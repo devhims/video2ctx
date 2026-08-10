@@ -14,7 +14,7 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(response.headers.get('content-type')).toContain('application/json');
     await expect(response.json()).resolves.toMatchObject({
       openapi: '3.1.0',
-      info: { title: 'Video2ctx API' },
+      info: { title: 'video2ctx API' },
       servers: [{ url: '/' }],
     });
   });
@@ -36,7 +36,7 @@ describe('OpenAPI and Scalar documentation', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
-    expect(html).toContain('Video2ctx API Reference');
+    expect(html).toContain('video2ctx API Reference');
     expect(html).toContain('./openapi.json');
     expect(html).toContain('data:image/svg+xml');
   });

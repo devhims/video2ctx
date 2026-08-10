@@ -1,6 +1,6 @@
-# Video2Ctx Web
+# video2ctx Web
 
-The Next.js 16 frontend for the Video2Ctx workspace.
+The Next.js 16 frontend for the video2ctx workspace.
 
 ## Local development
 

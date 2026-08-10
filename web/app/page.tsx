@@ -56,7 +56,7 @@ export default function HomePage() {
   return (
     <main className='lens-home'>
       <header className='lens-home-nav'>
-        <a className='lens-brand' href='/' aria-label='Video2ctx home'>
+        <a className='lens-brand' href='/' aria-label='video2ctx home'>
           <span className='lens-brand-mark' aria-hidden='true'>
             <img src='/brand/video2ctx-mark-red.svg' alt='' width='32' height='32' />
           </span>
@@ -203,7 +203,7 @@ export default function HomePage() {
 
       <footer className='lens-home-footer'>
         <p>
-          <strong>Video2ctx</strong>
+          <strong>video2ctx</strong>
           <span>Evidence-first research.</span>
         </p>
         <div>

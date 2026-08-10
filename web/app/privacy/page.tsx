@@ -3,8 +3,8 @@ import { LegalPage } from '../_components/legal-page';
 import styles from '../legal-page.module.css';
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy · Video2ctx',
-  description: 'How Video2ctx collects, uses, protects, and deletes personal information and Google user data.',
+  title: 'Privacy Policy · video2ctx',
+  description: 'How video2ctx collects, uses, protects, and deletes personal information and Google user data.',
 };
 
 export default function PrivacyPage() {
@@ -13,13 +13,13 @@ export default function PrivacyPage() {
       eyebrow='Your information'
       title='Privacy policy'
       effectiveDate='August 10, 2026'
-      summary='This policy explains what Video2ctx collects, why we use it, who processes it, and the controls available to you.'
+      summary='This policy explains what video2ctx collects, why we use it, who processes it, and the controls available to you.'
     >
       <section>
-        <h2>1. About Video2ctx</h2>
+        <h2>1. About video2ctx</h2>
         <p>
-          Video2ctx is a research service for finding, organizing, monitoring, and analysing video information. In this policy,
-          “Video2ctx,” “we,” and “us” refer to the operator of the Video2ctx service available at video2ctx.dev.
+          video2ctx is a research service for finding, organizing, monitoring, and analysing video information. In this policy,
+          “video2ctx,” “we,” and “us” refer to the operator of the video2ctx service available at video2ctx.dev.
         </p>
       </section>
 
@@ -75,22 +75,22 @@ export default function PrivacyPage() {
         <h3>Google sign-in</h3>
         <p>
           Google sign-in requests only OpenID identity information: your Google account identifier, basic profile information,
-          and primary email address. We use this information to create, secure, and display your Video2ctx account.
+          and primary email address. We use this information to create, secure, and display your video2ctx account.
         </p>
         <h3>Connected YouTube accounts</h3>
         <p>
-          Connecting YouTube is optional and uses the read-only YouTube scope. When you choose to connect, Video2ctx receives
+          Connecting YouTube is optional and uses the read-only YouTube scope. When you choose to connect, video2ctx receives
           permission to view information associated with your YouTube account. We store an encrypted refresh token so the
           requested connection can continue without asking you to sign in each time. We do not use this permission to publish,
           edit, or delete videos.
         </p>
         <p>
-          You can disconnect YouTube from Video2ctx or revoke access from your Google Account permissions. On disconnect, we
+          You can disconnect YouTube from video2ctx or revoke access from your Google Account permissions. On disconnect, we
           attempt to revoke the Google token and delete the stored connection. Account deletion also removes the stored
           connection.
         </p>
         <p className={styles.notice}>
-          Video2ctx’s use and transfer of information received from Google APIs adheres to the{' '}
+          video2ctx’s use and transfer of information received from Google APIs adheres to the{' '}
           <a href='https://developers.google.com/terms/api-services-user-data-policy' rel='noreferrer'>
             Google API Services User Data Policy
           </a>, including the Limited Use requirements.
@@ -117,7 +117,7 @@ export default function PrivacyPage() {
           </li>
           <li>Interact with Google and supported video platforms when you request their functionality.</li>
           <li>Comply with law, legal process, or valid governmental requests.</li>
-          <li>Protect users, the public, Video2ctx, or our legal rights from fraud, abuse, or security threats.</li>
+          <li>Protect users, the public, video2ctx, or our legal rights from fraud, abuse, or security threats.</li>
           <li>Complete a merger, financing, acquisition, or transfer of the service, subject to appropriate safeguards.</li>
         </ul>
       </section>
@@ -125,7 +125,7 @@ export default function PrivacyPage() {
       <section>
         <h2>7. Cookies and similar technologies</h2>
         <p>
-          Video2ctx uses secure authentication cookies to keep you signed in and protect account actions. The service may also
+          video2ctx uses secure authentication cookies to keep you signed in and protect account actions. The service may also
           use local browser storage for interface preferences. Vercel Analytics processes usage signals as described above.
           Blocking essential authentication storage may prevent account features from working.
         </p>
@@ -139,7 +139,7 @@ export default function PrivacyPage() {
           public video information is retained according to operational cache periods and may be refreshed or deleted over time.
         </p>
         <p>
-          When an account is deleted, Video2ctx deletes the account’s database records, private stored objects, connected-account
+          When an account is deleted, video2ctx deletes the account’s database records, private stored objects, connected-account
           authorization, and private search index through its deletion workflow. Limited records may remain temporarily in
           backups, security logs, delivery records, or where retention is required by law. We retain such residual information
           only for the applicable operational or legal period and do not use it for unrelated purposes.
@@ -168,7 +168,7 @@ export default function PrivacyPage() {
       <section>
         <h2>11. International processing</h2>
         <p>
-          Video2ctx and its service providers may process information in countries other than your own. Those countries may have
+          video2ctx and its service providers may process information in countries other than your own. Those countries may have
           different data-protection laws. Where required, we rely on appropriate safeguards for these transfers.
         </p>
       </section>
@@ -176,7 +176,7 @@ export default function PrivacyPage() {
       <section>
         <h2>12. Children</h2>
         <p>
-          Video2ctx is intended for adults and is not directed to children under 18. If you believe a child has provided personal
+          video2ctx is intended for adults and is not directed to children under 18. If you believe a child has provided personal
           information, contact us so we can investigate and delete it where appropriate.
         </p>
       </section>
