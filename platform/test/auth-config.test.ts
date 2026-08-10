@@ -42,5 +42,8 @@ describe('Better Auth API-key configuration', () => {
     });
     expect(captured.apiKey?.disableKeyHashing).not.toBe(true);
     expect(captured.auth?.account).toEqual({ encryptOAuthTokens: true });
+    expect(captured.auth?.session).toEqual({
+      cookieCache: { enabled: true, maxAge: 60 * 5 },
+    });
   });
 });

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { authClient } from '../lib/auth-client';
 
 const researchQuestions = [
   'What are creators saying about AI video tools?',
@@ -13,6 +14,7 @@ const researchQuestions = [
 
 export default function HomePage() {
   const router = useRouter();
+  const { data: session } = authClient.useSession();
   const [questionIndex, setQuestionIndex] = useState(0);
   const [visibleCharacters, setVisibleCharacters] = useState(0);
 
@@ -73,7 +75,8 @@ export default function HomePage() {
           className='lens-nav-primary'
           onClick={() => openDashboard('trends')}
         >
-          Dashboard <span aria-hidden='true'>→</span>
+          <span aria-live='polite'>{session?.user ? 'Dashboard' : 'Sign in'}</span>{' '}
+          <span aria-hidden='true'>→</span>
         </button>
       </header>
 

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "node --test lib/dashboard-data.test.ts",
+    "test": "node --test lib/*.test.ts",
     "start": "next start",
     "lint": "next lint"
   },
@@ -20,12 +20,12 @@
     "react-dom": "^19.2.6"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^25.7.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "postcss": "^8.5.25",
-    "tailwindcss": "^4.3.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
   },
   "overrides": {
