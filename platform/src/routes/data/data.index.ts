@@ -3,7 +3,14 @@ import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from 'all-t
 import type { App } from '../../types';
 import { requireDataPrincipal, requireUser } from '../../middlewares/authentication';
 import { ApiError, asId, body, text } from '../../lib/http';
-import { CREDIT_COSTS, CREDIT_RESERVES, meterOperation } from '../../lib/metering';
+import {
+  CREDIT_COSTS,
+  CREDIT_RESERVES,
+  dataOperationCost,
+  dataOperationReserve,
+  meterOperation,
+  type DataOperation,
+} from '../../lib/metering';
 import { routeInput, type CacheStatus } from '../../lib/youtube';
 import { requireEvidence, searchPrivate, searchPublic } from '../../lib/search';
 import { citedAnswer } from '../../lib/analysis';
@@ -41,9 +48,9 @@ dataRoutes.get('/search', async (c) => {
   const query = text(c.req.query('q'), 500);
   if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A search query is required.');
   const user = requireUser(c);
-  const payload = await meterOperation(c, { operation: 'private-search', reservedCredits: CREDIT_RESERVES.standardRead }, async () => ({
+  const payload = await meterOperation(c, { operation: 'private-search', reservedCredits: CREDIT_COSTS.privateSearch }, async () => ({
     value: { query, results: await searchPrivate(c.env, user.id, query, c.req.query('projectId')) },
-    actualCredits: CREDIT_COSTS.upstreamRead,
+    actualCredits: CREDIT_COSTS.privateSearch,
   }));
   return c.json(payload);
 });
@@ -73,7 +80,7 @@ dataRoutes.get('/providers/:provider/search', async (c) => {
   };
   const payload = await meterOperation(c, {
     operation: `${provider.descriptor.id}-search`,
-    reservedCredits: CREDIT_RESERVES.standardRead,
+    reservedCredits: dataOperationReserve('search'),
     metadata: { provider: provider.descriptor.id },
   }, async () => {
     const search = await provider.search(c.env, query, filters);
@@ -86,7 +93,7 @@ dataRoutes.get('/providers/:provider/search', async (c) => {
         meta: search.value.meta,
         freshness: search.value.freshness,
       },
-      actualCredits: cachedCost(search.cacheStatus),
+      actualCredits: dataOperationCost('search', search.cacheStatus),
       cacheStatus: search.cacheStatus,
     };
   });
@@ -104,11 +111,11 @@ dataRoutes.get('/providers/:provider/browse', async (c) => {
   });
   return c.json(await meterOperation(c, {
     operation: `${provider.descriptor.id}-browse`,
-    reservedCredits: CREDIT_RESERVES.standardRead,
+    reservedCredits: dataOperationReserve('browse'),
     metadata: { provider: provider.descriptor.id },
   }, async () => {
     const result = await provider.browse(c.env, options);
-    return { value: result.value, actualCredits: cachedCost(result.cacheStatus), cacheStatus: result.cacheStatus };
+    return { value: result.value, actualCredits: dataOperationCost('browse', result.cacheStatus), cacheStatus: result.cacheStatus };
   }));
 });
 
@@ -149,7 +156,7 @@ dataRoutes.post('/trends/plan', async (c) => {
 dataRoutes.get('/providers/:provider/videos/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video`, provider, () => provider.getVideo(c.env, id)));
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-video`, 'video', provider, () => provider.getVideo(c.env, id)));
 });
 
 dataRoutes.get('/providers/:provider/videos/:id/tracks', async (c) => {
@@ -157,10 +164,10 @@ dataRoutes.get('/providers/:provider/videos/:id/tracks', async (c) => {
   const id = asId(c.req.param('id'));
   return c.json(await meterOperation(c, {
     operation: `${provider.descriptor.id}-video-tracks`,
-    reservedCredits: CREDIT_RESERVES.standardRead,
+    reservedCredits: dataOperationReserve('tracks'),
     metadata: { provider: provider.descriptor.id },
   }, async () => ({
-    value: await provider.getTracks(c.env, id), actualCredits: CREDIT_COSTS.upstreamRead,
+    value: await provider.getTracks(c.env, id), actualCredits: dataOperationCost('tracks', 'miss'),
   })));
 });
 
@@ -168,7 +175,7 @@ dataRoutes.get('/providers/:provider/videos/:id/transcript', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const desiredLanguage = text(c.req.query('lang'), 20) || undefined;
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-transcript`, provider, () =>
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-transcript`, 'transcript', provider, () =>
     provider.getTranscript(c.env, id, desiredLanguage)));
 });
 
@@ -179,18 +186,18 @@ dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {
   if (all) {
     return c.json(await meterOperation(c, {
       operation: `${provider.descriptor.id}-video-comments-all`,
-      reservedCredits: CREDIT_RESERVES.fullComments,
+      reservedCredits: dataOperationReserve('comments'),
       metadata: { provider: provider.descriptor.id },
     }, async () => {
       const result = await provider.getAllComments(c.env, id);
       return {
         value: result.value,
-        actualCredits: result.cacheStatus === 'miss' ? CREDIT_COSTS.upstreamFullComments : CREDIT_COSTS.cachedFullComments,
+        actualCredits: dataOperationCost('comments', result.cacheStatus),
         cacheStatus: result.cacheStatus,
       };
     }));
   }
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-comments`, provider, () =>
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-comments`, 'comments', provider, () =>
     provider.getComments(c.env, id, c.req.query('continuation'))));
 });
 
@@ -199,25 +206,25 @@ dataRoutes.get('/providers/:provider/videos/:id/endscreen', async (c) => {
   const id = asId(c.req.param('id'));
   return c.json(await meterOperation(c, {
     operation: `${provider.descriptor.id}-video-endscreen`,
-    reservedCredits: CREDIT_RESERVES.standardRead,
+    reservedCredits: dataOperationReserve('endscreen'),
     metadata: { provider: provider.descriptor.id },
   }, async () => ({
     value: { provider: provider.descriptor.id, elements: await provider.getEndscreen(c.env, id) },
-    actualCredits: CREDIT_COSTS.upstreamRead,
+    actualCredits: dataOperationCost('endscreen', 'miss'),
   })));
 });
 
 dataRoutes.get('/providers/:provider/channels/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel`, provider, () => provider.getChannel(c.env, id)));
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel`, 'channel', provider, () => provider.getChannel(c.env, id)));
 });
 
 dataRoutes.get('/providers/:provider/channels/:id/videos', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const catalogSort = channelVideoSort(c.req.query('sort'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-videos`, provider, () =>
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-videos`, 'channelVideos', provider, () =>
     provider.getChannelVideos(c.env, id, c.req.query('continuation'), catalogSort)));
 });
 
@@ -225,14 +232,14 @@ dataRoutes.get('/providers/:provider/channels/:id/playlists', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const catalogSort = channelPlaylistSort(c.req.query('sort'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-playlists`, provider, () =>
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-playlists`, 'channelPlaylists', provider, () =>
     provider.getChannelPlaylists(c.env, id, c.req.query('continuation'), catalogSort)));
 });
 
 dataRoutes.get('/providers/:provider/playlists/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-playlist`, provider, () => provider.getPlaylist(c.env, id)));
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-playlist`, 'playlist', provider, () => provider.getPlaylist(c.env, id)));
 });
 
 dataRoutes.post('/answers', async (c) => {
@@ -284,16 +291,21 @@ dataRoutes.get('/usage', async (c) => {
 async function cachedRead<T>(
   c: Context<App>,
   operation: string,
+  dataOperation: DataOperation,
   provider: ProviderAdapter,
   load: () => Promise<{ value: T; cacheStatus: CacheStatus }>,
 ): Promise<T> {
   return meterOperation(c, {
     operation,
-    reservedCredits: CREDIT_RESERVES.standardRead,
+    reservedCredits: dataOperationReserve(dataOperation),
     metadata: { provider: provider.descriptor.id },
   }, async () => {
     const result = await load();
-    return { value: result.value, actualCredits: cachedCost(result.cacheStatus), cacheStatus: result.cacheStatus };
+    return {
+      value: result.value,
+      actualCredits: dataOperationCost(dataOperation, result.cacheStatus),
+      cacheStatus: result.cacheStatus,
+    };
   });
 }
 
@@ -325,10 +337,6 @@ async function enforceTrafficRate(c: Context<App>): Promise<void> {
   const key = apiKeyId ? `api-key:${apiKeyId}` : `user:${principal.id}`;
   const result = await c.env.PUBLIC_RATE_LIMITER.limit({ key });
   if (!result.success) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again shortly.');
-}
-
-function cachedCost(status: CacheStatus): number {
-  return status === 'miss' ? CREDIT_COSTS.upstreamRead : CREDIT_COSTS.cachedRead;
 }
 
 function entityType(value?: string): SearchFilters['type'] {

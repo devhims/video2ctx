@@ -3,7 +3,8 @@ import { ApiError, now } from './http';
 
 export interface Entitlements {
   plan: Plan;
-  monthlyCredits: number;
+  includedCredits: number;
+  creditGrant: 'onboarding' | 'monthly';
   projectLimit: number;
   monitorLimit: number;
   dailyImportLimit: number;
@@ -14,7 +15,8 @@ export async function entitlements(env: Env, userId: string): Promise<Entitlemen
   const plan = row?.plan === 'pro' ? 'pro' : 'free';
   return {
     plan,
-    monthlyCredits: Number(plan === 'pro' ? env.PRO_MONTHLY_CREDITS : env.FREE_MONTHLY_CREDITS),
+    includedCredits: Number(plan === 'pro' ? env.PRO_MONTHLY_CREDITS : env.FREE_ONBOARDING_CREDITS),
+    creditGrant: plan === 'pro' ? 'monthly' : 'onboarding',
     projectLimit: Number(plan === 'pro' ? env.PRO_PROJECT_LIMIT : env.FREE_PROJECT_LIMIT),
     monitorLimit: Number(plan === 'pro' ? env.PRO_MONITOR_LIMIT : env.FREE_MONITOR_LIMIT),
     dailyImportLimit: Number(plan === 'pro' ? env.PRO_DAILY_IMPORTS : env.FREE_DAILY_IMPORTS),
@@ -48,23 +50,46 @@ export async function enforceCount(
 }
 
 export async function creditBalance(env: Env, userId: string): Promise<number> {
-  await ensureMonthlyGrant(env, userId);
+  await ensureCreditGrant(env, userId);
   const row = await env.DB.prepare('SELECT COALESCE(SUM(credits), 0) AS balance FROM credit_ledger WHERE user_id = ?')
     .bind(userId)
     .first<{ balance: number }>();
   return Number(row?.balance ?? 0);
 }
 
-export async function ensureMonthlyGrant(env: Env, userId: string): Promise<void> {
+export async function ensureCreditGrant(env: Env, userId: string): Promise<void> {
   const limits = await entitlements(env, userId);
+  if (limits.creditGrant === 'onboarding') {
+    await ensureOnboardingGrant(env, userId, limits);
+    return;
+  }
+
   const month = new Date().toISOString().slice(0, 7);
   await env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
      VALUES (?, ?, ?, 'grant', ?, ?, ?)`
   ).bind(
-    crypto.randomUUID(), userId, `monthly:${month}`, limits.monthlyCredits,
+    crypto.randomUUID(), userId, `monthly:${month}`, limits.includedCredits,
     JSON.stringify({ plan: limits.plan, month }), now()
+  ).run();
+}
+
+async function ensureOnboardingGrant(env: Env, userId: string, limits: Entitlements): Promise<void> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO credit_ledger
+     (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
+     SELECT ?, ?, ?, 'grant',
+       CASE WHEN current_balance < ? THEN ? - current_balance ELSE 0 END,
+       ?, ?
+     FROM (
+       SELECT COALESCE(SUM(credits), 0) AS current_balance
+       FROM credit_ledger
+       WHERE user_id = ?
+     )`
+  ).bind(
+    crypto.randomUUID(), userId, 'onboarding:v1', limits.includedCredits, limits.includedCredits,
+    JSON.stringify({ plan: limits.plan, kind: 'onboarding', allowance: limits.includedCredits }), now(), userId,
   ).run();
 }
 
@@ -75,7 +100,7 @@ export async function reserveCredits(
   amount: number,
   metadata: Record<string, unknown>
 ): Promise<void> {
-  await ensureMonthlyGrant(env, userId);
+  await ensureCreditGrant(env, userId);
   const existing = await env.DB.prepare(
     `SELECT 1 FROM credit_ledger WHERE user_id=? AND operation_id=? AND entry_type='reserve'`
   ).bind(userId, operationId).first();

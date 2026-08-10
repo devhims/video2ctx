@@ -25,6 +25,8 @@ The platform randomly chooses a starting slot from two logical container IDs and
 
 Only identical misses share a coordinator. Unrelated cache keys resolve to different Durable Object identities and therefore do not pass through a global load-balancing bottleneck. A coalesced follower is metered at the cached-read price because it does not create another upstream operation.
 
+Provider-data credit prices live in the single `DATA_OPERATION_PRICING` table in `platform/src/lib/metering.ts`. Cached responses cost 1 credit. Fresh search and comment requests cost 2 credits, including full comment collection; every other fresh provider-data request costs 1 credit. Private indexed search and the existing composite analysis operations keep their separate prices.
+
 `OUTBOUND_PROXY_URL` is an optional Worker secret passed into the container environment. The URL is never returned or logged. The processor uses Undici's `ProxyAgent` when configured and direct Node fetch otherwise. KV remains the shared durable cache; container memory is not treated as authoritative.
 
 ## Shared package interface

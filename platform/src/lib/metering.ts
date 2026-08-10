@@ -6,10 +6,7 @@ import { requirePrincipal } from '../middlewares/authentication';
 
 export const CREDIT_COSTS = {
   free: 0,
-  cachedRead: 1,
-  upstreamRead: 3,
-  cachedFullComments: 2,
-  upstreamFullComments: 10,
+  privateSearch: 3,
   deterministicTrends: 15,
   aiTrends: 25,
   answer: 10,
@@ -19,8 +16,6 @@ export const CREDIT_COSTS = {
 } as const;
 
 export const CREDIT_RESERVES = {
-  standardRead: 3,
-  fullComments: 10,
   trends: 25,
   answer: 12,
   comparison: 24,
@@ -28,10 +23,37 @@ export const CREDIT_RESERVES = {
   report: 40,
 } as const;
 
+export const DATA_OPERATION_PRICING = {
+  search: { cached: 1, fresh: 2 },
+  browse: { cached: 1, fresh: 1 },
+  video: { cached: 1, fresh: 1 },
+  tracks: { cached: 1, fresh: 1 },
+  transcript: { cached: 1, fresh: 1 },
+  comments: { cached: 1, fresh: 2 },
+  endscreen: { cached: 1, fresh: 1 },
+  channel: { cached: 1, fresh: 1 },
+  channelVideos: { cached: 1, fresh: 1 },
+  channelPlaylists: { cached: 1, fresh: 1 },
+  playlist: { cached: 1, fresh: 1 },
+} as const;
+
+export type DataOperation = keyof typeof DATA_OPERATION_PRICING;
+export type MeteredCacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
+
+export function dataOperationCost(operation: DataOperation, cacheStatus: MeteredCacheStatus): number {
+  const price = DATA_OPERATION_PRICING[operation];
+  return cacheStatus === 'miss' ? price.fresh : price.cached;
+}
+
+export function dataOperationReserve(operation: DataOperation): number {
+  const price = DATA_OPERATION_PRICING[operation];
+  return Math.max(price.cached, price.fresh);
+}
+
 export interface CreditWork<T> {
   value: T;
   actualCredits: number;
-  cacheStatus?: 'hit' | 'miss' | 'coalesced' | 'stale';
+  cacheStatus?: MeteredCacheStatus;
 }
 
 export interface MeteringOptions {

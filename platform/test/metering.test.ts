@@ -11,7 +11,14 @@ const ledger = vi.hoisted(() => ({
 
 vi.mock('../src/lib/entitlements', () => ledger);
 
-import { CREDIT_COSTS, CREDIT_RESERVES, meterOperation } from '../src/lib/metering';
+import {
+  CREDIT_COSTS,
+  CREDIT_RESERVES,
+  DATA_OPERATION_PRICING,
+  dataOperationCost,
+  dataOperationReserve,
+  meterOperation,
+} from '../src/lib/metering';
 
 const testApp = new Hono<App>();
 testApp.use('*', async (c, next) => {
@@ -73,13 +80,33 @@ describe('credit metering', () => {
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'INSUFFICIENT_CREDITS' } });
   });
 
-  test('locks the approved data and analysis price table', () => {
+  test('locks the approved data-operation price table', () => {
+    expect(DATA_OPERATION_PRICING).toEqual({
+      search: { cached: 1, fresh: 2 },
+      browse: { cached: 1, fresh: 1 },
+      video: { cached: 1, fresh: 1 },
+      tracks: { cached: 1, fresh: 1 },
+      transcript: { cached: 1, fresh: 1 },
+      comments: { cached: 1, fresh: 2 },
+      endscreen: { cached: 1, fresh: 1 },
+      channel: { cached: 1, fresh: 1 },
+      channelVideos: { cached: 1, fresh: 1 },
+      channelPlaylists: { cached: 1, fresh: 1 },
+      playlist: { cached: 1, fresh: 1 },
+    });
+
+    expect(dataOperationCost('search', 'miss')).toBe(2);
+    expect(dataOperationCost('search', 'hit')).toBe(1);
+    expect(dataOperationCost('comments', 'miss')).toBe(2);
+    expect(dataOperationCost('comments', 'stale')).toBe(1);
+    expect(dataOperationCost('transcript', 'miss')).toBe(1);
+    expect(dataOperationReserve('comments')).toBe(2);
+  });
+
+  test('keeps private search and composite analysis pricing unchanged', () => {
     expect(CREDIT_COSTS).toEqual({
       free: 0,
-      cachedRead: 1,
-      upstreamRead: 3,
-      cachedFullComments: 2,
-      upstreamFullComments: 10,
+      privateSearch: 3,
       deterministicTrends: 15,
       aiTrends: 25,
       answer: 10,
@@ -87,8 +114,8 @@ describe('credit metering', () => {
       trendPlan: 26,
       report: 32,
     });
-    expect(CREDIT_RESERVES).toMatchObject({
-      standardRead: 3, fullComments: 10, trends: 25,
+    expect(CREDIT_RESERVES).toEqual({
+      trends: 25,
       answer: 12, comparison: 24, trendPlan: 32, report: 40,
     });
   });

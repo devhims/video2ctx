@@ -12,7 +12,7 @@
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
     "ADMIN_EMAILS": "",
-    "FREE_MONTHLY_CREDITS": "100",
+    "FREE_ONBOARDING_CREDITS": "1000",
     "PRO_MONTHLY_CREDITS": "2000",
     "FREE_PROJECT_LIMIT": "3",
     "FREE_MONITOR_LIMIT": "1",

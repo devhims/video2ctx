@@ -267,6 +267,7 @@ export const openApiDocument = {
       'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',
       'Product routes accept either a Better Auth session cookie or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
       'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',
+      'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free. Composite analysis pricing is unchanged.',
       'API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
       'When running locally with ENVIRONMENT other than production, set X-Demo-User to any stable value to create and use an isolated demo account.',
     ].join('\n\n'),
@@ -1587,7 +1588,16 @@ export const openApiDocument = {
       Notification: storedRecord,
       NotificationPreferencesRequest: { type: 'object', properties: { inApp: { type: 'boolean', default: true }, emailDigest: { type: 'string', enum: ['off', 'daily', 'weekly'], default: 'weekly' } } },
       NotificationPreferences: { type: 'object', required: ['inApp', 'emailDigest'], properties: { inApp: { type: 'boolean' }, emailDigest: { type: 'string', enum: ['off', 'daily', 'weekly'] } } },
-      Usage: { type: 'object', additionalProperties: true, properties: { plan: { type: 'string', enum: ['free', 'pro'] }, creditBalance: { type: 'integer' } } },
+      Usage: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          plan: { type: 'string', enum: ['free', 'pro'] },
+          includedCredits: { type: 'integer' },
+          creditGrant: { type: 'string', enum: ['onboarding', 'monthly'] },
+          creditBalance: { type: 'integer' },
+        },
+      },
     },
   },
 } as const;
