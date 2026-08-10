@@ -1,6 +1,6 @@
 # UI API Reference
 
-This document inventories the APIs currently called by the web UI. It is derived from the client calls in `web/app/page.tsx`, the same-origin proxy in `web/app/api/platform/[...path]/route.ts`, and the Hono routes in `platform/src/index.ts`.
+This document inventories the APIs currently called by the web UI. It is derived from the client calls in `web/app/dashboard/page.tsx`, the same-origin proxy in `web/app/api/platform/[...path]/route.ts`, and the Hono route groups in `platform/src/routes`.
 
 ## Request path
 
@@ -31,14 +31,14 @@ The UI loads these requests concurrently:
 
 1. `GET /v1/projects`
 2. `GET /v1/monitors`
-3. `GET /v1/browse`
-4. `GET /v1/trends?q=AI%20agents&limit=20` from the default Trend Lab view
+3. `GET /v1/providers/youtube/browse`
+4. `GET /v1/providers/youtube/trends?q=AI%20agents&limit=20` from the default Trend Lab view
 
 ### Search and inspection
 
 1. The search box sends its value to `POST /v1/resolve`.
 2. A recognized YouTube URL or video ID opens the matching entity endpoint directly.
-3. Plain text is sent to `GET /v1/search` with the selected search mode.
+3. Provider discovery uses `GET /v1/providers/youtube/search`; private evidence uses `GET /v1/search`; cited questions use `POST /v1/answers`.
 4. Opening a video loads its entity record, transcript, and comments. Transcript or comment failure does not prevent the main video record from opening.
 
 ### Saving a source
@@ -49,7 +49,7 @@ The UI loads these requests concurrently:
 
 ### Trend planning
 
-1. `GET /v1/trends` calculates topic signals from public YouTube data, stores metric snapshots, and adds evidence-grounded GLM insights by default.
+1. `GET /v1/providers/youtube/trends` calculates topic signals from public YouTube data, stores metric snapshots, and adds evidence-grounded GLM insights by default.
 2. The user can explicitly call `POST /v1/trends/plan` to turn those signals into a Kimi-generated plan. A normal topic scan does not consume user AI credits.
 
 ## API summary
@@ -62,19 +62,21 @@ The UI loads these requests concurrently:
 | `POST` | `/v1/projects/:id/items` | Save a source or transcript into a project | Private |
 | `GET` | `/v1/monitors` | Load monitor view and counts | Private |
 | `POST` | `/v1/monitors` | Monitor the inspected channel or topic | Private |
-| `GET` | `/v1/browse` | Seed the source inbox | Public, rate-limited |
+| `GET` | `/v1/providers` | List supported providers and capabilities | Authenticated |
+| `GET` | `/v1/providers/youtube/browse` | Seed the source inbox | Authenticated, rate-limited |
 | `POST` | `/v1/resolve` | Internal universal-input routing helper | First-party UI, protected |
-| `GET` | `/v1/search` | Search YouTube, private evidence, or ask a question | Mixed |
-| `GET` | `/v1/videos/:id` | Inspect a video | Public |
-| `GET` | `/v1/channels/:id` | Inspect a channel | Public |
-| `GET` | `/v1/channels/:id/videos` | Load a channel's videos | Public |
-| `GET` | `/v1/channels/:id/playlists` | Load a channel's playlists | Public |
-| `GET` | `/v1/playlists/:id` | Inspect a playlist | Public |
-| `GET` | `/v1/videos/:id/transcript` | Load timed transcript evidence | Public |
-| `GET` | `/v1/videos/:id/comments` | Load audience comments | Public |
+| `GET` | `/v1/providers/youtube/search` | Search YouTube | Authenticated, rate-limited |
+| `GET` | `/v1/search` | Search private indexed evidence | Authenticated |
+| `GET` | `/v1/providers/youtube/videos/:id` | Inspect a video | Authenticated |
+| `GET` | `/v1/providers/youtube/channels/:id` | Inspect a channel | Authenticated |
+| `GET` | `/v1/providers/youtube/channels/:id/videos` | Load a channel's videos | Authenticated |
+| `GET` | `/v1/providers/youtube/channels/:id/playlists` | Load a channel's playlists | Authenticated |
+| `GET` | `/v1/providers/youtube/playlists/:id` | Inspect a playlist | Authenticated |
+| `GET` | `/v1/providers/youtube/videos/:id/transcript` | Load timed transcript evidence | Authenticated |
+| `GET` | `/v1/providers/youtube/videos/:id/comments` | Load audience comments | Authenticated |
 | `POST` | `/v1/imports` | Start durable ingestion and indexing | Private |
 | `POST` | `/v1/answers` | Generate a cited answer for an inspected source | Private, metered |
-| `GET` | `/v1/trends` | Calculate topic momentum and patterns | Public, rate-limited |
+| `GET` | `/v1/providers/youtube/trends` | Calculate topic momentum and patterns | Authenticated, rate-limited |
 | `POST` | `/v1/trends/plan` | Generate an evidence-grounded video plan | Private, metered |
 
 ## Authentication APIs
@@ -147,7 +149,7 @@ How it works:
 
 ## Discovery APIs
 
-### `GET /v1/browse`
+### `GET /v1/providers/:provider/browse`
 
 Seeds the source inbox with a normalized public YouTube discovery feed.
 
@@ -164,20 +166,16 @@ How it works:
 - Uses current public YouTube destination IDs rather than the retired anonymous Trending feed.
 - Normalizes videos, channels, and playlists into application entities.
 - Returns both a mixed `results` list and explicit `videos`, `channels`, and `playlists` arrays.
-- Caches each option set in D1 for five minutes.
+- Caches each option set in Workers KV for five minutes.
 - Returns a stale cached snapshot if the upstream call fails and a previous snapshot exists.
 
-### `GET /v1/search`
+### `GET /v1/providers/:provider/search`
 
-Powers all three modes in the main search interface.
+Searches one external video provider. The current supported value for `provider` is `youtube`.
 
-Common parameters:
+Parameters:
 
 - `q`: required query
-- `mode`: `youtube`, `inside`, or `ask`; defaults to `youtube`
-- `projectId`: optional private-project restriction for `inside` and `ask`
-
-#### `mode=youtube`
 
 Additional filters:
 
@@ -194,12 +192,17 @@ How it works:
 
 - Calls the platform's YouTube search adapter and returns one mixed `results` array of videos, channels, and playlists. Each item has a `type` discriminator.
 - Preserves YouTube's interleaved result order and returns a continuation token when another page is available.
-- Caches the query/filter combination in D1 for five minutes with stale fallback.
+- Caches the query/filter combination in Workers KV for five minutes with stale fallback.
 - The UI currently exposes type, duration, and captions filters.
 
-#### `mode=inside`
+### `GET /v1/search`
 
 Searches transcript and research content previously saved by the user.
+
+Parameters:
+
+- `q`: required query
+- `projectId`: optional private-project restriction
 
 How it works:
 
@@ -208,7 +211,7 @@ How it works:
 - Uses hybrid keyword/vector retrieval, reciprocal-rank fusion, and BGE reranking.
 - Can filter to one project and returns up to 12 evidence chunks with scores, source IDs, and timestamps.
 
-#### `mode=ask`
+### `POST /v1/answers`
 
 Answers the query using the user’s indexed evidence.
 
@@ -221,18 +224,18 @@ How it works:
 
 ## Entity APIs
 
-### `GET /v1/videos/:id`
+### `GET /v1/providers/:provider/videos/:id`
 
 Returns core normalized video metadata: title, channel, description, thumbnails, duration, views, keywords, availability, and URL.
 
 How it works:
 
 - Calls YouTube player data through fallback client profiles when necessary.
-- Caches the normalized record in D1 for 30 minutes.
+- Caches the normalized record in Workers KV for 30 minutes.
 - Track metadata and endscreen elements are available from their dedicated video subresources.
 - Does not fetch the desktop caption catalog or expose media-format data, raw renderer data, tracking data, signed URLs, or ads.
 
-### `GET /v1/channels/:id`
+### `GET /v1/providers/:provider/channels/:id`
 
 Returns channel identity plus an `about` object aligned to YouTube's About UI:
 
@@ -247,9 +250,9 @@ How it works:
 - An `@handle` is first resolved through channel search and then loaded by channel ID.
 - YouTube redirect links are unwrapped; temporary redirect tokens are never returned.
 - The protected business email is not accessed. Public email addresses written into the description remain part of the description.
-- Results are cached in D1 for one hour.
+- Results are cached in Workers KV for one hour.
 
-### `GET /v1/channels/:id/videos`
+### `GET /v1/providers/:provider/channels/:id/videos`
 
 Returns one page of normalized video summaries from the channel's Videos tab.
 
@@ -257,9 +260,9 @@ Returns one page of normalized video summaries from the channel's Videos tab.
 - Accepts the optional `continuation` token returned by the previous response.
 - Returns `channelId`, the effective `sort`, `videos`, `continuation`, and `meta`.
 - Each video carries the UI card data: title, thumbnail, duration, views, published age, caption state, and canonical watch URL.
-- Pages are cached in D1 for 15 minutes.
+- Pages are cached in Workers KV for 15 minutes.
 
-### `GET /v1/channels/:id/playlists`
+### `GET /v1/providers/:provider/channels/:id/playlists`
 
 Returns one page of normalized playlist summaries from the channel's Playlists tab.
 
@@ -268,18 +271,18 @@ Returns one page of normalized playlist summaries from the channel's Playlists t
 - Returns `channelId`, the effective `sort`, `playlists`, `continuation`, and `meta`.
 - Each card includes its title, thumbnail, displayed video/episode count, optional `updatedTimeText`,
   `isPodcast`, canonical playlist URL, and the optional `playUrl` used by the card itself.
-- Pages are cached in D1 for 15 minutes.
+- Pages are cached in Workers KV for 15 minutes.
 
-### `GET /v1/playlists/:id`
+### `GET /v1/providers/:provider/playlists/:id`
 
 Returns playlist metadata, videos, and a continuation when more items are available.
 
 How it works:
 
 - Uses the platform's normalized YouTube playlist adapter.
-- Normalizes the catalog and caches it in D1 for one hour.
+- Normalizes the catalog and caches it in Workers KV for one hour.
 
-### `GET /v1/videos/:id/tracks`
+### `GET /v1/providers/:provider/videos/:id/tracks`
 
 Returns the video's actual source caption tracks and available auto-translation targets.
 
@@ -289,7 +292,7 @@ How it works:
 - Merges the desktop player catalog used by Chrome so `translationLanguages` and `autoTranslationTargets` contain the complete auto-translation target list exposed for the video.
 - Does not expose signed caption URLs or caption text.
 
-### `GET /v1/videos/:id/transcript`
+### `GET /v1/providers/:provider/videos/:id/transcript`
 
 Returns the synchronized transcript displayed beside the video.
 
@@ -304,9 +307,9 @@ How it works:
 - Without `lang`, it returns the original default-track transcript.
 - Normalizes every segment to `text`, `startMs`, `durationMs`, and `endMs`.
 - Returns the source `track` plus `translatedTo` when auto-translation was requested.
-- Caches transcripts in D1 for seven days.
+- Caches transcripts in Workers KV for seven days.
 
-### `GET /v1/videos/:id/comments`
+### `GET /v1/providers/:provider/videos/:id/comments`
 
 Returns comments for the audience-evidence panel.
 
@@ -363,6 +366,7 @@ Representative request from the UI:
 
 ```json
 {
+  "provider": "youtube",
   "entityType": "video",
   "entityId": "VIDEO_ID",
   "title": "Video title",
@@ -377,12 +381,17 @@ How it works:
 - The task stores the private document in R2 and uploads it to the user’s isolated AI Search instance.
 - Duplicate project/entity records are ignored by the database constraint.
 
+### `DELETE /v1/projects/:id`
+
+Deletes a project after removing its private objects from R2 and its indexed items from the user’s AI Search instance. D1 foreign keys then cascade the project’s document metadata and saved items.
+
 ### `POST /v1/imports`
 
 Starts durable ingestion after the user saves a source.
 
 ```json
 {
+  "provider": "youtube",
   "kind": "video",
   "entityId": "VIDEO_ID",
   "projectId": "PROJECT_ID"
@@ -424,7 +433,7 @@ How it works for the current UI:
 
 The endpoint can also search private project evidence when `entityId` is omitted, or the public corpus when `scope` is `public`.
 
-### `GET /v1/trends`
+### `GET /v1/providers/:provider/trends`
 
 Builds the Trend Lab dashboard for a topic.
 
@@ -452,6 +461,7 @@ Turns an existing Trend Lab report into a richer video strategy.
 ```json
 {
   "report": {
+    "provider": "youtube",
     "query": "AI agents",
     "sampleSize": 20,
     "summary": {},
@@ -490,6 +500,7 @@ Creates a channel, topic, or search monitor.
 
 ```json
 {
+  "provider": "youtube",
   "kind": "channel",
   "target": "CHANNEL_ID",
   "cadence": "hourly"
@@ -508,10 +519,10 @@ How it works:
 These platform contracts exist, but no current UI action calls them:
 
 - `GET /health`
-- `GET /v1/videos/:id/tracks`
-- `GET /v1/videos/:id/endscreen`
-- `GET /v1/channels/:id/videos`
-- `GET /v1/channels/:id/playlists`
+- `GET /v1/providers/:provider/videos/:id/tracks`
+- `GET /v1/providers/:provider/videos/:id/endscreen`
+- `GET /v1/providers/:provider/channels/:id/videos`
+- `GET /v1/providers/:provider/channels/:id/playlists`
 - `GET /v1/projects/:id`
 - `DELETE /v1/projects/:id`
 - `GET /v1/jobs/:id`
