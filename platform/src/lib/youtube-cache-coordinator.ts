@@ -4,6 +4,7 @@ import {
   type ProcessorErrorCode,
   type YouTubeOperation,
 } from './youtube-processor-client';
+import { safeErrorLog } from './http';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
@@ -189,9 +190,5 @@ function isCacheEntry<T>(value: unknown): value is YouTubeCacheEntry<T> {
 }
 
 function logCacheFailure(event: string, resourceType: string, error: unknown): void {
-  console.warn(JSON.stringify({
-    event,
-    resourceType,
-    error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
-  }));
+  console.warn({ event, resourceType, ...safeErrorLog(error) });
 }

@@ -1,6 +1,6 @@
 import type { EmailMessage, TaskMessage } from './types';
 import { indexPrivateDocument } from './lib/search';
-import { now, sha256 } from './lib/http';
+import { now, safeErrorLog, sha256 } from './lib/http';
 
 const PERMANENT_EMAIL_ERRORS = new Set([
   'E_VALIDATION_ERROR', 'E_FIELD_MISSING', 'E_SENDER_NOT_VERIFIED',
@@ -19,7 +19,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
     } catch (error) {
       const code = errorCode(error);
       if (batch.queue.includes('email') && PERMANENT_EMAIL_ERRORS.has(code)) {
-        console.error('permanent_email_failure', { code, error });
+        console.error({ event: 'permanent_email_failure', code, ...safeErrorLog(error) });
         message.ack();
       } else {
         message.retry({ delaySeconds: Math.min(900, 2 ** message.attempts * 10) });
@@ -81,7 +81,11 @@ async function runTask(task: TaskMessage, env: Env): Promise<void> {
     ).bind(String(task.payload.provider ?? 'youtube'), String(task.payload.entityId), now(), Number(task.payload.viewCount ?? 0)).run();
   } else if (task.type === 'delete-user-search') {
     const instanceId = String(task.payload.instanceId);
-    try { await env.AI_SEARCH.delete(instanceId); } catch (error) { console.warn('search_instance_delete', error); }
+    try {
+      await env.AI_SEARCH.delete(instanceId);
+    } catch (error) {
+      console.warn({ event: 'search_instance_delete', ...safeErrorLog(error) });
+    }
   }
 
   await env.DB.prepare(

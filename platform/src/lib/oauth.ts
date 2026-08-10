@@ -1,5 +1,5 @@
 import { decryptSecret, encryptSecret } from './crypto';
-import { ApiError, base64Url, now, randomToken, sha256 } from './http';
+import { ApiError, base64Url, now, randomToken, safeErrorLog, sha256 } from './http';
 
 const SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
 
@@ -56,11 +56,17 @@ export async function disconnectYoutube(env: Env, userId: string): Promise<void>
   if (connection) {
     try {
       const token = await decryptSecret(connection.encrypted_refresh_token, env.YOUTUBE_OAUTH_ENCRYPTION_KEY);
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
-        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      const response = await fetch('https://oauth2.googleapis.com/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token }),
       });
+      await response.body?.cancel();
+      if (!response.ok) {
+        throw Object.assign(new Error('OAuth token revocation failed.'), { code: `HTTP_${response.status}` });
+      }
     } catch (error) {
-      console.warn('youtube_oauth_revoke_failed', { userId, error });
+      console.warn({ event: 'youtube_oauth_revoke_failed', ...safeErrorLog(error) });
     }
   }
   await env.DB.prepare(`DELETE FROM oauth_connections WHERE user_id=? AND provider='youtube'`).bind(userId).run();

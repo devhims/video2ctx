@@ -1,4 +1,7 @@
-const captured = vi.hoisted(() => ({ apiKey: undefined as Record<string, any> | undefined }));
+const captured = vi.hoisted(() => ({
+  apiKey: undefined as Record<string, any> | undefined,
+  auth: undefined as Record<string, any> | undefined,
+}));
 
 vi.mock('@better-auth/api-key', () => ({
   apiKey: vi.fn((options: Record<string, any>) => {
@@ -6,7 +9,10 @@ vi.mock('@better-auth/api-key', () => ({
     return { id: 'api-key' };
   }),
 }));
-vi.mock('better-auth', () => ({ betterAuth: vi.fn((options) => ({ options })) }));
+vi.mock('better-auth', () => ({ betterAuth: vi.fn((options) => {
+  captured.auth = options;
+  return { options };
+}) }));
 vi.mock('better-auth/plugins', () => ({ magicLink: vi.fn(() => ({ id: 'magic-link' })) }));
 
 import { createAuth } from '../src/lib/auth';
@@ -35,5 +41,6 @@ describe('Better Auth API-key configuration', () => {
       permissions: { defaultPermissions: { data: ['read'], account: ['access'] } },
     });
     expect(captured.apiKey?.disableKeyHashing).not.toBe(true);
+    expect(captured.auth?.account).toEqual({ encryptOAuthTokens: true });
   });
 });

@@ -13,6 +13,7 @@ export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
     trustedOrigins: [env.APP_ORIGIN],
+    account: { encryptOAuthTokens: true },
     socialProviders: {
       google: {
         clientId: env.GOOGLE_CLIENT_ID,

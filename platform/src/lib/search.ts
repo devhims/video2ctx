@@ -1,4 +1,4 @@
-import { ApiError, now, sha256 } from './http';
+import { ApiError, now, safeErrorLog, sha256 } from './http';
 import { userSearchInstanceId } from './research-storage';
 
 export interface Evidence {
@@ -134,13 +134,9 @@ async function removePartialUpload(
   const results = await Promise.allSettled(cleanup);
   for (const result of results) {
     if (result.status === 'rejected') {
-      console.warn('document_partial_cleanup_failed', { error: errorMessage(result.reason) });
+      console.warn({ event: 'document_partial_cleanup_failed', ...safeErrorLog(result.reason) });
     }
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
 }
 
 export async function searchPrivate(
@@ -193,7 +189,7 @@ export async function searchPublic(env: Env, query: string): Promise<Evidence[]>
       sourceKey: chunk.item.key,
     }));
   } catch (error) {
-    console.warn('public_search_unavailable', error);
+    console.warn({ event: 'public_search_unavailable', ...safeErrorLog(error) });
     return [];
   }
 }

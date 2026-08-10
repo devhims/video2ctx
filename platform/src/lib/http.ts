@@ -19,11 +19,28 @@ export function jsonError(c: Context, error: unknown): Response {
       error.status
     );
   }
-  console.error('unhandled_request_error', { requestId, error });
+  console.error({ event: 'unhandled_request_error', requestId, ...safeErrorLog(error) });
   return c.json(
     { error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.', requestId } },
     500
   );
+}
+
+export function safeErrorLog(error: unknown): { errorName: string; errorCode?: string } {
+  const errorName = error instanceof Error ? safeErrorName(error.name) : 'UnknownError';
+  if (!error || typeof error !== 'object' || !('code' in error)) return { errorName };
+  const errorCode = safeErrorCode(String(error.code));
+  return errorCode ? { errorName, errorCode } : { errorName };
+}
+
+function safeErrorName(value: string): string {
+  const normalized = value.trim();
+  return /^[A-Za-z][A-Za-z0-9.]{0,63}$/.test(normalized) ? normalized : 'Error';
+}
+
+function safeErrorCode(value: string): string | undefined {
+  const normalized = value.trim();
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(normalized) ? normalized : undefined;
 }
 
 export async function body<T>(request: Request): Promise<T> {
