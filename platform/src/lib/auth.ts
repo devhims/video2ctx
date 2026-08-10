@@ -1,7 +1,9 @@
 import { betterAuth } from 'better-auth';
+import { apiKey } from '@better-auth/api-key';
 import { magicLink } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
+import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
 
 export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
   return betterAuth({
@@ -20,6 +22,28 @@ export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<
     },
     verification: { storeIdentifier: 'hashed' },
     plugins: [
+      apiKey({
+        apiKeyHeaders: 'x-api-key',
+        defaultPrefix: 'aty_',
+        defaultKeyLength: 64,
+        requireName: true,
+        storage: 'database',
+        references: 'user',
+        enableSessionForAPIKeys: false,
+        deferUpdates: false,
+        keyExpiration: {
+          defaultExpiresIn: null,
+          disableCustomExpiresTime: true,
+        },
+        rateLimit: {
+          enabled: true,
+          timeWindow: 60_000,
+          maxRequests: 60,
+        },
+        permissions: {
+          defaultPermissions: DEFAULT_API_KEY_PERMISSIONS,
+        },
+      }),
       magicLink({
         expiresIn: 900,
         storeToken: 'hashed',

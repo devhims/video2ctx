@@ -6,6 +6,7 @@ import {
 } from '../src/lib/trend-plan';
 
 const signals: TrendPlanSignals = {
+  provider: 'youtube',
   query: 'AI agents',
   sampleSize: 3,
   summary: { medianViewsPerHour: 800, publishedLast7Days: 2, breakoutCount: 1 },

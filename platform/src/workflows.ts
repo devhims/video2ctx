@@ -1,8 +1,8 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import type { ImportPayload, MonitorPayload } from './types';
 import { indexPrivateDocument, indexPublicDocument } from './lib/search';
-import { getAllComments, getChannel, getChannelVideos, getComments, getPlaylist, getTranscript, getVideo, searchYouTube } from './lib/youtube';
 import { now } from './lib/http';
+import { getProvider } from './providers';
 
 export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
   async run(event: WorkflowEvent<ImportPayload>, step: WorkflowStep): Promise<void> {
@@ -35,20 +35,24 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
   }
 
   private async importEntity(input: ImportPayload): Promise<ImportResult> {
+    const provider = getProvider(input.provider);
     if (input.kind === 'video') {
-      const [video, transcript] = await Promise.all([
-        getVideo(this.env, input.entityId),
-        getTranscript(this.env, input.entityId),
+      const [videoResult, transcriptResult] = await Promise.all([
+        provider.getVideo(this.env, input.entityId),
+        provider.getTranscript(this.env, input.entityId),
       ]);
+      const video = videoResult.value;
+      const transcript = transcriptResult.value;
       const content = transcript.segments
         .map((segment) => `[${segment.startMs}] ${segment.text}`)
         .join('\n');
-      const r2Key = `public/videos/${input.entityId}/transcript-${transcript.track.languageCode}.json`;
+      const r2Key = `public/${input.provider}/videos/${input.entityId}/transcript-${transcript.track.languageCode}.json`;
       await this.env.RESEARCH.put(r2Key, JSON.stringify(transcript), {
         httpMetadata: { contentType: 'application/json' },
-        customMetadata: { entity_id: input.entityId, language: transcript.track.languageCode },
+        customMetadata: { provider: input.provider, entity_id: input.entityId, language: transcript.track.languageCode },
       });
       await indexPublicDocument(this.env, {
+        provider: input.provider,
         entityId: input.entityId,
         title: video.title,
         content,
@@ -56,6 +60,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
       });
       if (input.projectId) {
         await indexPrivateDocument(this.env, {
+          provider: input.provider,
           userId: input.userId,
           projectId: input.projectId,
           entityId: input.entityId,
@@ -67,14 +72,14 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
     }
 
     if (input.kind === 'channel') {
-      const channel = await getChannel(this.env, input.entityId);
-      const catalog = await getChannelVideos(this.env, channel.id);
+      const channel = (await provider.getChannel(this.env, input.entityId)).value;
+      const catalog = (await provider.getChannelVideos(this.env, channel.id)).value;
       const eager = catalog.videos.slice(0, 25);
       for (const video of eager) {
         await this.env.TASKS.send({
           type: 'snapshot-statistics',
-          idempotencyKey: `snapshot:${video.id}:${new Date().toISOString().slice(0, 13)}`,
-          payload: { entityId: video.id, viewCount: video.viewCount },
+          idempotencyKey: `snapshot:${input.provider}:${video.id}:${new Date().toISOString().slice(0, 13)}`,
+          payload: { provider: input.provider, entityId: video.id, viewCount: video.viewCount },
         }, { contentType: 'json' });
       }
       await this.enqueueVideoImports(input, eager.slice(0, 10).map((video) => video.id));
@@ -86,7 +91,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
     }
 
     if (input.kind === 'playlist') {
-      const playlist = await getPlaylist(this.env, input.entityId);
+      const playlist = (await provider.getPlaylist(this.env, input.entityId)).value;
       await this.enqueueVideoImports(input, playlist.videos.slice(0, 10).map((video) => video.id));
       return {
         entityType: 'playlist', entityId: input.entityId, title: playlist.title,
@@ -99,13 +104,13 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
     let continuation: string | undefined;
     let partial = false;
     if (input.kind === 'deep-comments') {
-      const comments = await getAllComments(this.env, input.entityId);
+      const comments = (await provider.getAllComments(this.env, input.entityId)).value;
       pages.push(...comments.comments);
       partial = !comments.complete;
       continuation = comments.continuation;
     } else {
       for (let page = 0; page < 2; page += 1) {
-        const comments = await getComments(this.env, input.entityId, continuation);
+        const comments = (await provider.getComments(this.env, input.entityId, continuation)).value;
         pages.push(...comments.comments);
         continuation = comments.continuation;
         if (!continuation) break;
@@ -113,9 +118,9 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
       partial = Boolean(continuation);
     }
     await this.env.RESEARCH.put(
-      `public/videos/${input.entityId}/comments.json`,
+      `public/${input.provider}/videos/${input.entityId}/comments.json`,
       JSON.stringify({ comments: pages, continuation, complete: !partial, fetchedAt: new Date().toISOString() }),
-      { httpMetadata: { contentType: 'application/json' }, customMetadata: { entity_id: input.entityId } }
+      { httpMetadata: { contentType: 'application/json' }, customMetadata: { provider: input.provider, entity_id: input.entityId } }
     );
     return {
       entityType: 'comments', entityId: input.entityId,
@@ -125,13 +130,13 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
 
   private async enqueueVideoImports(parent: ImportPayload, videoIds: string[]): Promise<void> {
     for (const entityId of videoIds) {
-      const idempotencyKey = `eager:${parent.kind}:${parent.entityId}:${entityId}`;
+      const idempotencyKey = `eager:${parent.provider}:${parent.kind}:${parent.entityId}:${entityId}`;
       const existing = await this.env.DB.prepare('SELECT id FROM jobs WHERE user_id=? AND idempotency_key=?')
         .bind(parent.userId, idempotencyKey).first<{ id: string }>();
       if (existing) continue;
       const jobId = crypto.randomUUID();
       const child: ImportPayload = {
-        jobId, userId: parent.userId, kind: 'video', entityId,
+        jobId, userId: parent.userId, provider: parent.provider, kind: 'video', entityId,
         projectId: parent.projectId, idempotencyKey,
       };
       await this.env.DB.prepare(
@@ -160,7 +165,8 @@ export class MonitorWorkflow extends WorkflowEntrypoint<Env, MonitorPayload> {
     for (const monitor of monitors) {
       await step.do(`check-${String(monitor.id)}`, async () => {
         const target = String(monitor.target);
-        const result = await searchYouTube(this.env, target, { type: 'video', sort: 'date' });
+        const provider = getProvider(monitor.provider);
+        const result = (await provider.search(this.env, target, { type: 'video', sort: 'date' })).value;
         const newest = result.results[0];
         const previous = typeof monitor.last_cursor === 'string' ? monitor.last_cursor : undefined;
         if (newest?.type === 'video' && newest.id !== previous) {
@@ -169,7 +175,7 @@ export class MonitorWorkflow extends WorkflowEntrypoint<Env, MonitorPayload> {
              VALUES (?,?,'monitor_match',?,?,?,?)`
           ).bind(
             crypto.randomUUID(), String(monitor.user_id), 'New monitored video', newest.title,
-            JSON.stringify({ monitorId: monitor.id, videoId: newest.id, target }), now()
+            JSON.stringify({ monitorId: monitor.id, provider: monitor.provider, videoId: newest.id, target }), now()
           ).run();
           await this.env.DB.prepare('UPDATE monitors SET last_cursor=?, last_checked_at=? WHERE id=?')
             .bind(newest.id, now(), monitor.id).run();
@@ -195,6 +201,7 @@ interface ImportResult {
 interface MonitorRow {
   id: string;
   user_id: string;
+  provider: string;
   kind: string;
   target: string;
   query_json: string;

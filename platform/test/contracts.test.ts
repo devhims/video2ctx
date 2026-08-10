@@ -6,10 +6,10 @@ import { getVideo, routeInput } from '../src/lib/youtube';
 
 describe('universal input routing', () => {
   test.each([
-    ['https://youtu.be/abcdefghijk?t=10', { kind: 'video', id: 'abcdefghijk' }],
-    ['https://youtube.com/watch?v=abcdefghijk', { kind: 'video', id: 'abcdefghijk' }],
-    ['https://youtube.com/playlist?list=PL123', { kind: 'playlist', id: 'PL123' }],
-    ['https://youtube.com/@ResearchLab', { kind: 'channel', id: '@ResearchLab' }],
+    ['https://youtu.be/abcdefghijk?t=10', { kind: 'video', provider: 'youtube', id: 'abcdefghijk' }],
+    ['https://youtube.com/watch?v=abcdefghijk', { kind: 'video', provider: 'youtube', id: 'abcdefghijk' }],
+    ['https://youtube.com/playlist?list=PL123', { kind: 'playlist', provider: 'youtube', id: 'PL123' }],
+    ['https://youtube.com/@ResearchLab', { kind: 'channel', provider: 'youtube', id: '@ResearchLab' }],
     ['best AI research channels', { kind: 'search', query: 'best AI research channels' }],
   ])('routes %s', (input, expected) => expect(routeInput(input)).toEqual(expected));
   test('rejects non-YouTube URLs', () => expect(() => routeInput('https://example.com/watch?v=abcdefghijk')).toThrow('Only YouTube URLs'));
@@ -24,15 +24,12 @@ describe('public source metadata', () => {
       meta: { source: 'legacy-provider', fetchedAt: '2026-08-06T00:00:00.000Z', partial: false, warnings: [] },
     };
     const env = {
-      DB: {
-        prepare: () => ({
-          bind: () => ({
-            first: async () => ({
-              data_json: JSON.stringify(snapshot),
-              fetched_at: Date.now(),
-              expires_at: Date.now() + 60_000,
-            }),
-          }),
+      YOUTUBE_CACHE: {
+        get: async () => ({
+          version: 1,
+          value: snapshot,
+          fetchedAt: Date.now(),
+          freshUntil: Date.now() + 60_000,
         }),
       },
     } as unknown as Env;
@@ -40,6 +37,7 @@ describe('public source metadata', () => {
     const video = await getVideo(env, 'abcdefghijk');
 
     expect(video.meta.source).toBe('allthingsyoutube');
+    expect((video.meta as typeof video.meta & { provider: string }).provider).toBe('youtube');
   });
 });
 

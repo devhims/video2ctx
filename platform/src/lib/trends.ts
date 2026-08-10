@@ -404,7 +404,7 @@ async function loadSnapshotHistory(env: Env, ids: string[]): Promise<Map<string,
   const result = await env.DB.prepare(
     `SELECT entity_id,captured_at,view_count,like_count,comment_count
      FROM analytics_snapshots
-     WHERE entity_type='video' AND entity_id IN (${placeholders}) AND captured_at >= ?
+     WHERE provider='youtube' AND entity_type='video' AND entity_id IN (${placeholders}) AND captured_at >= ?
      ORDER BY entity_id,captured_at DESC`
   ).bind(...ids, cutoff).all<{
     entity_id: string; captured_at: number; view_count: number | null;
@@ -428,8 +428,8 @@ async function persistSnapshots(env: Env, capturedAt: number, videos: CollectedV
   if (!videos.length) return;
   await env.DB.batch(videos.map((video) => env.DB.prepare(
     `INSERT OR REPLACE INTO analytics_snapshots
-     (entity_type,entity_id,captured_at,view_count,like_count,comment_count,velocity)
-     VALUES ('video',?,?,?,?,?,?)`
+     (provider,entity_type,entity_id,captured_at,view_count,like_count,comment_count,velocity)
+     VALUES ('youtube','video',?,?,?,?,?,?)`
   ).bind(
     video.id, capturedAt, video.viewCount, video.likeCount ?? null, video.commentCount ?? null,
     video.observedViewsPerHour ?? null

@@ -2,12 +2,12 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "all-things-youtube-platform",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-31",
+  "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "ENVIRONMENT": "development",
-    "APP_ORIGIN": "http://localhost:3000",
-    "AUTH_BASE_URL": "http://localhost:3000/api/platform",
+    "ENVIRONMENT": "production",
+    "APP_ORIGIN": "https://www.video2ctx.dev",
+    "AUTH_BASE_URL": "https://www.video2ctx.dev",
     "EMAIL_FROM": "research@example.com",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
@@ -19,12 +19,61 @@
     "FREE_DAILY_IMPORTS": "10",
     "PRO_PROJECT_LIMIT": "100",
     "PRO_MONITOR_LIMIT": "50",
-    "PRO_DAILY_IMPORTS": "200"
+    "PRO_DAILY_IMPORTS": "200",
+    "YOUTUBE_PROCESSOR_INSTANCE_COUNT": "2",
+    "YOUTUBE_PROCESSOR_VERSION": "v1",
+    "YOUTUBE_PROCESSOR_MAX_ATTEMPTS": "2",
+    "YOUTUBE_PROCESSOR_TIMEOUT_MS": "120000",
+    "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "25",
+    "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4"
   },
+  "containers": [
+    {
+      "class_name": "YouTubeProcessorContainer",
+      "image": "./youtube-processor/Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "lite",
+      "max_instances": 4
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "YOUTUBE_PROCESSOR",
+        "class_name": "YouTubeProcessorContainer"
+      },
+      {
+        "name": "YOUTUBE_REQUEST_COORDINATOR",
+        "class_name": "YouTubeRequestCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["YouTubeProcessorContainer"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["YouTubeRequestCoordinator"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "all-things-youtube"
+      "database_name": "all-things-youtube-production",
+      "database_id": "4f173c2a-8c42-49ef-b36d-07a91533f029",
+      "preview_database_id": "633b783e-9fd9-402b-923a-2c8cb052bc69",
+      "migrations_dir": "migrations",
+      "remote": true
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "YOUTUBE_CACHE",
+      "id": "a7f3dabd47684ce8ada36680fb6fa527",
+      "preview_id": "08ae98076be441388d077d5087cc7c2f",
+      "remote": true
     }
   ],
   "r2_buckets": [

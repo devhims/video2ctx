@@ -1,3 +1,6 @@
+import type { createAuth } from './lib/auth';
+import type { ProviderId } from './providers/contract';
+
 export type Plan = 'free' | 'pro';
 
 export interface AppUser {
@@ -6,14 +9,28 @@ export interface AppUser {
   name: string;
 }
 
+export type AuthenticationMethod = 'session' | 'api-key' | 'demo';
+
+export interface AuthPrincipal {
+  user: AppUser;
+  method: AuthenticationMethod;
+  apiKeyId?: string;
+  permissions: Record<string, string[]>;
+}
+
 export interface AppVariables {
+  auth?: ReturnType<typeof createAuth>;
+  principal: AuthPrincipal | null;
   user: AppUser | null;
   requestId: string;
 }
 
+export type App = { Bindings: Env; Variables: AppVariables };
+
 export interface ImportPayload {
   jobId: string;
   userId: string;
+  provider: ProviderId;
   kind: 'video' | 'channel' | 'playlist' | 'comments' | 'deep-comments';
   entityId: string;
   projectId?: string;

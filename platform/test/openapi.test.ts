@@ -14,7 +14,7 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(response.headers.get('content-type')).toContain('application/json');
     await expect(response.json()).resolves.toMatchObject({
       openapi: '3.1.0',
-      info: { title: 'all-things-youtube API' },
+      info: { title: 'Video2Ctx API' },
       servers: [{ url: '/' }],
     });
   });
@@ -36,24 +36,50 @@ describe('OpenAPI and Scalar documentation', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
-    expect(html).toContain('all-things-youtube API Reference');
+    expect(html).toContain('Video2Ctx API Reference');
     expect(html).toContain('./openapi.json');
   });
 
   test('documents every concrete HTTP route declared by the Hono app', () => {
-    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
-    const routePattern = /app\.(get|post|put|patch|delete)\(\s*['"]([^'"]+)['"]/g;
-    const declared = [...source.matchAll(routePattern)].map(([, method, route]) => ({
-      method: method!,
-      path: route!.replace(/:([A-Za-z0-9_]+)/g, '{$1}'),
-    }));
+    const files = [
+      ['indexRoutes', '../src/routes/index.route.ts', ''],
+      ['dataRoutes', '../src/routes/data/data.index.ts', '/v1'],
+      ['publicRoutes', '../src/routes/public/public.index.ts', '/v1'],
+      ['sessionRoutes', '../src/routes/session/session.index.ts', '/v1'],
+    ] as const;
+    const declared = files.flatMap(([router, file, prefix]) => {
+      const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+      const routePattern = new RegExp(`${router}\\.(get|post|put|patch|delete)\\(\\s*['\"]([^'\"]+)['\"]`, 'g');
+      return [...source.matchAll(routePattern)].map(([, method, route]) => ({
+        method: method!,
+        path: `${prefix}${route}`.replace(/:([A-Za-z0-9_]+)/g, '{$1}'),
+      }));
+    });
     const paths = openApiDocument.paths as Record<string, Record<string, unknown>>;
 
+    const source = readFileSync(new URL('../src/app.ts', import.meta.url), 'utf8');
     expect(source).toContain("app.route('/', documentationApp)");
     expect(declared.length).toBeGreaterThan(35);
     for (const route of declared) {
       expect(paths[route.path]?.[route.method], `${route.method.toUpperCase()} ${route.path}`).toBeDefined();
     }
+  });
+
+  test('classifies route groups with explicit principal and session guards', () => {
+    const dataSource = readFileSync(new URL('../src/routes/data/data.index.ts', import.meta.url), 'utf8');
+    const sessionSource = readFileSync(new URL('../src/routes/session/session.index.ts', import.meta.url), 'utf8');
+    const publicSource = readFileSync(new URL('../src/routes/public/public.index.ts', import.meta.url), 'utf8');
+
+    expect(dataSource).toContain('DATA_ROUTE_PATTERNS');
+    expect(dataSource).toContain('dataRoutes.use(path, requireDataPrincipal)');
+    expect(sessionSource).toContain('ACCOUNT_ROUTE_PATTERNS');
+    expect(sessionSource).toContain('SESSION_ONLY_ROUTE_PATTERNS');
+    expect(sessionSource).toContain('sessionRoutes.use(path, requireAccountPrincipal)');
+    expect(sessionSource).toContain('sessionRoutes.use(path, requireSessionPrincipal)');
+    expect(dataSource).not.toContain("dataRoutes.use('*'");
+    expect(sessionSource).not.toContain("sessionRoutes.use('*'");
+    expect(publicSource).not.toContain('requireDataPrincipal');
+    expect(publicSource).not.toContain('requireSessionPrincipal');
   });
 
   test('uses unique operation IDs and resolvable local component references', () => {
@@ -72,7 +98,7 @@ describe('OpenAPI and Scalar documentation', () => {
     });
     expect(references.length).toBeGreaterThan(30);
     for (const reference of references) {
-      expect(reference).toMatch(/^#\/components\/(schemas|responses)\/[A-Za-z0-9]+$/);
+      expect(reference).toMatch(/^#\/components\/(schemas|responses|headers)\/[A-Za-z0-9]+$/);
       const parts = reference.slice(2).split('/');
       let target: unknown = openApiDocument;
       for (const part of parts) target = (target as Record<string, unknown>)[part];
@@ -80,9 +106,40 @@ describe('OpenAPI and Scalar documentation', () => {
     }
   });
 
-  test('documents categorized and paginated YouTube search responses', () => {
+  test('documents API-key authentication and credit response headers for data routes', () => {
+    const components = openApiDocument.components as Record<string, any>;
+    const paths = openApiDocument.paths as Record<string, Record<string, any>>;
+    const dataOperations = [
+      paths['/v1/search']!.get,
+      paths['/v1/providers/{provider}/browse']!.get,
+      paths['/v1/providers/{provider}/videos/{id}']!.get,
+      paths['/v1/usage']!.get,
+      paths['/v1/answers']!.post,
+    ];
+
+    expect(components.securitySchemes.apiKey).toMatchObject({
+      type: 'apiKey', in: 'header', name: 'X-API-Key',
+    });
+    expect(components.securitySchemes.bearerApiKey).toMatchObject({
+      type: 'http', scheme: 'bearer', bearerFormat: 'API key',
+    });
+    for (const operation of dataOperations) {
+      expect(operation.security).toContainEqual({ bearerApiKey: [] });
+      expect(operation.security).toContainEqual({ apiKey: [] });
+      expect(operation.responses['200'].headers).toMatchObject({
+        'X-Credits-Charged': { $ref: '#/components/headers/CreditsCharged' },
+        'X-Credits-Remaining': { $ref: '#/components/headers/CreditsRemaining' },
+      });
+      expect(operation.responses['402']).toEqual({ $ref: '#/components/responses/InsufficientCredits' });
+    }
+    expect(paths['/v1/projects']!.get.security).toContainEqual({ bearerApiKey: [] });
+    expect(paths['/v1/billing/checkout']!.post.security).not.toContainEqual({ bearerApiKey: [] });
+    expect(paths['/v1/account']!.delete.security).not.toContainEqual({ bearerApiKey: [] });
+  });
+
+  test('documents categorized and paginated provider search responses', () => {
     const searchOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
-      ['/v1/search']!.get;
+      ['/v1/providers/{provider}/search']!.get;
     const parameterNames = searchOperation.parameters.map((parameter: { name: string }) => parameter.name);
     const searchSchema = (openApiDocument.components.schemas as Record<string, any>).SearchResponse;
 
@@ -99,14 +156,14 @@ describe('OpenAPI and Scalar documentation', () => {
   test('documents tracks and transcript auto-translation', () => {
     const schemas = openApiDocument.components.schemas as Record<string, any>;
     const paths = openApiDocument.paths as Record<string, Record<string, any>>;
-    const tracksOperation = paths['/v1/videos/{id}/tracks']!.get;
+    const tracksOperation = paths['/v1/providers/{provider}/videos/{id}/tracks']!.get;
     const transcriptOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
-      ['/v1/videos/{id}/transcript']!.get;
+      ['/v1/providers/{provider}/videos/{id}/transcript']!.get;
     const parameterNames = transcriptOperation.parameters.map((parameter: { name: string }) => parameter.name);
 
     expect(tracksOperation.operationId).toBe('getVideoTracks');
     expect(tracksOperation.deprecated).not.toBe(true);
-    expect(paths['/v1/videos/{id}/captions']).toBeUndefined();
+    expect(paths['/v1/providers/{provider}/videos/{id}/captions']).toBeUndefined();
     expect(parameterNames).toContain('lang');
     expect(parameterNames).not.toContain('translateTo');
     expect(parameterNames).not.toContain('language');
@@ -123,9 +180,8 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(schemas.Video.allOf[1].properties).not.toHaveProperty('media');
     expect(schemas.Video.allOf[1].properties).not.toHaveProperty('storyboards');
     expect(schemas.Video.allOf[1].properties).not.toHaveProperty('endscreen');
-    expect(schemas.SourceMetadata.properties.source).toEqual({
-      type: 'string', const: 'allthingsyoutube',
-    });
+    expect(schemas.SourceMetadata.required).toContain('provider');
+    expect(schemas.SourceMetadata.properties.provider.enum).toEqual(['youtube']);
     expect(schemas.Channel.required).toEqual([
       'type', 'id', 'name', 'thumbnails', 'url', 'about', 'meta',
     ]);
@@ -135,9 +191,9 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(schemas.ChannelMoreInfo.properties.businessEmailAvailable.type).toBe('boolean');
     expect(schemas.ChannelVideos.required).toEqual(['channelId', 'sort', 'videos', 'meta']);
     expect(schemas.ChannelPlaylists.required).toEqual(['channelId', 'sort', 'playlists', 'meta']);
-    expect(paths['/v1/channels/{id}/videos']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+    expect(paths['/v1/providers/{provider}/channels/{id}/videos']!.get.parameters.map((parameter: { name: string }) => parameter.name))
       .toContain('continuation');
-    expect(paths['/v1/channels/{id}/playlists']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+    expect(paths['/v1/providers/{provider}/channels/{id}/playlists']!.get.parameters.map((parameter: { name: string }) => parameter.name))
       .toContain('continuation');
   });
 

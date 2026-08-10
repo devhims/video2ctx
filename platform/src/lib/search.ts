@@ -1,21 +1,19 @@
 import { ApiError, now, sha256 } from './http';
+import { userSearchInstanceId } from './research-storage';
 
 export interface Evidence {
   id: string;
   score: number;
   text: string;
+  provider?: string;
   entityId?: string;
   startMs?: number;
   projectId?: string;
   sourceKey: string;
 }
 
-function userInstance(userId: string): string {
-  return `user-${userId.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 27)}`;
-}
-
 async function getOrCreatePrivateInstance(env: Env, userId: string) {
-  const id = userInstance(userId);
+  const id = userSearchInstanceId(userId);
   try {
     await env.AI_SEARCH.get(id).info();
     return env.AI_SEARCH.get(id);
@@ -28,6 +26,7 @@ async function getOrCreatePrivateInstance(env: Env, userId: string) {
       chunk_size: 450,
       chunk_overlap: 20,
       custom_metadata: [
+        { field_name: 'provider', data_type: 'text' },
         { field_name: 'project_id', data_type: 'text' },
         { field_name: 'entity_id', data_type: 'text' },
         { field_name: 'start_ms', data_type: 'number' },
@@ -38,44 +37,56 @@ async function getOrCreatePrivateInstance(env: Env, userId: string) {
 
 export async function indexPrivateDocument(
   env: Env,
-  input: { userId: string; projectId: string; entityId: string; title: string; content: string; startMs?: number }
-): Promise<string> {
-  const documentId = await sha256(`${input.userId}:${input.projectId}:${input.entityId}:${input.startMs ?? 0}`);
-  const r2Key = `private/${input.userId}/projects/${input.projectId}/${documentId}.md`;
+  input: { provider: string; userId: string; projectId: string; entityId: string; title: string; content: string; startMs?: number }
+): Promise<string | null> {
+  const documentId = await sha256(`${input.userId}:${input.projectId}:${input.provider}:${input.entityId}:${input.startMs ?? 0}`);
+  const r2Key = `private/${input.userId}/projects/${input.projectId}/${input.provider}/${documentId}.md`;
   const body = `# ${input.title}\n\n${input.content}`;
-  await env.RESEARCH.put(r2Key, body, {
-    httpMetadata: { contentType: 'text/markdown; charset=utf-8' },
-    customMetadata: { project_id: input.projectId, entity_id: input.entityId },
-  });
+  const project = await privateProjectExists(env, input.userId, input.projectId);
+  if (!project) return null;
+
   const instance = await getOrCreatePrivateInstance(env, input.userId);
-  await instance.items.upload(`${input.projectId}-${documentId}.md`, body, {
-    metadata: {
-      project_id: input.projectId,
-      entity_id: input.entityId,
-      start_ms: String(input.startMs ?? 0),
-    },
-  });
-  await env.DB.prepare(
-    `INSERT OR REPLACE INTO documents
-     (id, owner_scope, user_id, project_id, entity_type, entity_id, title, body_preview, r2_key, indexed_at, created_at)
-     VALUES (?, 'private', ?, ?, 'transcript', ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    documentId, input.userId, input.projectId, input.entityId, input.title,
-    input.content.slice(0, 500), r2Key, now(), now()
-  ).run();
-  return documentId;
+  let searchItemId: string | undefined;
+  try {
+    await env.RESEARCH.put(r2Key, body, {
+      httpMetadata: { contentType: 'text/markdown; charset=utf-8' },
+      customMetadata: { provider: input.provider, project_id: input.projectId, entity_id: input.entityId },
+    });
+    const searchItem = await instance.items.upload(`${input.projectId}-${documentId}.md`, body, {
+      metadata: {
+        provider: input.provider,
+        project_id: input.projectId,
+        entity_id: input.entityId,
+        start_ms: String(input.startMs ?? 0),
+      },
+    });
+    searchItemId = searchItem.id;
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO documents
+       (id, owner_scope, user_id, project_id, provider, entity_type, entity_id, title, body_preview, r2_key, search_item_id, indexed_at, created_at)
+       VALUES (?, 'private', ?, ?, ?, 'transcript', ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      documentId, input.userId, input.projectId, input.provider, input.entityId, input.title,
+      input.content.slice(0, 500), r2Key, searchItemId, now(), now()
+    ).run();
+    return documentId;
+  } catch (error) {
+    await removePartialUpload(env, instance, r2Key, searchItemId);
+    if (!await privateProjectExists(env, input.userId, input.projectId)) return null;
+    throw error;
+  }
 }
 
 export async function indexPublicDocument(
   env: Env,
-  input: { entityId: string; title: string; content: string; language?: string; startMs?: number }
+  input: { provider: string; entityId: string; title: string; content: string; language?: string; startMs?: number }
 ): Promise<string> {
-  const documentId = await sha256(`public:${input.entityId}:${input.language ?? 'und'}:${input.startMs ?? 0}`);
-  const r2Key = `public/videos/${input.entityId}/${documentId}.md`;
+  const documentId = await sha256(`public:${input.provider}:${input.entityId}:${input.language ?? 'und'}:${input.startMs ?? 0}`);
+  const r2Key = `public/${input.provider}/videos/${input.entityId}/${documentId}.md`;
   const body = `# ${input.title}\n\n${input.content}`;
   await env.RESEARCH.put(r2Key, body, {
     httpMetadata: { contentType: 'text/markdown; charset=utf-8' },
-    customMetadata: { entity_id: input.entityId, language: input.language ?? 'und' },
+    customMetadata: { provider: input.provider, entity_id: input.entityId, language: input.language ?? 'und' },
   });
   let instance = env.AI_SEARCH.get(env.PUBLIC_SEARCH_INSTANCE);
   try {
@@ -86,24 +97,50 @@ export async function indexPublicDocument(
       index_method: { keyword: true, vector: true },
       fusion_method: 'rrf', chunk: true, chunk_size: 450, chunk_overlap: 20,
       custom_metadata: [
+        { field_name: 'provider', data_type: 'text' },
         { field_name: 'entity_id', data_type: 'text' },
         { field_name: 'start_ms', data_type: 'number' },
         { field_name: 'language', data_type: 'text' },
       ],
     });
   }
-  await instance.items.upload(`${input.entityId}-${documentId}.md`, body, {
-    metadata: { entity_id: input.entityId, start_ms: String(input.startMs ?? 0), language: input.language ?? 'und' },
+  const searchItem = await instance.items.upload(`${input.entityId}-${documentId}.md`, body, {
+    metadata: { provider: input.provider, entity_id: input.entityId, start_ms: String(input.startMs ?? 0), language: input.language ?? 'und' },
   });
   await env.DB.prepare(
     `INSERT OR REPLACE INTO documents
-     (id,owner_scope,entity_type,entity_id,language,title,body_preview,r2_key,indexed_at,created_at)
-     VALUES (?,'public','transcript',?,?,?,?,?,?,?,?)`
+     (id,owner_scope,provider,entity_type,entity_id,language,title,body_preview,r2_key,search_item_id,indexed_at,created_at)
+     VALUES (?,'public',?,'transcript',?,?,?,?,?,?,?,?)`
   ).bind(
-    documentId, input.entityId, input.language ?? null, input.title,
-    input.content.slice(0, 500), r2Key, now(), now()
+    documentId, input.provider, input.entityId, input.language ?? null, input.title,
+    input.content.slice(0, 500), r2Key, searchItem.id, now(), now()
   ).run();
   return documentId;
+}
+
+async function privateProjectExists(env: Env, userId: string, projectId: string): Promise<boolean> {
+  return Boolean(await env.DB.prepare('SELECT 1 FROM projects WHERE id=? AND user_id=?')
+    .bind(projectId, userId).first());
+}
+
+async function removePartialUpload(
+  env: Env,
+  instance: AiSearchInstance,
+  r2Key: string,
+  searchItemId?: string,
+): Promise<void> {
+  const cleanup: Promise<unknown>[] = [env.RESEARCH.delete(r2Key)];
+  if (searchItemId) cleanup.push(instance.items.delete(searchItemId));
+  const results = await Promise.allSettled(cleanup);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.warn('document_partial_cleanup_failed', { error: errorMessage(result.reason) });
+    }
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
 }
 
 export async function searchPrivate(
@@ -132,6 +169,7 @@ export async function searchPrivate(
     id: chunk.id,
     score: chunk.score,
     text: chunk.text,
+    provider: stringMetadata(chunk.item.metadata, 'provider'),
     entityId: stringMetadata(chunk.item.metadata, 'entity_id'),
     startMs: evidenceStartMs(chunk.text, chunk.item.metadata),
     projectId: stringMetadata(chunk.item.metadata, 'project_id'),
@@ -149,6 +187,7 @@ export async function searchPublic(env: Env, query: string): Promise<Evidence[]>
       id: chunk.id,
       score: chunk.score,
       text: chunk.text,
+      provider: stringMetadata(chunk.item.metadata, 'provider'),
       entityId: stringMetadata(chunk.item.metadata, 'entity_id'),
       startMs: evidenceStartMs(chunk.text, chunk.item.metadata),
       sourceKey: chunk.item.key,

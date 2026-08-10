@@ -3,6 +3,7 @@ import {
   BROWSE_LANGUAGES,
   BROWSE_REGIONS,
 } from './lib/browse-contract';
+import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
 
 type Schema = Record<string, unknown>;
 
@@ -11,6 +12,13 @@ const responseRef = (name: string) => ({ $ref: `#/components/responses/${name}` 
 const jsonResponse = (description: string, schema: Schema) => ({
   description,
   content: { 'application/json': { schema } },
+});
+const meteredJsonResponse = (description: string, schema: Schema) => ({
+  ...jsonResponse(description, schema),
+  headers: {
+    'X-Credits-Charged': { $ref: '#/components/headers/CreditsCharged' },
+    'X-Credits-Remaining': { $ref: '#/components/headers/CreditsRemaining' },
+  },
 });
 const jsonBody = (schema: Schema, description?: string) => ({
   required: true,
@@ -33,18 +41,41 @@ const queryParameter = (name: string, description: string, schema: Schema, requi
 });
 
 const privateSecurity = [{ sessionCookie: [] }, { demoUser: [] }];
+const personalAccessSecurity = [
+  { sessionCookie: [] },
+  { bearerApiKey: [] },
+  { apiKey: [] },
+  { demoUser: [] },
+];
+const dataSecurity = personalAccessSecurity;
+const accountSecurity = personalAccessSecurity;
 const standardErrors = {
   '401': responseRef('Unauthorized'),
+  '403': responseRef('Forbidden'),
   '422': responseRef('ValidationError'),
   '500': responseRef('ServerError'),
+  '503': responseRef('ServiceUnavailable'),
+};
+const dataErrors = {
+  ...standardErrors,
+  '402': responseRef('InsufficientCredits'),
+  '429': responseRef('RateLimited'),
 };
 const idParameter = pathParameter('id', 'Resource identifier.');
+const providerParameter = {
+  name: 'provider',
+  in: 'path',
+  required: true,
+  description: 'External video provider.',
+  schema: { type: 'string', enum: PROVIDER_IDS, example: 'youtube' },
+};
 
 const sourceMetadata: Schema = {
   type: 'object',
-  required: ['source', 'fetchedAt', 'partial', 'warnings'],
+  required: ['provider', 'source', 'fetchedAt', 'partial', 'warnings'],
   properties: {
-    source: { type: 'string', const: 'allthingsyoutube' },
+    provider: { type: 'string', enum: PROVIDER_IDS, description: 'Platform that owns the source resource.' },
+    source: { type: 'string', example: 'allthingsyoutube', description: 'Extractor or upstream implementation that produced the normalized response.' },
     fetchedAt: { type: 'string', format: 'date-time' },
     partial: { type: 'boolean' },
     warnings: { type: 'array', items: { type: 'string' } },
@@ -169,8 +200,9 @@ const trendVideo: Schema = {
 
 const trendReport: Schema = {
   type: 'object',
-  required: ['query', 'generatedAt', 'sampleSize', 'methodologyVersion', 'methodology', 'sample', 'confidence', 'summary', 'videos', 'hashtags', 'titlePatterns', 'durationMix', 'plan', 'warnings'],
+  required: ['provider', 'query', 'generatedAt', 'sampleSize', 'methodologyVersion', 'methodology', 'sample', 'confidence', 'summary', 'videos', 'hashtags', 'titlePatterns', 'durationMix', 'plan', 'warnings'],
   properties: {
+    provider: { type: 'string', enum: PROVIDER_IDS },
     query: { type: 'string' },
     generatedAt: { type: 'string', format: 'date-time' },
     sampleSize: { type: 'integer', minimum: 0 },
@@ -227,12 +259,15 @@ const storedRecord: Schema = {
 export const openApiDocument = {
   openapi: '3.1.0',
   info: {
-    title: 'all-things-youtube API',
+    title: 'Video2Ctx API',
     version: '1.0.0',
     license: { name: 'Proprietary' },
     description: [
-      'Interactive contract for the all-things-youtube platform Worker.',
-      'Public discovery routes can be called directly. Private routes accept a Better Auth session cookie.',
+      'Interactive contract for the Video2Ctx platform Worker.',
+      'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',
+      'Product routes accept either a Better Auth session cookie or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
+      'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',
+      'API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
       'When running locally with ENVIRONMENT other than production, set X-Demo-User to any stable value to create and use an isolated demo account.',
     ].join('\n\n'),
   },
@@ -242,6 +277,7 @@ export const openApiDocument = {
     { name: 'System', description: 'Service status and machine-readable documentation.' },
     { name: 'Authentication', description: 'Better Auth entry points used by the web application.' },
     { name: 'UI Helpers', description: 'Internal routing helpers used by the first-party web interface.' },
+    { name: 'Providers', description: 'Supported external video providers and their capabilities.' },
     { name: 'Discovery', description: 'Search, browse, and trend research.' },
     { name: 'Videos', description: 'Video metadata and evidence.' },
     { name: 'Channels', description: 'Channel inspection.' },
@@ -323,61 +359,136 @@ export const openApiDocument = {
         },
       },
     },
+    '/api/auth/api-key/create': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'createApiKey',
+        summary: 'Create a permanent API key',
+        description: 'Session-only Better Auth endpoint. The full secret is returned once and cannot be recovered later.',
+        security: privateSecurity,
+        requestBody: jsonBody(schemaRef('CreateApiKeyRequest')),
+        responses: {
+          '200': jsonResponse('API key created.', schemaRef('CreatedApiKey')),
+          '401': responseRef('Unauthorized'),
+          '422': responseRef('ValidationError'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/api/auth/api-key/list': {
+      get: {
+        tags: ['Authentication'],
+        operationId: 'listApiKeys',
+        summary: 'List the current user’s API keys',
+        security: privateSecurity,
+        responses: {
+          '200': jsonResponse('API key metadata without secrets.', schemaRef('ApiKeyList')),
+          '401': responseRef('Unauthorized'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/api/auth/api-key/delete': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'deleteApiKey',
+        summary: 'Revoke an API key',
+        security: privateSecurity,
+        requestBody: jsonBody({
+          type: 'object', required: ['keyId'], properties: { keyId: { type: 'string' } },
+        }),
+        responses: {
+          '200': jsonResponse('API key revoked.', { type: 'object', additionalProperties: true }),
+          '401': responseRef('Unauthorized'),
+          '404': responseRef('NotFound'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
     '/v1/resolve': {
       post: {
         tags: ['UI Helpers'],
         operationId: 'resolveInput',
         summary: 'Route universal UI input',
-        description: 'Internal first-party UI helper that classifies text, an ID, or a YouTube URL before navigation. It is not a primary public consumer API. In production, this route also requires a valid Cloudflare Turnstile response header.',
+        description: 'Internal first-party UI helper that classifies text, an ID, or a YouTube URL before navigation. It is authenticated, free of charge, and not a primary public consumer API.',
         'x-internal': true,
-        security: [{}, { turnstile: [] }],
+        security: dataSecurity,
         requestBody: jsonBody(schemaRef('ResolveRequest')),
         responses: {
-          '200': jsonResponse('The classified input.', schemaRef('ResolveResponse')),
+          '200': meteredJsonResponse('The classified input.', schemaRef('ResolveResponse')),
+          '401': responseRef('Unauthorized'),
           '403': responseRef('Forbidden'),
           '422': responseRef('ValidationError'),
           '429': responseRef('RateLimited'),
           '500': responseRef('ServerError'),
+          '503': responseRef('ServiceUnavailable'),
         },
       },
     },
     '/v1/search': {
       get: {
         tags: ['Discovery'],
-        operationId: 'search',
-        summary: 'Search YouTube, private evidence, or ask a cited question',
-        description: '`mode=youtube` is public. `inside` and `ask` require authentication. The authentication controls can be set before changing modes.',
+        operationId: 'searchPrivateEvidence',
+        summary: 'Search the user’s private indexed evidence',
+        description: 'Searches material previously saved or imported into the current user’s private research index.',
+        security: dataSecurity,
         parameters: [
-          queryParameter('q', 'Search query or question.', { type: 'string', maxLength: 500, example: 'AI agents' }, true),
-          queryParameter('mode', 'Search mode.', { type: 'string', enum: ['youtube', 'inside', 'ask'], default: 'youtube' }),
+          queryParameter('q', 'Evidence search query.', { type: 'string', maxLength: 500, example: 'AI agents' }, true),
           queryParameter('projectId', 'Restrict private retrieval to a project.', { type: 'string' }),
-          queryParameter('type', 'YouTube entity type.', { type: 'string', enum: ['all', 'video', 'channel', 'playlist'], default: 'all' }),
-          queryParameter('channel', 'Restrict YouTube search to a channel.', { type: 'string' }),
+        ],
+        responses: {
+          '200': meteredJsonResponse('Matching private evidence.', schemaRef('PrivateSearchResponse')),
+          ...dataErrors,
+        },
+      },
+    },
+    '/v1/providers': {
+      get: {
+        tags: ['Providers'],
+        operationId: 'listProviders',
+        summary: 'List supported video providers',
+        description: 'Returns the provider identifiers accepted in provider-scoped paths and the capabilities currently implemented for each provider.',
+        security: dataSecurity,
+        responses: {
+          '200': meteredJsonResponse('Supported providers.', schemaRef('ProviderList')),
+          ...dataErrors,
+        },
+      },
+    },
+    '/v1/providers/{provider}/search': {
+      get: {
+        tags: ['Discovery'],
+        operationId: 'searchProvider',
+        summary: 'Search a video provider',
+        description: 'Searches the selected external provider. Cache hits cost less than fresh upstream retrieval.',
+        security: dataSecurity,
+        parameters: [
+          providerParameter,
+          queryParameter('q', 'Provider search query.', { type: 'string', maxLength: 500, example: 'AI agents' }, true),
+          queryParameter('type', 'Provider entity type.', { type: 'string', enum: ['all', 'video', 'channel', 'playlist'], default: 'all' }),
+          queryParameter('channel', 'Restrict search to a channel.', { type: 'string' }),
           queryParameter('language', 'Preferred language code.', { type: 'string', example: 'en' }),
           queryParameter('duration', 'Video duration bucket.', { type: 'string', enum: ['short', 'medium', 'long'] }),
           queryParameter('sort', 'Result ordering.', { type: 'string', enum: ['relevance', 'date', 'views', 'rating'] }),
           queryParameter('captions', 'Only include captioned videos.', { type: 'boolean' }),
           queryParameter('live', 'Live broadcast state.', { type: 'string', enum: ['live', 'upcoming', 'completed'] }),
-          queryParameter('continuation', 'Opaque token returned by a previous YouTube search page.', { type: 'string' }),
+          queryParameter('continuation', 'Opaque token returned by a previous provider search page.', { type: 'string' }),
         ],
         responses: {
-          '200': jsonResponse('Search results or a cited answer, depending on mode.', {
-            oneOf: [schemaRef('SearchResponse'), schemaRef('PrivateSearchResponse'), schemaRef('CitedAnswer')],
-          }),
-          '401': responseRef('Unauthorized'),
-          '422': responseRef('ValidationError'),
-          '429': responseRef('RateLimited'),
-          '500': responseRef('ServerError'),
+          '200': meteredJsonResponse('Provider search results.', schemaRef('SearchResponse')),
+          ...dataErrors,
         },
       },
     },
-    '/v1/browse': {
+    '/v1/providers/{provider}/browse': {
       get: {
         tags: ['Discovery'],
-        operationId: 'browseYouTube',
-        summary: 'Browse a public YouTube discovery feed',
-        description: 'Returns queryless discovery results from a supported public YouTube destination. A category is required because YouTube no longer exposes an anonymous general Trending feed.',
+        operationId: 'browseProvider',
+        summary: 'Browse a provider discovery feed',
+        description: 'Returns queryless discovery results from a supported destination on the selected provider.',
+        security: dataSecurity,
         parameters: [
+          providerParameter,
           queryParameter('category', 'Discovery category.', {
             type: 'string',
             enum: BROWSE_CATEGORIES,
@@ -392,29 +503,27 @@ export const openApiDocument = {
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
         ],
         responses: {
-          '200': jsonResponse('Browse results.', schemaRef('BrowseResponse')),
-          '422': responseRef('ValidationError'),
-          '429': responseRef('RateLimited'),
-          '500': responseRef('ServerError'),
+          '200': meteredJsonResponse('Browse results.', schemaRef('BrowseResponse')),
+          ...dataErrors,
         },
       },
     },
-    '/v1/trends': {
+    '/v1/providers/{provider}/trends': {
       get: {
         tags: ['Discovery'],
         operationId: 'researchTrends',
         summary: 'Calculate public trend signals for a topic',
         description: 'Builds a diversified topic sample, persists public metric snapshots, calculates observed acceleration when history exists, and optionally adds GLM-generated evidence-grounded themes and content gaps.',
+        security: dataSecurity,
         parameters: [
+          providerParameter,
           queryParameter('q', 'Topic to research.', { type: 'string', maxLength: 200, example: 'AI agents' }, true),
           queryParameter('limit', 'Number of diversified videos to enrich; clamped to 8–30.', { type: 'integer', minimum: 8, maximum: 30, default: 20 }),
           queryParameter('insights', 'AI insight mode. Use deterministic to skip GLM analysis.', { type: 'string', enum: ['ai', 'deterministic'], default: 'ai' }),
         ],
         responses: {
-          '200': jsonResponse('Topic trend report.', schemaRef('TrendReport')),
-          '422': responseRef('ValidationError'),
-          '429': responseRef('RateLimited'),
-          '500': responseRef('ServerError'),
+          '200': meteredJsonResponse('Topic trend report.', schemaRef('TrendReport')),
+          ...dataErrors,
         },
       },
     },
@@ -424,154 +533,184 @@ export const openApiDocument = {
         operationId: 'generateTrendPlan',
         summary: 'Generate an AI video plan from trend signals',
         description: 'Uses Kimi K2.6 for strategic synthesis and automatically falls back to GPT-OSS 120B when Kimi is unavailable. The response identifies the model that produced it.',
-        security: privateSecurity,
+        security: dataSecurity,
         requestBody: jsonBody({
           type: 'object',
           required: ['report'],
           properties: { report: schemaRef('TrendReport') },
         }),
         responses: {
-          '200': jsonResponse('Evidence-grounded video plan.', schemaRef('AiTrendPlan')),
-          ...standardErrors,
-          '503': responseRef('ServiceUnavailable'),
+          '200': meteredJsonResponse('Evidence-grounded video plan.', schemaRef('AiTrendPlan')),
+          ...dataErrors,
         },
       },
     },
-    '/v1/videos/{id}': {
+    '/v1/providers/{provider}/videos/{id}': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideo',
         summary: 'Inspect a video',
-        parameters: [pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ')],
+        security: dataSecurity,
+        parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ')],
         responses: {
-          '200': jsonResponse('Normalized video metadata.', schemaRef('Video')),
+          '200': meteredJsonResponse('Normalized video metadata.', schemaRef('Video')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/videos/{id}/tracks': {
+    '/v1/providers/{provider}/videos/{id}/tracks': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoTracks',
         summary: 'List transcript tracks',
         description: 'Lists the source caption tracks and auto-translation targets available to the transcript endpoint. This endpoint returns metadata, not caption text.',
-        parameters: [pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ')],
+        security: dataSecurity,
+        parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ')],
         responses: {
-          '200': jsonResponse('Transcript track information.', schemaRef('CaptionTrackList')),
+          '200': meteredJsonResponse('Transcript track information.', schemaRef('CaptionTrackList')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/videos/{id}/transcript': {
+    '/v1/providers/{provider}/videos/{id}/transcript': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoTranscript',
         summary: 'Get a timed transcript',
+        security: dataSecurity,
         parameters: [
-          pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ'),
+          providerParameter,
+          pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('lang', 'Desired transcript language. The backend selects the default source track and translates only when necessary.', { type: 'string', example: 'hi' }),
         ],
         responses: {
-          '200': jsonResponse('Normalized timed transcript.', schemaRef('Transcript')),
+          '200': meteredJsonResponse('Normalized timed transcript.', schemaRef('Transcript')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/videos/{id}/comments': {
+    '/v1/providers/{provider}/videos/{id}/comments': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoComments',
         summary: 'Get video comments',
+        security: dataSecurity,
         parameters: [
-          pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ'),
+          providerParameter,
+          pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
           queryParameter('all', 'Fetch all available pages rather than one page.', { type: 'boolean', default: false }),
         ],
         responses: {
-          '200': jsonResponse('A comment page or collection.', schemaRef('CommentResponse')),
+          '200': meteredJsonResponse('A comment page or collection.', schemaRef('CommentResponse')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/videos/{id}/endscreen': {
+    '/v1/providers/{provider}/videos/{id}/endscreen': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoEndscreen',
         summary: 'Get endscreen elements',
-        parameters: [pathParameter('id', 'YouTube video ID.', 'dQw4w9WgXcQ')],
+        security: dataSecurity,
+        parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ')],
         responses: {
-          '200': jsonResponse('Video endscreen elements.', { type: 'array', items: schemaRef('EndscreenElement') }),
+          '200': meteredJsonResponse('Video endscreen elements.', schemaRef('EndscreenResponse')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/channels/{id}': {
+    '/v1/providers/{provider}/channels/{id}': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannel',
         summary: 'Inspect a channel',
-        parameters: [pathParameter('id', 'YouTube channel ID or handle.', '@YouTube')],
+        security: dataSecurity,
+        parameters: [providerParameter, pathParameter('id', 'Provider channel ID or handle.', '@YouTube')],
         responses: {
-          '200': jsonResponse('Normalized channel metadata.', schemaRef('Channel')),
+          '200': meteredJsonResponse('Normalized channel metadata.', schemaRef('Channel')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/channels/{id}/videos': {
+    '/v1/providers/{provider}/channels/{id}/videos': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannelVideos',
         summary: 'List channel videos',
+        security: dataSecurity,
         parameters: [
-          pathParameter('id', 'YouTube channel ID or handle.', '@YouTube'),
+          providerParameter,
+          pathParameter('id', 'Provider channel ID or handle.', '@YouTube'),
           queryParameter('sort', 'YouTube Videos-tab ordering.', { type: 'string', enum: ['latest', 'popular', 'oldest'], default: 'latest' }),
           queryParameter('continuation', 'Opaque token returned by the previous channel videos response.', { type: 'string' }),
         ],
         responses: {
-          '200': jsonResponse('A page of channel videos.', schemaRef('ChannelVideos')),
+          '200': meteredJsonResponse('A page of channel videos.', schemaRef('ChannelVideos')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/channels/{id}/playlists': {
+    '/v1/providers/{provider}/channels/{id}/playlists': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannelPlaylists',
         summary: 'List channel playlists',
+        security: dataSecurity,
         parameters: [
-          pathParameter('id', 'YouTube channel ID or handle.', '@YouTube'),
+          providerParameter,
+          pathParameter('id', 'Provider channel ID or handle.', '@YouTube'),
           queryParameter('sort', 'YouTube Playlists-tab ordering.', { type: 'string', enum: ['newest', 'last-video-added'], default: 'newest' }),
           queryParameter('continuation', 'Opaque token returned by the previous channel playlists response.', { type: 'string' }),
         ],
         responses: {
-          '200': jsonResponse('A page of channel playlists.', schemaRef('ChannelPlaylists')),
+          '200': meteredJsonResponse('A page of channel playlists.', schemaRef('ChannelPlaylists')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
         },
       },
     },
-    '/v1/playlists/{id}': {
+    '/v1/providers/{provider}/playlists/{id}': {
       get: {
         tags: ['Playlists'],
         operationId: 'getPlaylist',
         summary: 'Inspect a playlist',
-        parameters: [pathParameter('id', 'YouTube playlist ID.', 'PL123')],
+        security: dataSecurity,
+        parameters: [providerParameter, pathParameter('id', 'Provider playlist ID.', 'PL123')],
         responses: {
-          '200': jsonResponse('Normalized playlist and videos.', schemaRef('Playlist')),
+          '200': meteredJsonResponse('Normalized playlist and videos.', schemaRef('Playlist')),
+          '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
@@ -583,7 +722,7 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'listProjects',
         summary: 'List projects',
-        security: privateSecurity,
+        security: accountSecurity,
         responses: {
           '200': jsonResponse('The user’s projects.', {
             type: 'object', required: ['projects'], properties: { projects: { type: 'array', items: schemaRef('Project') } },
@@ -596,7 +735,7 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'createProject',
         summary: 'Create a project',
-        security: privateSecurity,
+        security: accountSecurity,
         requestBody: jsonBody(schemaRef('CreateProjectRequest')),
         responses: {
           '201': jsonResponse('Project created.', schemaRef('ProjectCreated')),
@@ -609,7 +748,7 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'getProject',
         summary: 'Get a project and its saved items',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '200': jsonResponse('Project details.', schemaRef('ProjectDetail')),
@@ -622,7 +761,8 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'deleteProject',
         summary: 'Delete a project',
-        security: privateSecurity,
+        description: 'Deletes the project’s private R2 objects and AI Search items before cascading its D1 metadata.',
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '204': { description: 'Project deleted.' },
@@ -637,7 +777,7 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'addProjectItem',
         summary: 'Save material to a project',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         requestBody: jsonBody(schemaRef('CreateProjectItemRequest')),
         responses: {
@@ -652,7 +792,7 @@ export const openApiDocument = {
         tags: ['Research'],
         operationId: 'createImport',
         summary: 'Start a durable import job',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [{
           name: 'Idempotency-Key', in: 'header', required: false,
           description: 'Optional caller-provided idempotency key.', schema: { type: 'string', maxLength: 200 },
@@ -670,7 +810,7 @@ export const openApiDocument = {
         tags: ['Research'],
         operationId: 'getJob',
         summary: 'Get import job status',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '200': jsonResponse('Durable job status.', schemaRef('Job')),
@@ -685,12 +825,11 @@ export const openApiDocument = {
         tags: ['Research'],
         operationId: 'createAnswer',
         summary: 'Generate a cited answer',
-        security: privateSecurity,
+        security: dataSecurity,
         requestBody: jsonBody(schemaRef('AnswerRequest')),
         responses: {
-          '200': jsonResponse('Evidence-grounded answer.', schemaRef('CitedAnswer')),
-          ...standardErrors,
-          '503': responseRef('ServiceUnavailable'),
+          '200': meteredJsonResponse('Evidence-grounded answer.', schemaRef('CitedAnswer')),
+          ...dataErrors,
         },
       },
     },
@@ -699,12 +838,11 @@ export const openApiDocument = {
         tags: ['Research'],
         operationId: 'createComparison',
         summary: 'Compare private research sources',
-        security: privateSecurity,
+        security: dataSecurity,
         requestBody: jsonBody(schemaRef('ComparisonRequest')),
         responses: {
-          '200': jsonResponse('Evidence-grounded comparison.', schemaRef('CitedAnswer')),
-          ...standardErrors,
-          '503': responseRef('ServiceUnavailable'),
+          '200': meteredJsonResponse('Evidence-grounded comparison.', schemaRef('CitedAnswer')),
+          ...dataErrors,
         },
       },
     },
@@ -713,12 +851,11 @@ export const openApiDocument = {
         tags: ['Research'],
         operationId: 'createReport',
         summary: 'Generate an evidence-first report',
-        security: privateSecurity,
+        security: dataSecurity,
         requestBody: jsonBody(schemaRef('ReportRequest')),
         responses: {
-          '200': jsonResponse('Evidence-grounded report.', schemaRef('CitedAnswer')),
-          ...standardErrors,
-          '503': responseRef('ServiceUnavailable'),
+          '200': meteredJsonResponse('Evidence-grounded report.', schemaRef('CitedAnswer')),
+          ...dataErrors,
         },
       },
     },
@@ -727,7 +864,7 @@ export const openApiDocument = {
         tags: ['Exports'],
         operationId: 'createProjectExport',
         summary: 'Create a project export',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         requestBody: jsonBody(schemaRef('CreateExportRequest')),
         responses: {
@@ -742,7 +879,7 @@ export const openApiDocument = {
         tags: ['Exports'],
         operationId: 'downloadExport',
         summary: 'Download an export',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '200': {
@@ -766,7 +903,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'listMonitors',
         summary: 'List monitors',
-        security: privateSecurity,
+        security: accountSecurity,
         responses: {
           '200': jsonResponse('The user’s monitors.', {
             type: 'object', required: ['monitors'], properties: { monitors: { type: 'array', items: schemaRef('Monitor') } },
@@ -779,7 +916,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'createMonitor',
         summary: 'Create a monitor',
-        security: privateSecurity,
+        security: accountSecurity,
         requestBody: jsonBody(schemaRef('CreateMonitorRequest')),
         responses: {
           '201': jsonResponse('Monitor created.', schemaRef('IdResponse')),
@@ -792,7 +929,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'deleteMonitor',
         summary: 'Delete a monitor',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '204': { description: 'Monitor deleted. The response is also successful when no matching monitor exists.' },
@@ -806,7 +943,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'listNotifications',
         summary: 'List recent notifications',
-        security: privateSecurity,
+        security: accountSecurity,
         responses: {
           '200': jsonResponse('Up to 100 recent notifications.', {
             type: 'object', required: ['notifications'], properties: { notifications: { type: 'array', items: schemaRef('Notification') } },
@@ -821,7 +958,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'markNotificationRead',
         summary: 'Mark a notification as read',
-        security: privateSecurity,
+        security: accountSecurity,
         parameters: [idParameter],
         responses: {
           '200': jsonResponse('Read state acknowledged.', {
@@ -837,7 +974,7 @@ export const openApiDocument = {
         tags: ['Monitoring'],
         operationId: 'updateNotificationPreferences',
         summary: 'Update notification preferences',
-        security: privateSecurity,
+        security: accountSecurity,
         requestBody: jsonBody(schemaRef('NotificationPreferencesRequest')),
         responses: {
           '200': jsonResponse('Updated preferences.', schemaRef('NotificationPreferences')),
@@ -958,10 +1095,11 @@ export const openApiDocument = {
         tags: ['Billing'],
         operationId: 'getUsage',
         summary: 'Get plan limits and credit balance',
-        security: privateSecurity,
+        security: dataSecurity,
         responses: {
-          '200': jsonResponse('Current entitlements and credits.', schemaRef('Usage')),
+          '200': meteredJsonResponse('Current entitlements and credits.', schemaRef('Usage')),
           '401': responseRef('Unauthorized'),
+          '402': responseRef('InsufficientCredits'),
           '500': responseRef('ServerError'),
         },
       },
@@ -1005,17 +1143,23 @@ export const openApiDocument = {
         name: 'better-auth.session_token',
         description: 'Better Auth session cookie. A production deployment may use the secure-prefixed cookie name; same-origin browser requests send it automatically.',
       },
+      apiKey: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-API-Key',
+        description: 'Legacy-compatible header for a permanent personal API key. Prefer Authorization: Bearer aty_….',
+      },
+      bearerApiKey: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'API key',
+        description: 'Permanent personal API key created in the dashboard. Example: curl -H "Authorization: Bearer aty_…" https://your-host/v1/projects',
+      },
       demoUser: {
         type: 'apiKey',
         in: 'header',
         name: 'X-Demo-User',
-        description: 'Local development only. Any stable value selects an isolated demo account. Ignored in production.',
-      },
-      turnstile: {
-        type: 'apiKey',
-        in: 'header',
-        name: 'cf-turnstile-response',
-        description: 'Cloudflare Turnstile token required by /v1/resolve in production.',
+        description: 'Local development only. Any stable value selects an isolated demo account. Rejected in production.',
       },
       stripeSignature: {
         type: 'apiKey',
@@ -1024,10 +1168,21 @@ export const openApiDocument = {
         description: 'Stripe-generated signature over the exact raw request body.',
       },
     },
+    headers: {
+      CreditsCharged: {
+        description: 'Credits settled for this operation.',
+        schema: { type: 'integer', minimum: 0 },
+      },
+      CreditsRemaining: {
+        description: 'Current balance in the owning user account after the request is metered.',
+        schema: { type: 'integer' },
+      },
+    },
     responses: {
       BadRequest: jsonResponse('The request is malformed.', schemaRef('Error')),
       Unauthorized: jsonResponse('Authentication is required.', schemaRef('Error')),
       Forbidden: jsonResponse('The caller is not allowed to perform this operation.', schemaRef('Error')),
+      InsufficientCredits: meteredJsonResponse('The user account does not have enough credits. Error code: INSUFFICIENT_CREDITS.', schemaRef('Error')),
       NotFound: jsonResponse('The requested resource was not found.', schemaRef('Error')),
       ValidationError: jsonResponse('The request failed validation.', schemaRef('Error')),
       RateLimited: jsonResponse('The public rate limit was exceeded.', schemaRef('Error')),
@@ -1055,7 +1210,7 @@ export const openApiDocument = {
         type: 'object',
         required: ['service', 'version', 'status', 'capabilities'],
         properties: {
-          service: { const: 'all-things-youtube-platform' },
+          service: { const: 'video2ctx-platform' },
           version: { const: 'v1' },
           status: { const: 'ok' },
           capabilities: { type: 'array', items: { type: 'string' } },
@@ -1079,6 +1234,50 @@ export const openApiDocument = {
         required: ['provider'],
         properties: { provider: { const: 'google' }, callbackURL: { type: 'string', default: '/' } },
       },
+      CreateApiKeyRequest: {
+        type: 'object',
+        required: ['name'],
+        properties: { name: { type: 'string', minLength: 1, maxLength: 32, example: 'Production integration' } },
+      },
+      ApiKey: {
+        type: 'object',
+        required: ['id', 'configId', 'referenceId', 'enabled', 'rateLimitEnabled', 'requestCount', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string' },
+          configId: { type: 'string', const: 'default' },
+          name: { type: ['string', 'null'] },
+          start: { type: ['string', 'null'], description: 'Safe starting characters used to identify the key.' },
+          prefix: { type: ['string', 'null'], example: 'aty_' },
+          referenceId: { type: 'string' },
+          enabled: { type: 'boolean' },
+          rateLimitEnabled: { type: 'boolean' },
+          rateLimitTimeWindow: { type: ['integer', 'null'], example: 60000 },
+          rateLimitMax: { type: ['integer', 'null'], example: 60 },
+          requestCount: { type: 'integer', minimum: 0 },
+          lastRequest: { type: ['string', 'null'], format: 'date-time' },
+          expiresAt: { type: ['string', 'null'], description: 'Always null for permanent keys.' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          permissions: { type: ['object', 'null'], additionalProperties: { type: 'array', items: { type: 'string' } } },
+        },
+      },
+      CreatedApiKey: {
+        allOf: [schemaRef('ApiKey'), {
+          type: 'object', required: ['key'], properties: {
+            key: { type: 'string', writeOnly: true, example: 'aty_…', description: 'Returned only when the key is created.' },
+          },
+        }],
+      },
+      ApiKeyList: {
+        type: 'object',
+        required: ['apiKeys', 'total'],
+        properties: {
+          apiKeys: { type: 'array', items: schemaRef('ApiKey') },
+          total: { type: 'integer', minimum: 0 },
+          limit: { type: ['integer', 'null'], minimum: 1 },
+          offset: { type: ['integer', 'null'], minimum: 0 },
+        },
+      },
       ResolveRequest: {
         type: 'object',
         required: ['input'],
@@ -1086,11 +1285,26 @@ export const openApiDocument = {
       },
       ResolveResponse: {
         oneOf: [
-          { type: 'object', required: ['kind', 'id'], properties: { kind: { const: 'video' }, id: { type: 'string' } } },
-          { type: 'object', required: ['kind', 'id'], properties: { kind: { const: 'channel' }, id: { type: 'string' } } },
-          { type: 'object', required: ['kind', 'id'], properties: { kind: { const: 'playlist' }, id: { type: 'string' } } },
+          { type: 'object', required: ['kind', 'provider', 'id'], properties: { kind: { const: 'video' }, provider: schemaRef('ProviderId'), id: { type: 'string' } } },
+          { type: 'object', required: ['kind', 'provider', 'id'], properties: { kind: { const: 'channel' }, provider: schemaRef('ProviderId'), id: { type: 'string' } } },
+          { type: 'object', required: ['kind', 'provider', 'id'], properties: { kind: { const: 'playlist' }, provider: schemaRef('ProviderId'), id: { type: 'string' } } },
           { type: 'object', required: ['kind', 'query'], properties: { kind: { const: 'search' }, query: { type: 'string' } } },
         ],
+      },
+      ProviderId: { type: 'string', enum: PROVIDER_IDS, example: 'youtube' },
+      Provider: {
+        type: 'object',
+        required: ['id', 'name', 'capabilities'],
+        properties: {
+          id: schemaRef('ProviderId'),
+          name: { type: 'string', example: 'YouTube' },
+          capabilities: { type: 'array', items: { type: 'string', enum: PROVIDER_CAPABILITIES } },
+        },
+      },
+      ProviderList: {
+        type: 'object',
+        required: ['providers'],
+        properties: { providers: { type: 'array', items: schemaRef('Provider') } },
       },
       SourceMetadata: sourceMetadata,
       Thumbnail: thumbnail,
@@ -1201,6 +1415,14 @@ export const openApiDocument = {
           thumbnails: { type: 'array', items: schemaRef('Thumbnail') }, position: { type: 'object', additionalProperties: true },
         },
       },
+      EndscreenResponse: {
+        type: 'object',
+        required: ['provider', 'elements'],
+        properties: {
+          provider: schemaRef('ProviderId'),
+          elements: { type: 'array', items: schemaRef('EndscreenElement') },
+        },
+      },
       CommentResponse: {
         type: 'object',
         required: ['videoId', 'comments', 'meta'],
@@ -1295,9 +1517,9 @@ export const openApiDocument = {
       TrendReport: trendReport,
       AiTrendPlan: {
         type: 'object',
-        required: ['model', 'generatedAt', 'angle', 'audience', 'hook', 'recommendedDurationSeconds', 'outline', 'titleIdeas', 'hashtags', 'differentiation', 'evidence', 'caveats', 'operationId'],
+        required: ['provider', 'model', 'generatedAt', 'angle', 'audience', 'hook', 'recommendedDurationSeconds', 'outline', 'titleIdeas', 'hashtags', 'differentiation', 'evidence', 'caveats', 'operationId'],
         properties: {
-          model: { type: 'string', enum: ['@cf/moonshotai/kimi-k2.6', '@cf/openai/gpt-oss-120b'] }, generatedAt: { type: 'string', format: 'date-time' }, angle: { type: 'string' },
+          provider: schemaRef('ProviderId'), model: { type: 'string', enum: ['@cf/moonshotai/kimi-k2.6', '@cf/openai/gpt-oss-120b'] }, generatedAt: { type: 'string', format: 'date-time' }, angle: { type: 'string' },
           audience: { type: 'string' }, hook: { type: 'string' }, recommendedDurationSeconds: { type: 'integer' },
           outline: { type: 'array', items: { type: 'object', required: ['section', 'goal'], properties: { section: { type: 'string' }, goal: { type: 'string' } } } },
           titleIdeas: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } },
@@ -1317,15 +1539,16 @@ export const openApiDocument = {
       },
       ProjectCreated: { type: 'object', required: ['id', 'name'], properties: { id: { type: 'string', format: 'uuid' }, name: { type: 'string' } } },
       CreateProjectItemRequest: {
-        type: 'object', required: ['entityType', 'entityId'], properties: {
-          entityType: { type: 'string', maxLength: 30, example: 'video' }, entityId: { type: 'string' }, title: { type: 'string', maxLength: 300 },
+        type: 'object', required: ['provider', 'entityType', 'entityId'], properties: {
+          provider: schemaRef('ProviderId'), entityType: { type: 'string', maxLength: 30, example: 'video' }, entityId: { type: 'string' }, title: { type: 'string', maxLength: 300 },
           startMs: { type: 'integer', minimum: 0 }, endMs: { type: 'integer', minimum: 0 }, note: { type: 'string', maxLength: 5000 },
           tags: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 50 } }, content: { type: 'string', maxLength: 100000 },
         },
       },
       IdResponse: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
       CreateImportRequest: {
-        type: 'object', required: ['kind', 'entityId'], properties: {
+        type: 'object', required: ['provider', 'kind', 'entityId'], properties: {
+          provider: schemaRef('ProviderId'),
           kind: { type: 'string', enum: ['video', 'channel', 'playlist', 'comments', 'deep-comments'] },
           entityId: { type: 'string' }, projectId: { type: 'string' }, idempotencyKey: { type: 'string', maxLength: 200 },
         },
@@ -1334,7 +1557,7 @@ export const openApiDocument = {
       Job: { allOf: [storedRecord, { properties: { id: { type: 'string' }, status: { type: 'string', enum: ['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled'] }, progress: { type: 'integer', minimum: 0, maximum: 100 } } }] },
       Evidence: {
         type: 'object', required: ['id', 'score', 'text'], properties: {
-          id: { type: 'string' }, score: { type: 'number' }, text: { type: 'string' }, entityId: { type: 'string' },
+          id: { type: 'string' }, score: { type: 'number' }, text: { type: 'string' }, provider: schemaRef('ProviderId'), entityId: { type: 'string' },
           startMs: { type: 'integer', minimum: 0 }, sourceKey: { type: 'string' }, index: { type: 'integer', minimum: 1 },
         },
       },
@@ -1346,8 +1569,9 @@ export const openApiDocument = {
       AnswerRequest: {
         type: 'object', required: ['question'], properties: {
           question: { type: 'string', minLength: 1, maxLength: 2000 }, projectId: { type: 'string' },
-          entityId: { type: 'string' }, scope: { type: 'string', enum: ['private', 'public'], default: 'private' },
+          provider: schemaRef('ProviderId'), entityId: { type: 'string' }, scope: { type: 'string', enum: ['private', 'public'], default: 'private' },
         },
+        dependentRequired: { entityId: ['provider'] },
       },
       ComparisonRequest: { type: 'object', properties: { question: { type: 'string', maxLength: 2000 }, projectId: { type: 'string' } } },
       ReportRequest: { type: 'object', properties: { prompt: { type: 'string', maxLength: 2000 }, projectId: { type: 'string' } } },
@@ -1355,8 +1579,8 @@ export const openApiDocument = {
       Export: storedRecord,
       Monitor: storedRecord,
       CreateMonitorRequest: {
-        type: 'object', required: ['kind', 'target'], properties: {
-          kind: { type: 'string', enum: ['channel', 'topic', 'search'] }, target: { type: 'string', minLength: 1, maxLength: 500 },
+        type: 'object', required: ['provider', 'kind', 'target'], properties: {
+          provider: schemaRef('ProviderId'), kind: { type: 'string', enum: ['channel', 'topic', 'search'] }, target: { type: 'string', minLength: 1, maxLength: 500 },
           cadence: { type: 'string', maxLength: 30, default: 'hourly' }, query: { type: 'object', additionalProperties: true },
         },
       },

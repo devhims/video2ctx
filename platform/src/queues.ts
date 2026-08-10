@@ -77,8 +77,8 @@ async function runTask(task: TaskMessage, env: Env): Promise<void> {
   } else if (task.type === 'snapshot-statistics') {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO analytics_snapshots
-       (entity_type,entity_id,captured_at,view_count) VALUES ('video',?,?,?)`
-    ).bind(String(task.payload.entityId), now(), Number(task.payload.viewCount ?? 0)).run();
+       (provider,entity_type,entity_id,captured_at,view_count) VALUES (?,'video',?,?,?)`
+    ).bind(String(task.payload.provider ?? 'youtube'), String(task.payload.entityId), now(), Number(task.payload.viewCount ?? 0)).run();
   } else if (task.type === 'delete-user-search') {
     const instanceId = String(task.payload.instanceId);
     try { await env.AI_SEARCH.delete(instanceId); } catch (error) { console.warn('search_instance_delete', error); }

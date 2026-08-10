@@ -48,6 +48,7 @@ export async function enforceCount(
 }
 
 export async function creditBalance(env: Env, userId: string): Promise<number> {
+  await ensureMonthlyGrant(env, userId);
   const row = await env.DB.prepare('SELECT COALESCE(SUM(credits), 0) AS balance FROM credit_ledger WHERE user_id = ?')
     .bind(userId)
     .first<{ balance: number }>();
@@ -88,7 +89,7 @@ export async function reserveCredits(
     crypto.randomUUID(), userId, operationId, -amount, JSON.stringify(metadata), now(), userId, amount
   ).run();
   if (!result.meta.changes) {
-    throw new ApiError(403, 'INSUFFICIENT_CREDITS', 'Not enough AI credits for this operation.');
+    throw new ApiError(402, 'INSUFFICIENT_CREDITS', 'Not enough credits for this operation.');
   }
 }
 
@@ -98,7 +99,8 @@ export async function settleCredits(
   operationId: string,
   reserved: number,
   actual: number,
-  providerCostMicros: number
+  providerCostMicros: number,
+  metadata: Record<string, unknown> = {},
 ): Promise<void> {
   const refund = Math.max(0, reserved - actual);
   await env.DB.prepare(
@@ -107,14 +109,20 @@ export async function settleCredits(
      VALUES (?, ?, ?, 'settle', ?, ?, ?, ?)`
   ).bind(
     crypto.randomUUID(), userId, operationId, refund, providerCostMicros,
-    JSON.stringify({ reserved, actual }), now()
+    JSON.stringify({ ...metadata, reserved, actual }), now()
   ).run();
 }
 
-export async function releaseCredits(env: Env, userId: string, operationId: string, reserved: number): Promise<void> {
+export async function releaseCredits(
+  env: Env,
+  userId: string,
+  operationId: string,
+  reserved: number,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
   await env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
-     VALUES (?, ?, ?, 'release', ?, '{}', ?)`
-  ).bind(crypto.randomUUID(), userId, operationId, reserved, now()).run();
+     VALUES (?, ?, ?, 'release', ?, ?, ?)`
+  ).bind(crypto.randomUUID(), userId, operationId, reserved, JSON.stringify(metadata), now()).run();
 }

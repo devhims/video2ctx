@@ -13,5 +13,5 @@ export const documentationApp = new Hono()
   })
   .get('/docs', Scalar({
     url: './openapi.json',
-    pageTitle: 'all-things-youtube API Reference',
+    pageTitle: 'Video2Ctx API Reference',
   }));
