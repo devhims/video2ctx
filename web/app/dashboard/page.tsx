@@ -1,27 +1,29 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { authClient } from '../../lib/auth-client';
 
 type Mode = 'youtube' | 'inside' | 'ask';
+type ProviderId = 'youtube';
 type Section = 'trends' | 'discover' | 'projects' | 'monitors';
 type EntityType = 'video' | 'channel' | 'playlist';
 type Thumbnail = { url: string; width?: number; height?: number };
 type SearchItem = {
-  type: EntityType; id: string; title?: string; name?: string; description?: string;
+  provider?: ProviderId; type: EntityType; id: string; title?: string; name?: string; description?: string;
   channel?: { id: string; name: string }; thumbnails: Thumbnail[]; durationText?: string;
   viewCountText?: string; publishedTimeText?: string; isLive?: boolean; videoCountText?: string;
 };
 type Segment = { text: string; startMs: number; endMs: number; durationMs: number };
 type Transcript = { videoId: string; segments: Segment[]; text: string; track: { name: string; kind: string; languageCode: string } };
 type Project = { id: string; name: string; description?: string; item_count?: number };
-type ProjectItem = { id: string; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
+type ProjectItem = { id: string; provider: ProviderId; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
 type ProjectDetail = Project & { items: ProjectItem[] };
-type Monitor = { id: string; kind: string; target: string; enabled: number; last_checked_at?: number };
-type Citation = { index: number; text: string; entityId?: string; startMs?: number; score: number };
+type Monitor = { id: string; provider: ProviderId; kind: string; target: string; enabled: number; last_checked_at?: number };
+type Citation = { index: number; text: string; provider?: ProviderId; entityId?: string; startMs?: number; score: number };
 type Answer = { answer: string; citations: Citation[] };
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; citations?: Citation[]; failedQuestion?: string };
 type ChatSession = { id: string; title: string; messages: ChatMessage[] };
-type Inspector = { type: EntityType; id: string; data: Record<string, unknown>; transcript?: Transcript; comments?: Array<Record<string, unknown>> };
+type Inspector = { provider: ProviderId; type: EntityType; id: string; data: Record<string, unknown>; transcript?: Transcript; comments?: Array<Record<string, unknown>> };
 type TrendVideo = {
   id: string; title: string; channel: { id: string; name: string }; thumbnails: Thumbnail[];
   durationSeconds?: number; publishedTimeText?: string; publishDate?: string; ageHours?: number;
@@ -29,7 +31,7 @@ type TrendVideo = {
   trendScore: number; trendBand: 'Breakout' | 'Rising' | 'Steady'; url: string;
 };
 type TrendReport = {
-  query: string; generatedAt: string; sampleSize: number; methodology: string;
+  provider: ProviderId; query: string; generatedAt: string; sampleSize: number; methodology: string;
   summary: { totalViews: number; medianViewsPerHour: number; publishedLast7Days: number; breakoutCount: number };
   videos: TrendVideo[];
   hashtags: Array<{ tag: string; videos: number; averageViewsPerHour: number; lift: number }>;
@@ -39,12 +41,13 @@ type TrendReport = {
   warnings: string[];
 };
 type AiTrendPlan = {
-  model: '@cf/openai/gpt-oss-120b'; generatedAt: string; operationId: string;
+  provider: ProviderId; model: '@cf/openai/gpt-oss-120b'; generatedAt: string; operationId: string;
   angle: string; audience: string; hook: string; recommendedDurationSeconds: number;
   outline: Array<{ section: string; goal: string }>;
   titleIdeas: string[]; hashtags: string[]; differentiation: string[];
   evidence: Array<{ claim: string; videoIds: string[] }>; caveats: string[];
 };
+type Usage = { plan: 'free' | 'pro'; monthlyCredits: number; creditBalance: number };
 
 type IconName = 'home' | 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus';
 
@@ -62,12 +65,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return <svg className='ui-icon' width={size} height={size} viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.75' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>{paths[name]}</svg>;
 }
 
-const DEMO_HEADERS = { 'x-demo-user': 'local-beta' };
 const REQUEST_TIMEOUT_MS = 15_000;
+const YOUTUBE_API = '/v1/providers/youtube';
 
 async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set('x-demo-user', 'local-beta');
+  if (['localhost', '127.0.0.1'].includes(window.location.hostname)) headers.set('x-demo-user', 'local-beta');
   if (options.body) headers.set('content-type', 'application/json');
   const controller = new AbortController();
   const parentSignal = options.signal;
@@ -79,8 +82,13 @@ async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUE
   try {
     const response = await fetch(`/api/platform${path}`, { ...options, headers, credentials: 'include', signal: controller.signal });
     if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-      throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+      const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+      const code = payload?.error?.code;
+      const message = response.status === 401 ? 'Sign in to continue.'
+        : response.status === 402 ? 'Your credit balance is too low for this operation.'
+        : response.status === 429 ? 'Too many requests. Wait a moment and try again.'
+        : payload?.error?.message ?? `Request failed (${response.status})`;
+      throw new PlatformApiError(response.status, code, message);
     }
     return response.json() as Promise<T>;
   } catch (cause) {
@@ -95,11 +103,18 @@ async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUE
   }
 }
 
+class PlatformApiError extends Error {
+  constructor(readonly status: number, readonly code: string | undefined, message: string) { super(message); }
+}
+
 function isAbortError(cause: unknown) {
   return cause instanceof DOMException && cause.name === 'AbortError';
 }
 
 export default function WorkspacePage() {
+  const { data: session, isPending: sessionPending } = authClient.useSession();
+  const [clientReady, setClientReady] = useState(false);
+  const [demoEnabled, setDemoEnabled] = useState(false);
   const [section, setSection] = useState<Section>('trends');
   const [mode, setMode] = useState<Mode>('youtube');
   const [query, setQuery] = useState('');
@@ -123,9 +138,16 @@ export default function WorkspacePage() {
   const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
+  const [usage, setUsage] = useState<Usage | null>(null);
   const operationController = useRef<AbortController | null>(null);
   const projectController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const authenticated = Boolean(session?.user) || demoEnabled;
+
+  useEffect(() => {
+    setDemoEnabled(['localhost', '127.0.0.1'].includes(window.location.hostname));
+    setClientReady(true);
+  }, []);
 
   const beginOperation = useCallback((label: string) => {
     operationController.current?.abort();
@@ -159,22 +181,26 @@ export default function WorkspacePage() {
   }, [cancelOperation, section]);
 
   const refreshPrivateData = useCallback(async () => {
-    const [projectData, monitorData] = await Promise.all([
+    if (!authenticated) return;
+    const [projectData, monitorData, usageData] = await Promise.all([
       api<{ projects: Project[] }>('/v1/projects').catch(() => ({ projects: [] })),
       api<{ monitors: Monitor[] }>('/v1/monitors').catch(() => ({ monitors: [] })),
+      api<Usage>('/v1/usage').catch(() => null),
     ]);
     setProjects(projectData.projects);
     setMonitors(monitorData.monitors);
-  }, []);
+    setUsage(usageData);
+  }, [authenticated]);
 
   useEffect(() => {
+    if (!authenticated) return;
     void refreshPrivateData();
-    api<{ results: SearchItem[] }>('/v1/browse')
-      .then((data) => { setItems(data.results.slice(0, 12)); setSourceState('live'); })
+    api<{ results: SearchItem[] }>(`${YOUTUBE_API}/browse?category=music`)
+      .then((data) => { setItems(data.results.slice(0, 12).map((item) => ({ ...item, provider: 'youtube' }))); setSourceState('live'); })
       .catch(() => {
         setItems([]); setSourceState('degraded');
       });
-  }, [refreshPrivateData]);
+  }, [authenticated, refreshPrivateData]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -213,27 +239,29 @@ export default function WorkspacePage() {
     setHasSearched(true);
     setAnswer(null); setInspector(null); setSection('discover');
     try {
-      const resolved = await api<{ kind: EntityType | 'search'; id?: string; query?: string }>('/v1/resolve', {
-        method: 'POST', body: JSON.stringify({ input: query }), headers: DEMO_HEADERS, signal: controller.signal,
+      const resolved = await api<{ kind: EntityType | 'search'; provider?: ProviderId; id?: string; query?: string }>('/v1/resolve', {
+        method: 'POST', body: JSON.stringify({ input: query }), signal: controller.signal,
       });
       if (resolved.kind !== 'search' && resolved.id) {
         setOperationLabel('Opening the source and gathering evidence…');
-        await inspect(resolved.kind, resolved.id, controller);
+        await inspect(resolved.kind, resolved.id, controller, resolved.provider ?? 'youtube');
         return;
       }
       setOperationLabel(activeMode === 'ask' ? 'Building a cited answer…' : activeMode === 'inside' ? 'Searching indexed video moments…' : 'Searching live YouTube sources…');
-      const params = new URLSearchParams({ q: resolved.query ?? query, mode: activeMode });
+      const params = new URLSearchParams({ q: resolved.query ?? query });
       if (activeMode === 'youtube') {
         params.set('type', entityFilter);
         if (duration) params.set('duration', duration);
         if (captionsOnly) params.set('captions', 'true');
-        const data = await api<{ results: SearchItem[] }>(`/v1/search?${params}`, { signal: controller.signal });
-        setItems(data.results);
+        const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
+        setItems(data.results.map((item) => ({ ...item, provider: 'youtube' })));
       } else if (activeMode === 'inside') {
         const data = await api<{ results: Citation[] }>(`/v1/search?${params}`, { signal: controller.signal });
         setItems(data.results.map((result) => evidenceToItem(result)));
       } else {
-        const data = await api<Answer>(`/v1/search?${params}`, { signal: controller.signal });
+        const data = await api<Answer>('/v1/answers', {
+          method: 'POST', body: JSON.stringify({ question: resolved.query ?? query }), signal: controller.signal,
+        });
         setAnswer(data);
       }
       setSourceState('live');
@@ -242,18 +270,24 @@ export default function WorkspacePage() {
     } finally { finishOperation(controller); }
   };
 
-  const inspect = async (type: EntityType, id: string, activeController?: AbortController) => {
+  const inspect = async (
+    type: EntityType,
+    id: string,
+    activeController?: AbortController,
+    provider: ProviderId = 'youtube',
+  ) => {
     const controller = activeController ?? beginOperation('Opening the source and gathering evidence…');
     setError(''); setAnswer(null);
     try {
       const plural = type === 'video' ? 'videos' : type === 'channel' ? 'channels' : 'playlists';
-      const data = await api<Record<string, unknown>>(`/v1/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
-      const next: Inspector = { type, id, data };
+      const providerApi = `/v1/providers/${provider}`;
+      const data = await api<Record<string, unknown>>(`${providerApi}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
+      const next: Inspector = { provider, type, id, data };
       if (type === 'video') {
         setOperationLabel('Loading captions and audience evidence…');
         const [transcript, comments] = await Promise.all([
-          api<Transcript>(`/v1/videos/${id}/transcript`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return undefined; }),
-          api<{ comments: Array<Record<string, unknown>> }>(`/v1/videos/${id}/comments?all=true`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return { comments: [] }; }),
+          api<Transcript>(`${providerApi}/videos/${id}/transcript`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return undefined; }),
+          api<{ comments: Array<Record<string, unknown>> }>(`${providerApi}/videos/${id}/comments?all=true`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return { comments: [] }; }),
         ]);
         next.transcript = transcript;
         next.comments = comments.comments;
@@ -290,12 +324,12 @@ export default function WorkspacePage() {
       const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
       await api(`/v1/projects/${project.id}/items`, {
         method: 'POST', body: JSON.stringify({
-          entityType: inspector.type, entityId: inspector.id, title,
+          provider: inspector.provider, entityType: inspector.type, entityId: inspector.id, title,
           content: inspector.transcript?.segments.map((segment) => `[${segment.startMs}] ${segment.text}`).join('\n'),
         }),
       });
       await api('/v1/imports', {
-        method: 'POST', body: JSON.stringify({ kind: inspector.type, entityId: inspector.id, projectId: project.id }),
+        method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),
       }).catch(() => null);
       setNotice(`Saved to ${project.name}`); await refreshPrivateData();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
@@ -305,7 +339,7 @@ export default function WorkspacePage() {
     if (!inspector) return;
     const target = inspector.type === 'channel' ? inspector.id : String(inspector.data.channel ? (inspector.data.channel as { id?: string }).id : inspector.id);
     try {
-      await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ kind: inspector.type === 'channel' ? 'channel' : 'topic', target }) });
+      await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type === 'channel' ? 'channel' : 'topic', target }) });
       setNotice('Monitor enabled'); await refreshPrivateData();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
   };
@@ -322,13 +356,22 @@ export default function WorkspacePage() {
     ask: { label: 'Ask with citations', placeholder: 'Ask a research question about your indexed sources…', action: 'Ask YouTube' },
   }[mode];
 
+  if (sessionPending || !clientReady) return <main className='auth-gate'><p>Checking your session…</p></main>;
+  if (!authenticated) return <main className='auth-gate'>
+    <p className='panel-label'>Private research workspace</p>
+    <h1>Sign in to research YouTube</h1>
+    <p>Data APIs now use your plan and credit balance. Sign in to search, inspect transcripts, and manage projects.</p>
+    <button className='signin-button' onClick={() => setShowSignIn(true)}>Sign in</button>
+    {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
+  </main>;
+
   return (
     <main className='workspace-shell'>
-      <Sidebar section={section} setSection={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} />
+      <Sidebar section={section} setSection={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} accountName={session?.user.name ?? (demoEnabled ? 'Local demo' : undefined)} credits={usage?.creditBalance} onSignOut={() => void authClient.signOut()} />
       <div className='workspace-main'>
         <header className='topbar'>
           <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : 'Monitors'}</h1></div>
-          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'checking' ? 'Checking sources' : 'Sources limited'}</span><button className='signin-button' aria-label='Sign in' onClick={() => setShowSignIn(true)}><Icon name='user' size={16} /><span>Sign in</span></button></div>
+          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'checking' ? 'Checking sources' : 'Sources limited'}</span>{usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}<a className='signin-button' href='/dashboard/developer'>API keys</a></div>
         </header>
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
@@ -364,11 +407,11 @@ export default function WorkspacePage() {
             {inspector ? (
               <InspectorPanel inspector={inspector} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => setInspector(null)} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} />
             ) : !answer && (
-              <DiscoveryGrid items={items} projects={projects} monitors={monitors} sourceState={sourceState} onInspect={(type, id) => void inspect(type, id)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
+              <DiscoveryGrid items={items} projects={projects} monitors={monitors} sourceState={sourceState} onInspect={(type, id, provider) => void inspect(type, id, undefined, provider)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
             )}
           </>
         </div>
-        <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id); }} /></div>
+        <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
         <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); setMode('youtube'); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
@@ -377,14 +420,14 @@ export default function WorkspacePage() {
   );
 }
 
-function Sidebar({ section, setSection, projects, onNewProject, onOpenProject, onSignIn }: { section: Section; setSection: (value: Section) => void; projects: Project[]; onNewProject: () => void; onOpenProject: (project: Project) => void; onSignIn: () => void }) {
+function Sidebar({ section, setSection, projects, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: { section: Section; setSection: (value: Section) => void; projects: Project[]; onNewProject: () => void; onOpenProject: (project: Project) => void; onSignIn: () => void; accountName?: string; credits?: number; onSignOut: () => void }) {
   return <aside className='sidebar'>
     <a className='brand workspace-brand' aria-label='all things youtube home' href='/'><span className='lens-brand-mark' aria-hidden='true'><i /></span><span className='lens-brand-type'><b>all things</b><strong>youtube</strong></span></a>
-    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'><Icon name='trend' /></span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'><Icon name='search' /></span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'><Icon name='folder' /></span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'><Icon name='monitor' /></span>Monitors</button></nav>
+    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'><Icon name='trend' /></span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'><Icon name='search' /></span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'><Icon name='folder' /></span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'><Icon name='monitor' /></span>Monitors</button><a href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</a></nav>
     <div className='sidebar-rule' />
     <div className='sidebar-label'><span>RECENT PROJECTS</span><button aria-label='Create a new project' onClick={onNewProject}>＋</button></div>
     <div className='project-links'>{projects.slice(0,5).map((project, index) => <button key={project.id} onClick={() => onOpenProject(project)}><span aria-hidden='true' className={`project-color c${index % 4}`} />{project.name}</button>)}{!projects.length && <p>Save a source to start.</p>}</div>
-    <div className='account-card'><strong>Keep your research private</strong><p>Sign in to sync projects and monitors across devices.</p><button onClick={onSignIn}><Icon name='user' size={15} />Sign in</button></div>
+    <div className='account-card'>{accountName ? <><strong>{accountName}</strong><p>{credits === undefined ? 'Loading credit balance…' : `${credits} credits remaining`}</p><button onClick={onSignOut}><Icon name='user' size={15} />Sign out</button></> : <><strong>Keep your research private</strong><p>Sign in to sync projects and monitors across devices.</p><button onClick={onSignIn}><Icon name='user' size={15} />Sign in</button></>}</div>
   </aside>;
 }
 
@@ -405,7 +448,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`/v1/trends?q=${encodeURIComponent(nextTopic)}&limit=8`, { signal: controller.signal }, 20_000));
+      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8`, { signal: controller.signal }, 20_000));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {
@@ -423,6 +466,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     if (!report) return;
     setAiLoading(true); setAiError('');
     const planSignals = {
+      provider: report.provider,
       query: report.query,
       sampleSize: report.sampleSize,
       summary: report.summary,
@@ -533,7 +577,7 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Searching, enriching, and comparing public video signals. This stops automatically if the source takes too long.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: 'checking' | 'live' | 'degraded'; onInspect: (type: EntityType, id: string) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
+function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: 'checking' | 'live' | 'degraded'; onInspect: (type: EntityType, id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
   const savedSources = projects.reduce((total, project) => total + (project.item_count ?? 0), 0);
   const activeMonitors = monitors.filter((monitor) => monitor.enabled).length;
   return <section className='content-section discovery-section'>
@@ -541,7 +585,7 @@ function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onSt
       <div className='source-inbox'>
         <div className='section-heading'><div><h2>{items.length ? 'Evidence to explore' : hasSearched ? 'No matching sources' : 'Open a source workspace'}</h2><p>{items.length ? 'Choose a result to inspect its captions, comments, and source details.' : hasSearched ? 'Try a broader topic, remove a filter, or paste a direct YouTube URL.' : 'Paste a video, channel, or playlist URL to begin with real source data.'}</p></div>{items.length ? <span>{items.length} sources · {loading ? 'previous results' : 'current results'}</span> : null}</div>
         {!items.length && !loading ? <div className='source-onboarding'><Icon name='search' size={22} /><div><strong>{hasSearched ? 'Nothing matched this search.' : 'Your source inbox is empty.'}</strong><p>{hasSearched ? 'Change the query or filters and search again.' : 'Start with a URL or search term. The result will replace this guide.'}</p></div><button onClick={onStart}>{hasSearched ? 'Edit search' : 'Paste a YouTube URL'}</button></div> : null}
-        <div className='source-grid'>{loading && !items.length ? Array.from({length:4}).map((_,i)=><div className='source-card skeleton' key={i}/>) : items.map((item, index) => <button className={`source-card ${index === 0 ? 'featured' : ''}`} key={`${item.type}-${item.id}`} onClick={() => onInspect(item.type,item.id)}>
+        <div className='source-grid'>{loading && !items.length ? Array.from({length:4}).map((_,i)=><div className='source-card skeleton' key={i}/>) : items.map((item, index) => <button className={`source-card ${index === 0 ? 'featured' : ''}`} key={`${item.provider ?? 'youtube'}-${item.type}-${item.id}`} onClick={() => onInspect(item.type,item.id,item.provider)}>
           <div className='thumbnail'>{item.thumbnails?.[0]?.url ? <img src={item.thumbnails[0].url} alt='' /> : <div className='thumb-placeholder'>YT</div>}<span className={`type-pill ${item.type}`}>{item.type}</span>{item.durationText && <time>{item.durationText}</time>}</div>
           <div className='card-copy'><span className='evidence-label'><i />Ready to inspect</span><h3>{item.title ?? item.name}</h3><p>{item.channel?.name ?? item.description ?? `${item.videoCountText ?? ''}`}</p><div><span>{item.viewCountText ?? item.publishedTimeText ?? 'Source ready'}</span><b>Open evidence <span>→</span></b></div></div>
         </button>)}</div>
@@ -625,13 +669,13 @@ function SourceChat({ inspector }: { inspector: Inspector }) {
     if (!nextQuestion || pendingSessionId || !activeSession) return;
     const sessionId = activeSession.id;
     const previousMessages = activeSession.messages.filter((message) => !message.failedQuestion).slice(-6);
-    const contextualQuestion = previousMessages.length ? `Continue this conversation about the same YouTube source.\n\n${previousMessages.map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content.slice(0, 900)}`).join('\n')}\n\nUser's new question: ${nextQuestion}` : nextQuestion;
+    const contextualQuestion = previousMessages.length ? `Continue this conversation about the same video source.\n\n${previousMessages.map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content.slice(0, 900)}`).join('\n')}\n\nUser's new question: ${nextQuestion}` : nextQuestion;
     const userMessage: ChatMessage = { id: `message-${++messageCounter.current}`, role: 'user', content: nextQuestion };
     updateSession(sessionId, (session) => ({ ...session, title: session.messages.length ? session.title : compactChatTitle(nextQuestion), messages: [...session.messages, userMessage] }));
     setQuestion(''); setPendingSessionId(sessionId);
     const controller = new AbortController(); request.current = { controller, sessionId, question: nextQuestion };
     try {
-      const response = await api<Answer>('/v1/answers', { method: 'POST', body: JSON.stringify({ question: contextualQuestion, entityId: inspector.id }), signal: controller.signal }, 25_000);
+      const response = await api<Answer>('/v1/answers', { method: 'POST', body: JSON.stringify({ question: contextualQuestion, provider: inspector.provider, entityId: inspector.id }), signal: controller.signal }, 25_000);
       updateSession(sessionId, (session) => ({ ...session, messages: [...session.messages, { id: `message-${++messageCounter.current}`, role: 'assistant', content: response.answer, citations: response.citations }] }));
     } catch (cause) {
       if (!isAbortError(cause)) updateSession(sessionId, (session) => ({ ...session, messages: [...session.messages, { id: `message-${++messageCounter.current}`, role: 'assistant', content: cause instanceof Error ? cause.message : 'I could not create a cited answer. Save and index the source, then try again.', failedQuestion: nextQuestion }] }));
@@ -650,7 +694,7 @@ function SourceChat({ inspector }: { inspector: Inspector }) {
     <div className='chat-surface'>
       <div className='chat-log' ref={chatLog} role='log' aria-live='polite' aria-label={`Messages in ${activeSession.title}`}>
         {!activeSession.messages.length && pendingSessionId !== activeSession.id && <div className='chat-empty'><div className='chat-empty-mark' aria-hidden='true'><Icon name='spark' size={17} /></div><h4>Ask this video anything</h4><p>Answers stay grounded in the captions.</p><div>{['Summarize with evidence','Show the strongest claims','Find a concrete example'].map((prompt) => <button key={prompt} onClick={() => { setQuestion(prompt); composer.current?.focus(); }}>{prompt}</button>)}</div></div>}
-        {activeSession.messages.map((message) => <ChatMessageBubble key={message.id} message={message} sourceId={inspector.id} onReuse={reuseFailedQuestion} />)}
+        {activeSession.messages.map((message) => <ChatMessageBubble key={message.id} message={message} provider={inspector.provider} sourceId={inspector.id} onReuse={reuseFailedQuestion} />)}
         {pendingSessionId === activeSession.id && <article className='chat-message assistant pending'><div className='chat-avatar' aria-hidden='true'>✦</div><div className='chat-bubble'><span>Evidence assistant</span><div className='chat-thinking' role='status'><i /><i /><i /><b>Reading source moments…</b></div><button className='stop-answer' onClick={stopAnswer}>Stop generating</button></div></article>}
       </div>
       <form className='chat-composer' onSubmit={(event) => void sendQuestion(event)}>
@@ -661,8 +705,8 @@ function SourceChat({ inspector }: { inspector: Inspector }) {
   </section>;
 }
 
-function ChatMessageBubble({ message, sourceId, onReuse }: { message: ChatMessage; sourceId: string; onReuse: (question: string) => void }) {
-  return <article className={`chat-message ${message.role}${message.failedQuestion ? ' failed' : ''}`}><div className='chat-avatar' aria-hidden='true'>{message.role === 'user' ? 'You' : <Icon name='spark' size={15} />}</div><div className='chat-bubble'><span>{message.role === 'user' ? 'You' : 'Evidence assistant'}</span><p>{message.content}</p>{message.citations?.length ? <div className='chat-citations' aria-label='Sources cited in this answer'>{message.citations.map((citation) => <a key={`${message.id}-${citation.index}`} href={`https://youtube.com/watch?v=${citation.entityId ?? sourceId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}`} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,120)}{citation.text.length > 120 ? '…' : ''}</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div> : null}{message.failedQuestion && <button className='retry-chat' onClick={() => onReuse(message.failedQuestion ?? '')}>Put question back in composer</button>}</div></article>;
+function ChatMessageBubble({ message, provider, sourceId, onReuse }: { message: ChatMessage; provider: ProviderId; sourceId: string; onReuse: (question: string) => void }) {
+  return <article className={`chat-message ${message.role}${message.failedQuestion ? ' failed' : ''}`}><div className='chat-avatar' aria-hidden='true'>{message.role === 'user' ? 'You' : <Icon name='spark' size={15} />}</div><div className='chat-bubble'><span>{message.role === 'user' ? 'You' : 'Evidence assistant'}</span><p>{message.content}</p>{message.citations?.length ? <div className='chat-citations' aria-label='Sources cited in this answer'>{message.citations.map((citation) => <a key={`${message.id}-${citation.index}`} href={sourceUrl(citation.provider ?? provider, citation.entityId ?? sourceId, citation.startMs)} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,120)}{citation.text.length > 120 ? '…' : ''}</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div> : null}{message.failedQuestion && <button className='retry-chat' onClick={() => onReuse(message.failedQuestion ?? '')}>Put question back in composer</button>}</div></article>;
 }
 
 function compactChatTitle(value: string) {
@@ -696,8 +740,8 @@ function MonitorsView({ monitors, onFindSource, onOpenTarget }: { monitors: Moni
 function SignInDialog({ onClose }: { onClose:()=>void }) {
   const dialogRef = useDialogFocus<HTMLDivElement>(onClose);
   const [email,setEmail]=useState(''); const [message,setMessage]=useState('');
-  const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/platform/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:'/'})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
-  const google=async()=>{const response=await fetch('/api/platform/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:'/'})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
+  const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:'/'})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
+  const google=async()=>{const response=await fetch('/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:'/'})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
   return <div className='dialog-backdrop' onMouseDown={onClose}><div ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='sign-in-title' onMouseDown={(event)=>event.stopPropagation()}><button className='dialog-close' aria-label='Close sign-in dialog' onClick={onClose}>×</button><p className='panel-label'>Private workspace</p><h2 id='sign-in-title'>Sign in to your research</h2><p>Projects, notes, monitors, and YouTube sync stay private to you.</p><button className='google-button' onClick={()=>void google()}>Continue with Google</button><div className='or'><span/>or<span/></div><form onSubmit={magic}><label className='field-label' htmlFor='sign-in-email'>Email address</label><input id='sign-in-email' type='email' required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder='you@example.com'/><button>Send magic link</button></form><small className='dialog-message' role='status' aria-live='polite'>{message || '\u00a0'}</small></div></div>;
 }
 
@@ -727,7 +771,8 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
   return dialogRef;
 }
 
-function evidenceToItem(result: Citation): SearchItem { return { type:'video',id:result.entityId??result.index.toString(),title:result.text,description:`Match score ${Math.round(result.score*100)}% · ${result.startMs!==undefined?formatTime(result.startMs):'source'}`,thumbnails:[] }; }
+function evidenceToItem(result: Citation): SearchItem { return { provider:result.provider??'youtube',type:'video',id:result.entityId??result.index.toString(),title:result.text,description:`Match score ${Math.round(result.score*100)}% · ${result.startMs!==undefined?formatTime(result.startMs):'source'}`,thumbnails:[] }; }
+function sourceUrl(provider: ProviderId, id: string, startMs?: number) { return provider === 'youtube' ? `https://youtube.com/watch?v=${id}${startMs !== undefined ? `&t=${Math.floor(startMs/1000)}s` : ''}` : '#'; }
 function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;}
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}

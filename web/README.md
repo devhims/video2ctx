@@ -1,6 +1,6 @@
-# all-things-youtube Web
+# Video2Ctx Web
 
-The Next.js 16 and OpenNext frontend for the all-things-youtube Workspace.
+The Next.js 16 frontend for the Video2Ctx workspace.
 
 ## Local development
 
@@ -18,15 +18,8 @@ npm install
 npm run dev -- --port 3000
 ```
 
-Open <http://localhost:3000>. The same-origin `/api/platform/*` BFF forwards requests to `PLATFORM_API_BASE_URL`, which defaults to `http://localhost:8787` locally.
+Open <http://localhost:3000>. The same-origin `/api/platform/*` BFF forwards requests to `PLATFORM_API_BASE_URL`, which defaults to `http://localhost:8787` locally. Better Auth is exposed at `/api/auth/*` and rewritten through the same BFF.
 
-## Cloudflare
+## Vercel
 
-Build, preview, or deploy the Next.js application through `@opennextjs/cloudflare`:
-
-```bash
-npm run preview
-npm run deploy
-```
-
-Production uses the `PLATFORM` service binding configured in `wrangler.jsonc`.
+The production frontend is deployed as a native Next.js application. Connect this repository in Vercel, set the project root directory to `web`, and use `main` as the production branch. The BFF defaults to `https://api.video2ctx.dev` in production; `PLATFORM_API_BASE_URL` can override it.

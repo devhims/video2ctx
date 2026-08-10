@@ -1,5 +1,3 @@
-import { getCloudflareContext } from '@opennextjs/cloudflare';
-
 export const dynamic = 'force-dynamic';
 
 type RouteContext = { params: Promise<{ path: string[] }> };
@@ -25,15 +23,10 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
     ...(request.body ? { duplex: 'half' } as RequestInit : {}),
   };
 
-  try {
-    const { env } = getCloudflareContext();
-    if (env.PLATFORM) return env.PLATFORM.fetch(new Request(target, init));
-  } catch (error) {
-    if (process.env.NODE_ENV === 'production') throw error;
-  }
-
-  const fallbackBase = process.env.PLATFORM_API_BASE_URL ?? 'http://localhost:8787';
-  return fetch(new URL(`${target.pathname}${target.search}`, fallbackBase), init);
+  const platformBase =
+    process.env.PLATFORM_API_BASE_URL ??
+    (process.env.NODE_ENV === 'production' ? 'https://api.video2ctx.dev' : 'http://localhost:8787');
+  return fetch(new URL(`${target.pathname}${target.search}`, platformBase), init);
 }
 
 export const GET = proxy;
