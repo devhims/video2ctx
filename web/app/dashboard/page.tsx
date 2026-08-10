@@ -2,10 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { authClient } from '../../lib/auth-client';
+import {
+  canDeleteAccount,
+  CREDIT_BALANCE_EVENT,
+  DELETE_ACCOUNT_CONFIRMATION,
+  loadDashboardAccountData,
+  publishCreditBalance,
+  type DashboardUsage,
+} from '../../lib/dashboard-data';
 
 type Mode = 'youtube' | 'inside' | 'ask';
 type ProviderId = 'youtube';
-type Section = 'trends' | 'discover' | 'projects' | 'monitors';
+type Section = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
+type SourceState = 'idle' | 'live' | 'degraded';
 type EntityType = 'video' | 'channel' | 'playlist';
 type Thumbnail = { url: string; width?: number; height?: number };
 type SearchItem = {
@@ -47,9 +56,9 @@ type AiTrendPlan = {
   titleIdeas: string[]; hashtags: string[]; differentiation: string[];
   evidence: Array<{ claim: string; videoIds: string[] }>; caveats: string[];
 };
-type Usage = { plan: 'free' | 'pro'; monthlyCredits: number; creditBalance: number };
+type Usage = DashboardUsage;
 
-type IconName = 'home' | 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus';
+type IconName = 'home' | 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus' | 'settings';
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -61,6 +70,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     user: <><circle cx='12' cy='8' r='3.25' /><path d='M5.5 20c.6-4 2.8-6 6.5-6s5.9 2 6.5 6' /></>,
     spark: <path d='M12 3.5c.6 4.7 2.8 6.9 7.5 7.5-4.7.6-6.9 2.8-7.5 7.5-.6-4.7-2.8-6.9-7.5-7.5 4.7-.6 6.9-2.8 7.5-7.5Z' />,
     plus: <path d='M12 5v14M5 12h14' />,
+    settings: <><circle cx='12' cy='12' r='3' /><path d='M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z' /></>,
   };
   return <svg className='ui-icon' width={size} height={size} viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.75' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>{paths[name]}</svg>;
 }
@@ -81,6 +91,7 @@ async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUE
   const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const response = await fetch(`/api/platform${path}`, { ...options, headers, credentials: 'include', signal: controller.signal });
+    publishCreditBalance(response.headers);
     if (!response.ok) {
       const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
       const code = payload?.error?.code;
@@ -90,6 +101,7 @@ async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUE
         : payload?.error?.message ?? `Request failed (${response.status})`;
       throw new PlatformApiError(response.status, code, message);
     }
+    if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   } catch (cause) {
     if (controller.signal.aborted) {
@@ -134,7 +146,7 @@ export default function WorkspacePage() {
   const [showSignIn, setShowSignIn] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
-  const [sourceState, setSourceState] = useState<'checking' | 'live' | 'degraded'>('checking');
+  const [sourceState, setSourceState] = useState<SourceState>('idle');
   const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
@@ -182,25 +194,25 @@ export default function WorkspacePage() {
 
   const refreshPrivateData = useCallback(async () => {
     if (!authenticated) return;
-    const [projectData, monitorData, usageData] = await Promise.all([
-      api<{ projects: Project[] }>('/v1/projects').catch(() => ({ projects: [] })),
-      api<{ monitors: Monitor[] }>('/v1/monitors').catch(() => ({ monitors: [] })),
-      api<Usage>('/v1/usage').catch(() => null),
-    ]);
-    setProjects(projectData.projects);
-    setMonitors(monitorData.monitors);
-    setUsage(usageData);
+    const data = await loadDashboardAccountData((path) => api(path));
+    setProjects(data.projects);
+    setMonitors(data.monitors);
+    setUsage(data.usage);
   }, [authenticated]);
 
   useEffect(() => {
     if (!authenticated) return;
     void refreshPrivateData();
-    api<{ results: SearchItem[] }>(`${YOUTUBE_API}/browse?category=music`)
-      .then((data) => { setItems(data.results.slice(0, 12).map((item) => ({ ...item, provider: 'youtube' }))); setSourceState('live'); })
-      .catch(() => {
-        setItems([]); setSourceState('degraded');
-      });
   }, [authenticated, refreshPrivateData]);
+
+  useEffect(() => {
+    const updateCreditBalance = (event: Event) => {
+      const balance = (event as CustomEvent<number>).detail;
+      setUsage((current) => current ? { ...current, creditBalance: balance } : current);
+    };
+    window.addEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
+    return () => window.removeEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
+  }, []);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -215,7 +227,7 @@ export default function WorkspacePage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const requestedSection = params.get('section');
-    if (requestedSection === 'trends' || requestedSection === 'discover' || requestedSection === 'projects' || requestedSection === 'monitors') {
+    if (requestedSection === 'trends' || requestedSection === 'discover' || requestedSection === 'projects' || requestedSection === 'monitors' || requestedSection === 'settings') {
       setSection(requestedSection);
     }
     const requestedQuery = params.get('q');
@@ -370,8 +382,8 @@ export default function WorkspacePage() {
       <Sidebar section={section} setSection={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} accountName={session?.user.name ?? (demoEnabled ? 'Local demo' : undefined)} credits={usage?.creditBalance} onSignOut={() => void authClient.signOut()} />
       <div className='workspace-main'>
         <header className='topbar'>
-          <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : 'Monitors'}</h1></div>
-          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'checking' ? 'Checking sources' : 'Sources limited'}</span>{usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}<a className='signin-button' href='/dashboard/developer'>API keys</a></div>
+          <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}</h1></div>
+          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'idle' ? 'Ready to search' : 'Sources limited'}</span>{usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}<a className='signin-button' href='/dashboard/developer'>API keys</a></div>
         </header>
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
@@ -413,6 +425,7 @@ export default function WorkspacePage() {
         </div>
         <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
         <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); setMode('youtube'); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} /></div>
+        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={session?.user.email} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
@@ -423,12 +436,67 @@ export default function WorkspacePage() {
 function Sidebar({ section, setSection, projects, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: { section: Section; setSection: (value: Section) => void; projects: Project[]; onNewProject: () => void; onOpenProject: (project: Project) => void; onSignIn: () => void; accountName?: string; credits?: number; onSignOut: () => void }) {
   return <aside className='sidebar'>
     <a className='brand workspace-brand' aria-label='all things youtube home' href='/'><span className='lens-brand-mark' aria-hidden='true'><i /></span><span className='lens-brand-type'><b>all things</b><strong>youtube</strong></span></a>
-    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'><Icon name='trend' /></span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'><Icon name='search' /></span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'><Icon name='folder' /></span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'><Icon name='monitor' /></span>Monitors</button><a href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</a></nav>
+    <nav aria-label='Dashboard navigation'><a href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</a><button aria-current={section === 'trends' ? 'page' : undefined} className={section === 'trends' ? 'active' : ''} onClick={() => setSection('trends')}><span aria-hidden='true'><Icon name='trend' /></span>Trend Lab</button><button aria-current={section === 'discover' ? 'page' : undefined} className={section === 'discover' ? 'active' : ''} onClick={() => setSection('discover')}><span aria-hidden='true'><Icon name='search' /></span>Sources</button><button aria-current={section === 'projects' ? 'page' : undefined} className={section === 'projects' ? 'active' : ''} onClick={() => setSection('projects')}><span aria-hidden='true'><Icon name='folder' /></span>Projects <em>{projects.length}</em></button><button aria-current={section === 'monitors' ? 'page' : undefined} className={section === 'monitors' ? 'active' : ''} onClick={() => setSection('monitors')}><span aria-hidden='true'><Icon name='monitor' /></span>Monitors</button><a href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</a><button aria-current={section === 'settings' ? 'page' : undefined} className={section === 'settings' ? 'active' : ''} onClick={() => setSection('settings')}><span aria-hidden='true'><Icon name='settings' /></span>Settings</button></nav>
     <div className='sidebar-rule' />
     <div className='sidebar-label'><span>RECENT PROJECTS</span><button aria-label='Create a new project' onClick={onNewProject}>＋</button></div>
     <div className='project-links'>{projects.slice(0,5).map((project, index) => <button key={project.id} onClick={() => onOpenProject(project)}><span aria-hidden='true' className={`project-color c${index % 4}`} />{project.name}</button>)}{!projects.length && <p>Save a source to start.</p>}</div>
     <div className='account-card'>{accountName ? <><strong>{accountName}</strong><p>{credits === undefined ? 'Loading credit balance…' : `${credits} credits remaining`}</p><button onClick={onSignOut}><Icon name='user' size={15} />Sign out</button></> : <><strong>Keep your research private</strong><p>Sign in to sync projects and monitors across devices.</p><button onClick={onSignIn}><Icon name='user' size={15} />Sign in</button></>}</div>
   </aside>;
+}
+
+function SettingsView({ email }: { email?: string }) {
+  const [confirmation, setConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const confirmed = canDeleteAccount(confirmation);
+
+  const deleteAccount = async () => {
+    if (!email || !confirmed || deleting) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await api<void>('/v1/account', { method: 'DELETE' }, 60_000);
+      window.location.replace('/');
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
+      setDeleting(false);
+    }
+  };
+
+  return <section className='settings-page content-section standalone'>
+    <div className='section-heading'>
+      <div><h2>Account settings</h2><p>Manage personal developer access and permanently remove your video2ctx account.</p></div>
+    </div>
+    <article className='settings-card'>
+      <div><span className='panel-label'>Signed-in account</span><h3>{email ?? 'Local demo account'}</h3><p>Personal API keys are managed separately from your account profile.</p></div>
+      <a className='button secondary' href='/dashboard/developer'>Manage API keys</a>
+    </article>
+    <article className='danger-zone' aria-labelledby='delete-account-heading'>
+      <div className='danger-zone-copy'>
+        <span className='panel-label'>Danger zone</span>
+        <h3 id='delete-account-heading'>Delete account permanently</h3>
+        <p>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
+      </div>
+      {email ? <div className='delete-account-confirmation'>
+        <label htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
+        <input
+          id='delete-account-confirmation'
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+          autoComplete='off'
+          spellCheck={false}
+          placeholder={DELETE_ACCOUNT_CONFIRMATION}
+          aria-describedby='delete-account-help'
+          disabled={deleting}
+        />
+        <small id='delete-account-help'>The confirmation is case-sensitive.</small>
+        <button className='delete-account-button' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
+          {deleting ? 'Deleting account…' : 'Delete account permanently'}
+        </button>
+        {deleteError && <p className='delete-account-error' role='alert'>{deleteError}</p>}
+      </div> : <p className='delete-account-unavailable'>Account deletion is unavailable for the local demo identity.</p>}
+    </article>
+  </section>;
 }
 
 function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
@@ -577,7 +645,7 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Searching, enriching, and comparing public video signals. This stops automatically if the source takes too long.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: 'checking' | 'live' | 'degraded'; onInspect: (type: EntityType, id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
+function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: SourceState; onInspect: (type: EntityType, id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
   const savedSources = projects.reduce((total, project) => total + (project.item_count ?? 0), 0);
   const activeMonitors = monitors.filter((monitor) => monitor.enabled).length;
   return <section className='content-section discovery-section'>
@@ -591,9 +659,9 @@ function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onSt
         </button>)}</div>
       </div>
       <aside className='research-pulse'>
-        <div className='pulse-head'><div><p className='panel-label'>Workspace status</p><h3>Your research</h3></div><span className={`live-pill ${sourceState}`}><i />{sourceState === 'live' ? 'Live' : sourceState === 'checking' ? 'Checking' : 'Limited'}</span></div>
+        <div className='pulse-head'><div><p className='panel-label'>Workspace status</p><h3>Your research</h3></div><span className={`live-pill ${sourceState}`}><i />{sourceState === 'live' ? 'Live' : sourceState === 'idle' ? 'Ready' : 'Limited'}</span></div>
         <div className='pulse-stats'><article><strong>{projects.length}</strong><span>active projects</span></article><article><strong>{savedSources}</strong><span>saved sources</span></article><article><strong>{activeMonitors}</strong><span>signal monitors</span></article></div>
-        <div className='pipeline-card'><div><span>Evidence pipeline</span><b>{sourceState === 'live' ? 'Healthy' : sourceState === 'checking' ? 'Checking' : 'Limited'}</b></div><ol><li className={sourceState === 'live' ? 'complete' : ''}><i>{sourceState === 'live' ? '✓' : '1'}</i><span><b>Source discovery</b><small>{sourceState === 'live' ? 'Live YouTube catalog' : sourceState === 'checking' ? 'Checking source access' : 'Retry a search to reconnect'}</small></span></li><li className='complete'><i>✓</i><span><b>Transcript index</b><small>Exact moments retained</small></span></li><li><i>3</i><span><b>Cited synthesis</b><small>Ready when you ask</small></span></li></ol></div>
+        <div className='pipeline-card'><div><span>Evidence pipeline</span><b>{sourceState === 'live' ? 'Healthy' : sourceState === 'idle' ? 'Ready' : 'Limited'}</b></div><ol><li className={sourceState === 'live' ? 'complete' : ''}><i>{sourceState === 'live' ? '✓' : '1'}</i><span><b>Source discovery</b><small>{sourceState === 'live' ? 'Live YouTube catalog' : sourceState === 'idle' ? 'Runs when you search' : 'Retry a search to reconnect'}</small></span></li><li className='complete'><i>✓</i><span><b>Transcript index</b><small>Exact moments retained</small></span></li><li><i>3</i><span><b>Cited synthesis</b><small>Ready when you ask</small></span></li></ol></div>
         <p className='pulse-note'>Keep claims connected to the moment and source they came from.</p>
       </aside>
     </div>

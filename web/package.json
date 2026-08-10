@@ -2,9 +2,11 @@
   "name": "all-things-youtube-web",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "node --test lib/dashboard-data.test.ts",
     "start": "next start",
     "lint": "next lint"
   },

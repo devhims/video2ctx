@@ -395,3 +395,20 @@ html,body{overflow-x:clip}
 :where(.trend-search button,.universal-search>button,.button.primary,.inspector-actions button.primary,.source-question button,.chat-composer button,.plan-generate,.trend-empty button,.source-onboarding button,.dialog form>button):focus-visible{
   outline-color:var(--color-dashboard-ink);
 }
+
+.settings-page{max-width:72rem}
+.settings-card,.danger-zone{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--space-xl);border:1px solid var(--color-dashboard-rule);border-radius:var(--radius-dashboard-md);padding:var(--space-lg);background:var(--color-dashboard-surface)}
+.settings-card h3,.danger-zone h3{margin:var(--space-xs) 0 0;font:700 1.25rem/1.2 var(--font-dashboard-display)}
+.settings-card p,.danger-zone p{max-width:65ch;margin:var(--space-xs) 0 0;color:var(--color-dashboard-ink-soft);font-size:.82rem;line-height:1.55}
+.settings-card .button{text-decoration:none}
+.danger-zone{grid-template-columns:minmax(0,1fr) minmax(17rem,24rem);align-items:start;margin-top:var(--space-lg);border-color:color-mix(in srgb,var(--color-dashboard-danger) 45%,var(--color-dashboard-rule));background:color-mix(in srgb,var(--color-dashboard-danger) 4%,var(--color-dashboard-surface))}
+.danger-zone .panel-label{color:var(--color-dashboard-danger)}
+.delete-account-confirmation{display:grid;gap:var(--space-xs)}
+.delete-account-confirmation label{font-size:.75rem;font-weight:700}
+.delete-account-confirmation input{min-height:2.75rem;border:1px solid var(--color-dashboard-rule-strong);border-radius:var(--radius-dashboard-sm);padding:0 var(--space-sm);background:var(--color-dashboard-surface);color:var(--color-dashboard-ink);font:700 .85rem var(--font-dashboard-mono)}
+.delete-account-confirmation small{color:var(--color-dashboard-muted);font-size:.7rem}
+.delete-account-button{min-height:2.75rem;margin-top:var(--space-xs);border:1px solid var(--color-dashboard-danger);border-radius:var(--radius-dashboard-sm);background:var(--color-dashboard-danger);color:#fff;font-size:.78rem;font-weight:750;cursor:pointer}
+.delete-account-button:disabled{opacity:.45;cursor:not-allowed}
+.delete-account-error,.delete-account-unavailable{color:var(--color-dashboard-danger)!important;font-weight:650}
+@media(hover:hover) and (pointer:fine){.delete-account-button:not(:disabled):hover{filter:brightness(.9)}}
+@media(max-width:43.75rem){.settings-card,.danger-zone{grid-template-columns:1fr}.settings-card .button{width:100%}}
