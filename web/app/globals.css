@@ -114,13 +114,10 @@ html,body{overflow-x:clip}
 .workspace-main{background:var(--color-dashboard-paper)}
 .workspace-view{min-width:0}
 .workspace-shell :is(h1,h2,h3,h4){overflow-wrap:anywhere;min-width:0}
-.workspace-brand{gap:var(--space-sm);text-decoration:none;color:var(--color-dashboard-ink)}
-.workspace-brand .lens-brand-mark{width:2.25rem;height:1.55rem;border-radius:var(--radius-dashboard-sm)}
-.workspace-brand .lens-brand-type{gap:0;line-height:.83}
-.workspace-brand .lens-brand-type b{font-size:.54rem}
-.workspace-brand .lens-brand-type strong{font-size:1.12rem;color:var(--color-dashboard-danger)}
+.workspace-brand{width:2.75rem;min-height:2.75rem;display:grid;place-items:center;text-decoration:none;color:var(--color-dashboard-ink)}
+.workspace-brand>img{display:block;width:2.25rem;height:2.25rem}
 .sidebar{padding:var(--space-lg) var(--space-md);border-color:var(--color-dashboard-rule)}
-.sidebar nav{margin-top:var(--space-xl);gap:var(--space-xs)}
+.sidebar nav{margin-top:var(--space-lg);gap:var(--space-xs)}
 .sidebar nav button,.sidebar nav a,.project-links button{
   min-height:2.75rem;padding:var(--space-sm);border-radius:var(--radius-dashboard-sm);
   color:var(--color-dashboard-ink-soft);font-size:.875rem;white-space:nowrap;
@@ -271,7 +268,9 @@ html,body{overflow-x:clip}
   .workspace-shell{display:block}
   .workspace-main{padding-bottom:calc(4.5rem + env(safe-area-inset-bottom))}
   .sidebar{height:calc(4.25rem + env(safe-area-inset-bottom));padding:var(--space-xs) max(var(--space-xs),env(safe-area-inset-right)) max(var(--space-xs),env(safe-area-inset-bottom)) max(var(--space-xs),env(safe-area-inset-left));background:var(--color-dashboard-sidebar)}
-  .sidebar nav{margin:0;gap:var(--space-2xs)}
+  .workspace-brand{display:grid;flex:0 0 3rem;min-height:3rem}
+  .workspace-brand>img{width:1.75rem;height:1.75rem}
+  .sidebar nav{width:auto;min-width:0;flex:1;margin:0;gap:var(--space-2xs)}
   .sidebar nav button,.sidebar nav button:not(.active),.sidebar nav a{flex:1;min-width:0;min-height:3rem;padding:var(--space-2xs);font-size:.62rem;line-height:1;gap:var(--space-2xs);white-space:nowrap}
   .sidebar nav button span,.sidebar nav a span{font-size:inherit}
   .sidebar nav button em{display:none}

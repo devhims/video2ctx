@@ -44,7 +44,7 @@ export async function citedAnswer(
         retries: { maxAttempts: 3, retryDelayMs: 250, backoff: 'exponential' },
         metadata: { operation: mode },
       },
-      tags: ['all-things-youtube', mode],
+      tags: ['video2ctx', mode],
     });
   } catch (error) {
     if (!gatewayUnavailable(error)) throw error;

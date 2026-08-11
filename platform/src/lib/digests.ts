@@ -23,7 +23,7 @@ export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promi
       idempotencyKey: `digest:${cadence}:${user.id}:${new Date().toISOString().slice(0, 10)}`,
       userId: user.id,
       to: user.email,
-      subject: `Your ${cadence} all-things-youtube digest`,
+      subject: `Your ${cadence} video2ctx digest`,
       html: `<p>Hello ${escapeHtml(user.name)},</p><ul>${listHtml}</ul><p><a href="${escapeHtml(unsubscribeUrl)}">Unsubscribe from digests</a></p>`,
       text: `Hello ${user.name},\n\n${listText}\n\nUnsubscribe: ${unsubscribeUrl}`,
       unsubscribeUrl,

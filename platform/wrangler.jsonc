@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
+  // Some backing Cloudflare resources retain their pre-video2ctx deployment
+  // names. Changing those identifiers requires a separately planned data and
+  // traffic migration; they are not product-facing brand names.
   "vars": {
     "ENVIRONMENT": "production",
     "APP_ORIGIN": "https://www.video2ctx.dev",

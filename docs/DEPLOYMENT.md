@@ -4,7 +4,7 @@ Production deployments are triggered by changes to `main`. Pull requests run the
 
 ## Vercel frontend
 
-Import `devhims/all-things-youtube` into the existing Vercel project with these settings:
+Import `devhims/video2ctx` into the existing Vercel project with these settings:
 
 - Framework preset: **Next.js**
 - Root directory: `web`
@@ -18,7 +18,7 @@ Keep `www.video2ctx.dev` as the canonical production domain. The application def
 
 ## Cloudflare backend
 
-Open the existing `all-things-youtube-platform` Worker, select **Settings → Builds**, and connect the same GitHub repository with these settings:
+Open the existing `video2ctx` Worker, select **Settings → Builds**, and connect the same GitHub repository with these settings:
 
 - Root directory: `platform`
 - Production branch: `main`

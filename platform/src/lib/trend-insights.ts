@@ -80,7 +80,7 @@ export async function generateTrendInsights(
         retries: { maxAttempts: 2, retryDelayMs: 250, backoff: 'exponential' },
         metadata: { operation: 'trend-insights', topic: query.slice(0, 80) },
       },
-      tags: ['all-things-youtube', 'trend-insights'],
+      tags: ['video2ctx', 'trend-insights'],
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

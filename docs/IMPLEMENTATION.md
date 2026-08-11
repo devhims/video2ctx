@@ -1,4 +1,4 @@
-# all-things-youtube Workspace
+# video2ctx Workspace
 
 This repository implements the beta with a standalone library, two Worker applications, and one containerized processing boundary:
 

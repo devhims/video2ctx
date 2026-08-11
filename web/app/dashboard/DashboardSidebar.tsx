@@ -7,11 +7,10 @@ export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' |
 export type DashboardSidebarSection = DashboardSection | 'developer';
 export type SidebarProject = { id: string; name: string };
 
-type IconName = 'home' | 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus' | 'settings';
+type IconName = 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus' | 'settings';
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
-    home: <><path d='M3.5 10.5 12 3.75l8.5 6.75' /><path d='M5.5 9.5v10h13v-10M9.5 19.5v-6h5v6' /></>,
     trend: <><path d='M4 17 9 12l3 3 8-9' /><path d='M15 6h5v5' /></>,
     search: <><circle cx='10.5' cy='10.5' r='5.75' /><path d='m15 15 4.5 4.5' /></>,
     folder: <><path d='M3.5 6.5h6l2 2h9v10.5h-17z' /><path d='M3.5 9h17' /></>,
@@ -45,9 +44,8 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
   );
 
   return <aside className='sidebar'>
-    <Link className='brand workspace-brand' aria-label='all things youtube home' href='/'><span className='lens-brand-mark' aria-hidden='true'><i /></span><span className='lens-brand-type'><b>all things</b><strong>youtube</strong></span></Link>
+    <Link className='brand workspace-brand' aria-label='video2ctx home' href='/'><img src='/brand/video2ctx-mark-red.svg' alt='' width='36' height='36' /></Link>
     <nav aria-label='Dashboard navigation'>
-      <Link href='/'><span aria-hidden='true'><Icon name='home' /></span>Home</Link>
       {navButton('trends', 'Trend Lab', 'trend')}
       {navButton('discover', 'Sources', 'search')}
       {navButton('projects', 'Projects', 'folder', <em>{projects.length}</em>)}

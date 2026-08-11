@@ -42,7 +42,7 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
   try {
     const response = await env.EMAIL.send({
       to: input.to,
-      from: { email: env.EMAIL_FROM, name: 'all-things-youtube' },
+      from: { email: env.EMAIL_FROM, name: 'video2ctx' },
       subject: input.subject,
       html: input.html,
       text: input.text,

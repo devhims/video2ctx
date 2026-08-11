@@ -14,7 +14,13 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(response.headers.get('content-type')).toContain('application/json');
     await expect(response.json()).resolves.toMatchObject({
       openapi: '3.1.0',
-      info: { title: 'video2ctx API' },
+      info: {
+        title: 'video2ctx API',
+        license: {
+          name: 'Apache License 2.0',
+          identifier: 'Apache-2.0',
+        },
+      },
       servers: [{ url: '/' }],
     });
   });

@@ -261,7 +261,10 @@ export const openApiDocument = {
   info: {
     title: 'video2ctx API',
     version: '1.0.0',
-    license: { name: 'Proprietary' },
+    license: {
+      name: 'Apache License 2.0',
+      identifier: 'Apache-2.0',
+    },
     description: [
       'Interactive contract for the video2ctx platform Worker.',
       'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',

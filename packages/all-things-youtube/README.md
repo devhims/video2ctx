@@ -9,7 +9,7 @@ Get transcripts/captions, comments, video details, channels, playlists, and more
 [![Node.js 18+](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ready-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![API key](https://img.shields.io/badge/API%20key-not%20required-2ea44f)](#scope-and-stability)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/devhims/all-things-youtube/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/devhims/video2ctx/blob/main/packages/all-things-youtube/LICENSE)
 
 [Quick start](#quick-start) · [API](#api-at-a-glance) · [Pagination](#pagination) · [Reliability](#retries-and-rate-limits) · [Hosting](#using-the-library-vs-hosting-an-api)
 
@@ -567,4 +567,4 @@ This project is not affiliated with, endorsed by, or sponsored by YouTube or Goo
 
 ## License
 
-[MIT](https://github.com/devhims/all-things-youtube/blob/main/LICENSE)
+[MIT](https://github.com/devhims/video2ctx/blob/main/packages/all-things-youtube/LICENSE)

@@ -49,11 +49,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/devhims/all-things-youtube.git",
+    "url": "git+https://github.com/devhims/video2ctx.git",
     "directory": "packages/all-things-youtube"
   },
+  "homepage": "https://github.com/devhims/video2ctx/tree/main/packages/all-things-youtube#readme",
   "bugs": {
-    "url": "https://github.com/devhims/all-things-youtube/issues"
+    "url": "https://github.com/devhims/video2ctx/issues"
   },
   "license": "MIT",
   "dependencies": {

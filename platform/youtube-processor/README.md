@@ -30,7 +30,7 @@ The Worker routes each cache miss to a random member of its fixed container pool
 ```sh
 npm install
 npm test
-docker build -t all-things-youtube-processor .
+docker build -t video2ctx-youtube-processor .
 ```
 
 The container installs the exact `all-things-youtube` version recorded in
