@@ -85,11 +85,15 @@ export function CraftDirection() {
             image costs no main-thread time on the one screen where the input
             must become usable as fast as possible. */}
         <div className='voxel-field'>
-          {/* The scene, at rest. Sharp everywhere — the effect is carried by
-              light, not by degrading the image. Where a pointer exists this is
-              dimmed in CSS so the flashlight has something to recover; where one
-              does not, it stands at full strength on its own. */}
+          {/* On pointer desktops, use the video's own poster as the first paint.
+              The video reuses the same URL, so the browser does not also transfer
+              the separate 90 KB horizon still. Touch and reduced-motion devices
+              retain their purpose-built static compositions. */}
           <picture className='voxel-base'>
+            <source
+              media='(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)'
+              srcSet='/scene/fold-scene-poster.webp'
+            />
             <source
               media='(orientation: portrait) and (max-width: 900px)'
               srcSet='/scene/voxel-horizon-portrait.webp'
@@ -136,7 +140,7 @@ export function CraftDirection() {
       </div>
 
       <div className='craft-reveal'>
-        <section className='craft-band craft-ways-band' aria-labelledby='craft-ways-title'>
+        <section className='craft-band' aria-labelledby='craft-ways-title'>
           <div className='craft-band-head'>
             <h2 id='craft-ways-title'>Three ways in.</h2>
             <p>Same data, same source links. Pick whichever fits where you are working.</p>

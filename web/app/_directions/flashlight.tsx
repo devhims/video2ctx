@@ -1,13 +1,23 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-/* A flashlight over the scene.
+/* The fold's motion layer: a looping scene, plus a flashlight over it.
  *
  * The landscape rests almost unlit. A soft circular light tracks the pointer
  * and the terrain inside it comes up out of the dark — so the scene stays sharp
- * everywhere and the effect is carried entirely by light, with no quantised or
- * degraded resting state to apologise for.
+ * everywhere and the effect is carried entirely by light.
+ *
+ * Both are mounted here, from JS, under one gate. That gate is the whole
+ * performance story: a device without a fine pointer never creates the <video>
+ * element at all, so it downloads zero bytes of it and keeps the poster still.
+ * Putting the video in the server-rendered markup and hiding it with CSS would
+ * not achieve that.
+ *
+ * The light is a `backdrop-filter`, which brightens whatever is painted behind
+ * it. The resting darkness is a separate translucent layer, so the video itself
+ * remains fully opaque and is never softened by blending with the still image.
+ * One source, one filter, no copy.
  *
  * Deliberately not WebGL. Canvas UI's dither components are the obvious
  * off-the-shelf answer, but they are built on the experimental html-in-canvas
@@ -26,25 +36,47 @@ const EASE = 0.18;
 /** Below this the lens has effectively arrived and the loop can stop. */
 const SETTLED = 0.4;
 
+/* Which scene, if any, this device should fetch.
+ *
+ * A phone pays roughly eight times as much for the same decoration, on the
+ * connections least able to afford it, so it is asked for explicitly rather
+ * than by default — and never when the browser reports a metered or slow link.
+ * `saveData` is a direct user preference and is treated as final. */
+type Scene = 'none' | 'landscape' | 'portrait';
+
+function chooseScene(): Scene {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'none';
+
+  if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) return 'landscape';
+
+  // Touch from here on: the portrait crop, and only over a link that can take it.
+  const link = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+    }
+  ).connection;
+  if (link?.saveData) return 'none';
+  if (link?.effectiveType && !/4g|5g/.test(link.effectiveType)) return 'none';
+
+  return window.matchMedia('(orientation: portrait)').matches ? 'portrait' : 'none';
+}
+
 export function Flashlight() {
   const lensRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [scene, setScene] = useState<Scene>('none');
 
   useEffect(() => {
     const lens = lensRef.current;
-    const inner = innerRef.current;
-    if (!lens || !inner) return;
+    if (!lens) return;
 
-    /* Pointer-driven and purely decorative, so it is scoped to devices that
-     * actually have a pointer and to users who have not asked for less motion.
-     *
-     * These two conditions must stay in step with the `.voxel-base` dimming in
-     * craft.css: the resting scene is only darkened where a flashlight exists to
-     * light it again. Dim it anywhere this component does not mount and the
-     * scene is simply too dark, with nothing able to recover it. */
-    const fine = window.matchMedia('(hover: hover) and (pointer: fine)');
-    const still = window.matchMedia('(prefers-reduced-motion: reduce)');
-    if (!fine.matches || still.matches) return;
+    const chosen = chooseScene();
+    setScene(chosen);
+
+    /* The light is pointer-driven, so it exists only on the landscape path.
+     * Touch devices get the scene moving but no lens — there is no pointer to
+     * follow, and `.voxel-dimmer` keeps the composite readable either way. */
+    if (chosen !== 'landscape') return;
 
     const field = lens.parentElement;
     if (!field) return;
@@ -55,21 +87,12 @@ export function Flashlight() {
     let targetY = 0;
     let x = 0;
     let y = 0;
-    let width = 0;
-    let height = 0;
     // Read from the element rather than a constant, so the size lives in CSS
     // only and the two can never drift apart.
     let lensSize = 0;
 
     const measure = () => {
-      const box = field.getBoundingClientRect();
-      width = box.width;
-      height = box.height;
       lensSize = lens.offsetWidth;
-      // The lit layer is a full copy of the field, so it can be counter
-      // translated to stay registered with the dim scene beneath it.
-      inner.style.width = `${width}px`;
-      inner.style.height = `${height}px`;
     };
 
     const paint = () => {
@@ -81,7 +104,6 @@ export function Flashlight() {
 
       const half = lensSize / 2;
       lens.style.transform = `translate3d(${x - half}px, ${y - half}px, 0)`;
-      inner.style.transform = `translate3d(${half - x}px, ${half - y}px, 0)`;
 
       // Keep going only while it is still catching up; a resting lens costs
       // nothing.
@@ -96,11 +118,23 @@ export function Flashlight() {
       const box = field.getBoundingClientRect();
       targetX = event.clientX - box.left;
       targetY = event.clientY - box.top;
+
+      /* A refresh can place the pointer inside the fold before this effect has
+       * attached `pointerenter`. Make movement self-healing instead of waiting
+       * for the pointer to leave and enter again. Start at the pointer so the
+       * recovered lens fades in locally rather than flying across the scene. */
+      if (!live) {
+        live = true;
+        x = targetX;
+        y = targetY;
+        lens.dataset.live = 'true';
+      }
+
       schedule();
     };
 
     const onEnter = (event: PointerEvent) => {
-      if (!width) measure();
+      if (!lensSize) measure();
       live = true;
       const box = field.getBoundingClientRect();
       // Start where the pointer already is, so the lens does not fly in from
@@ -132,18 +166,66 @@ export function Flashlight() {
     };
   }, []);
 
+  /* iOS will not autoplay anything it does not consider muted, and React's
+   * `muted` prop is not reliably reflected onto a dynamically created <video>
+   * element — the attribute renders but the property can stay false, so the
+   * play is refused and the poster is all you get. Setting it imperatively
+   * before asking to play is the fix.
+   *
+   * The play promise is caught rather than ignored: Low Power Mode refuses
+   * autoplay outright, and that is fine — the poster is a designed state, not
+   * a failure. */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    const played = video.play();
+    if (played && typeof played.then === 'function') {
+      played.catch(() => {
+        /* Autoplay declined. The poster stands in, which is the fallback the
+         * scene is designed around anyway. */
+      });
+    }
+  }, [scene]);
+
   return (
-    <div className='voxel-lens' ref={lensRef} data-live='false' aria-hidden='true'>
-      <div className='voxel-lens-inner' ref={innerRef}>
-        <picture>
-          <source
-            media='(orientation: portrait) and (max-width: 900px)'
-            srcSet='/scene/voxel-horizon-portrait.webp'
-          />
-          <source media='(max-width: 1100px)' srcSet='/scene/voxel-horizon-900.webp' />
-          <img src='/scene/voxel-horizon.webp' alt='' width={1672} height={941} decoding='async' />
-        </picture>
-      </div>
-    </div>
+    <>
+      {scene !== 'none' ? (
+        <>
+          <video
+            key={scene}
+            ref={videoRef}
+            className='voxel-video'
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload='auto'
+            poster={
+              scene === 'portrait'
+                ? '/scene/fold-scene-portrait-poster.webp'
+                : '/scene/fold-scene-poster.webp'
+            }
+            aria-hidden='true'
+          >
+            {scene === 'portrait' ? (
+              <>
+                <source src='/scene/fold-scene-portrait.webm' type='video/webm' />
+                <source src='/scene/fold-scene-portrait.mp4' type='video/mp4' />
+              </>
+            ) : (
+              <>
+                <source src='/scene/fold-scene.webm' type='video/webm' />
+                <source src='/scene/fold-scene.mp4' type='video/mp4' />
+              </>
+            )}
+          </video>
+          <div className='voxel-dimmer' aria-hidden='true' />
+        </>
+      ) : null}
+      <div className='voxel-lens' ref={lensRef} data-live='false' aria-hidden='true' />
+    </>
   );
 }

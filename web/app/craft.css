@@ -120,7 +120,9 @@ html:has(.craft) body {
 .voxel-field {
   position: absolute;
   z-index: 0;
-  inset: 26% 0 0;
+  /* The small bottom overscan is consumed by the translate-only scroll drift,
+   * keeping the fold covered without ever scaling the decoded video. */
+  inset: 26% 0 -4%;
   display: block;
   overflow: hidden;
   pointer-events: none;
@@ -172,10 +174,43 @@ html:has(.craft) body {
   }
 }
 
-/* The flashlight. A soft window onto the same scene, lit and slightly warmed,
- * tracking the pointer. The feathered mask belongs to the lens and never moves
- * relative to it, so travelling the light is a compositor transform with no
- * repaint — only its position changes, never its paint. */
+/* The looping scene. Sits in the same box as the poster and simply covers it
+ * once it can play, so there is no layout change when it arrives. */
+.voxel-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: 50% 100%;
+}
+
+/* Darkness belongs above the footage, never on it. Keeping the video fully
+ * opaque prevents it from blending with the fallback still underneath, which
+ * otherwise produces a soft double exposure as the camera moves. The lens
+ * brightens this composite back toward the untouched source. */
+.voxel-dimmer {
+  position: absolute;
+  inset: 0;
+  background: oklch(0% 0 0 / 0.64);
+  pointer-events: none;
+}
+
+/* Touch devices get the scene but no flashlight, so nothing ever lifts the
+ * dimmer back. Without this the fold is simply dark — the 0.64 above is
+ * calibrated against a lens that can recover it, and here there is none. */
+@media (hover: none), (pointer: coarse) {
+  .voxel-dimmer {
+    background: oklch(0% 0 0 / 0.52);
+  }
+}
+
+/* The flashlight. `backdrop-filter` brightens whatever is painted behind it, so
+ * one scene serves both states and there is no second copy to keep registered —
+ * which is what makes a moving scene possible at all. The feathered mask belongs
+ * to the lens and never moves relative to it, so travelling the light is a
+ * compositor transform: only its position changes, never its paint. */
 .voxel-lens {
   position: absolute;
   top: 0;
@@ -185,16 +220,22 @@ html:has(.craft) body {
   overflow: hidden;
   opacity: 0;
   will-change: transform;
-  filter: brightness(1.28) saturate(1.16);
+  backdrop-filter: brightness(3) saturate(1.28);
   transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
   /* A long, gaussian-ish falloff that reaches zero exactly at the element edge.
    * A radial-gradient with few stops hitting transparent well inside the box
    * leaves a discernible rim — the eye finds the point where the ramp stops.
    * More stops over a longer tail read as light falling off rather than as a
    * circle. No border-radius either: the mask is what shapes the light, and a
-   * rounded clip on top of it can only ever re-introduce a hard edge. */
+   * rounded clip on top of it can only ever re-introduce a hard edge.
+   *
+   * `closest-side` is load-bearing. The default is farthest-corner, which puts
+   * the gradient's 100% at the corner of the box — so at the edge midpoints the
+   * mask is still ~20% opaque and the square box clips it, showing straight
+   * edges. Anchoring to the nearest side makes the gradient complete on the
+   * inscribed circle, leaving the corners genuinely empty. */
   mask-image: radial-gradient(
-    circle at center,
+    circle closest-side at center,
     oklch(0% 0 0) 0%,
     oklch(0% 0 0 / 0.97) 14%,
     oklch(0% 0 0 / 0.86) 28%,
@@ -219,24 +260,14 @@ html:has(.craft) body {
   position: absolute;
   inset: 0;
   background: radial-gradient(
-    circle at center,
-    oklch(70% 0.16 33 / 0.14),
-    oklch(68% 0.17 32 / 0.08) 30%,
-    oklch(66% 0.18 31 / 0.03) 56%,
+    circle closest-side at center,
+    oklch(70% 0.16 33 / 0.18),
+    oklch(68% 0.17 32 / 0.1) 30%,
+    oklch(66% 0.18 31 / 0.04) 56%,
     transparent 82%
   );
   mix-blend-mode: plus-lighter;
   pointer-events: none;
-}
-
-.voxel-lens-inner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  /* The lit presence. Against a 0.2 base this composites to roughly a 3.5x
-   * lift, without touching the highlights. */
-  opacity: 0.66;
-  will-change: transform;
 }
 
 /* The portrait scene is 3:4, far taller than the field's box on a phone, so the
@@ -245,15 +276,23 @@ html:has(.craft) body {
  * separate composition. */
 @media (orientation: portrait) and (max-width: 900px) {
   .voxel-field {
-    inset: 20% 0 0;
+    inset: 20% 0 -3%;
   }
 
   .voxel-field img {
     object-position: 50% 88%;
   }
 
+  /* The portrait clip is cropped to almost exactly this box's aspect, so it
+   * needs no further anchoring — centring keeps the whole composed frame. */
+  .voxel-video {
+    object-position: 50% 50%;
+  }
 }
 
+/* Restore the fold's scroll response without the scale that resampled every
+ * video frame. The overscan above keeps the translated field covering the fold
+ * throughout the move. */
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     .voxel-field {
@@ -264,27 +303,15 @@ html:has(.craft) body {
   }
 }
 
-/* A slow push into the scene, not just a slide past it.
- *
- * The scale was previously constant and only the translate moved, which read as
- * a push-in on phones purely by accident: the portrait crop frames the world far
- * more tightly, so identical pixels of drift cover much more of the scene there.
- * Making the zoom explicit gets the same feel on every viewport instead of one
- * that depends on how hard `cover` happens to be cropping.
- *
- * Starting above 1 guarantees the image still covers its box at every point, so
- * the scale can never expose an edge. Both properties are compositor-only. */
 @keyframes voxel-drift {
-  from { transform: translate3d(0, 0, 0) scale(1.03); }
-  to { transform: translate3d(0, -4%, 0) scale(1.13); }
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, -4%, 0);
+  }
 }
 
-/* The portrait crop magnifies the scene, so the same ramp reads far stronger on
- * a phone. Pulled back so both viewports feel like the same camera move.
- *
- * This has to sit after the @supports block above: that rule uses the
- * `animation` shorthand, which resets animation-name, so an override placed
- * earlier loses no matter how specific its media query is. */
 @media (orientation: portrait) and (max-width: 900px) {
   .voxel-field {
     animation-name: voxel-drift-portrait;
@@ -292,8 +319,12 @@ html:has(.craft) body {
 }
 
 @keyframes voxel-drift-portrait {
-  from { transform: translate3d(0, 0, 0) scale(1.03); }
-  to { transform: translate3d(0, -3%, 0) scale(1.08); }
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, -3%, 0);
+  }
 }
 
 /* ------------------------------------------------------------------ fold */
@@ -302,7 +333,8 @@ html:has(.craft) body {
   min-height: 100svh;
   position: relative;
   isolation: isolate;
-  padding: clamp(7rem, 16vh, 11rem) clamp(var(--space-md), 6vw, 3rem) clamp(4rem, 10vh, 7rem);
+  padding: clamp(7rem, 16vh, 11rem) clamp(var(--space-md), 6vw, 3rem)
+    clamp(4rem, 10vh, 7rem);
   display: grid;
   align-content: start;
   justify-items: center;
@@ -405,7 +437,9 @@ html:has(.craft) body {
  * into a single transformation. Kept well under the 20px where it gets
  * expensive in Safari. */
 .craft-button-label {
-  transition: filter var(--control) var(--out), opacity var(--control) var(--out);
+  transition:
+    filter var(--control) var(--out),
+    opacity var(--control) var(--out);
 }
 
 .craft-form button[data-state='loading'] .craft-button-label {
@@ -424,7 +458,9 @@ html:has(.craft) body {
 }
 
 @keyframes craft-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .craft-form-note {
@@ -536,7 +572,9 @@ html:has(.craft) body {
   position: absolute;
   z-index: 1;
   inset: 0;
-  clip-path: inset(0 var(--clip-right) 0 var(--clip-left) round var(--radius-home-pill));
+  clip-path: inset(
+    0 var(--clip-right) 0 var(--clip-left) round var(--radius-home-pill)
+  );
   background: var(--ink);
   color: var(--paper);
   pointer-events: none;
@@ -692,6 +730,9 @@ html:has(.craft) body {
 .craft-parts,
 .craft-close {
   padding: clamp(4rem, 12vh, 8rem) clamp(var(--space-md), 6vw, 3rem);
+}
+
+.craft-close {
   border-top: 1px solid var(--rule);
 }
 
@@ -821,7 +862,6 @@ html:has(.craft) body {
   text-underline-offset: 0.2em;
 }
 
-
 /* --------------------------------------------------------- code sample */
 
 .craft-band {
@@ -901,7 +941,9 @@ html:has(.craft) body {
   place-items: center;
   font-size: 0.75rem;
   font-weight: 600;
-  transition: transform var(--press) var(--out), color var(--control) var(--out);
+  transition:
+    transform var(--press) var(--out),
+    color var(--control) var(--out);
 }
 
 .craft-copy:active {
@@ -910,7 +952,9 @@ html:has(.craft) body {
 
 .craft-copy > span[aria-hidden] {
   grid-area: 1 / 1;
-  transition: opacity var(--control) var(--out), filter var(--control) var(--out);
+  transition:
+    opacity var(--control) var(--out),
+    filter var(--control) var(--out);
 }
 
 .craft-copy > span[aria-hidden]:nth-child(2),
