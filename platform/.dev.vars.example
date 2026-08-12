@@ -7,5 +7,9 @@ TURNSTILE_SECRET=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PRO_PRICE_ID=
+# Required in production for the anonymous landing-page inspection quota.
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+LANDING_RATE_LIMIT_SALT=replace-with-a-private-random-value
 # Optional. Use an HTTP(S) proxy when YouTube blocks shared datacenter egress.
 OUTBOUND_PROXY_URL=

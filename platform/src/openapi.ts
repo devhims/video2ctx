@@ -279,6 +279,7 @@ export const openApiDocument = {
   servers: [{ url: '/', description: 'Current platform host' }],
   tags: [
     { name: 'System', description: 'Service status and machine-readable documentation.' },
+    { name: 'Demo', description: 'Anonymous product proof used by the public landing page.' },
     { name: 'Authentication', description: 'Better Auth entry points used by the web application.' },
     { name: 'UI Helpers', description: 'Internal routing helpers used by the first-party web interface.' },
     { name: 'Providers', description: 'Supported external video providers and their capabilities.' },
@@ -332,6 +333,22 @@ export const openApiDocument = {
             description: 'Interactive Scalar API reference.',
             content: { 'text/html': { schema: { type: 'string' } } },
           },
+        },
+      },
+    },
+    '/v1/demo/youtube/inspect': {
+      post: {
+        tags: ['Demo'],
+        operationId: 'inspectLandingYouTubeVideo',
+        summary: 'Inspect a YouTube video from the landing page',
+        description: 'Returns a bounded preview of video metadata, timestamped transcript segments, and comments. Anonymous clients may inspect five distinct videos in a rolling 24-hour window; repeating a video does not consume another slot.',
+        security: [],
+        requestBody: jsonBody(schemaRef('LandingDemoInspectionRequest')),
+        responses: {
+          '200': jsonResponse('A landing-page video inspection.', schemaRef('LandingDemoInspectionResponse')),
+          '422': responseRef('ValidationError'),
+          '429': responseRef('RateLimited'),
+          '503': responseRef('ServiceUnavailable'),
         },
       },
     },
@@ -1286,6 +1303,80 @@ export const openApiDocument = {
         type: 'object',
         required: ['input'],
         properties: { input: { type: 'string', maxLength: 500, example: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } },
+      },
+      LandingDemoInspectionRequest: {
+        type: 'object',
+        required: ['url'],
+        properties: {
+          url: {
+            type: 'string',
+            format: 'uri',
+            maxLength: 500,
+            example: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          },
+        },
+      },
+      LandingDemoQuota: {
+        type: 'object',
+        required: ['limit', 'remaining', 'resetAt', 'repeated'],
+        properties: {
+          limit: { type: 'integer', const: 5 },
+          remaining: { type: 'integer', minimum: 0, maximum: 5 },
+          resetAt: { type: 'string', format: 'date-time' },
+          repeated: { type: 'boolean' },
+        },
+      },
+      LandingDemoTranscript: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['status', 'track', 'segmentCount', 'segments'],
+            properties: {
+              status: { const: 'ready' },
+              track: schemaRef('CaptionTrack'),
+              segmentCount: { type: 'integer', minimum: 0 },
+              segments: { type: 'array', maxItems: 16, items: schemaRef('TranscriptSegment') },
+            },
+          },
+          {
+            type: 'object',
+            required: ['status'],
+            properties: { status: { const: 'unavailable' } },
+          },
+        ],
+      },
+      LandingDemoComments: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['status', 'comments'],
+            properties: {
+              status: { const: 'ready' },
+              totalCount: { type: 'integer', minimum: 0 },
+              comments: {
+                type: 'array',
+                maxItems: 4,
+                items: { type: 'object', additionalProperties: true },
+              },
+            },
+          },
+          {
+            type: 'object',
+            required: ['status'],
+            properties: { status: { const: 'unavailable' } },
+          },
+        ],
+      },
+      LandingDemoInspectionResponse: {
+        type: 'object',
+        required: ['video', 'transcript', 'comments', 'quota', 'partial'],
+        properties: {
+          video: schemaRef('Video'),
+          transcript: schemaRef('LandingDemoTranscript'),
+          comments: schemaRef('LandingDemoComments'),
+          quota: schemaRef('LandingDemoQuota'),
+          partial: { type: 'boolean' },
+        },
       },
       ResolveResponse: {
         oneOf: [

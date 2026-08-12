@@ -3,9 +3,58 @@ import type { App } from '../../types';
 import { processStripeWebhook } from '../../lib/billing';
 import { unsubscribe } from '../../lib/digests';
 import { youtubeOAuthCallback } from '../../lib/oauth';
-import { ApiError, text } from '../../lib/http';
+import { ApiError, body, text } from '../../lib/http';
+import { claimLandingDemoQuota, type LandingDemoQuota } from '../../lib/landing-demo';
+import { routeInput } from '../../lib/youtube';
+import { getProvider } from '../../providers';
 
 export const publicRoutes = new Hono<App>();
+
+publicRoutes.post('/demo/youtube/inspect', async (c) => {
+  const payload = await body<{ url?: unknown }>(c.req.raw);
+  const input = routeInput(text(payload.url, 500));
+  if (input.kind !== 'video') {
+    throw new ApiError(422, 'VIDEO_URL_REQUIRED', 'Enter a public YouTube video URL.');
+  }
+
+  const quota = await claimLandingDemoQuota(c.env, c.req.raw, input.id);
+  const provider = getProvider('youtube');
+  const [videoResult, transcriptResult, commentsResult] = await Promise.allSettled([
+    provider.getVideo(c.env, input.id),
+    provider.getTranscript(c.env, input.id),
+    provider.getComments(c.env, input.id),
+  ]);
+
+  if (videoResult.status === 'rejected') throw inspectionError(videoResult.reason);
+
+  c.header('X-Demo-Limit', String(quota.limit));
+  c.header('X-Demo-Remaining', String(quota.remaining));
+  c.header('X-Demo-Reset', quota.resetAt);
+
+  const transcript = transcriptResult.status === 'fulfilled'
+    ? {
+        status: 'ready' as const,
+        track: transcriptResult.value.value.track,
+        segmentCount: transcriptResult.value.value.segments.length,
+        segments: transcriptResult.value.value.segments.slice(0, 16),
+      }
+    : { status: 'unavailable' as const };
+  const comments = commentsResult.status === 'fulfilled'
+    ? {
+        status: 'ready' as const,
+        totalCount: commentsResult.value.value.totalCount,
+        comments: commentsResult.value.value.comments.slice(0, 4),
+      }
+    : { status: 'unavailable' as const };
+
+  return c.json({
+    video: videoResult.value.value,
+    transcript,
+    comments,
+    quota,
+    partial: transcript.status !== 'ready' || comments.status !== 'ready',
+  });
+});
 
 publicRoutes.post('/billing/webhook', async (c) => {
   await processStripeWebhook(c.env, c.req.raw);
@@ -24,3 +73,8 @@ publicRoutes.get('/oauth/youtube/callback', async (c) => {
   await youtubeOAuthCallback(c.env, code, state);
   return c.redirect(`${c.env.APP_ORIGIN}/settings/connections?youtube=connected`, 302);
 });
+
+function inspectionError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error;
+  return new ApiError(503, 'VIDEO_INSPECTION_UNAVAILABLE', 'This video could not be inspected right now.');
+}

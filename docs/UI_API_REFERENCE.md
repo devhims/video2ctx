@@ -20,6 +20,7 @@ Browser
 - Private routes: Better Auth session cookie required
 - Local development: `x-demo-user` creates a stable demo user when `ENVIRONMENT` is not `production`
 - Public protection: selected discovery routes use a Cloudflare rate limiter; `/v1/resolve` also requires Turnstile in production
+- Landing proof: `POST /v1/demo/youtube/inspect` is anonymous and allows five distinct videos per visitor in a rolling 24-hour window
 - Errors: `{ "error": { "code": string, "message": string, "details"?: unknown, "requestId"?: string } }`
 - Traceability: every platform response receives an `X-Request-Id` header
 
@@ -65,6 +66,7 @@ The UI loads these requests concurrently:
 | `GET` | `/v1/providers` | List supported providers and capabilities | Authenticated |
 | `GET` | `/v1/providers/youtube/browse` | Seed the source inbox | Authenticated, rate-limited |
 | `POST` | `/v1/resolve` | Internal universal-input routing helper | First-party UI, protected |
+| `POST` | `/v1/demo/youtube/inspect` | Bounded video, transcript, and comments preview | Public landing page, IP quota |
 | `GET` | `/v1/providers/youtube/search` | Search YouTube | Authenticated, rate-limited |
 | `GET` | `/v1/search` | Search private indexed evidence | Authenticated |
 | `GET` | `/v1/providers/youtube/videos/:id` | Inspect a video | Authenticated |
@@ -114,6 +116,12 @@ The response includes a redirect `url`. Better Auth handles the OAuth callback a
 ## UI helper APIs
 
 These routes support first-party interface behavior and are not primary public consumer APIs.
+
+### `POST /v1/demo/youtube/inspect`
+
+The public landing page sends `{ "url": "https://www.youtube.com/watch?v=..." }` directly to the platform so Cloudflare can identify the visitor IP. The response includes normalized video metadata, up to 16 timestamped transcript segments, up to four comments, partial-data status, and the visitor's current quota.
+
+The quota is five distinct YouTube video IDs per HMAC-hashed IP in the trailing 24 hours. Repeating a video in that window does not consume another slot. Upstash Redis evaluates the cleanup, duplicate check, count, and insert atomically. Production requests fail closed if Redis or the hashing salt is unavailable.
 
 ### `POST /v1/resolve`
 
