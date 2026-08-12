@@ -1,8 +1,12 @@
-/* Hallmark · macrostructure: Feature Stack · tone: technical-austere · anchor hue: vermilion
- * nav: N10 Floating-on-scroll morph · footer: Ft5 Statement
- * enrichment: scroll-scrubbed CSS/SVG decomposition stage (footage deferred)
- * pre-emit critique: P5 H5 E5 S5 R5 V5
- * genre: modern-minimal · theme: existing-brand-DNA
+/* Shared tokens. Two systems draw on this file:
+ *
+ *   dashboard  --color-dashboard-*  light paper, the application shell
+ *   landing    --color-home-*       light paper, used by /explore contenders
+ *
+ * The live landing direction (Craft) declares its own dark palette locally in
+ * app/craft.css and is stamped there. Its tokens are NOT here — see debt 1 in
+ * web/DESIGN.md. Do not add a macrostructure stamp to this file: it is shared
+ * by several directions and any single stamp is wrong for the others.
  */
 :root {
   --color-home-paper: oklch(96.5% 0.012 83);

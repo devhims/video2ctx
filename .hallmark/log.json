@@ -1,5 +1,31 @@
 [
   {
+    "date": "2026-08-12",
+    "macrostructure": "Marquee Hero",
+    "theme": "custom",
+    "theme_axes": "dark / grotesk-sans display / warm",
+    "vibe": "quiet, crafted, nocturnal developer tool",
+    "enrichment": "E-video \u2014 looping voxel scene with a pointer-tracked flashlight",
+    "nav": "N2 Floating chip",
+    "footer": "Ft4 Dense typographic colophon",
+    "brief": "Landing rebuild: the fold is the inspect form; motion budgeted by frequency",
+    "knob_deltas": "palette=dark custom (first non-light landing); motion=emil-design-eng curves; tabs=clip-path",
+    "pre_emit": "P5 H5 E5 S5 R5 V5",
+    "slop_test": "not run \u2014 see DESIGN.md debt 4 (state coverage incomplete)"
+  },
+  {
+    "date": "2026-08-12",
+    "macrostructure": "Feature Stack",
+    "theme": "existing-brand-DNA",
+    "theme_axes": "light / grotesk-sans display / warm",
+    "enrichment": "Tier-A CSS decomposition stage, scroll-scrubbed",
+    "nav": "N10 Floating-on-scroll morph",
+    "footer": "Ft5 Statement",
+    "brief": "Decomposition direction \u2014 contender, not shipped; lives at /explore/decomposition",
+    "pre_emit": "P5 H5 E5 S5 R5 V5",
+    "slop_test": "not run"
+  },
+  {
     "date": "2026-08-03",
     "macrostructure": "Workbench",
     "theme": "existing-brand-DNA",
