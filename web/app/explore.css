@@ -1,0 +1,197 @@
+/* Internal comparison surface. Deliberately plain — it is a workbench for
+ * judging the directions, not itself a design to judge. */
+
+.explore {
+  min-height: 100svh;
+  padding: clamp(3rem, 8vw, 6rem) clamp(var(--space-md), 6vw, 5rem);
+  background: var(--color-home-paper);
+  color: var(--color-home-ink);
+  font-family: var(--font-home-body);
+}
+
+.explore-head {
+  max-width: 46rem;
+}
+
+.explore-eyebrow {
+  margin: 0;
+  color: var(--color-home-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.explore h1 {
+  margin: var(--space-md) 0 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 725;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.explore-lede {
+  margin: var(--space-lg) 0 0;
+  color: var(--color-home-ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.explore-list {
+  max-width: 62rem;
+  margin: clamp(var(--space-2xl), 5vw, 4rem) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-xl);
+}
+
+.explore-list li {
+  padding-top: var(--space-lg);
+  border-top: var(--rule-home) solid var(--color-home-rule-strong);
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
+.explore-index {
+  margin: 0;
+  color: var(--color-home-accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.7rem;
+}
+
+.explore-list h2 {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.explore-list h2 a {
+  color: var(--color-home-ink);
+  text-underline-offset: 0.2em;
+}
+
+.explore-tag {
+  padding: 0.15rem var(--space-xs);
+  border-radius: var(--radius-home-pill);
+  background: color-mix(in oklch, var(--color-home-accent) 14%, transparent);
+  color: var(--color-home-accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.explore-premise {
+  max-width: 44rem;
+  margin: var(--space-sm) 0 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.explore-meta {
+  margin: var(--space-lg) 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+
+.explore-meta > div {
+  min-width: 0;
+}
+
+.explore-meta dt {
+  color: var(--color-home-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.explore-meta dd {
+  margin: var(--space-xs) 0 0;
+  color: var(--color-home-ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.explore-note {
+  max-width: 44rem;
+  margin: clamp(var(--space-2xl), 5vw, 4rem) 0 0;
+  color: var(--color-home-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------- switcher */
+
+.direction-switcher {
+  min-height: 3rem;
+  padding: var(--space-2xs);
+  border-radius: var(--radius-home-pill);
+  background: oklch(20% 0.012 75 / 0.94);
+  box-shadow: 0 0.75rem 2.5rem oklch(20% 0.012 75 / 0.24);
+  color: oklch(96.5% 0.012 83);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  position: fixed;
+  z-index: 40;
+  inset: auto auto var(--space-md) 50%;
+  transform: translateX(-50%);
+  backdrop-filter: blur(0.5rem);
+}
+
+.direction-switcher a {
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  border-radius: var(--radius-home-pill);
+  background: oklch(96.5% 0.012 83 / 0.12);
+  color: inherit;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.direction-switcher-index {
+  padding-inline: var(--space-md);
+  font-size: 0.7rem !important;
+}
+
+.direction-switcher span {
+  min-width: 9rem;
+  padding-inline: var(--space-sm);
+  display: grid;
+  gap: 0.1rem;
+  text-align: center;
+}
+
+.direction-switcher b {
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.direction-switcher small {
+  color: oklch(96.5% 0.012 83 / 0.6);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+}
+
+@media (max-width: 720px) {
+  .explore-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-xs);
+  }
+
+  .explore-meta {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-md);
+  }
+}

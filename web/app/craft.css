@@ -1,0 +1,1125 @@
+/* Hallmark · macrostructure: Marquee Hero · nav: N2 floating chip · footer: Ft4 colophon
+ * theme: custom — near-black paper, warm off-white ink, vermilion carried over from the mark
+ * motion: per emil-design-eng — frequency-budgeted, transitions over keyframes,
+ *         transform/opacity only, exits faster than entrances
+ * pre-emit critique: P5 H5 E5 S5 R5 V5
+ */
+
+/* The dark page has to own the document, not just its own box. Without this the
+ * overscroll rubber-band flashes the light body colour at the top of the page,
+ * and the scrollbar, form controls and autofill all render in the light scheme
+ * on a near-black background. Nobody reports either one; everybody feels them. */
+html:has(.craft),
+html:has(.craft) body {
+  background: oklch(15.5% 0.006 75);
+  color-scheme: dark;
+}
+
+.craft {
+  --paper: oklch(15.5% 0.006 75);
+  --paper-raised: oklch(19% 0.007 75);
+  --ink: oklch(95% 0.006 83);
+  --ink-soft: oklch(72% 0.008 82);
+  --ink-muted: oklch(56% 0.008 80);
+  --rule: oklch(27% 0.008 78);
+  --rule-strong: oklch(36% 0.01 78);
+  --accent: oklch(66% 0.19 31);
+  --accent-ink: oklch(98% 0.006 83);
+
+  /* Emil's curves. The built-in CSS easings are too weak to read as
+   * intentional; these are the strong variants. `ease-in` is deliberately
+   * absent — it delays the first frame, which is the frame the user is
+   * watching most closely. */
+  --out: cubic-bezier(0.23, 1, 0.32, 1);
+  --in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Frequency-budgeted durations. Press feedback is the fastest thing on the
+   * page; the once-per-visit reveals are the slowest. */
+  --press: 140ms;
+  --control: 200ms;
+  --enter: 420ms;
+  --exit: 200ms;
+
+  min-height: 100svh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-home-body);
+  overflow-x: clip;
+}
+
+.craft *,
+.craft *::before,
+.craft *::after {
+  box-sizing: border-box;
+}
+
+.craft :where(a, button, input) {
+  font: inherit;
+}
+
+/* Never animated — a focus ring that fades in is a focus ring that arrives late. */
+.craft :where(a, button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* --------------------------------------------------------------- N2 chip */
+
+.craft-chip {
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-pill);
+  background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
+  backdrop-filter: blur(0.75rem);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-md);
+  position: fixed;
+  z-index: 20;
+  inset: var(--space-md) auto auto 50%;
+  transform: translateX(-50%);
+}
+
+.craft-chip > a {
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.78rem;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.craft-chip img {
+  display: block;
+}
+
+.craft-chip-action {
+  min-height: 1.9rem;
+  padding-inline: var(--space-md);
+  border-radius: var(--radius-home-pill);
+  background: var(--ink);
+  color: var(--paper) !important;
+  font-size: 0.74rem !important;
+  font-weight: 650 !important;
+  transition: transform var(--press) var(--out);
+}
+
+/* ---------------------------------------------------------- voxel horizon */
+
+/* A pre-rendered scene, composited entirely in CSS so it can be retuned without
+ * regenerating the artwork. Two rules keep it from competing with the input,
+ * which is the only thing on this screen that matters:
+ *   1. it is masked to fade out well above the headline, so no text is ever set
+ *      over terrain and contrast never depends on where a ridge happens to land
+ *   2. it never animates on its own — the only motion is a compositor-only
+ *      parallax on the scroll timeline, so there is no loop and no main-thread
+ *      work after the single decode */
+.voxel-field {
+  position: absolute;
+  z-index: 0;
+  inset: 26% 0 0;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+  /* No blanket opacity here any more. The resting scene and the lit scene each
+   * carry their own, so the contrast between them comes from presence rather
+   * than from a brightness filter — a filter strong enough to read as a torch
+   * also clips the scene's highlights to white. */
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    oklch(0% 0 0 / 0.2) 26%,
+    oklch(0% 0 0 / 0.72) 56%,
+    oklch(0% 0 0) 76%,
+    oklch(0% 0 0 / 0.45) 95%,
+    transparent 100%
+  );
+}
+
+.voxel-field picture,
+.voxel-field img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.voxel-field img {
+  /* Anchor to the bottom: the top of the scene is empty sky that would only
+   * push the terrain out of frame on short viewports. */
+  object-fit: cover;
+  object-position: 50% 100%;
+}
+
+/* Presence of the resting scene where no flashlight exists to lift it. */
+.voxel-base {
+  opacity: 0.32;
+}
+
+/* The scene at rest.
+ *
+ * Only dimmed where a pointer exists to light it again — these conditions are
+ * the same ones Flashlight mounts under, and the two must stay in step. On
+ * touch, or under reduced motion, the component never mounts, so dimming here
+ * would leave a scene nothing could recover. */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .voxel-base {
+    /* Dim enough that the light has somewhere to lift the scene from, but not
+     * so dim that the resting state reads as noise rather than as a place. */
+    opacity: 0.2;
+  }
+}
+
+/* The flashlight. A soft window onto the same scene, lit and slightly warmed,
+ * tracking the pointer. The feathered mask belongs to the lens and never moves
+ * relative to it, so travelling the light is a compositor transform with no
+ * repaint — only its position changes, never its paint. */
+.voxel-lens {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 460px;
+  height: 460px;
+  overflow: hidden;
+  opacity: 0;
+  will-change: transform;
+  filter: brightness(1.28) saturate(1.16);
+  transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
+  /* A long, gaussian-ish falloff that reaches zero exactly at the element edge.
+   * A radial-gradient with few stops hitting transparent well inside the box
+   * leaves a discernible rim — the eye finds the point where the ramp stops.
+   * More stops over a longer tail read as light falling off rather than as a
+   * circle. No border-radius either: the mask is what shapes the light, and a
+   * rounded clip on top of it can only ever re-introduce a hard edge. */
+  mask-image: radial-gradient(
+    circle at center,
+    oklch(0% 0 0) 0%,
+    oklch(0% 0 0 / 0.97) 14%,
+    oklch(0% 0 0 / 0.86) 28%,
+    oklch(0% 0 0 / 0.68) 40%,
+    oklch(0% 0 0 / 0.47) 52%,
+    oklch(0% 0 0 / 0.28) 64%,
+    oklch(0% 0 0 / 0.14) 76%,
+    oklch(0% 0 0 / 0.05) 87%,
+    oklch(0% 0 0 / 0.01) 95%,
+    transparent 100%
+  );
+}
+
+.voxel-lens[data-live='true'] {
+  opacity: 1;
+}
+
+/* A warm core, so it reads as a light source rather than as a brightness patch.
+ * Static relative to the lens, so it costs nothing while the lens moves. */
+.voxel-lens::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at center,
+    oklch(70% 0.16 33 / 0.14),
+    oklch(68% 0.17 32 / 0.08) 30%,
+    oklch(66% 0.18 31 / 0.03) 56%,
+    transparent 82%
+  );
+  mix-blend-mode: plus-lighter;
+  pointer-events: none;
+}
+
+.voxel-lens-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* The lit presence. Against a 0.2 base this composites to roughly a 3.5x
+   * lift, without touching the highlights. */
+  opacity: 0.66;
+  will-change: transform;
+}
+
+/* The portrait scene is 3:4, far taller than the field's box on a phone, so the
+ * box is raised to meet it — otherwise `cover` would scale to width and crop
+ * away the horizon and the monoliths, which are the whole reason for shipping a
+ * separate composition. */
+@media (orientation: portrait) and (max-width: 900px) {
+  .voxel-field {
+    inset: 20% 0 0;
+  }
+
+  .voxel-field img {
+    object-position: 50% 88%;
+  }
+
+}
+
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .voxel-field {
+      animation: voxel-drift linear both;
+      animation-timeline: scroll();
+      animation-range: 0 100svh;
+    }
+  }
+}
+
+/* A slow push into the scene, not just a slide past it.
+ *
+ * The scale was previously constant and only the translate moved, which read as
+ * a push-in on phones purely by accident: the portrait crop frames the world far
+ * more tightly, so identical pixels of drift cover much more of the scene there.
+ * Making the zoom explicit gets the same feel on every viewport instead of one
+ * that depends on how hard `cover` happens to be cropping.
+ *
+ * Starting above 1 guarantees the image still covers its box at every point, so
+ * the scale can never expose an edge. Both properties are compositor-only. */
+@keyframes voxel-drift {
+  from { transform: translate3d(0, 0, 0) scale(1.03); }
+  to { transform: translate3d(0, -4%, 0) scale(1.13); }
+}
+
+/* The portrait crop magnifies the scene, so the same ramp reads far stronger on
+ * a phone. Pulled back so both viewports feel like the same camera move.
+ *
+ * This has to sit after the @supports block above: that rule uses the
+ * `animation` shorthand, which resets animation-name, so an override placed
+ * earlier loses no matter how specific its media query is. */
+@media (orientation: portrait) and (max-width: 900px) {
+  .voxel-field {
+    animation-name: voxel-drift-portrait;
+  }
+}
+
+@keyframes voxel-drift-portrait {
+  from { transform: translate3d(0, 0, 0) scale(1.03); }
+  to { transform: translate3d(0, -3%, 0) scale(1.08); }
+}
+
+/* ------------------------------------------------------------------ fold */
+
+.craft-fold {
+  min-height: 100svh;
+  position: relative;
+  isolation: isolate;
+  padding: clamp(7rem, 16vh, 11rem) clamp(var(--space-md), 6vw, 3rem) clamp(4rem, 10vh, 7rem);
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  text-align: center;
+}
+
+.craft-fold > :not(.voxel-field) {
+  position: relative;
+  z-index: 1;
+}
+
+.craft-fold h1 {
+  max-width: 18ch;
+  margin: 0;
+  font-size: clamp(2.4rem, 7vw, 4.75rem);
+  font-weight: 680;
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.craft-sub {
+  max-width: 34ch;
+  margin: var(--space-lg) 0 0;
+  color: var(--ink-soft);
+  font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
+  line-height: 1.55;
+  text-wrap: balance;
+}
+
+/* ------------------------------------------------------------------ form */
+
+.craft-demo {
+  width: min(100%, 40rem);
+  margin-top: clamp(var(--space-xl), 5vh, var(--space-2xl));
+}
+
+.craft-form {
+  padding: var(--space-2xs);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: var(--paper-raised);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2xs);
+  transition: border-color var(--control) var(--out);
+}
+
+.craft-form:focus-within {
+  border-color: var(--ink-muted);
+}
+
+.craft-form input {
+  min-width: 0;
+  min-height: 3rem;
+  padding-inline: var(--space-lg);
+  border: 0;
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.craft-form input::placeholder {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+.craft-form button {
+  min-height: 3rem;
+  min-width: 8.5rem;
+  padding-inline: var(--space-lg);
+  border: 0;
+  border-radius: var(--radius-home-pill);
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: transform var(--press) var(--out);
+}
+
+/* Instant, physical press feedback. This is the whole point of the control. */
+.craft-form button:active {
+  transform: scale(0.97);
+}
+
+.craft-form button:disabled {
+  cursor: progress;
+}
+
+/* The label swaps under a light blur instead of hard-cutting between words.
+ * Without it you briefly see two distinct strings overlapping; blur blends them
+ * into a single transformation. Kept well under the 20px where it gets
+ * expensive in Safari. */
+.craft-button-label {
+  transition: filter var(--control) var(--out), opacity var(--control) var(--out);
+}
+
+.craft-form button[data-state='loading'] .craft-button-label {
+  filter: blur(2px);
+  opacity: 0.72;
+}
+
+/* A faster spinner makes the wait feel shorter even when it is not. */
+.craft-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid color-mix(in oklch, var(--accent-ink) 35%, transparent);
+  border-top-color: var(--accent-ink);
+  border-radius: 50%;
+  animation: craft-spin 600ms linear infinite;
+}
+
+@keyframes craft-spin {
+  to { transform: rotate(360deg); }
+}
+
+.craft-form-note {
+  min-height: 1.5rem;
+  margin: var(--space-md) 0 0;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.craft-error {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- result */
+
+.craft-result {
+  margin-top: clamp(var(--space-2xl), 6vh, 4rem);
+  text-align: left;
+}
+
+/* Staggered entrance. 45ms steps, and @starting-style handles the entry without
+ * a mounted-state effect in React. */
+.craft-result > * {
+  transition:
+    opacity var(--enter) var(--out),
+    transform var(--enter) var(--out);
+  transition-delay: calc(var(--i) * 45ms);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.craft-result-head h2 {
+  margin: 0;
+  font-size: clamp(1.15rem, 2.4vw, 1.5rem);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.craft-result-head p {
+  margin: var(--space-sm) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.craft-result-head a {
+  color: var(--ink-soft);
+  text-underline-offset: 0.2em;
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+.craft-tabs {
+  margin-top: var(--space-xl);
+}
+
+.craft-tablist {
+  --clip-left: 0%;
+  --clip-right: 66%;
+  padding: var(--space-3xs);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-pill);
+  background: var(--paper-raised);
+  display: inline-grid;
+  grid-auto-flow: column;
+  position: relative;
+  isolation: isolate;
+}
+
+.craft-tablist button,
+.craft-tablist-active span {
+  min-height: 2.25rem;
+  padding-inline: var(--space-lg);
+  border: 0;
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.craft-tablist button {
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color var(--control) var(--out);
+}
+
+/* The duplicate row, styled as if every tab were active, then clipped to just
+ * the active one. Animating the clip means the label changes colour exactly at
+ * the moving edge of the pill — a crossfade between two text colours can never
+ * land that cleanly, no matter how the timing is tuned. */
+.craft-tablist-active {
+  padding: inherit;
+  border-radius: inherit;
+  display: inline-grid;
+  grid-auto-flow: column;
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  clip-path: inset(0 var(--clip-right) 0 var(--clip-left) round var(--radius-home-pill));
+  background: var(--ink);
+  color: var(--paper);
+  pointer-events: none;
+  transition: clip-path var(--control) var(--in-out);
+}
+
+.craft-panel {
+  min-height: 18rem;
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--rule);
+}
+
+.craft-transcript,
+.craft-comments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.craft-transcript li {
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--rule);
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
+.craft-transcript a {
+  color: var(--accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.craft-transcript p,
+.craft-comments p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.craft-comments li {
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.craft-comment-author {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--ink) !important;
+  font-size: 0.78rem !important;
+  font-weight: 600;
+}
+
+.craft-comment-author b {
+  padding: 0.1rem var(--space-xs);
+  border-radius: var(--radius-home-pill);
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+}
+
+.craft-comments > li > p + p {
+  margin-top: var(--space-xs);
+}
+
+.craft-channel {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-lg);
+}
+
+.craft-channel dt {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.craft-channel dd {
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+
+.craft-channel a {
+  color: var(--ink);
+  text-underline-offset: 0.2em;
+}
+
+.craft-empty {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+/* --------------------------------------------------------------- reveals */
+
+/* Scroll-driven in CSS, with no observer and no JS state.
+ *
+ * The previous version hid the section with clip-path and removed the clip when
+ * an IntersectionObserver reported it on screen. That deadlocks: Chromium folds
+ * an element's own clip-path into its intersection rect, so `inset(0 0 100% 0)`
+ * collapses the target to zero height and it can never intersect — the property
+ * doing the hiding is the same one preventing its own removal. Verified in
+ * Chrome: the observer fired once at load and never again through a full-page
+ * scroll; setting clip-path:none made it fire immediately.
+ *
+ * A view() timeline has no such dependency, because it is computed from layout
+ * position rather than from what is painted. It also degrades the right way:
+ * where the timeline is unsupported the @supports block never applies and the
+ * content is simply visible, which is the correct fallback for content that
+ * must not depend on JS to exist.
+ */
+.craft-reveal {
+  /* Default state is visible. Anything else risks content that never appears. */
+  opacity: 1;
+}
+
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .craft-reveal {
+      animation: craft-reveal-in linear both;
+      animation-timeline: view();
+      /* Finish well before the section is centred, so it is fully readable by
+       * the time it is the thing you are looking at. */
+      animation-range: entry 5% entry 45%;
+    }
+  }
+}
+
+@keyframes craft-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.craft-parts,
+.craft-close {
+  padding: clamp(4rem, 12vh, 8rem) clamp(var(--space-md), 6vw, 3rem);
+  border-top: 1px solid var(--rule);
+}
+
+.craft-parts {
+  width: min(100%, 52rem);
+  margin-inline: auto;
+}
+
+.craft-parts h2,
+.craft-close h2 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+  font-weight: 680;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.craft-parts ul {
+  margin: var(--space-2xl) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.craft-parts li,
+.craft-ways li,
+.craft-trust > div {
+  transition-delay: calc(var(--i) * 45ms);
+}
+
+.craft-parts li {
+  padding: var(--space-md) 0;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-lg);
+}
+
+.craft-parts b {
+  min-width: 7rem;
+  font-size: 0.95rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.craft-parts span {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+/* ----------------------------------------------------------------- close */
+
+.craft-close {
+  width: min(100%, 46rem);
+  margin-inline: auto;
+  text-align: center;
+}
+
+.craft-close p {
+  margin: var(--space-lg) auto 0;
+  max-width: 46ch;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.craft-actions {
+  margin-top: var(--space-2xl);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.craft-primary,
+.craft-secondary {
+  min-height: 2.75rem;
+  padding-inline: var(--space-xl);
+  border-radius: var(--radius-home-pill);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.85rem;
+  font-weight: 620;
+  text-decoration: none;
+  transition: transform var(--press) var(--out);
+}
+
+.craft-primary {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.craft-secondary {
+  border: 1px solid var(--rule-strong);
+  color: var(--ink);
+}
+
+.craft-primary:active,
+.craft-secondary:active,
+.craft-chip-action:active {
+  transform: scale(0.97);
+}
+
+/* -------------------------------------------------------------- colophon */
+
+.craft-colophon {
+  padding: var(--space-2xl) clamp(var(--space-md), 6vw, 3rem);
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: var(--space-sm);
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+  line-height: 1.7;
+}
+
+.craft-colophon b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.craft-colophon a {
+  color: var(--ink-muted);
+  text-underline-offset: 0.2em;
+}
+
+
+/* --------------------------------------------------------- code sample */
+
+.craft-band {
+  width: min(100%, 58rem);
+  margin-inline: auto;
+  padding: clamp(4rem, 12vh, 7.5rem) clamp(var(--space-md), 6vw, 3rem);
+  border-top: 1px solid var(--rule);
+}
+
+.craft-band-head h2 {
+  margin: 0;
+  max-width: 22ch;
+  font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+  font-weight: 680;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.craft-band-head p {
+  max-width: 48ch;
+  margin: var(--space-lg) 0 0;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.craft-code {
+  margin-top: clamp(var(--space-xl), 4vh, var(--space-2xl));
+}
+
+.craft-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.craft-code-block {
+  margin: var(--space-lg) 0 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-lg);
+  background: oklch(12.5% 0.006 75);
+  overflow-x: auto;
+  color: var(--ink-soft);
+  font-family: var(--font-home-mono);
+  font-size: 0.78rem;
+  line-height: 1.75;
+  tab-size: 2;
+}
+
+.craft-code-block code {
+  font: inherit;
+  white-space: pre;
+}
+
+.craft-code-note {
+  margin: var(--space-md) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+/* Both labels sit stacked in the same grid cell and crossfade in place, so the
+ * button never resizes mid-press. Success is quiet — no toast, no bounce. */
+.craft-copy {
+  min-height: 2.25rem;
+  padding-inline: var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: transform var(--press) var(--out), color var(--control) var(--out);
+}
+
+.craft-copy:active {
+  transform: scale(0.97);
+}
+
+.craft-copy > span[aria-hidden] {
+  grid-area: 1 / 1;
+  transition: opacity var(--control) var(--out), filter var(--control) var(--out);
+}
+
+.craft-copy > span[aria-hidden]:nth-child(2),
+.craft-copy[data-copied='true'] > span[aria-hidden]:nth-child(1) {
+  opacity: 0;
+  filter: blur(2px);
+}
+
+.craft-copy[data-copied='true'] {
+  color: var(--accent);
+}
+
+.craft-copy[data-copied='true'] > span[aria-hidden]:nth-child(2) {
+  opacity: 1;
+  filter: none;
+}
+
+.craft-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* -------------------------------------------------------------- ways in */
+
+.craft-ways {
+  margin: clamp(var(--space-xl), 4vh, var(--space-2xl)) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-xl);
+}
+
+.craft-ways li {
+  min-width: 0;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--rule-strong);
+  display: grid;
+  align-content: start;
+  gap: var(--space-sm);
+}
+
+.craft-ways h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.craft-ways p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.craft-ways a {
+  margin-top: var(--space-xs);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.82rem;
+  font-weight: 620;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.craft-ways a span {
+  transition: transform var(--control) var(--out);
+}
+
+/* ---------------------------------------------------------------- trust */
+
+.craft-trust {
+  margin: clamp(var(--space-xl), 4vh, var(--space-2xl)) 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-xl) clamp(var(--space-xl), 5vw, 3.5rem);
+}
+
+.craft-trust > div {
+  min-width: 0;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--rule);
+}
+
+.craft-trust dt {
+  font-size: 0.95rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.craft-trust dd {
+  max-width: 40ch;
+  margin: var(--space-sm) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.65;
+}
+
+/* ------------------------------------------------------------ hover only */
+
+/* Touch devices fire hover on tap, so every hover state is gated. */
+@media (hover: hover) and (pointer: fine) {
+  .craft-tablist button:hover {
+    color: var(--ink-soft);
+  }
+
+  .craft-chip-action:hover,
+  .craft-primary:hover,
+  .craft-secondary:hover,
+  .craft-form button:hover {
+    transform: translateY(-1px);
+  }
+
+  .craft-colophon a:hover,
+  .craft-result-head a:hover {
+    color: var(--ink);
+  }
+
+  .craft-copy:hover {
+    color: var(--ink);
+  }
+
+  .craft-ways a:hover span {
+    transform: translateX(3px);
+  }
+}
+
+@media (max-width: 900px) {
+  .craft-ways,
+  .craft-trust {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-lg);
+  }
+}
+
+@media (max-width: 640px) {
+  .craft-code-block {
+    padding: var(--space-md);
+    font-size: 0.72rem;
+  }
+
+  .craft-code-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .craft-form {
+    grid-template-columns: minmax(0, 1fr);
+    border-radius: var(--radius-home-lg);
+  }
+
+  .craft-form input,
+  .craft-form button {
+    border-radius: calc(var(--radius-home-lg) - 0.25rem);
+  }
+
+  .craft-tablist {
+    width: 100%;
+    grid-auto-flow: row;
+    grid-auto-columns: unset;
+  }
+
+  /* The clipped duplicate assumes a horizontal row; on a stacked list it would
+   * clip the wrong axis, so it is retired and colour handles the active state. */
+  .craft-tablist-active {
+    display: none;
+  }
+
+  .craft-tablist button[aria-selected='true'] {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  .craft-transcript li {
+    grid-template-columns: 3rem minmax(0, 1fr);
+    gap: var(--space-sm);
+  }
+}
+
+/* Reduced motion means fewer and gentler, not none — opacity survives because
+ * it aids comprehension; movement and clipping do not. */
+@media (prefers-reduced-motion: reduce) {
+  .craft *,
+  .craft *::before,
+  .craft *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 150ms !important;
+  }
+
+  .craft-result > *,
+  .craft-reveal[data-seen='false'],
+  .craft-reveal[data-seen='true'] {
+    clip-path: none;
+    transform: none;
+  }
+
+  .craft-spinner {
+    animation-duration: 900ms !important;
+    animation-iteration-count: infinite !important;
+  }
+}

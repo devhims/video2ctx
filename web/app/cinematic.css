@@ -1,0 +1,423 @@
+/* Hallmark · Feature Stack — the scroll-driven decomposition band.
+ *
+ * Two modes share one set of markup:
+ *   [data-scrub='off']  static stacked list. The no-JS, phone, and
+ *                       reduced-motion state. Reads correctly top to bottom.
+ *   [data-scrub='on']   pinned stage. The engine writes `--p` (0..1) on the
+ *                       track; every layer below derives its motion from it.
+ *
+ * Only transform and opacity animate. `--p` is registered as a real <number> so
+ * it interpolates and clamps instead of being treated as an opaque token.
+ */
+
+@property --p {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+.cinematic {
+  --beats: 6;
+  position: relative;
+  background-color: var(--color-stage-void);
+  color: var(--color-stage-ink);
+  /* The page's only remaining texture, deliberately scoped to this band rather
+   * than applied globally the way the old dot-grid was. */
+  background-image:
+    radial-gradient(ellipse 80% 55% at 68% 42%, oklch(68% 0.19 31 / 0.07), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 8% 90%, oklch(60% 0.05 250 / 0.05), transparent 70%);
+}
+
+/* ---------------------------------------------------------------- copy rail */
+
+.cinematic-head {
+  max-width: 34rem;
+}
+
+.cinematic-eyebrow {
+  margin: 0;
+  color: var(--color-stage-accent);
+  font-family: var(--font-home-pixel);
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+
+.cinematic-head h2 {
+  margin: var(--space-md) 0 0;
+  font-family: var(--font-home-display);
+  font-size: clamp(1.9rem, 3.2vw, 2.9rem);
+  font-weight: 725;
+  letter-spacing: -0.045em;
+  line-height: 1.03;
+  text-wrap: balance;
+}
+
+.cinematic-beats {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cinematic-beat-index {
+  margin: 0;
+  color: var(--color-stage-accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+}
+
+.cinematic-beat h3 {
+  margin: var(--space-xs) 0 0;
+  font-size: clamp(1.35rem, 2vw, 1.85rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
+.cinematic-beat-line {
+  max-width: 30rem;
+  margin: var(--space-md) 0 0;
+  color: var(--color-stage-ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+/* ----------------------------------------------------------- static fallback */
+
+.cinematic[data-scrub='off'] .cinematic-track {
+  padding: clamp(3.5rem, 8vw, 7rem) clamp(var(--space-md), 6vw, 5rem);
+}
+
+.cinematic[data-scrub='off'] .cinematic-beats {
+  margin-top: var(--space-2xl);
+  display: grid;
+  gap: var(--space-2xl);
+}
+
+.cinematic[data-scrub='off'] .cinematic-beat {
+  padding-top: var(--space-lg);
+  border-top: var(--rule-home) solid var(--color-stage-rule);
+}
+
+/* In static mode the substrate is one still image of the idea, not a stage. */
+.cinematic[data-scrub='off'] .stage {
+  margin-top: var(--space-2xl);
+  aspect-ratio: 16 / 10;
+}
+
+.cinematic[data-scrub='off'] .stage-frame {
+  --p: 0.34;
+}
+
+/* ------------------------------------------------------------- pinned stage */
+
+.cinematic[data-scrub='on'] .cinematic-track {
+  /* Scroll distance: roughly one 85vh beat each, plus a viewport for the pin to
+   * travel through. Longer than this reads as a hostage situation. */
+  height: calc(var(--beats) * 85svh + 100svh);
+}
+
+.cinematic[data-scrub='on'] .cinematic-pin {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+  padding: clamp(var(--space-lg), 4vw, 3.5rem) clamp(var(--space-md), 5vw, 4.5rem);
+  display: grid;
+  grid-template-columns: minmax(21rem, 0.82fr) minmax(0, 1.18fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(var(--space-lg), 4vw, 4rem);
+  overflow: hidden;
+}
+
+.cinematic[data-scrub='on'] .cinematic-head {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.cinematic[data-scrub='on'] .cinematic-beats {
+  grid-column: 1;
+  grid-row: 2;
+  position: relative;
+  align-self: center;
+  min-height: 0;
+}
+
+.cinematic[data-scrub='on'] .stage {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: center;
+}
+
+/* Beat crossfade — motion primitive 2 of 3. The beats occupy the same space and
+ * hand off; only the active one is in the reading position. */
+.cinematic[data-scrub='on'] .cinematic-beat {
+  position: absolute;
+  inset: auto 0 auto 0;
+  transition:
+    opacity var(--dur-long) var(--ease-out),
+    transform var(--dur-long) var(--ease-out),
+    visibility 0s linear var(--dur-long);
+}
+
+.cinematic[data-scrub='on'] .cinematic-beat[data-state='active'] {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.cinematic[data-scrub='on'] .cinematic-beat[data-state='past'] {
+  opacity: 0;
+  transform: translateY(-1.75rem);
+  visibility: hidden;
+}
+
+.cinematic[data-scrub='on'] .cinematic-beat[data-state='future'] {
+  opacity: 0;
+  transform: translateY(1.75rem);
+  visibility: hidden;
+}
+
+/* --------------------------------------------------------------- the stage */
+
+.stage {
+  position: relative;
+  min-width: 0;
+}
+
+.stage-frame {
+  /* Per-beat local progress. Each --pN ramps 0 → 1 across its own sixth of the
+   * timeline, so a layer can own one beat without knowing about the others. */
+  --p0: clamp(0, calc(var(--p) * 6), 1);
+  --p1: clamp(0, calc(var(--p) * 6 - 1), 1);
+  --p2: clamp(0, calc(var(--p) * 6 - 2), 1);
+  --p3: clamp(0, calc(var(--p) * 6 - 3), 1);
+  --p4: clamp(0, calc(var(--p) * 6 - 4), 1);
+  --p5: clamp(0, calc(var(--p) * 6 - 5), 1);
+
+  height: 100%;
+  min-height: 22rem;
+  border: var(--rule-home) solid var(--color-stage-rule);
+  border-radius: var(--radius-home-lg);
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 46%, oklch(24% 0.012 72), var(--color-stage-void-deep));
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  perspective: 60rem;
+  transform-style: preserve-3d;
+}
+
+.stage-haze {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 42% 70% at 22% 50%, oklch(68% 0.19 31 / 0.16), transparent 68%);
+  opacity: calc(0.5 + var(--p) * 0.5);
+  pointer-events: none;
+}
+
+/* The subject. Present through every beat, receding as the camera pulls out. */
+.stage-slab {
+  --slab-w: 42%;
+  width: var(--slab-w);
+  aspect-ratio: 16 / 9;
+  border: var(--rule-home) solid oklch(72% 0.02 70 / 0.35);
+  border-radius: var(--radius-home-sm);
+  background: linear-gradient(148deg, var(--color-stage-slab-lit), var(--color-stage-slab));
+  box-shadow: var(--shadow-stage-glow);
+  position: absolute;
+  z-index: 4;
+  inset: 50% auto auto 50%;
+  overflow: hidden;
+  transform:
+    translate(-50%, -50%)
+    rotateY(calc(var(--p) * -20deg))
+    scale(calc(1 - var(--p) * 0.42))
+    translateZ(calc(var(--p) * -5rem));
+}
+
+.stage-slab-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(112deg, oklch(98% 0.01 80 / 0.16), transparent 46%);
+}
+
+/* Beat 1 — the front face delaminates into timestamped strata. */
+.stage-strata {
+  position: absolute;
+  z-index: 5;
+  inset: 50% auto auto 50%;
+  width: 42%;
+  aspect-ratio: 16 / 9;
+  transform:
+    translate(-50%, -50%)
+    rotateY(calc(-14deg - var(--p) * 6deg))
+    scale(calc(1 - var(--p) * 0.4));
+  transform-style: preserve-3d;
+  opacity: calc(var(--p1) * (1 - var(--p3) * 0.75));
+}
+
+.stage-strata i {
+  --lift: calc((var(--i) - 6.5) * var(--p1) * 0.42rem);
+  height: 0.1875rem;
+  border-radius: var(--radius-home-pill);
+  background: linear-gradient(90deg, var(--color-stage-accent), oklch(72% 0.02 70 / 0.25));
+  position: absolute;
+  inset: calc(6% + var(--i) * 6.4%) 8% auto 8%;
+  transform: translateY(var(--lift)) translateZ(calc(var(--p1) * 2rem));
+}
+
+/* Beat 2 — the identity plate separates and holds beside the slab. */
+.stage-plate {
+  width: 15%;
+  aspect-ratio: 1;
+  border: var(--rule-home) solid oklch(72% 0.02 70 / 0.45);
+  border-radius: 50%;
+  background: linear-gradient(160deg, oklch(40% 0.03 60), var(--color-stage-slab));
+  position: absolute;
+  z-index: 6;
+  inset: 50% auto auto 50%;
+  opacity: var(--p2);
+  transform:
+    translate(-50%, -50%)
+    translate(calc(var(--p2) * 9rem), calc(var(--p2) * -6.5rem))
+    scale(calc(0.5 + var(--p2) * 0.5));
+}
+
+/* Beat 3 — audience response wells up from behind the slab. */
+.stage-motes {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  opacity: calc(var(--p3) * (1 - var(--p5) * 0.8));
+}
+
+.stage-motes i {
+  width: 3.1rem;
+  height: 1.6rem;
+  border: var(--rule-home) solid oklch(72% 0.02 70 / 0.3);
+  border-radius: var(--radius-home-sm);
+  background: oklch(30% 0.014 72 / 0.85);
+  position: absolute;
+  inset: calc(16% + var(--i) * 10.5%) 7% auto auto;
+  transform:
+    translateX(calc((1 - var(--p3)) * 7rem))
+    translateY(calc((1 - var(--p3)) * 2rem));
+}
+
+/* Beat 4 — the slab is revealed as one card in an ordered series. */
+.stage-strip {
+  position: absolute;
+  z-index: 2;
+  inset: 50% auto auto 50%;
+  width: 42%;
+  aspect-ratio: 16 / 9;
+  transform: translate(-50%, -50%);
+  transform-style: preserve-3d;
+  opacity: calc(var(--p4) * (1 - var(--p5) * 0.65));
+}
+
+.stage-strip i {
+  position: absolute;
+  inset: 0;
+  border: var(--rule-home) solid oklch(72% 0.02 70 / 0.22);
+  border-radius: var(--radius-home-sm);
+  background: oklch(24% 0.012 72 / 0.9);
+  transform:
+    translateX(calc(var(--i) * var(--p4) * -4.4rem))
+    translateZ(calc(var(--i) * var(--p4) * -2.2rem))
+    scale(calc(1 - var(--i) * var(--p4) * 0.06));
+  opacity: calc(1 - var(--i) * 0.17);
+}
+
+/* Beat 5 — the series widens into a searchable field. */
+.stage-field {
+  position: absolute;
+  z-index: 1;
+  inset: 12% 6% 14% 6%;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.55rem;
+  opacity: var(--p5);
+  transform: rotateX(calc(var(--p5) * 26deg)) scale(calc(0.86 + var(--p5) * 0.14));
+  transform-origin: center 65%;
+}
+
+.stage-field i {
+  border: var(--rule-home) solid oklch(72% 0.02 70 / 0.16);
+  border-radius: 0.1875rem;
+  background: oklch(23% 0.012 72 / 0.8);
+}
+
+/* The query beam that isolates a cluster of results. */
+.stage-beam {
+  width: 34%;
+  position: absolute;
+  z-index: 7;
+  inset: 12% auto 14% 0;
+  background: linear-gradient(90deg, transparent, oklch(68% 0.19 31 / 0.14), transparent);
+  opacity: var(--p5);
+  transform: translateX(calc(var(--p5) * 180%));
+  pointer-events: none;
+}
+
+.stage-readout {
+  margin: var(--space-md) 0 0;
+  color: var(--color-stage-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+}
+
+.stage-readout span {
+  color: var(--color-stage-accent);
+}
+
+/* ------------------------------------------------------------- responsive */
+
+@media (max-width: 1080px) {
+  /* Below this the two-column pin has nowhere to put the stage, and the skill's
+   * own guidance is that sticky + scroll-sync is rough on small screens. The
+   * static list is not a degraded version — it is the designed fallback. */
+  .cinematic[data-scrub='on'] .cinematic-track {
+    height: auto;
+  }
+
+  .cinematic[data-scrub='on'] .cinematic-pin {
+    position: static;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    padding: clamp(3rem, 8vw, 5rem) clamp(var(--space-md), 5vw, 3rem);
+  }
+
+  .cinematic[data-scrub='on'] .cinematic-beats {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: var(--space-2xl);
+    display: grid;
+    gap: var(--space-2xl);
+  }
+
+  .cinematic[data-scrub='on'] .cinematic-beat {
+    position: static;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    padding-top: var(--space-lg);
+    border-top: var(--rule-home) solid var(--color-stage-rule);
+  }
+
+  .cinematic[data-scrub='on'] .stage {
+    grid-column: 1;
+    grid-row: auto;
+    order: -1;
+    aspect-ratio: 16 / 10;
+  }
+
+  .cinematic[data-scrub='on'] .stage-frame {
+    --p: 0.34;
+  }
+}

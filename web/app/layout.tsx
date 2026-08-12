@@ -8,7 +8,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'video2ctx',
   description:
-    'Connect agents to video data through one evidence-aware API and research workspace.',
+    'Paste a YouTube URL and get back the transcript, channel, comments, playlist and search context around it — normalised, with every moment still linked to its source.',
   applicationName: 'video2ctx',
 };
 
