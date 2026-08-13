@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
-    "dev:local": "wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev:local": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
     "build": "tsc --noEmit",
     "test": "vitest run && npm --prefix youtube-processor test",
     "verify": "npm ci --prefix youtube-processor && npm run build && npm test",
