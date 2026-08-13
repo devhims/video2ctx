@@ -1,0 +1,22 @@
+---
+title: "Choose video data"
+description: "Understand the datasets available when a video opens."
+---
+
+Video details are included automatically. Choose one or more additional datasets before opening a result.
+
+<CardGroup cols={3}>
+  <Card title="Transcript" icon="closed-captioning">
+    Complete timestamped spoken text, including the selected track and source metadata.
+  </Card>
+  <Card title="Comments" icon="comments">
+    Public audience responses with continuation-based pagination when more pages are available.
+  </Card>
+  <Card title="Channel information" icon="circle-user">
+    Creator profile, description, links, thumbnails, channel URLs, and available public totals.
+  </Card>
+</CardGroup>
+
+At least one additional dataset remains selected. If you only need core video metadata, use the API directly through the [video endpoint](/api/entities).
+
+Responses preserve source metadata and warnings. Optional upstream fields can be absent; display text and numeric values are returned separately where YouTube provides both.

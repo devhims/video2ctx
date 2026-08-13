@@ -1,0 +1,48 @@
+---
+title: "Internal endpoint inventory"
+description: "Generated non-interactive inventory of first-party, callback, and operator operations."
+---
+
+<Warning>
+  These routes are documented for transparency and maintainers. They are intentionally excluded from the interactive API playground.
+</Warning>
+
+This page is generated from `platform/src/openapi.ts` and the exhaustive audience map. Do not edit it by hand.
+
+## First-party application operations
+
+Called by the video2ctx web application or an explicit signed-in account action.
+
+| Method | Path | Operation ID | Summary | Declared access | Safety notes |
+| --- | --- | --- | --- | --- | --- |
+| `POST` | `/api/auth/api-key/create` | `createApiKey` | Create a permanent API key | `sessionCookie` or `demoUser` | Creates a secret credential; expose the returned key once and keep it out of logs and client storage. |
+| `POST` | `/api/auth/api-key/delete` | `deleteApiKey` | Revoke an API key | `sessionCookie` or `demoUser` | Immediately revokes the selected credential; require an explicit user action. |
+| `GET` | `/api/auth/api-key/list` | `listApiKeys` | List the current user’s API keys | `sessionCookie` or `demoUser` | Returns credential metadata; restrict it to the current signed-in account. |
+| `POST` | `/api/auth/sign-in/magic-link` | `signInWithMagicLink` | Send a magic sign-in link | Public or protocol-signed | Sends account email; rate-limit callers and never disclose whether an address is registered. |
+| `POST` | `/api/auth/sign-in/social` | `signInWithSocialProvider` | Start Google sign-in | Public or protocol-signed | Starts an interactive browser sign-in; do not call it with API-key credentials. |
+| `DELETE` | `/v1/account` | `deleteAccount` | Permanently delete the current account | `sessionCookie` or `demoUser` | Destructive account operation; require deliberate confirmation and never automate it for a user. |
+| `POST` | `/v1/billing/checkout` | `createBillingCheckout` | Create a Stripe Checkout session | `sessionCookie` or `demoUser` | Starts an external checkout session; the user must review and complete payment with Stripe. |
+| `POST` | `/v1/demo/youtube/inspect` | `inspectLandingYouTubeVideo` | Inspect a YouTube video from the landing page | Public or protocol-signed | Public, rate-limited demo route; do not use it as a credentialed bulk-data API. |
+| `POST` | `/v1/notification-preferences/confirm-email` | `confirmNotificationEmail` | Confirm monitor email alerts from the signed-in dashboard | `sessionCookie` or `bearerApiKey` or `apiKey` or `demoUser` | Enables email delivery only for the signed-in account after validating the confirmation token. |
+| `DELETE` | `/v1/oauth/youtube` | `disconnectYouTube` | Disconnect the YouTube account | `sessionCookie` or `demoUser` | Mutates the account connection state; require an explicit user action. |
+| `GET` | `/v1/oauth/youtube/connect` | `createYouTubeConnectUrl` | Create a YouTube OAuth URL | `sessionCookie` or `demoUser` | Returns a state-bound OAuth URL; start it only from a user-initiated connection flow. |
+| `POST` | `/v1/resolve` | `resolveInput` | Route universal UI input | `sessionCookie` or `bearerApiKey` or `apiKey` or `demoUser` | First-party input router; its dispatch behavior is not a stable public API contract. |
+
+## Callbacks and signed links
+
+Called by an external provider or through a signed link with protocol-specific state.
+
+| Method | Path | Operation ID | Summary | Declared access | Safety notes |
+| --- | --- | --- | --- | --- | --- |
+| `POST` | `/v1/billing/webhook` | `handleStripeWebhook` | Handle a Stripe webhook | `stripeSignature` | Accept only Stripe-signed requests and preserve idempotent event handling. |
+| `GET` | `/v1/email/unsubscribe` | `unsubscribeEmail` | Unsubscribe from email digests | Public or protocol-signed | A signed link changes email preferences; do not expose or reuse its token. |
+| `POST` | `/v1/email/unsubscribe` | `unsubscribeEmailPost` | Unsubscribe from email digests | Public or protocol-signed | Changes email preferences; validate the signed request and avoid logging its token. |
+| `GET` | `/v1/oauth/youtube/callback` | `completeYouTubeOAuth` | Complete YouTube OAuth | Public or protocol-signed | OAuth callback; validate state and consume authorization codes only once. |
+
+## Operator operations
+
+Reserved for authorized video2ctx platform administration.
+
+| Method | Path | Operation ID | Summary | Declared access | Safety notes |
+| --- | --- | --- | --- | --- | --- |
+| `GET` | `/v1/admin/jobs` | `listAdminJobs` | List recent jobs across users | `sessionCookie` or `demoUser` | May expose cross-account operational metadata; restrict it to authorized operators. |

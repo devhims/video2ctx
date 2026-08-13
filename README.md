@@ -70,7 +70,7 @@ Useful entry points:
 - Interactive Scalar reference: <https://api.video2ctx.dev/docs>
 - OpenAPI 3.1 document: <https://api.video2ctx.dev/openapi.json>
 - Service health: <https://api.video2ctx.dev/health>
-- Detailed UI-to-API flows: [`docs/UI_API_REFERENCE.md`](./docs/UI_API_REFERENCE.md)
+- Detailed UI-to-API flows: [`reference/engineering/UI_API_REFERENCE.md`](./reference/engineering/UI_API_REFERENCE.md)
 
 ## Use the standalone library
 
@@ -114,6 +114,7 @@ npm ci --prefix packages/all-things-youtube
 npm ci --prefix platform
 npm ci --prefix platform/youtube-processor
 npm ci --prefix web
+npm ci --prefix docs
 
 cp platform/.dev.vars.example platform/.dev.vars
 ```
@@ -197,7 +198,7 @@ The Worker owns authentication, authorization, rate limits, credit metering, cac
 
 The processor image installs the pinned, published `all-things-youtube` version. Local library source is not copied into that production image. Publish and pin a library release before deploying platform behavior that depends on library changes.
 
-For the complete request path and reliability model, see [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md).
+For the complete request path and reliability model, see [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md).
 
 ## Repository layout
 
@@ -207,7 +208,8 @@ For the complete request path and reliability model, see [`docs/IMPLEMENTATION.m
 | [`platform/`](./platform)                                       | TypeScript/Hono Cloudflare Worker with auth, API keys, billing, D1, R2, KV, AI, queues, workflows, and OpenAPI   |
 | [`platform/youtube-processor/`](./platform/youtube-processor)   | Private Node 22/Hono container for outbound YouTube operations and optional proxy egress                         |
 | [`packages/all-things-youtube/`](./packages/all-things-youtube) | Publishable normalized YouTube client and public TypeScript data model                                           |
-| [`docs/`](./docs)                                               | Architecture, API contracts, deployment guidance, and implementation notes                                       |
+| [`docs/`](./docs)                                               | Public Mintlify documentation site                                                                                |
+| [`reference/`](./reference)                                     | Internal architecture, design, deployment, and agent guidance                                                     |
 | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)        | Pull-request verification for the platform and web application                                                   |
 
 ## Configuration
@@ -227,7 +229,7 @@ Local secret placeholders are documented in [`platform/.dev.vars.example`](./pla
 | `PLATFORM_API_BASE_URL`                                             | Web       | Overrides the platform origin; defaults to localhost in development and the public API in production |
 | `NEXT_PUBLIC_PLATFORM_API_BASE_URL`                                 | Web       | Browser-visible platform origin used by the anonymous landing-page inspection                        |
 
-Do not place production secrets in Git or build variables. Add Cloudflare runtime secrets interactively as described in [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md#cloudflare-setup).
+Do not place production secrets in Git or build variables. Add Cloudflare runtime secrets interactively as described in [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md#cloudflare-setup).
 
 ## Development and verification
 
@@ -241,6 +243,10 @@ Common commands, run from the repository root:
 | `npm --prefix platform run verify`                        | Install processor dependencies, type-check the Worker, and run platform and processor tests |
 | `npm --prefix platform run test:container`                | Run only the processor contract tests                                                       |
 | `npm --prefix packages/all-things-youtube run test:watch` | Run the library suite in watch mode                                                         |
+| `npm run docs:dev`                                        | Preview the Mintlify documentation site locally                                             |
+| `npm run docs:generate`                                   | Regenerate the consumer OpenAPI file and internal endpoint inventory                        |
+| `npm run docs:check`                                      | Fail when generated documentation artifacts are stale                                       |
+| `npm run docs:verify`                                     | Validate the Mintlify build, links, and accessibility                                        |
 
 Before opening a pull request, run:
 
@@ -248,15 +254,18 @@ Before opening a pull request, run:
 npm run build
 npm test
 npm --prefix web test
+npm run docs:check
+npm run docs:verify
 ```
 
-Pull requests also run the `Platform` and `Web` GitHub Actions checks. Keep changes focused, include regression coverage for behavior changes, and update the OpenAPI document and API docs when a route contract changes.
+Pull requests also run the `Platform`, `Web`, and `Documentation` GitHub Actions checks. Keep changes focused, include regression coverage for behavior changes, and update the OpenAPI document and API docs when a route contract changes.
 
 ## Documentation
 
-- [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md) — backend architecture, API examples, storage, reliability, privacy, and Cloudflare setup
-- [`docs/UI_API_REFERENCE.md`](./docs/UI_API_REFERENCE.md) — current UI request flows and platform route contracts
-- [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — Git-triggered Vercel and Cloudflare production deployment
+- [Mintlify documentation source](./docs) — dashboard guides, API quickstarts, and the generated API reference
+- [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md) — backend architecture, storage, reliability, privacy, and Cloudflare setup
+- [`reference/engineering/UI_API_REFERENCE.md`](./reference/engineering/UI_API_REFERENCE.md) — current UI request flows and platform route contracts
+- [`reference/engineering/DEPLOYMENT.md`](./reference/engineering/DEPLOYMENT.md) — Git-triggered Vercel and Cloudflare production deployment
 - [`web/README.md`](./web/README.md) — frontend-specific development and Vercel behavior
 - [`platform/youtube-processor/README.md`](./platform/youtube-processor/README.md) — processor proxy, capacity, image, and verification details
 - [`packages/all-things-youtube/README.md`](./packages/all-things-youtube/README.md) — standalone package reference

@@ -1,0 +1,22 @@
+---
+title: "Notifications and email consent"
+description: "Control in-app and email delivery independently."
+---
+
+Monitor matches can appear in the dashboard inbox, by email, or through both channels.
+
+## In-app alerts
+
+In-app alerts are enabled by default. A new monitor match creates an unread notification containing the monitor, provider, video ID, target, title, and creation time.
+
+## Email alerts
+
+Email delivery is off until the signed-in account explicitly confirms it.
+
+<Steps>
+  <Step title="Enable email alerts">Turn on **Email alerts** in Settings. video2ctx sends a confirmation message to the email address on the account.</Step>
+  <Step title="Confirm from the message">Choose **Confirm email alerts**. The signed link returns to the dashboard and is consumed after the account loads.</Step>
+  <Step title="See the result">Settings shows a persistent success or error message and removes the confirmation token from the URL.</Step>
+</Steps>
+
+Confirmation links expire after 24 hours and only work for the account that requested them. Turning email alerts off clears both active and pending consent. Unsubscribe links require a deliberate confirmation page before preferences change.

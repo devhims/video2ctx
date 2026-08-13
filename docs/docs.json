@@ -1,0 +1,129 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "video2ctx",
+  "description": "Turn videos into useful context for people, applications, and AI agents.",
+  "seo": {
+    "metatags": {
+      "canonical": "https://docs.video2ctx.dev"
+    }
+  },
+  "colors": {
+    "primary": "#c83b30",
+    "light": "#f45d4f",
+    "dark": "#c83b30"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navigation": {
+    "pages": [
+      {
+        "group": "Start here",
+        "pages": ["index"]
+      },
+      {
+        "group": "Dashboard",
+        "pages": [
+          "dashboard/getting-started",
+          "dashboard/sources",
+          "dashboard/data-options",
+          "dashboard/projects",
+          "dashboard/monitoring",
+          "dashboard/notifications",
+          "dashboard/trends",
+          "dashboard/account"
+        ]
+      },
+      {
+        "group": "Build with the API",
+        "pages": [
+          "api/quickstart",
+          "api/authentication",
+          "api/conventions",
+          "api/discovery",
+          "api/entities",
+          "api/research",
+          "api/monitoring",
+          "api/node-library",
+          "api/agents"
+        ]
+      },
+      {
+        "group": "API reference",
+        "pages": [
+          "api-reference/introduction",
+          {
+            "group": "Endpoints",
+            "openapi": "api-reference/openapi.json"
+          }
+        ]
+      },
+      {
+        "group": "Platform internals",
+        "pages": ["internals/overview", "internals/endpoints"]
+      },
+      {
+        "group": "Open source",
+        "pages": [
+          "open-source/local-development",
+          "open-source/architecture",
+          "open-source/deployment",
+          "open-source/contributing"
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/devhims/video2ctx",
+          "icon": "github"
+        },
+        {
+          "anchor": "API status",
+          "href": "https://api.video2ctx.dev/health",
+          "icon": "signal-stream"
+        }
+      ]
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "API reference",
+        "href": "/api-reference/introduction"
+      },
+      {
+        "label": "Support",
+        "href": "mailto:support@video2ctx.dev"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Open dashboard",
+      "href": "https://video2ctx.dev/dashboard"
+    }
+  },
+  "api": {
+    "playground": {
+      "display": "interactive"
+    },
+    "examples": {
+      "languages": ["bash", "javascript", "python"],
+      "defaults": "required",
+      "prefill": true,
+      "autogenerate": true
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude", "perplexity", "mcp", "cursor", "vscode"]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/devhims/video2ctx"
+    }
+  }
+}

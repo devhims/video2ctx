@@ -1,0 +1,24 @@
+---
+title: "Monitor channels"
+description: "Check for new uploads on a schedule you control."
+---
+
+A monitor watches the newest result for a channel, topic, or search. Channel monitors are what the current dashboard creates from an inspected video or channel.
+
+## What each check does
+
+1. Loads the monitor only if it is enabled.
+2. Reads the channel's latest video, or the newest search result for topic and search monitors.
+3. Treats the first observed video as the baseline without notifying you.
+4. On a later check, creates a notification only when the leading video ID changes.
+5. Advances the cursor after notification delivery has been queued.
+
+<Warning>
+  Monitoring currently detects a newly leading video. It does not measure keyword mentions inside transcripts, view velocity, comment changes, or edits to an existing video.
+</Warning>
+
+## Schedules
+
+Choose every hour, 6 hours, 12 hours, 24 hours, 3 days, or one week. New monitors default to every 24 hours and queue their baseline check about one minute after creation.
+
+Each monitor owns an independent Durable Object alarm. Pausing or deleting one monitor does not change the schedule of another.

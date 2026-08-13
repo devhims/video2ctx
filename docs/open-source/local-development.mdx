@@ -1,0 +1,28 @@
+---
+title: "Local development"
+description: "Run the web application and Cloudflare platform together."
+---
+
+The repository contains the Next.js web application, Cloudflare Worker platform, YouTube extraction package, processor container, and this documentation project.
+
+```bash
+git clone https://github.com/devhims/video2ctx.git
+cd video2ctx
+npm install --prefix packages/all-things-youtube
+npm install --prefix platform
+npm install --prefix web
+npm install --prefix docs
+npm run dev
+```
+
+The combined local command starts the platform and web application with local Cloudflare storage. Local dashboard requests use isolated demo identities; they do not create resources in production D1.
+
+Run the documentation separately with:
+
+```bash
+npm run docs:dev
+```
+
+<Warning>
+  Workers AI and explicitly remote bindings can incur usage even during local development. Never commit `.dev.vars`, API keys, OAuth secrets, or email credentials.
+</Warning>

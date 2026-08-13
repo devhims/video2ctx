@@ -1,0 +1,28 @@
+---
+title: "Videos, channels, and playlists"
+description: "Retrieve normalized provider resources and their related data."
+---
+
+## Videos
+
+Start with video details, then request only the deeper datasets your workflow needs.
+
+- `GET /v1/providers/youtube/videos/{id}` — core metadata
+- `GET /v1/providers/youtube/videos/{id}/tracks` — available transcript tracks
+- `GET /v1/providers/youtube/videos/{id}/transcript` — timed segments or words
+- `GET /v1/providers/youtube/videos/{id}/comments` — paginated public comments
+- `GET /v1/providers/youtube/videos/{id}/endscreen` — end-screen links
+
+## Channels
+
+- `GET /v1/providers/youtube/channels/{id}` — profile, public totals, links, and metadata
+- `GET /v1/providers/youtube/channels/{id}/videos` — paginated video catalog
+- `GET /v1/providers/youtube/channels/{id}/playlists` — paginated playlist catalog
+
+## Playlists
+
+`GET /v1/providers/youtube/playlists/{id}` returns playlist metadata and its paginated video index. Fetching a playlist does not automatically fetch transcripts or comments for every video.
+
+<Tip>
+  IDs, handles, and supported YouTube URLs are normalized by the underlying package, but hosted API path parameters should use the resource ID returned by discovery whenever possible.
+</Tip>

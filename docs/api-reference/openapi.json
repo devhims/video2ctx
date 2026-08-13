@@ -1,0 +1,5635 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "video2ctx API",
+    "version": "1.0.0",
+    "license": {
+      "name": "Apache License 2.0",
+      "identifier": "Apache-2.0"
+    },
+    "description": "Consumer-facing contract for the hosted video2ctx API. First-party application and operator routes are documented separately at https://docs.video2ctx.dev/internals/overview."
+  },
+  "security": [],
+  "servers": [
+    {
+      "url": "https://api.video2ctx.dev",
+      "description": "Hosted video2ctx API"
+    }
+  ],
+  "tags": [
+    {
+      "name": "System",
+      "description": "Service status and machine-readable documentation."
+    },
+    {
+      "name": "Providers",
+      "description": "Supported external video providers and their capabilities."
+    },
+    {
+      "name": "Discovery",
+      "description": "Search, browse, and trend research."
+    },
+    {
+      "name": "Videos",
+      "description": "Video metadata and evidence."
+    },
+    {
+      "name": "Channels",
+      "description": "Channel inspection."
+    },
+    {
+      "name": "Playlists",
+      "description": "Playlist inspection."
+    },
+    {
+      "name": "Projects",
+      "description": "Private research projects and saved material."
+    },
+    {
+      "name": "Research",
+      "description": "Imports, jobs, cited answers, comparisons, and reports."
+    },
+    {
+      "name": "Exports",
+      "description": "Project export creation and download."
+    },
+    {
+      "name": "Monitoring",
+      "description": "Monitors, notifications, and digest preferences."
+    },
+    {
+      "name": "Billing",
+      "description": "Checkout, usage, and Stripe webhook handling."
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getServiceInfo",
+        "summary": "Get platform information",
+        "responses": {
+          "200": {
+            "description": "Platform information.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInfo"
+                }
+              }
+            }
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getHealth",
+        "summary": "Check platform health",
+        "responses": {
+          "200": {
+            "description": "The platform is healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getOpenApiDocument",
+        "summary": "Get the OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getApiReference",
+        "summary": "Open the Scalar API reference",
+        "responses": {
+          "200": {
+            "description": "Interactive Scalar API reference.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "operationId": "searchPrivateEvidence",
+        "summary": "Search the user’s private indexed evidence",
+        "description": "Searches material previously saved or imported into the current user’s private research index.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Evidence search query.",
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "example": "AI agents"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": false,
+            "description": "Restrict private retrieval to a project.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching private evidence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSearchResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "tags": [
+          "Providers"
+        ],
+        "operationId": "listProviders",
+        "summary": "List supported video providers",
+        "description": "Returns the provider identifiers accepted in provider-scoped paths and the capabilities currently implemented for each provider.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Supported providers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderList"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/search": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "operationId": "searchProvider",
+        "summary": "Search a video provider",
+        "description": "Searches the selected external provider. Cache hits cost less than fresh upstream retrieval.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Provider search query.",
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "example": "AI agents"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Provider entity type.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "video",
+                "channel",
+                "playlist"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Restrict search to a channel.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "description": "Preferred language code.",
+            "schema": {
+              "type": "string",
+              "example": "en"
+            }
+          },
+          {
+            "name": "duration",
+            "in": "query",
+            "required": false,
+            "description": "Video duration bucket.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "short",
+                "medium",
+                "long"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Result ordering.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "relevance",
+                "date",
+                "views",
+                "rating"
+              ]
+            }
+          },
+          {
+            "name": "captions",
+            "in": "query",
+            "required": false,
+            "description": "Only include captioned videos.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "live",
+            "in": "query",
+            "required": false,
+            "description": "Live broadcast state.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "upcoming",
+                "completed"
+              ]
+            }
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "description": "Opaque token returned by a previous provider search page.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider search results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/browse": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "operationId": "browseProvider",
+        "summary": "Browse a provider discovery feed",
+        "description": "Returns queryless discovery results from a supported destination on the selected provider.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": true,
+            "description": "Discovery category.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "music",
+                "news",
+                "sports",
+                "live"
+              ],
+              "example": "music"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "required": false,
+            "description": "Supported region code.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "US",
+                "IN"
+              ],
+              "default": "US",
+              "example": "IN"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "description": "Supported language code.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "en",
+                "hi"
+              ],
+              "default": "en",
+              "example": "en"
+            }
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "description": "Opaque pagination token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browse results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/trends": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "operationId": "researchTrends",
+        "summary": "Calculate public trend signals for a topic",
+        "description": "Builds a diversified topic sample, persists public metric snapshots, calculates observed acceleration when history exists, and optionally adds GLM-generated evidence-grounded themes and content gaps.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Topic to research.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "example": "AI agents"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Number of diversified videos to enrich; clamped to 8–30.",
+            "schema": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 30,
+              "default": 20
+            }
+          },
+          {
+            "name": "insights",
+            "in": "query",
+            "required": false,
+            "description": "AI insight mode. Use deterministic to skip GLM analysis.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ai",
+                "deterministic"
+              ],
+              "default": "ai"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Topic trend report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrendReport"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/trends/plan": {
+      "post": {
+        "tags": [
+          "Discovery"
+        ],
+        "operationId": "generateTrendPlan",
+        "summary": "Generate an AI video plan from trend signals",
+        "description": "Uses Kimi K2.6 for strategic synthesis and automatically falls back to GPT-OSS 120B when Kimi is unavailable. The response identifies the model that produced it.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "report"
+                ],
+                "properties": {
+                  "report": {
+                    "$ref": "#/components/schemas/TrendReport"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evidence-grounded video plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiTrendPlan"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/videos/{id}": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "operationId": "getVideo",
+        "summary": "Inspect a video",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider video ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "dQw4w9WgXcQ"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized video metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Video"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/videos/{id}/tracks": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "operationId": "getVideoTracks",
+        "summary": "List transcript tracks",
+        "description": "Lists the source caption tracks and auto-translation targets available to the transcript endpoint. This endpoint returns metadata, not caption text.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider video ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "dQw4w9WgXcQ"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript track information.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptionTrackList"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/videos/{id}/transcript": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "operationId": "getVideoTranscript",
+        "summary": "Get a timed transcript",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider video ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "dQw4w9WgXcQ"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "description": "Desired transcript language. The backend selects the default source track and translates only when necessary.",
+            "schema": {
+              "type": "string",
+              "example": "hi"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized timed transcript.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Transcript"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/videos/{id}/comments": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "operationId": "getVideoComments",
+        "summary": "Get video comments",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider video ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "dQw4w9WgXcQ"
+            }
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "description": "Opaque pagination token.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "description": "Fetch all available pages rather than one page.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A comment page or collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/videos/{id}/endscreen": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "operationId": "getVideoEndscreen",
+        "summary": "Get endscreen elements",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider video ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "dQw4w9WgXcQ"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Video endscreen elements.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndscreenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/channels/{id}": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "operationId": "getChannel",
+        "summary": "Inspect a channel",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider channel ID or handle.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "@YouTube"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized channel metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/channels/{id}/videos": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "operationId": "getChannelVideos",
+        "summary": "List channel videos",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider channel ID or handle.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "@YouTube"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "YouTube Videos-tab ordering.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "latest",
+                "popular",
+                "oldest"
+              ],
+              "default": "latest"
+            }
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "description": "Opaque token returned by the previous channel videos response.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of channel videos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelVideos"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/channels/{id}/playlists": {
+      "get": {
+        "tags": [
+          "Channels"
+        ],
+        "operationId": "getChannelPlaylists",
+        "summary": "List channel playlists",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider channel ID or handle.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "@YouTube"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "YouTube Playlists-tab ordering.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "last-video-added"
+              ],
+              "default": "newest"
+            }
+          },
+          {
+            "name": "continuation",
+            "in": "query",
+            "required": false,
+            "description": "Opaque token returned by the previous channel playlists response.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of channel playlists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelPlaylists"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/providers/{provider}/playlists/{id}": {
+      "get": {
+        "tags": [
+          "Playlists"
+        ],
+        "operationId": "getPlaylist",
+        "summary": "Inspect a playlist",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "External video provider.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "youtube"
+              ],
+              "example": "youtube"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Provider playlist ID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "PL123"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized playlist and videos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Playlist"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "operationId": "listProjects",
+        "summary": "List projects",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user’s projects.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "projects"
+                  ],
+                  "properties": {
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Project"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "operationId": "createProject",
+        "summary": "Create a project",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "operationId": "getProject",
+        "summary": "Get a project and its saved items",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "delete": {
+        "tags": [
+          "Projects"
+        ],
+        "operationId": "deleteProject",
+        "summary": "Delete a project",
+        "description": "Deletes the project’s private R2 objects and AI Search items before cascading its D1 metadata.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/projects/{id}/items": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "operationId": "addProjectItem",
+        "summary": "Save material to a project",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectItemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project item created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/imports": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "operationId": "createImport",
+        "summary": "Start a durable import job",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Optional caller-provided idempotency key.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Import queued or an existing idempotent job returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "Research"
+        ],
+        "operationId": "getJob",
+        "summary": "Get import job status",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Durable job status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/answers": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "operationId": "createAnswer",
+        "summary": "Generate a cited answer",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evidence-grounded answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CitedAnswer"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/comparisons": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "operationId": "createComparison",
+        "summary": "Compare private research sources",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComparisonRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evidence-grounded comparison.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CitedAnswer"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/reports": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "operationId": "createReport",
+        "summary": "Generate an evidence-first report",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evidence-grounded report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CitedAnswer"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/projects/{id}/exports": {
+      "post": {
+        "tags": [
+          "Exports"
+        ],
+        "operationId": "createProjectExport",
+        "summary": "Create a project export",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Export created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Export"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/exports/{id}/download": {
+      "get": {
+        "tags": [
+          "Exports"
+        ],
+        "operationId": "downloadExport",
+        "summary": "Download an export",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Export file.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/monitors": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "listMonitors",
+        "summary": "List monitors",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user’s monitors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "monitors"
+                  ],
+                  "properties": {
+                    "monitors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Monitor"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "post": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "createMonitor",
+        "summary": "Create a monitor",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMonitorRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Monitor created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/monitors/{id}": {
+      "patch": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "updateMonitor",
+        "summary": "Update a monitor schedule or display metadata",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "intervalMinutes": {
+                    "$ref": "#/components/schemas/MonitorIntervalMinutes"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Monitor updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorSchedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "delete": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "deleteMonitor",
+        "summary": "Delete a monitor",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Monitor deleted. The response is also successful when no matching monitor exists."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/notifications": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "listNotifications",
+        "summary": "List recent notifications",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 100 recent notifications.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "notifications"
+                  ],
+                  "properties": {
+                    "notifications": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Notification"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/notifications/{id}/read": {
+      "post": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "markNotificationRead",
+        "summary": "Mark a notification as read",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Resource identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read state acknowledged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "read"
+                  ],
+                  "properties": {
+                    "read": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/notification-preferences": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "getNotificationPreferences",
+        "summary": "Get notification preferences",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current preferences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "put": {
+        "tags": [
+          "Monitoring"
+        ],
+        "operationId": "updateNotificationPreferences",
+        "summary": "Update notification preferences",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated preferences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": [
+          "Billing"
+        ],
+        "operationId": "getUsage",
+        "summary": "Get plan limits and credit balance",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current entitlements and credits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            },
+            "headers": {
+              "X-Credits-Charged": {
+                "$ref": "#/components/headers/CreditsCharged"
+              },
+              "X-Credits-Remaining": {
+                "$ref": "#/components/headers/CreditsRemaining"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/InsufficientCredits"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "better-auth.session_token",
+        "description": "Better Auth session cookie. A production deployment may use the secure-prefixed cookie name; same-origin browser requests send it automatically."
+      },
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Legacy-compatible header for a permanent personal API key. Prefer Authorization: Bearer aty_…."
+      },
+      "bearerApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Permanent personal API key created in the dashboard. Example: curl -H \"Authorization: Bearer aty_…\" https://your-host/v1/projects"
+      },
+      "demoUser": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Demo-User",
+        "description": "Local development only. Any stable value selects an isolated demo account. Rejected in production."
+      },
+      "stripeSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "stripe-signature",
+        "description": "Stripe-generated signature over the exact raw request body."
+      }
+    },
+    "headers": {
+      "CreditsCharged": {
+        "description": "Credits settled for this operation.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "CreditsRemaining": {
+        "description": "Current balance in the owning user account after the request is metered.",
+        "schema": {
+          "type": "integer"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request is malformed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication is required.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The caller is not allowed to perform this operation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InsufficientCredits": {
+        "description": "The user account does not have enough credits. Error code: INSUFFICIENT_CREDITS.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "X-Credits-Charged": {
+            "$ref": "#/components/headers/CreditsCharged"
+          },
+          "X-Credits-Remaining": {
+            "$ref": "#/components/headers/CreditsRemaining"
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested resource was not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "The request failed validation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "The public rate limit was exceeded.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "An unexpected server error occurred.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "An upstream AI or YouTube service is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "QUERY_REQUIRED"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {},
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ServiceInfo": {
+        "type": "object",
+        "required": [
+          "service",
+          "version",
+          "status",
+          "capabilities"
+        ],
+        "properties": {
+          "service": {
+            "const": "video2ctx-platform"
+          },
+          "version": {
+            "const": "v1"
+          },
+          "status": {
+            "const": "ok"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "timestamp"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MagicLinkSignInRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "creator@example.com"
+          },
+          "callbackURL": {
+            "type": "string",
+            "default": "/"
+          }
+        }
+      },
+      "SocialSignInRequest": {
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "const": "google"
+          },
+          "callbackURL": {
+            "type": "string",
+            "default": "/"
+          }
+        }
+      },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "example": "Production integration"
+          }
+        }
+      },
+      "ApiKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "configId",
+          "referenceId",
+          "enabled",
+          "rateLimitEnabled",
+          "requestCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "configId": {
+            "type": "string",
+            "const": "default"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Safe starting characters used to identify the key."
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "aty_"
+          },
+          "referenceId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "rateLimitEnabled": {
+            "type": "boolean"
+          },
+          "rateLimitTimeWindow": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 60000
+          },
+          "rateLimitMax": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 60
+          },
+          "requestCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRequest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always null for permanent keys."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "permissions": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CreatedApiKey": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiKey"
+          },
+          {
+            "type": "object",
+            "required": [
+              "key"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "writeOnly": true,
+                "example": "aty_…",
+                "description": "Returned only when the key is created."
+              }
+            }
+          }
+        ]
+      },
+      "ApiKeyList": {
+        "type": "object",
+        "required": [
+          "apiKeys",
+          "total"
+        ],
+        "properties": {
+          "apiKeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKey"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      },
+      "ResolveRequest": {
+        "type": "object",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "string",
+            "maxLength": 500,
+            "example": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          }
+        }
+      },
+      "LandingDemoInspectionRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 500,
+            "example": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          }
+        }
+      },
+      "LandingDemoQuota": {
+        "type": "object",
+        "required": [
+          "limit",
+          "remaining",
+          "resetAt",
+          "repeated"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "const": 5
+          },
+          "remaining": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "resetAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "repeated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LandingDemoTranscript": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "track",
+              "segmentCount",
+              "segments"
+            ],
+            "properties": {
+              "status": {
+                "const": "ready"
+              },
+              "track": {
+                "$ref": "#/components/schemas/CaptionTrack"
+              },
+              "segmentCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "segments": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSegment"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          }
+        ]
+      },
+      "LandingDemoComments": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "comments"
+            ],
+            "properties": {
+              "status": {
+                "const": "ready"
+              },
+              "totalCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "comments": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          }
+        ]
+      },
+      "LandingDemoInspectionResponse": {
+        "type": "object",
+        "required": [
+          "video",
+          "transcript",
+          "comments",
+          "quota",
+          "partial"
+        ],
+        "properties": {
+          "video": {
+            "$ref": "#/components/schemas/Video"
+          },
+          "transcript": {
+            "$ref": "#/components/schemas/LandingDemoTranscript"
+          },
+          "comments": {
+            "$ref": "#/components/schemas/LandingDemoComments"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/LandingDemoQuota"
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ResolveResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "video"
+              },
+              "provider": {
+                "$ref": "#/components/schemas/ProviderId"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "channel"
+              },
+              "provider": {
+                "$ref": "#/components/schemas/ProviderId"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "playlist"
+              },
+              "provider": {
+                "$ref": "#/components/schemas/ProviderId"
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "query"
+            ],
+            "properties": {
+              "kind": {
+                "const": "search"
+              },
+              "query": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "ProviderId": {
+        "type": "string",
+        "enum": [
+          "youtube"
+        ],
+        "example": "youtube"
+      },
+      "Provider": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "capabilities"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "name": {
+            "type": "string",
+            "example": "YouTube"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "search",
+                "browse",
+                "trends",
+                "video",
+                "tracks",
+                "transcript",
+                "comments",
+                "endscreen",
+                "channel",
+                "playlist"
+              ]
+            }
+          }
+        }
+      },
+      "ProviderList": {
+        "type": "object",
+        "required": [
+          "providers"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provider"
+            }
+          }
+        }
+      },
+      "SourceMetadata": {
+        "type": "object",
+        "required": [
+          "provider",
+          "source",
+          "fetchedAt",
+          "partial",
+          "warnings"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "youtube"
+            ],
+            "description": "Platform that owns the source resource."
+          },
+          "source": {
+            "type": "string",
+            "example": "allthingsyoutube",
+            "description": "Extractor or upstream implementation that produced the normalized response."
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Thumbnail": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ChannelSummary": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "name",
+          "thumbnails",
+          "url"
+        ],
+        "properties": {
+          "type": {
+            "const": "channel"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "subscriberCountText": {
+            "type": "string"
+          },
+          "videoCountText": {
+            "type": "string"
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "VideoSummary": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "title",
+          "channel",
+          "thumbnails",
+          "isLive",
+          "url"
+        ],
+        "properties": {
+          "type": {
+            "const": "video"
+          },
+          "id": {
+            "type": "string",
+            "example": "dQw4w9WgXcQ"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "url"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "durationText": {
+            "type": "string"
+          },
+          "publishedTimeText": {
+            "type": "string"
+          },
+          "viewCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "viewCountText": {
+            "type": "string"
+          },
+          "isLive": {
+            "type": "boolean"
+          },
+          "hasCaptions": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "PlaylistSummary": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "title",
+          "thumbnails",
+          "isPodcast",
+          "url"
+        ],
+        "properties": {
+          "type": {
+            "const": "playlist"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "videoCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "videoCountText": {
+            "type": "string"
+          },
+          "updatedTimeText": {
+            "type": "string",
+            "description": "YouTube’s display text, such as “Updated 4 days ago”."
+          },
+          "isPodcast": {
+            "type": "boolean"
+          },
+          "playUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Starts playback from the item represented by the playlist card."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "SearchResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/VideoSummary"
+          },
+          {
+            "$ref": "#/components/schemas/ChannelSummary"
+          },
+          {
+            "$ref": "#/components/schemas/PlaylistSummary"
+          }
+        ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": [
+          "query",
+          "results",
+          "meta"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          },
+          "continuation": {
+            "type": "string"
+          },
+          "estimatedTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "BrowseResponse": {
+        "type": "object",
+        "required": [
+          "category",
+          "browseId",
+          "results",
+          "videos",
+          "channels",
+          "playlists",
+          "meta"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "music",
+              "news",
+              "sports",
+              "live"
+            ]
+          },
+          "browseId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          },
+          "videos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoSummary"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelSummary"
+            }
+          },
+          "playlists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaylistSummary"
+            }
+          },
+          "continuation": {
+            "type": "string"
+          },
+          "estimatedTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "PrivateSearchResponse": {
+        "type": "object",
+        "required": [
+          "query",
+          "results"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          }
+        }
+      },
+      "CaptionTrack": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "languageCode",
+          "kind",
+          "isTranslatable",
+          "isDefault"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "languageCode": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "asr",
+              "unknown"
+            ]
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "asr",
+              "unknown"
+            ]
+          },
+          "isTranslatable": {
+            "type": "boolean"
+          },
+          "isDefault": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TranslationLanguage": {
+        "type": "object",
+        "required": [
+          "languageCode",
+          "name"
+        ],
+        "properties": {
+          "languageCode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CaptionTrackList": {
+        "type": "object",
+        "required": [
+          "tracks",
+          "sourceTracks",
+          "translationLanguages",
+          "autoTranslationTargets",
+          "meta"
+        ],
+        "properties": {
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaptionTrack"
+            }
+          },
+          "sourceTracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaptionTrack"
+            }
+          },
+          "translationLanguages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranslationLanguage"
+            }
+          },
+          "autoTranslationTargets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranslationLanguage"
+            }
+          },
+          "defaultTrackId": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "TranscriptSegment": {
+        "type": "object",
+        "required": [
+          "startMs",
+          "durationMs",
+          "endMs",
+          "text"
+        ],
+        "properties": {
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "Transcript": {
+        "type": "object",
+        "required": [
+          "videoId",
+          "track",
+          "segments",
+          "text",
+          "meta"
+        ],
+        "properties": {
+          "videoId": {
+            "type": "string"
+          },
+          "track": {
+            "$ref": "#/components/schemas/CaptionTrack"
+          },
+          "translatedTo": {
+            "$ref": "#/components/schemas/TranslationLanguage"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            }
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "segment",
+              "word"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "Video": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VideoSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "keywords",
+              "availability",
+              "meta"
+            ],
+            "properties": {
+              "keywords": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "availability": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "meta": {
+                "$ref": "#/components/schemas/SourceMetadata"
+              }
+            }
+          }
+        ]
+      },
+      "EndscreenElement": {
+        "type": "object",
+        "required": [
+          "type",
+          "startMs",
+          "endMs",
+          "thumbnails"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "playlist",
+              "channel",
+              "unknown"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "string"
+          },
+          "videoId": {
+            "type": "string"
+          },
+          "playlistId": {
+            "type": "string"
+          },
+          "channelId": {
+            "type": "string"
+          },
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "position": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "EndscreenResponse": {
+        "type": "object",
+        "required": [
+          "provider",
+          "elements"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "elements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EndscreenElement"
+            }
+          }
+        }
+      },
+      "CommentResponse": {
+        "type": "object",
+        "required": [
+          "videoId",
+          "comments",
+          "meta"
+        ],
+        "properties": {
+          "videoId": {
+            "type": "string"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "totalCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total comments reported by YouTube when available."
+          },
+          "continuation": {
+            "type": "string"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "pagesFetched": {
+            "type": "integer"
+          },
+          "topLevelCount": {
+            "type": "integer"
+          },
+          "replyCount": {
+            "type": "integer"
+          },
+          "remainingContinuations": {
+            "type": "integer"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "Channel": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "name",
+          "thumbnails",
+          "url",
+          "about",
+          "meta"
+        ],
+        "properties": {
+          "type": {
+            "const": "channel"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "about": {
+            "$ref": "#/components/schemas/ChannelAbout"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "ChannelLink": {
+        "type": "object",
+        "required": [
+          "title",
+          "displayUrl",
+          "url"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "displayUrl": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "ChannelMoreInfo": {
+        "type": "object",
+        "required": [
+          "canonicalChannelUrl",
+          "businessEmailAvailable"
+        ],
+        "properties": {
+          "canonicalChannelUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "displayCanonicalChannelUrl": {
+            "type": "string"
+          },
+          "joinedDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "joinedDateText": {
+            "type": "string"
+          },
+          "subscriberCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Normalized value of YouTube’s displayed, potentially rounded subscriber count."
+          },
+          "subscriberCountText": {
+            "type": "string"
+          },
+          "videoCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "videoCountText": {
+            "type": "string"
+          },
+          "viewCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "viewCountText": {
+            "type": "string"
+          },
+          "businessEmailAvailable": {
+            "type": "boolean",
+            "description": "Whether YouTube presents its protected business-email action. The email itself is not accessed."
+          }
+        }
+      },
+      "ChannelAbout": {
+        "type": "object",
+        "required": [
+          "links",
+          "moreInfo"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelLink"
+            }
+          },
+          "moreInfo": {
+            "$ref": "#/components/schemas/ChannelMoreInfo"
+          }
+        }
+      },
+      "ChannelVideos": {
+        "type": "object",
+        "required": [
+          "channelId",
+          "sort",
+          "videos",
+          "meta"
+        ],
+        "properties": {
+          "channelId": {
+            "type": "string"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "popular",
+              "oldest"
+            ]
+          },
+          "videos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoSummary"
+            }
+          },
+          "continuation": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "ChannelPlaylists": {
+        "type": "object",
+        "required": [
+          "channelId",
+          "sort",
+          "playlists",
+          "meta"
+        ],
+        "properties": {
+          "channelId": {
+            "type": "string"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "last-video-added"
+            ]
+          },
+          "playlists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaylistSummary"
+            }
+          },
+          "continuation": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "Playlist": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlaylistSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "videos",
+              "meta"
+            ],
+            "properties": {
+              "videos": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/VideoSummary"
+                }
+              },
+              "continuation": {
+                "type": "string"
+              },
+              "estimatedTotal": {
+                "type": "integer"
+              },
+              "meta": {
+                "$ref": "#/components/schemas/SourceMetadata"
+              }
+            }
+          }
+        ]
+      },
+      "TrendVideo": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "channel",
+          "thumbnails",
+          "description",
+          "viewCount",
+          "signalSource",
+          "confidenceScore",
+          "hashtags",
+          "keywords",
+          "trendScore",
+          "trendBand",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "thumbnails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thumbnail"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "publishedTimeText": {
+            "type": "string"
+          },
+          "publishDate": {
+            "type": "string"
+          },
+          "ageHours": {
+            "type": "number",
+            "minimum": 0
+          },
+          "viewCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "viewsPerHour": {
+            "type": "number",
+            "minimum": 0
+          },
+          "observedViewsPerHour": {
+            "type": "number",
+            "minimum": 0
+          },
+          "previousViewsPerHour": {
+            "type": "number",
+            "minimum": 0
+          },
+          "accelerationPercent": {
+            "type": "number"
+          },
+          "observationHours": {
+            "type": "number",
+            "minimum": 0
+          },
+          "viewDelta": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "likeDelta": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commentDelta": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commentCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "likeCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "engagementRate": {
+            "type": "number",
+            "minimum": 0
+          },
+          "channelBaselineViewsPerHour": {
+            "type": "number",
+            "minimum": 0
+          },
+          "channelLift": {
+            "type": "number",
+            "minimum": 0
+          },
+          "searchRank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signalSource": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "estimated"
+            ]
+          },
+          "confidenceScore": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "hashtags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trendScore": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "trendBand": {
+            "type": "string",
+            "enum": [
+              "Breakout",
+              "Rising",
+              "Steady"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "TrendReport": {
+        "type": "object",
+        "required": [
+          "provider",
+          "query",
+          "generatedAt",
+          "sampleSize",
+          "methodologyVersion",
+          "methodology",
+          "sample",
+          "confidence",
+          "summary",
+          "videos",
+          "hashtags",
+          "titlePatterns",
+          "durationMix",
+          "plan",
+          "warnings"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "youtube"
+            ]
+          },
+          "query": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sampleSize": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "methodologyVersion": {
+            "const": "2.0"
+          },
+          "methodology": {
+            "type": "string"
+          },
+          "sample": {
+            "type": "object",
+            "required": [
+              "candidateVideos",
+              "enrichedVideos",
+              "channels",
+              "observedVideos"
+            ],
+            "properties": {
+              "candidateVideos": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "enrichedVideos": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "channels": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "observedVideos": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "confidence": {
+            "type": "object",
+            "required": [
+              "score",
+              "level",
+              "reasons"
+            ],
+            "properties": {
+              "score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "summary": {
+            "type": "object",
+            "required": [
+              "totalViews",
+              "medianViewsPerHour",
+              "publishedLast7Days",
+              "breakoutCount",
+              "acceleratingCount"
+            ],
+            "properties": {
+              "totalViews": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "medianViewsPerHour": {
+                "type": "number",
+                "minimum": 0
+              },
+              "publishedLast7Days": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "breakoutCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "acceleratingCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "medianObservedViewsPerHour": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          },
+          "videos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendVideo"
+            }
+          },
+          "hashtags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "titlePatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "durationMix": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "insights": {
+            "type": "object",
+            "description": "Optional GLM-generated analysis. Omitted when deterministic mode is requested or model inference fails.",
+            "additionalProperties": true
+          },
+          "plan": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AiTrendPlan": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "generatedAt",
+          "angle",
+          "audience",
+          "hook",
+          "recommendedDurationSeconds",
+          "outline",
+          "titleIdeas",
+          "hashtags",
+          "differentiation",
+          "evidence",
+          "caveats",
+          "operationId"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "@cf/moonshotai/kimi-k2.6",
+              "@cf/openai/gpt-oss-120b"
+            ]
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "angle": {
+            "type": "string"
+          },
+          "audience": {
+            "type": "string"
+          },
+          "hook": {
+            "type": "string"
+          },
+          "recommendedDurationSeconds": {
+            "type": "integer"
+          },
+          "outline": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "section",
+                "goal"
+              ],
+              "properties": {
+                "section": {
+                  "type": "string"
+                },
+                "goal": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "titleIdeas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hashtags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "differentiation": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "claim",
+                "videoIds"
+              ],
+              "properties": {
+                "claim": {
+                  "type": "string"
+                },
+                "videoIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "caveats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Project": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+            "additionalProperties": true
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "item_count": {
+                "type": "integer"
+              }
+            }
+          }
+        ]
+      },
+      "ProjectDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Project"
+          },
+          {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProjectItem"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ProjectItem": {
+        "type": "object",
+        "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+        "additionalProperties": true
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "example": "Research inbox"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          }
+        }
+      },
+      "ProjectCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProjectItemRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "entityType",
+          "entityId"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "entityType": {
+            "type": "string",
+            "maxLength": 30,
+            "example": "video"
+          },
+          "entityId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 50
+            }
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 100000
+          }
+        }
+      },
+      "IdResponse": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CreateImportRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "kind",
+          "entityId"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "channel",
+              "playlist",
+              "comments",
+              "deep-comments"
+            ]
+          },
+          "entityId": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "JobAccepted": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "progress"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "Job": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+            "additionalProperties": true
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "queued",
+                  "running",
+                  "partial",
+                  "succeeded",
+                  "failed",
+                  "cancelled"
+                ]
+              },
+              "progress": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        ]
+      },
+      "Evidence": {
+        "type": "object",
+        "required": [
+          "id",
+          "score",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "entityId": {
+            "type": "string"
+          },
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sourceKey": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "CitedAnswer": {
+        "type": "object",
+        "required": [
+          "answer",
+          "citations",
+          "operationId"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AnswerRequest": {
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "entityId": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "private",
+              "public"
+            ],
+            "default": "private"
+          }
+        },
+        "dependentRequired": {
+          "entityId": [
+            "provider"
+          ]
+        }
+      },
+      "ComparisonRequest": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "projectId": {
+            "type": "string"
+          }
+        }
+      },
+      "ReportRequest": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "projectId": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateExportRequest": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "Supported export format.",
+            "example": "markdown"
+          }
+        }
+      },
+      "Export": {
+        "type": "object",
+        "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+        "additionalProperties": true
+      },
+      "MonitorIntervalMinutes": {
+        "type": "integer",
+        "enum": [
+          60,
+          360,
+          720,
+          1440,
+          4320,
+          10080
+        ],
+        "default": 1440,
+        "description": "How often the monitor runs, in minutes."
+      },
+      "MonitorSchedule": {
+        "type": "object",
+        "required": [
+          "intervalMinutes",
+          "enabled"
+        ],
+        "properties": {
+          "intervalMinutes": {
+            "$ref": "#/components/schemas/MonitorIntervalMinutes"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "nextCheckAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Unix time in milliseconds for the next alarm."
+          }
+        }
+      },
+      "Monitor": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+            "additionalProperties": true
+          },
+          {
+            "type": "object",
+            "required": [
+              "interval_minutes",
+              "enabled"
+            ],
+            "properties": {
+              "interval_minutes": {
+                "$ref": "#/components/schemas/MonitorIntervalMinutes"
+              },
+              "enabled": {
+                "type": "integer",
+                "enum": [
+                  0,
+                  1
+                ]
+              },
+              "next_check_at": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "last_checked_at": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "CreateMonitorRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "channel",
+              "topic",
+              "search"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "intervalMinutes": {
+            "$ref": "#/components/schemas/MonitorIntervalMinutes"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
+        "additionalProperties": true
+      },
+      "NotificationPreferencesRequest": {
+        "type": "object",
+        "properties": {
+          "inApp": {
+            "type": "boolean",
+            "default": true
+          },
+          "emailAlerts": {
+            "type": "boolean",
+            "default": false,
+            "description": "True requests a confirmation email; delivery remains disabled until confirmed."
+          }
+        }
+      },
+      "NotificationPreferences": {
+        "type": "object",
+        "required": [
+          "inApp",
+          "emailAlerts",
+          "emailAlertsPending",
+          "emailDigest"
+        ],
+        "properties": {
+          "inApp": {
+            "type": "boolean"
+          },
+          "emailAlerts": {
+            "type": "boolean",
+            "description": "True only after the account email has confirmed delivery."
+          },
+          "emailAlertsPending": {
+            "type": "boolean"
+          },
+          "emailAlertsRequestedAt": {
+            "type": "integer"
+          },
+          "emailDigest": {
+            "type": "string",
+            "enum": [
+              "off",
+              "daily",
+              "weekly"
+            ]
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro"
+            ]
+          },
+          "includedCredits": {
+            "type": "integer"
+          },
+          "creditGrant": {
+            "type": "string",
+            "enum": [
+              "onboarding",
+              "monthly"
+            ]
+          },
+          "creditBalance": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

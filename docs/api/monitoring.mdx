@@ -1,0 +1,30 @@
+---
+title: "Monitoring API"
+description: "Create scheduled checks and consume their notifications."
+---
+
+Create a monitor with `POST /v1/monitors`. Supported intervals are 60, 360, 720, 1440, 4320, and 10080 minutes; the default is 1440 minutes.
+
+```json
+{
+  "provider": "youtube",
+  "kind": "channel",
+  "target": "UC…",
+  "intervalMinutes": 1440,
+  "query": {
+    "label": "Example channel"
+  }
+}
+```
+
+The first check establishes a cursor and does not create a notification. A later leading-video change creates an in-app record and, when separately confirmed, queues an email alert.
+
+Use:
+
+- `GET /v1/monitors` to list schedules and check state.
+- `PATCH /v1/monitors/{id}` to change query metadata, interval, or enabled state.
+- `DELETE /v1/monitors/{id}` to stop and remove a monitor.
+- `GET /v1/notifications` and `POST /v1/notifications/{id}/read` to consume the inbox.
+- `GET` and `PUT /v1/notification-preferences` to control channels.
+
+Email confirmation and unsubscribe links are first-party account flows and appear in [Platform internals](/internals/overview).

@@ -50,7 +50,7 @@ Design method: Hallmark (audit → redesign), with motion/perf rails from
   contract. Rationale and the reduced 3-movement prompt: §3.7.
 - **Model if/when it is generated: Seedance 2.5** (confirmed available in ElevenCreative), one
   single continuous take — never a frame-locked chain, which cannot fit the budget. Recipe:
-  `docs/CINEMATIC_ASSETS.md`.
+  `reference/design/CINEMATIC_ASSETS.md`.
 - **Keyframe stills: not generated.** Codex `image_gen` is unavailable in this environment (the
   code-mode host is not installed), and a single take needs no start frame anyway.
 
@@ -81,7 +81,7 @@ Ranked by impact.
 Production ships nav → hero → `agent-premise` → footer (`web/app/page.tsx`). For a developer
 API that is missing: the shape of the response, a request you can copy, the endpoint index,
 pricing, auth. Two of the five surfaces the product actually exposes — **playlist** and
-**search** — appear nowhere in the shipping variant. `docs/UI_API_REFERENCE.md` lists twelve
+**search** — appear nowhere in the shipping variant. `reference/engineering/UI_API_REFERENCE.md` lists twelve
 routes; the landing page names zero of them.
 
 ### 1.2 The orbit diagram carries no information and the metaphor is wrong
@@ -174,7 +174,7 @@ the animation are the same decision.
 3. **The cinematic** — five folds, dark band. Section 3 below.
 4. **Live proof** — the existing inspect result, plus the `curl` that produced it, a copy
    button, and raw JSON in a `<details>`. Fixes 1.9.
-5. **Surface index** — the twelve routes from `docs/UI_API_REFERENCE.md` as a real scannable
+5. **Surface index** — the twelve routes from `reference/engineering/UI_API_REFERENCE.md` as a real scannable
    index, grouped video / channel / playlist / search / transcript / comments. Fixes 1.1.
 6. **Honest facts band** — replaces the `Input / Output / Built for` spec sheet with facts we
    actually hold: rolling 24h quota, `X-Request-Id` on every response, source links on every
@@ -261,7 +261,7 @@ Division of labour — **one generation, not six**:
 
 | Step | Who | Cost |
 | --- | --- | --- |
-| 1. Prompt + exact UI settings | me — done, `docs/CINEMATIC_ASSETS.md` | $0 |
+| 1. Prompt + exact UI settings | me — done, `reference/design/CINEMATIC_ASSETS.md` | $0 |
 | 2. Generate the single 30s take, download to `/tmp/v2c-cinematic/take_raw.mp4` | **you** | 1 generation |
 | 3. Encode, poster, mobile loop, wire, QA | me | $0 |
 
@@ -360,7 +360,7 @@ rest:
 Channel, playlist and search then play as DOM beats over a near-held tail of the shot — the
 engine's `linger` remap stretches 20s across the full band without reading as slow motion, because
 it decelerates into each beat rather than gliding at constant speed. Settings otherwise unchanged
-from `docs/CINEMATIC_ASSETS.md`: 16:9, highest resolution offered, **sound off**, no start or end
+from `reference/design/CINEMATIC_ASSETS.md`: 16:9, highest resolution offered, **sound off**, no start or end
 frame.
 
 ### 3.8 Accessibility
@@ -396,7 +396,7 @@ frame.
 - `web/public/cinematic/{beat1..5}.mp4` + `{beat1..5}.webp` (desktop scrub chain + posters)
 - `web/public/cinematic/hero-loop.mp4` — ~6s play-once mobile visual, re-encoded from leg 1, no
   extra generation
-- `docs/CINEMATIC_ASSETS.md` — prompt text, model, settings, per-clip credit cost, and the ffmpeg
+- `reference/design/CINEMATIC_ASSETS.md` — prompt text, model, settings, per-clip credit cost, and the ffmpeg
   commands, so the chain is reproducible and re-rollable without re-deriving any of it
 
 **Delete**
@@ -412,7 +412,7 @@ placeholder. This ships a materially better page on its own and proves the scrol
 pacing, copy, and perf budget before any money is spent. If the choreography is wrong, it is
 wrong here, cheaply.
 
-**Phase 2 — the take.** Prompt and settings are ready in `docs/CINEMATIC_ASSETS.md`. You generate
+**Phase 2 — the take.** Prompt and settings are ready in `reference/design/CINEMATIC_ASSETS.md`. You generate
 one 30s clip and download it; I encode, poster, and wire it. Runs **in parallel with Phase 1** —
 nothing in Phase 1 depends on the footage existing, because the placeholder occupies the same
 stage with the same scroll contract.

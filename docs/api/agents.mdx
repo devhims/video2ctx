@@ -1,0 +1,19 @@
+---
+title: "Use video2ctx from agents"
+description: "Give an agent source-linked video context through the current REST API."
+---
+
+Agents can call the same hosted REST endpoints as any server application. A reliable integration separates discovery, selective retrieval, and evidence presentation.
+
+<Steps>
+  <Step title="Discover narrowly">Search for videos or resolve the relevant resource in your own application before requesting deeper datasets.</Step>
+  <Step title="Fetch only needed context">Retrieve metadata first, then transcript, comments, channel information, or playlist items according to the task.</Step>
+  <Step title="Preserve provenance">Keep video IDs, source URLs, transcript timestamps, fetch times, partial flags, and warnings with the text given to the model.</Step>
+  <Step title="Return verifiable evidence">Link claims back to the video and timestamp instead of treating model output as the source.</Step>
+</Steps>
+
+Use a server-side tool wrapper so the API key never enters a model prompt or browser bundle. Bound query length, response size, continuation depth, and the number of fresh operations an agent can initiate.
+
+<Warning>
+  video2ctx does not currently publish a dedicated Agent API, hosted MCP server, or installable agent skill. Those names describe future product directions, not available contracts.
+</Warning>

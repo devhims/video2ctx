@@ -41,3 +41,20 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            docs/package-lock.json
+            platform/package-lock.json
+      - run: npm ci --prefix platform
+      - run: npm ci --prefix docs
+      - run: npm run docs:check
+      - run: npm run docs:verify

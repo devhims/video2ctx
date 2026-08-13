@@ -1,0 +1,22 @@
+---
+title: "Account, credits, and API keys"
+description: "Understand identity, shared usage, and developer access."
+---
+
+Your dashboard session and personal API keys represent the same account. They share projects, monitors, notifications, and one credit ledger.
+
+## Credits
+
+Metered responses report `X-Credits-Charged` and `X-Credits-Remaining`. The dashboard refreshes the visible balance from completed responses; an absent balance should not block the rest of the workspace.
+
+## API keys
+
+Create and revoke personal keys from **Dashboard → Developer**. Send a key as a bearer token and keep it on the server. Do not place it in client-side JavaScript, screenshots, repository files, or support messages.
+
+## Account deletion
+
+Deleting an account removes user-owned projects, research, monitors, notifications, API keys, credit history, and connected accounts. The action requires a signed-in browser session and explicit confirmation.
+
+<Card title="Create your first API request" href="/api/quickstart" icon="terminal">
+  Continue with authentication, a copyable request, and the shared response conventions.
+</Card>

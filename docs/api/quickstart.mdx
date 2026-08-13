@@ -1,0 +1,34 @@
+---
+title: "API quickstart"
+description: "Create a key and retrieve normalized video context."
+---
+
+The hosted API is available at `https://api.video2ctx.dev`. Product routes use the versioned `/v1` prefix.
+
+<Steps>
+  <Step title="Create a personal API key">
+    Sign in, open [Dashboard → Developer](https://video2ctx.dev/dashboard/developer), and create a key. Copy it when shown; stored key material cannot be recovered later.
+  </Step>
+  <Step title="Keep the key in your server environment">
+
+```bash
+export VIDEO2CTX_API_KEY='aty_…'
+```
+
+  </Step>
+  <Step title="Request a transcript">
+
+```bash
+curl 'https://api.video2ctx.dev/v1/providers/youtube/videos/dQw4w9WgXcQ/transcript' \
+  --header "Authorization: Bearer $VIDEO2CTX_API_KEY"
+```
+
+  </Step>
+</Steps>
+
+The response contains timestamped segments, combined text, track information, and source metadata. Metered responses also include the credits charged and remaining balance in response headers.
+
+<CardGroup cols={2}>
+  <Card title="Authentication" href="/api/authentication" icon="key">Store, send, and revoke personal API keys safely.</Card>
+  <Card title="Response conventions" href="/api/conventions" icon="code">Understand pagination, warnings, credits, and errors.</Card>
+</CardGroup>

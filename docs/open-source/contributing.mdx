@@ -1,0 +1,24 @@
+---
+title: "Contributing"
+description: "Keep code, contracts, and documentation aligned."
+---
+
+Keep changes focused and include regression coverage for behavior changes.
+
+## Public API changes
+
+1. Update the route implementation and `platform/src/openapi.ts` together.
+2. Classify every new operation for documentation.
+3. Regenerate the consumer specification and internal endpoint inventory.
+4. Update the relevant guide when behavior, cost, pagination, or failure semantics change.
+5. Run platform, web, and documentation verification before opening a pull request.
+
+```bash
+npm run docs:generate
+npm run docs:check
+npm run docs:verify
+```
+
+Do not manually edit generated API artifacts. Feature guides should explain workflows and tradeoffs; request parameters and response schemas belong in the generated reference.
+
+Issues and pull requests are managed in the [GitHub repository](https://github.com/devhims/video2ctx).

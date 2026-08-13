@@ -132,7 +132,7 @@ rely on — measure it (§5).
 
 ### The prompt that shipped
 
-`docs/CINEMATIC_ASSETS.md` holds the full text. Its shape:
+`reference/design/CINEMATIC_ASSETS.md` holds the full text. Its shape:
 
 1. Dominant motion, with locations and strong verbs
 2. Secondary motion, described as a cycle

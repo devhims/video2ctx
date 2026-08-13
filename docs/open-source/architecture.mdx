@@ -1,0 +1,25 @@
+---
+title: "Architecture"
+description: "How requests move from the product surface to normalized video data."
+---
+
+```mermaid
+flowchart LR
+  Client[Dashboard or API client] --> Web[Next.js web proxy]
+  Client --> API[Cloudflare Worker API]
+  Web --> API
+  API --> Provider[Provider adapters]
+  Provider --> Processor[YouTube processor containers]
+  API --> D1[(D1 account data)]
+  API --> KV[(KV provider cache)]
+  API --> R2[(R2 exports)]
+  API --> Queue[Queues and workflows]
+  API --> DO[Durable Object monitor alarms]
+  API --> AI[Workers AI]
+```
+
+Provider data is normalized behind explicit provider routes. User-owned resources remain provider-neutral and are always scoped to the authenticated principal.
+
+The platform uses D1 for durable account state, KV for provider caching, R2 for export objects, queues and workflows for asynchronous work, and one Durable Object identity per monitor schedule. The processor boundary isolates upstream YouTube extraction from the public Worker contract.
+
+OpenAPI remains the source of truth for the hosted HTTP surface. The Mintlify consumer reference and internal endpoint inventory are generated from that document.

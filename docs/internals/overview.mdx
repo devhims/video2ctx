@@ -1,0 +1,18 @@
+---
+title: "Platform internals"
+description: "Non-interactive contracts used by the first-party application and platform operators."
+---
+
+This section documents every operation that should not be treated as a normal external-consumer API.
+
+| Audience | Intended caller |
+| --- | --- |
+| First-party | The video2ctx web application or an explicit account action |
+| Callback | A signed provider link, OAuth provider, email recipient, or Stripe |
+| Operator | Authorized video2ctx platform administration |
+
+<Warning>
+  These operations intentionally have no documentation playground. Some require browser cookies, signed payloads, provider state, or operator privileges; replaying them manually can change account or billing state.
+</Warning>
+
+The generated [endpoint inventory](/internals/endpoints) lists method, path, operation ID, intended audience, summary, and declared authentication for every internal operation.

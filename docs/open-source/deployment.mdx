@@ -1,0 +1,20 @@
+---
+title: "Deployment"
+description: "Production surfaces and their release boundaries."
+---
+
+video2ctx has three independently deployed public surfaces:
+
+| Surface | Platform | Address |
+| --- | --- | --- |
+| Web application | Vercel | `video2ctx.dev` |
+| Platform API | Cloudflare Workers | `api.video2ctx.dev` |
+| Documentation | Mintlify | `docs.video2ctx.dev` |
+
+Production API deployment applies pending D1 migrations before publishing the Worker. The web application and documentation deploy from Git independently and should not run database migrations.
+
+<Warning>
+  Deployment configuration may contain public resource identifiers, but secrets must be configured in the owning platform. Do not place production secret values in Git or build variables.
+</Warning>
+
+The existing Scalar reference at `api.video2ctx.dev/docs` remains available during the Mintlify rollout and can be retained as a low-level contract viewer afterward.

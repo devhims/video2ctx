@@ -1,0 +1,27 @@
+---
+title: "Authentication"
+description: "Authenticate hosted API requests with a personal key."
+---
+
+Use the standard `Authorization` header for server-to-server requests:
+
+```http
+Authorization: Bearer aty_…
+```
+
+`X-API-Key` remains available for compatibility, but bearer authentication is preferred. Browser sessions and API keys share the same account resources and credit ledger.
+
+## Permissions
+
+Personal API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session or platform operator authorization.
+
+## Key safety
+
+- Keep keys in server-side secrets or environment variables.
+- Never embed a key in a public web bundle or mobile application.
+- Use separate keys for separate integrations so one can be revoked independently.
+- Revoke a key immediately if it appears in logs, screenshots, source control, or support messages.
+
+<Warning>
+  Local demo identities are development-only. Production rejects the `X-Demo-User` header.
+</Warning>

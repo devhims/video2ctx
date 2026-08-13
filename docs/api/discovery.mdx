@@ -1,0 +1,28 @@
+---
+title: "Discovery and trends"
+description: "Search, browse, resolve input, and research topic momentum."
+---
+
+Use provider discovery when you need public YouTube results and private evidence search when you need material already stored by the account.
+
+| Capability | Endpoint |
+| --- | --- |
+| List provider capabilities | `GET /v1/providers` |
+| Search YouTube | `GET /v1/providers/youtube/search` |
+| Browse a supported catalog | `GET /v1/providers/youtube/browse` |
+| Search private evidence | `GET /v1/search` |
+| Build a trend report | `GET /v1/providers/youtube/trends` |
+| Generate a plan from a report | `POST /v1/trends/plan` |
+
+```bash
+curl --get 'https://api.video2ctx.dev/v1/providers/youtube/search' \
+  --header "Authorization: Bearer $VIDEO2CTX_API_KEY" \
+  --data-urlencode 'q=AI agents' \
+  --data 'type=video'
+```
+
+Trend research samples and enriches observable public signals. It must not be interpreted as private creator analytics or guaranteed audience demand.
+
+<Note>
+  `/v1/resolve` is documented under Platform internals because it is a free first-party dashboard routing helper, not the primary discovery API for external consumers.
+</Note>

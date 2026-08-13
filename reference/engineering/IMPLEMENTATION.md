@@ -141,7 +141,7 @@ The `platform/wrangler.jsonc` file binds separate preview and production D1 data
 1. Enable Email Sending for the domain in `EMAIL_FROM` and update that address.
 2. Set `APP_ORIGIN`, `AUTH_BASE_URL`, `ENVIRONMENT=production`, Stripe price ID, admin emails, and plan limits per environment.
 3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, and Stripe credentials. If direct YouTube egress is unreliable, also run `wrangler secret put OUTBOUND_PROXY_URL` and enter the proxy URL interactively.
-4. Connect the platform to Cloudflare Builds and the web application to Vercel, using the repository settings in `docs/DEPLOYMENT.md`.
+4. Connect the platform to Cloudflare Builds and the web application to Vercel, using the repository settings in `reference/engineering/DEPLOYMENT.md`.
 5. Apply D1 migrations remotely and configure Google/Stripe callback URLs.
 
 Never commit `.dev.vars`. The web Worker does not receive provider secrets; it reaches the platform through `PLATFORM`.

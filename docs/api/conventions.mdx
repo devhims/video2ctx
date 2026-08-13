@@ -1,0 +1,33 @@
+---
+title: "API conventions"
+description: "Credits, pagination, metadata, caching, and error behavior."
+---
+
+## Provider paths
+
+Provider-owned resources use explicit paths such as `/v1/providers/youtube/videos/{id}`. User-owned projects, research, monitors, and notifications remain provider-neutral.
+
+## Credits
+
+Metered responses include:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Credits-Charged` | Credits settled for the completed operation |
+| `X-Credits-Remaining` | Account balance after settlement |
+
+Cached provider responses cost 1 credit. Fresh search and comment requests cost 2 credits; other fresh provider-data requests cost 1 credit. Composite analysis operations expose their charge through the same headers.
+
+## Pagination
+
+Search, browse, comments, channel catalogs, and playlists return opaque continuation values. Pass the value back to the same endpoint and do not parse, modify, or reuse it with another query.
+
+## Source metadata
+
+Normalized responses identify their provider, extractor, fetch time, partial state, and warnings. Optional upstream fields may be absent. A partial response can still contain usable data; inspect warnings before treating it as complete.
+
+## Errors
+
+Errors use a stable envelope with a machine-readable code and human-readable message. Common statuses include `401` for missing authentication, `402` for insufficient credits, `422` for invalid input, `429` for rate limiting, and `503` for a temporarily unavailable provider.
+
+Only retry operations identified as retryable. Preserve idempotency keys for job-creating requests.

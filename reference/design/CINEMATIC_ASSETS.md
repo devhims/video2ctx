@@ -1,6 +1,6 @@
 # Cinematic assets — generation recipe
 
-> **Reusable method:** `docs/HIGGSFIELD_ASSET_GUIDE.md` — model choice, prompting
+> **Reusable method:** `reference/design/HIGGSFIELD_ASSET_GUIDE.md` — model choice, prompting
 > failures, the measurement harness and the encode pipeline, generalised from the
 > hero loop that did ship.
 >
@@ -10,7 +10,7 @@
 > *did* ship, see `web/public/scene/README.md`.
 
 Reproducible record for the landing page's scroll-scrubbed decomposition footage
-(`web/public/cinematic/`). Plan: `docs/LANDING_CINEMATIC_PLAN.md`.
+(`web/public/cinematic/`). Plan: `reference/design/LANDING_CINEMATIC_PLAN.md`.
 
 - **Model**: Seedance 2.5 via ElevenCreative (web product, supervised — the API-key MCP has no
   image/video tools)
