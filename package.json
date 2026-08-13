@@ -4,6 +4,8 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
+    "dev": "npm run dev:local",
+    "dev:local": "node dev-local.mjs",
     "dev:web": "npm --prefix web run dev",
     "dev:platform": "npm --prefix platform run dev",
     "build:library": "npm --prefix packages/all-things-youtube run build",

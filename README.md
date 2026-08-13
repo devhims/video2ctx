@@ -122,7 +122,19 @@ Replace the `BETTER_AUTH_SECRET` placeholder in `platform/.dev.vars` with at lea
 
 ### 2. Start the platform
 
-The fully local path keeps D1 state on your machine:
+Start the complete local stack with one command:
+
+```bash
+npm run dev
+```
+
+This applies local D1 migrations, starts the platform on port 8787, and starts
+the web application on port 3000. It also pins the web proxy to the local
+platform even when `web/.env.local` contains a hosted API URL. Open
+<http://localhost:3000> when both services are ready.
+
+The fully local path keeps D1 state on your machine. To run each service in a
+separate terminal instead, use:
 
 ```bash
 npm --prefix platform run db:migrate:local
@@ -131,7 +143,7 @@ npm --prefix platform run dev:local -- --port 8787
 
 Wrangler builds and starts the private YouTube processor container on the first uncached provider request, so Docker must already be running.
 
-### 3. Start the web application
+### 3. Start the web application (manual setup only)
 
 In a second terminal:
 
