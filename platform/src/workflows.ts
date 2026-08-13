@@ -3,6 +3,7 @@ import type { ImportPayload, MonitorPayload } from './types';
 import { indexPrivateDocument, indexPublicDocument } from './lib/search';
 import { now } from './lib/http';
 import { getProvider } from './providers';
+import { checkMonitor, type MonitorRow } from './lib/monitor-check';
 
 export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
   async run(event: WorkflowEvent<ImportPayload>, step: WorkflowStep): Promise<void> {
@@ -164,24 +165,7 @@ export class MonitorWorkflow extends WorkflowEntrypoint<Env, MonitorPayload> {
 
     for (const monitor of monitors) {
       await step.do(`check-${String(monitor.id)}`, async () => {
-        const target = String(monitor.target);
-        const provider = getProvider(monitor.provider);
-        const result = (await provider.search(this.env, target, { type: 'video', sort: 'date' })).value;
-        const newest = result.results[0];
-        const previous = typeof monitor.last_cursor === 'string' ? monitor.last_cursor : undefined;
-        if (newest?.type === 'video' && newest.id !== previous) {
-          await this.env.DB.prepare(
-            `INSERT INTO notifications (id,user_id,type,title,body,data_json,created_at)
-             VALUES (?,?,'monitor_match',?,?,?,?)`
-          ).bind(
-            crypto.randomUUID(), String(monitor.user_id), 'New monitored video', newest.title,
-            JSON.stringify({ monitorId: monitor.id, provider: monitor.provider, videoId: newest.id, target }), now()
-          ).run();
-          await this.env.DB.prepare('UPDATE monitors SET last_cursor=?, last_checked_at=? WHERE id=?')
-            .bind(newest.id, now(), monitor.id).run();
-        } else {
-          await this.env.DB.prepare('UPDATE monitors SET last_checked_at=? WHERE id=?').bind(now(), monitor.id).run();
-        }
+        await checkMonitor(this.env, monitor.id, monitor.user_id);
       });
     }
   }
@@ -196,18 +180,4 @@ interface ImportResult {
   eager?: number;
   partial: boolean;
   continuation?: string;
-}
-
-interface MonitorRow {
-  id: string;
-  user_id: string;
-  provider: string;
-  kind: string;
-  target: string;
-  query_json: string;
-  cadence: string;
-  enabled: number;
-  last_checked_at: number | null;
-  last_cursor: string | null;
-  created_at: number;
 }

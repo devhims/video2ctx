@@ -8,6 +8,15 @@ import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
 import { createCheckout } from '../../lib/billing';
 import { deleteProjectAssets, deleteR2Prefix, userSearchInstanceId } from '../../lib/research-storage';
 import { getProvider } from '../../providers';
+import {
+  DEFAULT_MONITOR_INTERVAL_MINUTES,
+  cancelMonitorSchedule,
+  configureMonitorSchedule,
+  initialMonitorCheckAt,
+  monitorCadence,
+  monitorIntervalMinutes,
+} from '../../lib/monitor-scheduler';
+import { confirmEmailAlerts, getNotificationPreferences, saveNotificationPreferences } from '../../lib/notification-preferences';
 
 export const sessionRoutes = new Hono<App>();
 
@@ -197,7 +206,7 @@ sessionRoutes.post('/monitors', async (c) => {
   const user = requireUser(c);
   const limits = await entitlements(c.env, user.id);
   await enforceCount(c.env, user.id, 'monitors', limits.monitorLimit);
-  const input = await body<{ provider?: string; kind?: string; target?: string; cadence?: string; query?: unknown }>(c.req.raw);
+  const input = await body<{ provider?: string; kind?: string; target?: string; cadence?: string; intervalMinutes?: number; query?: unknown }>(c.req.raw);
   const provider = getProvider(text(input.provider, 40));
   if (!input.kind || !['channel', 'topic', 'search'].includes(input.kind)) {
     throw new ApiError(422, 'INVALID_MONITOR_KIND', 'Invalid monitor kind.');
@@ -205,16 +214,91 @@ sessionRoutes.post('/monitors', async (c) => {
   const target = text(input.target, 500);
   if (!target) throw new ApiError(422, 'MONITOR_TARGET_REQUIRED', 'Monitor target is required.');
   const id = crypto.randomUUID();
+  const intervalMinutes = monitorIntervalInput(input.intervalMinutes, input.cadence);
+  const createdAt = now();
+  const nextCheckAt = initialMonitorCheckAt(createdAt);
   await c.env.DB.prepare(
-    `INSERT INTO monitors (id,user_id,provider,kind,target,query_json,cadence,created_at) VALUES (?,?,?,?,?,?,?,?)`
-  ).bind(id, user.id, provider.descriptor.id, input.kind, target, JSON.stringify(input.query ?? {}), text(input.cadence, 30) || 'hourly', now()).run();
-  return c.json({ id }, 201);
+    `INSERT INTO monitors
+     (id,user_id,provider,kind,target,query_json,cadence,interval_minutes,next_check_at,created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).bind(
+    id, user.id, provider.descriptor.id, input.kind, target, JSON.stringify(input.query ?? {}),
+    monitorCadence(intervalMinutes), intervalMinutes, nextCheckAt, createdAt,
+  ).run();
+  try {
+    await configureMonitorSchedule(c.env, { monitorId: id, userId: user.id, intervalMinutes, nextCheckAt });
+  } catch (error) {
+    await c.env.DB.prepare('DELETE FROM monitors WHERE id=? AND user_id=?').bind(id, user.id).run();
+    throw error;
+  }
+  return c.json({ id, intervalMinutes, nextCheckAt }, 201);
+});
+
+sessionRoutes.patch('/monitors/:id', async (c) => {
+  const user = requireUser(c);
+  const monitorId = asId(c.req.param('id'));
+  const input = await body<{ query?: unknown; intervalMinutes?: number; enabled?: boolean }>(c.req.raw);
+  const existing = await c.env.DB.prepare(
+    `SELECT query_json,cadence,interval_minutes,enabled,next_check_at
+     FROM monitors WHERE id=? AND user_id=?`
+  ).bind(monitorId, user.id).first<{
+    query_json: string;
+    cadence: string;
+    interval_minutes: number;
+    enabled: number;
+    next_check_at: number | null;
+  }>();
+  if (!existing) throw new ApiError(404, 'MONITOR_NOT_FOUND', 'Monitor not found.');
+
+  const intervalMinutes = input.intervalMinutes === undefined
+    ? monitorIntervalMinutes(existing.interval_minutes)
+    : monitorIntervalMinutes(input.intervalMinutes);
+  const enabled = input.enabled === undefined ? Boolean(existing.enabled) : input.enabled;
+  const scheduleChanged = intervalMinutes !== existing.interval_minutes || enabled !== Boolean(existing.enabled);
+  const nextCheckAt = enabled
+    ? scheduleChanged || !existing.next_check_at ? initialMonitorCheckAt() : existing.next_check_at
+    : null;
+  const queryJson = input.query === undefined ? existing.query_json : JSON.stringify(input.query ?? {});
+
+  await c.env.DB.prepare(
+    `UPDATE monitors SET query_json=?,cadence=?,interval_minutes=?,enabled=?,next_check_at=?
+     WHERE id=? AND user_id=?`
+  ).bind(
+    queryJson, monitorCadence(intervalMinutes), intervalMinutes, enabled ? 1 : 0, nextCheckAt,
+    monitorId, user.id,
+  ).run();
+
+  try {
+    if (enabled && nextCheckAt) {
+      await configureMonitorSchedule(c.env, { monitorId, userId: user.id, intervalMinutes, nextCheckAt });
+    } else {
+      await cancelMonitorSchedule(c.env, monitorId);
+    }
+  } catch (error) {
+    await c.env.DB.prepare(
+      `UPDATE monitors SET query_json=?,cadence=?,interval_minutes=?,enabled=?,next_check_at=?
+       WHERE id=? AND user_id=?`
+    ).bind(
+      existing.query_json, existing.cadence, existing.interval_minutes, existing.enabled, existing.next_check_at,
+      monitorId, user.id,
+    ).run();
+    throw error;
+  }
+
+  return c.json({ intervalMinutes, enabled, nextCheckAt });
 });
 
 sessionRoutes.delete('/monitors/:id', async (c) => {
   const user = requireUser(c);
+  const monitorId = asId(c.req.param('id'));
   await c.env.DB.prepare('DELETE FROM monitors WHERE id=? AND user_id=?')
-    .bind(asId(c.req.param('id')), user.id).run();
+    .bind(monitorId, user.id).run();
+  try {
+    await cancelMonitorSchedule(c.env, monitorId);
+  } catch {
+    // A deleted monitor is harmless if cancellation is briefly unavailable:
+    // its next alarm verifies D1 ownership and then removes itself.
+  }
   return c.body(null, 204);
 });
 
@@ -232,16 +316,21 @@ sessionRoutes.post('/notifications/:id/read', async (c) => {
   return c.json({ read: true });
 });
 
+sessionRoutes.get('/notification-preferences', async (c) => {
+  const user = requireUser(c);
+  return c.json(await getNotificationPreferences(c.env, user.id));
+});
+
 sessionRoutes.put('/notification-preferences', async (c) => {
   const user = requireUser(c);
-  const input = await body<{ inApp?: boolean; emailDigest?: string }>(c.req.raw);
-  const digest = ['off', 'daily', 'weekly'].includes(input.emailDigest ?? '') ? input.emailDigest : 'weekly';
-  await c.env.DB.prepare(
-    `INSERT INTO notification_preferences (user_id,in_app,email_digest,updated_at) VALUES (?,?,?,?)
-     ON CONFLICT(user_id) DO UPDATE SET in_app=excluded.in_app,email_digest=excluded.email_digest,
-       unsubscribed_at=NULL,updated_at=excluded.updated_at`
-  ).bind(user.id, input.inApp === false ? 0 : 1, digest, now()).run();
-  return c.json({ inApp: input.inApp !== false, emailDigest: digest });
+  const input = await body<{ inApp?: boolean; emailAlerts?: boolean }>(c.req.raw);
+  return c.json(await saveNotificationPreferences(c.env, user.id, input));
+});
+
+sessionRoutes.post('/notification-preferences/confirm-email', async (c) => {
+  const user = requireUser(c);
+  const input = await body<{ confirmation?: string }>(c.req.raw);
+  return c.json(await confirmEmailAlerts(c.env, user.id, text(input.confirmation, 1000)));
 });
 
 sessionRoutes.get('/oauth/youtube/connect', async (c) => {
@@ -295,4 +384,14 @@ function cleanTags(value: unknown): string[] {
 function finiteNumber(value: unknown): number | null {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.round(number) : null;
+}
+
+function monitorIntervalInput(value: unknown, legacyCadence: unknown): number {
+  if (value !== undefined) return monitorIntervalMinutes(value);
+  const cadence = text(legacyCadence, 30).toLowerCase();
+  if (!cadence) return DEFAULT_MONITOR_INTERVAL_MINUTES;
+  if (cadence === 'hourly') return 60;
+  if (cadence === 'daily') return 1440;
+  const minutes = /^(\d+)m$/.exec(cadence)?.[1];
+  return monitorIntervalMinutes(minutes ?? cadence);
 }

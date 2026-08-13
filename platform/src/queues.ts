@@ -1,6 +1,7 @@
 import type { EmailMessage, TaskMessage } from './types';
 import { indexPrivateDocument } from './lib/search';
 import { now, safeErrorLog, sha256 } from './lib/http';
+import { checkMonitor } from './lib/monitor-check';
 
 const PERMANENT_EMAIL_ERRORS = new Set([
   'E_VALIDATION_ERROR', 'E_FIELD_MISSING', 'E_SENDER_NOT_VERIFIED',
@@ -43,6 +44,7 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
     const response = await env.EMAIL.send({
       to: input.to,
       from: { email: env.EMAIL_FROM, name: 'video2ctx' },
+      replyTo: env.EMAIL_REPLY_TO,
       subject: input.subject,
       html: input.html,
       text: input.text,
@@ -86,6 +88,8 @@ async function runTask(task: TaskMessage, env: Env): Promise<void> {
     } catch (error) {
       console.warn({ event: 'search_instance_delete', ...safeErrorLog(error) });
     }
+  } else if (task.type === 'run-monitor') {
+    await checkMonitor(env, String(task.payload.monitorId), String(task.payload.userId));
   }
 
   await env.DB.prepare(

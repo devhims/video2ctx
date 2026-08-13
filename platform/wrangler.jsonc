@@ -11,7 +11,8 @@
     "ENVIRONMENT": "production",
     "APP_ORIGIN": "https://www.video2ctx.dev",
     "AUTH_BASE_URL": "https://www.video2ctx.dev",
-    "EMAIL_FROM": "noreply@video2ctx.dev",
+    "EMAIL_FROM": "noreply@notify.video2ctx.dev",
+    "EMAIL_REPLY_TO": "support@video2ctx.dev",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
     "ADMIN_EMAILS": "",
@@ -50,6 +51,10 @@
       {
         "name": "YOUTUBE_REQUEST_COORDINATOR",
         "class_name": "YouTubeRequestCoordinator"
+      },
+      {
+        "name": "MONITOR_SCHEDULER",
+        "class_name": "MonitorScheduler"
       }
     ]
   },
@@ -61,6 +66,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["YouTubeRequestCoordinator"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["MonitorScheduler"]
     }
   ],
   "d1_databases": [
@@ -139,7 +148,8 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "remote": true
+      "remote": true,
+      "allowed_sender_addresses": ["noreply@notify.video2ctx.dev"]
     }
   ],
   "triggers": {

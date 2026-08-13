@@ -946,6 +946,27 @@ export const openApiDocument = {
       },
     },
     '/v1/monitors/{id}': {
+      patch: {
+        tags: ['Monitoring'],
+        operationId: 'updateMonitor',
+        summary: 'Update a monitor schedule or display metadata',
+        security: accountSecurity,
+        parameters: [idParameter],
+        requestBody: jsonBody({
+          type: 'object',
+          properties: {
+            query: { type: 'object', additionalProperties: true },
+            intervalMinutes: schemaRef('MonitorIntervalMinutes'),
+            enabled: { type: 'boolean' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Monitor updated.', schemaRef('MonitorSchedule')),
+          '401': responseRef('Unauthorized'),
+          '404': responseRef('NotFound'),
+          '500': responseRef('ServerError'),
+        },
+      },
       delete: {
         tags: ['Monitoring'],
         operationId: 'deleteMonitor',
@@ -991,6 +1012,17 @@ export const openApiDocument = {
       },
     },
     '/v1/notification-preferences': {
+      get: {
+        tags: ['Monitoring'],
+        operationId: 'getNotificationPreferences',
+        summary: 'Get notification preferences',
+        security: accountSecurity,
+        responses: {
+          '200': jsonResponse('Current preferences.', schemaRef('NotificationPreferences')),
+          '401': responseRef('Unauthorized'),
+          '500': responseRef('ServerError'),
+        },
+      },
       put: {
         tags: ['Monitoring'],
         operationId: 'updateNotificationPreferences',
@@ -999,6 +1031,23 @@ export const openApiDocument = {
         requestBody: jsonBody(schemaRef('NotificationPreferencesRequest')),
         responses: {
           '200': jsonResponse('Updated preferences.', schemaRef('NotificationPreferences')),
+          ...standardErrors,
+        },
+      },
+    },
+    '/v1/notification-preferences/confirm-email': {
+      post: {
+        tags: ['Monitoring'],
+        operationId: 'confirmNotificationEmail',
+        summary: 'Confirm monitor email alerts from the signed-in dashboard',
+        security: accountSecurity,
+        requestBody: jsonBody({
+          type: 'object', required: ['confirmation'], properties: {
+            confirmation: { type: 'string', minLength: 1, maxLength: 1000 },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Email alerts confirmed.', schemaRef('NotificationPreferences')),
           ...standardErrors,
         },
       },
@@ -1013,7 +1062,7 @@ export const openApiDocument = {
           queryParameter('token', 'Signed unsubscribe token.', { type: 'string' }, true),
         ],
         responses: {
-          '200': { description: 'Email digests disabled.', content: { 'text/plain': { schema: { type: 'string' } } } },
+          '200': { description: 'Email alerts disabled.', content: { 'text/plain': { schema: { type: 'string' } } } },
           '400': { description: 'Invalid unsubscribe link.', content: { 'text/plain': { schema: { type: 'string' } } } },
         },
       },
@@ -1027,7 +1076,7 @@ export const openApiDocument = {
           queryParameter('token', 'Signed unsubscribe token.', { type: 'string' }, true),
         ],
         responses: {
-          '200': { description: 'Email digests disabled.', content: { 'text/plain': { schema: { type: 'string' } } } },
+          '200': { description: 'Email alerts disabled.', content: { 'text/plain': { schema: { type: 'string' } } } },
           '400': { description: 'Invalid unsubscribe link.', content: { 'text/plain': { schema: { type: 'string' } } } },
         },
       },
@@ -1672,16 +1721,41 @@ export const openApiDocument = {
       ReportRequest: { type: 'object', properties: { prompt: { type: 'string', maxLength: 2000 }, projectId: { type: 'string' } } },
       CreateExportRequest: { type: 'object', required: ['format'], properties: { format: { type: 'string', description: 'Supported export format.', example: 'markdown' } } },
       Export: storedRecord,
-      Monitor: storedRecord,
+      MonitorIntervalMinutes: {
+        type: 'integer', enum: [60, 360, 720, 1440, 4320, 10080], default: 1440,
+        description: 'How often the monitor runs, in minutes.',
+      },
+      MonitorSchedule: {
+        type: 'object', required: ['intervalMinutes', 'enabled'], properties: {
+          intervalMinutes: schemaRef('MonitorIntervalMinutes'), enabled: { type: 'boolean' },
+          nextCheckAt: { type: ['integer', 'null'], description: 'Unix time in milliseconds for the next alarm.' },
+        },
+      },
+      Monitor: {
+        allOf: [storedRecord, {
+          type: 'object', required: ['interval_minutes', 'enabled'], properties: {
+            interval_minutes: schemaRef('MonitorIntervalMinutes'), enabled: { type: 'integer', enum: [0, 1] },
+            next_check_at: { type: ['integer', 'null'] }, last_checked_at: { type: ['integer', 'null'] },
+          },
+        }],
+      },
       CreateMonitorRequest: {
         type: 'object', required: ['provider', 'kind', 'target'], properties: {
           provider: schemaRef('ProviderId'), kind: { type: 'string', enum: ['channel', 'topic', 'search'] }, target: { type: 'string', minLength: 1, maxLength: 500 },
-          cadence: { type: 'string', maxLength: 30, default: 'hourly' }, query: { type: 'object', additionalProperties: true },
+          intervalMinutes: schemaRef('MonitorIntervalMinutes'), query: { type: 'object', additionalProperties: true },
         },
       },
       Notification: storedRecord,
-      NotificationPreferencesRequest: { type: 'object', properties: { inApp: { type: 'boolean', default: true }, emailDigest: { type: 'string', enum: ['off', 'daily', 'weekly'], default: 'weekly' } } },
-      NotificationPreferences: { type: 'object', required: ['inApp', 'emailDigest'], properties: { inApp: { type: 'boolean' }, emailDigest: { type: 'string', enum: ['off', 'daily', 'weekly'] } } },
+      NotificationPreferencesRequest: { type: 'object', properties: { inApp: { type: 'boolean', default: true }, emailAlerts: { type: 'boolean', default: false, description: 'True requests a confirmation email; delivery remains disabled until confirmed.' } } },
+      NotificationPreferences: {
+        type: 'object', required: ['inApp', 'emailAlerts', 'emailAlertsPending', 'emailDigest'], properties: {
+          inApp: { type: 'boolean' },
+          emailAlerts: { type: 'boolean', description: 'True only after the account email has confirmed delivery.' },
+          emailAlertsPending: { type: 'boolean' },
+          emailAlertsRequestedAt: { type: 'integer' },
+          emailDigest: { type: 'string', enum: ['off', 'daily', 'weekly'] },
+        },
+      },
       Usage: {
         type: 'object',
         additionalProperties: true,

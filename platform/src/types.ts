@@ -44,7 +44,7 @@ export interface MonitorPayload {
 }
 
 export interface TaskMessage {
-  type: 'index-document' | 'snapshot-statistics' | 'delete-user-search';
+  type: 'index-document' | 'snapshot-statistics' | 'delete-user-search' | 'run-monitor';
   idempotencyKey: string;
   payload: Record<string, unknown>;
 }
