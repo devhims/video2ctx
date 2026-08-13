@@ -1,6 +1,6 @@
 /* Shared tokens. Two systems draw on this file:
  *
- *   dashboard  --color-dashboard-*  light paper, the application shell
+ *   dashboard  --color-dashboard-*  warm dark paper, the application shell
  *   landing    --color-home-*       light paper, used by /explore contenders
  *
  * The live landing direction (Craft) declares its own dark palette locally in
@@ -103,39 +103,42 @@
   --z-home-raised: 10;
   --z-home-nav: 20;
 
-  --color-dashboard-paper: oklch(96.5% 0.012 83);
-  --color-dashboard-surface: oklch(98.5% 0.008 83);
-  --color-dashboard-surface-muted: oklch(93% 0.014 83);
-  --color-dashboard-sidebar: oklch(94% 0.012 83);
-  --color-dashboard-ink: oklch(20% 0.012 75);
-  --color-dashboard-ink-soft: oklch(42% 0.012 80);
-  --color-dashboard-muted: oklch(45% 0.012 82);
-  --color-dashboard-rule: oklch(79% 0.012 83);
-  --color-dashboard-rule-strong: oklch(62% 0.014 80);
-  --color-dashboard-accent: oklch(57% 0.2 31);
-  --color-dashboard-accent-hover: oklch(52% 0.2 31);
-  --color-dashboard-accent-soft: oklch(92% 0.035 31);
-  --color-dashboard-accent-ink: var(--color-dashboard-surface);
-  --color-dashboard-focus: oklch(47% 0.21 31);
-  --color-dashboard-dark: oklch(20% 0.01 75);
-  --color-dashboard-dark-raised: oklch(25% 0.012 75);
-  --color-dashboard-dark-ink: oklch(94% 0.008 83);
-  --color-dashboard-success: oklch(47% 0.1 145);
-  --color-dashboard-success-soft: oklch(92% 0.03 145);
-  --color-dashboard-warning: oklch(48% 0.08 78);
-  --color-dashboard-warning-soft: oklch(94% 0.03 78);
-  --color-dashboard-danger: oklch(48% 0.2 31);
-  --color-dashboard-surface-glass: oklch(98.5% 0.008 83 / 0.94);
-  --color-dashboard-paper-glass: oklch(96.5% 0.012 83 / 0.94);
-  --color-dashboard-dark-glass: oklch(20% 0.01 75 / 0.86);
-  --color-dashboard-dark-wash: oklch(20% 0.01 75 / 0.18);
-  --color-dashboard-accent-wash: oklch(61% 0.2 31 / 0.16);
-  --color-dashboard-success-wash: oklch(47% 0.1 145 / 0.16);
-  --color-dashboard-overlay: oklch(18% 0.01 75 / 0.55);
-  --color-dashboard-shadow-subtle: oklch(20% 0.01 75 / 0.06);
-  --color-dashboard-shadow: oklch(20% 0.01 75 / 0.12);
-  --color-dashboard-shadow-strong: oklch(20% 0.01 75 / 0.18);
-  --shadow-dashboard-modal: 0 1.5rem 5rem oklch(20% 0.01 75 / 0.25);
+  /* The application now shares Craft's warm dark paper and vermilion accent.
+   * Dashboard roles stay separate so dense product surfaces can be tuned without
+   * coupling their contrast directly to the marketing composition. */
+  --color-dashboard-paper: oklch(15.5% 0.006 75);
+  --color-dashboard-surface: oklch(19% 0.007 75);
+  --color-dashboard-surface-muted: oklch(22.5% 0.008 75);
+  --color-dashboard-sidebar: oklch(17.2% 0.007 75);
+  --color-dashboard-ink: oklch(95% 0.006 83);
+  --color-dashboard-ink-soft: oklch(72% 0.008 82);
+  --color-dashboard-muted: oklch(62% 0.008 80);
+  --color-dashboard-rule: oklch(27% 0.008 78);
+  --color-dashboard-rule-strong: oklch(36% 0.01 78);
+  --color-dashboard-accent: oklch(66% 0.19 31);
+  --color-dashboard-accent-hover: oklch(70% 0.18 31);
+  --color-dashboard-accent-soft: oklch(25% 0.05 31);
+  --color-dashboard-accent-ink: oklch(98% 0.006 83);
+  --color-dashboard-focus: oklch(72% 0.17 31);
+  --color-dashboard-dark: oklch(12.5% 0.005 75);
+  --color-dashboard-dark-raised: oklch(23% 0.008 75);
+  --color-dashboard-dark-ink: oklch(95% 0.006 83);
+  --color-dashboard-success: oklch(72% 0.11 145);
+  --color-dashboard-success-soft: oklch(24% 0.035 145);
+  --color-dashboard-warning: oklch(78% 0.11 78);
+  --color-dashboard-warning-soft: oklch(25% 0.035 78);
+  --color-dashboard-danger: oklch(72% 0.17 31);
+  --color-dashboard-surface-glass: oklch(19% 0.007 75 / 0.86);
+  --color-dashboard-paper-glass: oklch(15.5% 0.006 75 / 0.92);
+  --color-dashboard-dark-glass: oklch(12.5% 0.005 75 / 0.88);
+  --color-dashboard-dark-wash: oklch(5% 0.004 75 / 0.24);
+  --color-dashboard-accent-wash: oklch(66% 0.19 31 / 0.16);
+  --color-dashboard-success-wash: oklch(72% 0.11 145 / 0.14);
+  --color-dashboard-overlay: oklch(5% 0.004 75 / 0.72);
+  --color-dashboard-shadow-subtle: oklch(5% 0.004 75 / 0.16);
+  --color-dashboard-shadow: oklch(5% 0.004 75 / 0.28);
+  --color-dashboard-shadow-strong: oklch(5% 0.004 75 / 0.42);
+  --shadow-dashboard-modal: 0 1.5rem 5rem oklch(5% 0.004 75 / 0.58);
 
   --font-dashboard-display: var(--font-geist-sans);
   --font-dashboard-body: var(--font-geist-sans);

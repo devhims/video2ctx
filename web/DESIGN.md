@@ -1,8 +1,10 @@
-# Landing page design system
+# Product design system
 
-Covers the marketing surface only — `/` and `/explore`. The dashboard is a
-separate system (light paper, `--color-dashboard-*` in `tokens.css`) and nothing
-here applies to it.
+Covers the live marketing surface (`/` and `/explore`) and the product workspace
+(`/dashboard`). The dashboard keeps dedicated `--color-dashboard-*` roles in
+`tokens.css` because dense application surfaces need their own contrast tuning,
+but those roles now resolve to Craft's warm dark paper, off-white ink, and
+vermilion accent. The product and marketing surfaces are one visual family.
 
 Live direction: **Craft**, at `web/app/_directions/craft.tsx` + `craft.css`.
 
@@ -52,10 +54,50 @@ as a known debt in §8.
 Everything is OKLCH. The accent is the one chromatic colour on the page and is
 inherited from the brand mark — it is not a free choice.
 
-**The dark page owns the document.** `html:has(.craft)` sets both the background
-and `color-scheme: dark`. Without it, overscroll rubber-banding flashes the light
-body colour and the scrollbar, form controls and autofill render in the light
-scheme on near-black.
+### Dashboard mapping
+
+The dashboard reuses the same colour roles under application-specific names:
+`paper` → `--color-dashboard-paper`, `paper-raised` →
+`--color-dashboard-surface`, `ink` → `--color-dashboard-ink`, and `accent` →
+`--color-dashboard-accent`. Navigation, search controls, panels, dialogs, and
+empty states stay within those roles. Success and warning colours remain
+available only for status communication; they are not decorative accents.
+
+Dashboard muted text uses 62% lightness rather than the marketing surface's
+56% muted ink. This keeps secondary copy above AA contrast across dashboard
+paper, surface, and muted-surface roles without promoting it to primary
+emphasis.
+
+The workspace also inherits Craft's interaction rules: pill-shaped primary
+actions, `scale(0.97)` press feedback, hover effects gated to fine pointers,
+instant focus rings, and transform/opacity motion only.
+
+### Shared typography hierarchy
+
+Both surfaces use Geist Sans, with Geist Mono or Pixel Grid reserved for data
+and the wordmark. Weight carries the hierarchy as deliberately as size:
+
+| Role | Size | Weight |
+| --- | --- | --- |
+| Marketing display (homepage hero only) | `clamp(2.4rem, …, 4.75rem)` | 500 |
+| Marketing page/section title | `clamp(1.6rem, …, 2.4rem)` | 680 |
+| Workspace section title | `clamp(1.5rem, …, 2rem)` | 650 |
+| Component title | `1–1.2rem` | 650 |
+| Primary action | `0.8–0.85rem` | 650 |
+| Secondary action | `0.78–0.85rem` | 620 |
+| Navigation and filters | `0.72–0.82rem` | 530–600 |
+| Body copy | `0.82–0.95rem`, `1.6` line-height | 400 |
+| Labels and metadata | `0.62–0.7rem` | 560–600 |
+
+Avoid 700–750 weights for routine interface hierarchy. They made the workspace
+feel typographically separate from Craft and reduced contrast between headings,
+labels, and actions.
+
+**The dark page owns the document.** `html:has(.craft)` does this for marketing;
+the dashboard shell and signed-out gates use the same pattern in `globals.css`.
+Each sets both the document background and `color-scheme: dark`. Without it,
+overscroll rubber-banding flashes the light body colour and the scrollbar, form
+controls and autofill render in the light scheme on near-black.
 
 ---
 
@@ -73,6 +115,16 @@ From `emil-design-eng`. Before animating anything, ask how often it is seen.
 
 This is why the input and the scene have opposite motion budgets. Treating the
 page as one motion system was the mistake this rule corrected.
+
+### Dashboard motion budget
+
+The dashboard deliberately carries only `--out`, `--press`, and `--control`.
+Its chrome is seen hundreds of times per day, so it keeps immediate interaction
+feedback and short control transitions without inheriting the landing page's
+`--in-out`, `--enter`, or `--exit` tokens. Those broader tokens support
+once-per-visit reveals and spatial movement that the dashboard does not
+currently use. Add a dashboard motion token only when a new interaction and
+its frequency justify it.
 
 ### Curves and durations
 
