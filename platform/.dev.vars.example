@@ -8,6 +8,7 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PRO_PRICE_ID=
 # Required in production for the anonymous landing-page inspection quota.
+LANDING_DEMO_RATE_LIMIT_MODE=disabled
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 LANDING_RATE_LIMIT_SALT=replace-with-a-private-random-value

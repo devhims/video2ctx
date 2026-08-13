@@ -7,8 +7,8 @@ interface Env {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRO_PRICE_ID: string;
-  UPSTASH_REDIS_REST_URL?: string;
-  UPSTASH_REDIS_REST_TOKEN?: string;
-  LANDING_RATE_LIMIT_SALT?: string;
+  UPSTASH_REDIS_REST_URL: string;
+  UPSTASH_REDIS_REST_TOKEN: string;
+  LANDING_RATE_LIMIT_SALT: string;
   OUTBOUND_PROXY_URL?: string;
 }

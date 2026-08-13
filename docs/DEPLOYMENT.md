@@ -31,7 +31,9 @@ Configure branch control to build only `main` for now. Do not enable automatic W
 
 The production deploy command applies pending D1 migrations before deploying the Worker. Runtime secrets remain attached to the existing Worker and must not be added to Git build variables.
 
-The anonymous landing-page inspection fails closed in production. Add these Worker runtime secrets before deployment:
+The anonymous landing-page inspection fails closed in production unless
+`LANDING_DEMO_RATE_LIMIT_MODE=disabled` is explicitly configured for testing.
+Before a production launch, set the mode to `enforced` and add these Worker runtime secrets:
 
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`

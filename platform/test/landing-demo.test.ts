@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app';
 import {
+  claimLandingDemoQuota,
   evaluateDistinctVideoLimit,
   LANDING_DEMO_WINDOW_MS,
 } from '../src/lib/landing-demo';
@@ -45,6 +46,39 @@ describe('landing-page video inspection', () => {
       ['video2ctx:landing:videos:hashed-visitor'],
       [timestamp, timestamp - LANDING_DEMO_WINDOW_MS, 'abcdefghijk', 5, LANDING_DEMO_WINDOW_MS],
     );
+  });
+
+  it('allows an explicit production testing bypass without Upstash credentials', async () => {
+    const timestamp = Date.UTC(2026, 7, 12, 18, 0, 0);
+
+    await expect(claimLandingDemoQuota(
+      {
+        ENVIRONMENT: 'production',
+        LANDING_DEMO_RATE_LIMIT_MODE: 'disabled',
+      } as unknown as Env,
+      new Request('https://api.video2ctx.dev/v1/demo/youtube/inspect'),
+      'abcdefghijk',
+      timestamp,
+    )).resolves.toEqual({
+      limit: 5,
+      remaining: 5,
+      resetAt: new Date(timestamp + LANDING_DEMO_WINDOW_MS).toISOString(),
+      repeated: false,
+    });
+  });
+
+  it('still fails closed in production when the explicit bypass is not enabled', async () => {
+    await expect(claimLandingDemoQuota(
+      {
+        ENVIRONMENT: 'production',
+        LANDING_DEMO_RATE_LIMIT_MODE: 'enforced',
+      } as unknown as Env,
+      new Request('https://api.video2ctx.dev/v1/demo/youtube/inspect'),
+      'abcdefghijk',
+    )).rejects.toMatchObject({
+      status: 503,
+      code: 'DEMO_RATE_LIMIT_UNAVAILABLE',
+    });
   });
 
   it('returns a stable 429 contract when five distinct videos remain in the window', async () => {

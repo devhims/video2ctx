@@ -61,6 +61,12 @@ export async function claimLandingDemoQuota(
   videoId: string,
   timestamp = Date.now(),
 ): Promise<LandingDemoQuota> {
+  // Wrangler narrows production vars to their configured literal values, while
+  // local development may still override this switch at runtime.
+  if (String(env.LANDING_DEMO_RATE_LIMIT_MODE) === 'disabled') {
+    return unmeteredQuota(timestamp);
+  }
+
   const configured = Boolean(
     env.UPSTASH_REDIS_REST_URL
     && env.UPSTASH_REDIS_REST_TOKEN
@@ -69,12 +75,7 @@ export async function claimLandingDemoQuota(
 
   if (!configured) {
     if (env.ENVIRONMENT !== 'production') {
-      return {
-        limit: LANDING_DEMO_LIMIT,
-        remaining: LANDING_DEMO_LIMIT,
-        resetAt: new Date(timestamp + LANDING_DEMO_WINDOW_MS).toISOString(),
-        repeated: false,
-      };
+      return unmeteredQuota(timestamp);
     }
     throw unavailable();
   }
@@ -106,6 +107,15 @@ export async function claimLandingDemoQuota(
 
   if (quota.remaining < 0 || quota.remaining > LANDING_DEMO_LIMIT) throw unavailable();
   return quota;
+}
+
+function unmeteredQuota(timestamp: number): LandingDemoQuota {
+  return {
+    limit: LANDING_DEMO_LIMIT,
+    remaining: LANDING_DEMO_LIMIT,
+    resetAt: new Date(timestamp + LANDING_DEMO_WINDOW_MS).toISOString(),
+    repeated: false,
+  };
 }
 
 export async function evaluateDistinctVideoLimit(
