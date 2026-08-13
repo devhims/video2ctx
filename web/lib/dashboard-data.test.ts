@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   canDeleteAccount,
+  confirmDashboardEmailConsent,
   creditBalanceFromHeaders,
+  emailConsentToConfirm,
   loadDashboardAccountData,
+  pathWithoutEmailConsent,
 } from './dashboard-data.ts';
 
 describe('dashboard account bootstrap', () => {
@@ -53,5 +56,35 @@ describe('account deletion confirmation', () => {
     assert.equal(canDeleteAccount('delete'), false);
     assert.equal(canDeleteAccount('DELETE '), false);
     assert.equal(canDeleteAccount(''), false);
+  });
+});
+
+describe('email alert confirmation', () => {
+  test('automatically consumes a confirmation once the signed-in account is ready', () => {
+    assert.equal(emailConsentToConfirm('signed-token', 'member@example.com', false), undefined);
+    assert.equal(emailConsentToConfirm('signed-token', 'member@example.com', true), 'signed-token');
+    assert.equal(emailConsentToConfirm('signed-token', 'member@example.com', true, 'signed-token'), undefined);
+  });
+
+  test('posts the email token to the confirmation endpoint', async () => {
+    let request: { path: string; options: RequestInit } | undefined;
+    const preferences = { inApp: true, emailAlerts: true, emailAlertsPending: false, emailDigest: 'off' as const };
+
+    const result = await confirmDashboardEmailConsent(async (path, options) => {
+      request = { path, options };
+      return preferences;
+    }, 'signed-token');
+
+    assert.deepEqual(result, preferences);
+    assert.equal(request?.path, '/v1/notification-preferences/confirm-email');
+    assert.equal(request?.options.method, 'POST');
+    assert.deepEqual(JSON.parse(String(request?.options.body)), { confirmation: 'signed-token' });
+  });
+
+  test('removes only the consumed token from the dashboard URL', () => {
+    assert.equal(
+      pathWithoutEmailConsent('/dashboard', '?section=settings&emailConsent=signed-token'),
+      '/dashboard?section=settings',
+    );
   });
 });

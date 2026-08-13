@@ -387,6 +387,8 @@ html,body{overflow-x:clip}
 .settings-email-confirmation strong{font-size:.78rem}
 .settings-email-confirmation small,.settings-email-confirmation p{color:var(--color-dashboard-ink-soft);font-size:.7rem;line-height:1.45}
 .settings-email-confirmation small b{color:var(--color-dashboard-ink);font-weight:650}
+.settings-email-confirmation[data-state='success']{border-color:color-mix(in srgb,var(--color-dashboard-success) 45%,var(--color-dashboard-rule));background:var(--color-dashboard-success-soft)}
+.settings-email-confirmation[data-state='error']{border-color:color-mix(in srgb,var(--color-dashboard-danger) 45%,var(--color-dashboard-rule));background:var(--color-dashboard-danger-soft)}
 .settings-email-confirmation button,.settings-resend-confirmation{min-height:2.2rem;padding:0 .8rem;border:1px solid var(--color-dashboard-rule-strong);border-radius:var(--radius-dashboard-sm);background:var(--color-dashboard-surface-muted);color:var(--color-dashboard-ink);font-size:.7rem;font-weight:650;cursor:pointer}
 .settings-email-confirmation button{border-color:var(--color-dashboard-accent);background:var(--color-dashboard-accent);color:var(--color-dashboard-accent-ink)}
 .settings-email-confirmation p{grid-column:1/-1;margin:0}

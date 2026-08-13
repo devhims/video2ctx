@@ -33,6 +33,7 @@ describe('notification preferences', () => {
       to: 'member@customer.test',
       subject: 'Confirm email alerts for video2ctx',
     });
+    expect(sent[0]?.text).toContain('Confirm email alerts');
   });
 
   test('activates delivery only after the signed-in confirmation step', async () => {

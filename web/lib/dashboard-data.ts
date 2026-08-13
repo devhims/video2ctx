@@ -57,6 +57,10 @@ export interface DashboardAccountData {
 }
 
 type DashboardRequest = (path: string) => Promise<unknown>;
+type DashboardPreferenceMutation = (
+  path: string,
+  options: RequestInit,
+) => Promise<DashboardNotificationPreferences>;
 
 export async function loadDashboardAccountData(request: DashboardRequest): Promise<DashboardAccountData> {
   const [projectData, monitorData, usage, notificationData, notificationPreferences] = await Promise.all([
@@ -74,6 +78,33 @@ export async function loadDashboardAccountData(request: DashboardRequest): Promi
     notifications: notificationData.notifications,
     notificationPreferences,
   };
+}
+
+export function emailConsentToConfirm(
+  confirmation: string | undefined,
+  email: string | undefined,
+  accountReady: boolean,
+  attemptedConfirmation?: string,
+): string | undefined {
+  if (!accountReady || !email || !confirmation || confirmation === attemptedConfirmation) return undefined;
+  return confirmation;
+}
+
+export async function confirmDashboardEmailConsent(
+  request: DashboardPreferenceMutation,
+  confirmation: string,
+): Promise<DashboardNotificationPreferences> {
+  return request('/v1/notification-preferences/confirm-email', {
+    method: 'POST',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export function pathWithoutEmailConsent(pathname: string, search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete('emailConsent');
+  const suffix = params.toString();
+  return `${pathname}${suffix ? `?${suffix}` : ''}`;
 }
 
 export const CREDIT_BALANCE_EVENT = 'video2ctx:credit-balance';

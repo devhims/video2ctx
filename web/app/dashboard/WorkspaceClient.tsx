@@ -4,10 +4,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import Link from 'next/link';
 import {
   canDeleteAccount,
+  confirmDashboardEmailConsent,
   CREDIT_BALANCE_EVENT,
   DEFAULT_NOTIFICATION_PREFERENCES,
   DELETE_ACCOUNT_CONFIRMATION,
+  emailConsentToConfirm,
   loadDashboardAccountData,
+  pathWithoutEmailConsent,
   publishCreditBalance,
   type DashboardUsage,
   type DashboardNotification,
@@ -188,6 +191,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [notificationPreferences, setNotificationPreferences] = useState<DashboardNotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
+  const [accountDataReady, setAccountDataReady] = useState(false);
   const [inspector, setInspector] = useState<Inspector | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -251,8 +255,12 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   }, [authenticated]);
 
   useEffect(() => {
-    if (!authenticated) return;
-    void refreshPrivateData();
+    if (!authenticated) { setAccountDataReady(false); return; }
+    let cancelled = false;
+    void refreshPrivateData().finally(() => {
+      if (!cancelled) setAccountDataReady(true);
+    });
+    return () => { cancelled = true; };
   }, [authenticated, refreshPrivateData]);
 
   useEffect(() => {
@@ -583,7 +591,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
         </div>
         <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
         <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} /></div>
-        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} isDemo={demoEnabled} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
+        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
@@ -619,9 +627,10 @@ function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSetting
   </div>;
 }
 
-function SettingsView({ email, emailConsent, isDemo, preferences, onPreferencesChange }: {
+function SettingsView({ email, emailConsent, accountDataReady, isDemo, preferences, onPreferencesChange }: {
   email?: string;
   emailConsent?: string;
+  accountDataReady: boolean;
   isDemo: boolean;
   preferences: DashboardNotificationPreferences;
   onPreferencesChange: (preferences: DashboardNotificationPreferences) => void;
@@ -631,8 +640,9 @@ function SettingsView({ email, emailConsent, isDemo, preferences, onPreferencesC
   const [deleteError, setDeleteError] = useState('');
   const [preferenceSaving, setPreferenceSaving] = useState<'inApp' | 'emailAlerts'>();
   const [preferenceMessage, setPreferenceMessage] = useState('');
-  const [confirmationSaving, setConfirmationSaving] = useState(false);
+  const [confirmationState, setConfirmationState] = useState<'idle' | 'confirming' | 'success' | 'error'>('idle');
   const [confirmationMessage, setConfirmationMessage] = useState('');
+  const attemptedEmailConsent = useRef<string | undefined>(undefined);
   const confirmed = canDeleteAccount(confirmation);
 
   const savePreference = async (key: 'inApp' | 'emailAlerts', value: boolean) => {
@@ -659,26 +669,41 @@ function SettingsView({ email, emailConsent, isDemo, preferences, onPreferencesC
     }
   };
 
-  const confirmEmailDelivery = async () => {
-    if (!emailConsent || confirmationSaving) return;
-    setConfirmationSaving(true);
+  const confirmEmailDelivery = useCallback(async (confirmationToken: string) => {
+    setConfirmationState('confirming');
     setConfirmationMessage('');
     try {
-      const saved = await api<DashboardNotificationPreferences>('/v1/notification-preferences/confirm-email', {
-        method: 'POST', body: JSON.stringify({ confirmation: emailConsent }),
-      });
+      const saved = await confirmDashboardEmailConsent(
+        (path, options) => api<DashboardNotificationPreferences>(path, options),
+        confirmationToken,
+      );
       onPreferencesChange(saved);
+      setConfirmationState('success');
       setConfirmationMessage(`Email alerts are now enabled for ${email}.`);
-      const params = new URLSearchParams(window.location.search);
-      params.delete('emailConsent');
-      const suffix = params.toString();
-      window.history.replaceState(null, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}`);
+      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
     } catch (cause) {
+      setConfirmationState('error');
       setConfirmationMessage(cause instanceof Error ? cause.message : 'Could not confirm email alerts.');
-    } finally {
-      setConfirmationSaving(false);
     }
-  };
+  }, [email, onPreferencesChange]);
+
+  useEffect(() => {
+    const confirmationToken = emailConsentToConfirm(
+      emailConsent,
+      email,
+      accountDataReady,
+      attemptedEmailConsent.current,
+    );
+    if (!confirmationToken) return;
+    attemptedEmailConsent.current = confirmationToken;
+    if (preferences.emailAlerts) {
+      setConfirmationState('success');
+      setConfirmationMessage(`Email alerts are already enabled for ${email}.`);
+      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
+      return;
+    }
+    void confirmEmailDelivery(confirmationToken);
+  }, [accountDataReady, confirmEmailDelivery, email, emailConsent, preferences.emailAlerts]);
 
   const deleteAccount = async () => {
     if (!email || !confirmed || deleting) return;
@@ -704,10 +729,8 @@ function SettingsView({ email, emailConsent, isDemo, preferences, onPreferencesC
         <p className='settings-card-copy'>Control each delivery channel independently. Changes apply to every monitor.</p>
       </div>
       <div className='settings-toggle-list'>
-        {emailConsent && !preferences.emailAlerts && <div className='settings-email-confirmation' role='status'>
-          <span><strong>Finish enabling email alerts</strong><small>Confirm from this signed-in account before monitor emails can be sent to <b>{email}</b>.</small></span>
-          <button type='button' disabled={confirmationSaving} onClick={() => void confirmEmailDelivery()}>{confirmationSaving ? 'Confirming…' : 'Confirm email alerts'}</button>
-          {confirmationMessage && <p>{confirmationMessage}</p>}
+        {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
+          <span><strong>{confirmationState === 'confirming' ? 'Confirming email alerts…' : confirmationState === 'success' ? 'Email alerts enabled' : 'Email confirmation failed'}</strong><small>{confirmationState === 'confirming' ? <>Checking the approval for <b>{email}</b>.</> : confirmationMessage}</small></span>
         </div>}
         <label className='settings-toggle-row'>
           <span><strong>In-app alerts</strong><small>Show new monitor matches in the notification inbox.</small></span>

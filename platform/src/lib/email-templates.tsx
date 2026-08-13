@@ -72,7 +72,7 @@ export function NotificationOptInEmail({ recipientName, confirmationUrl }: Notif
     <Heading style={heading}>Approve monitor emails</Heading>
     <Text style={bodyText}>Hello {recipientName},</Text>
     <Text style={bodyText}>You asked to receive email when a video2ctx monitor finds a new upload.</Text>
-    <Button href={confirmationUrl} style={primaryButton}>Review and confirm</Button>
+    <Button href={confirmationUrl} style={primaryButton}>Confirm email alerts</Button>
     <Text style={supportingText}>Email alerts remain off until you return to the signed-in dashboard and confirm. If you did not request this, you can ignore this message.</Text>
   </EmailShell>;
 }
