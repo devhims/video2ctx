@@ -4,7 +4,7 @@ class CreditDatabase {
   balance: number;
   readonly operations = new Set<string>();
 
-  constructor(balance = 0) {
+  constructor(balance = 0, readonly plan: 'free' | 'pro' = 'free') {
     this.balance = balance;
   }
 
@@ -12,7 +12,7 @@ class CreditDatabase {
     return {
       bind: (...values: unknown[]) => ({
         first: async () => {
-          if (sql.includes('SELECT plan FROM plans')) return null;
+          if (sql.includes('SELECT plan FROM plans')) return this.plan === 'pro' ? { plan: 'pro' } : null;
           if (sql.includes('SUM(credits)')) return { balance: this.balance };
           return null;
         },
@@ -39,7 +39,7 @@ function environment(database: CreditDatabase): Env {
   return {
     DB: database,
     FREE_ONBOARDING_CREDITS: '1000',
-    PRO_MONTHLY_CREDITS: '2000',
+    PRO_MONTHLY_CREDITS: '20000',
     FREE_PROJECT_LIMIT: '3',
     FREE_MONITOR_LIMIT: '1',
     FREE_DAILY_IMPORTS: '10',
@@ -55,6 +55,14 @@ describe('credit entitlements', () => {
       plan: 'free',
       includedCredits: 1000,
       creditGrant: 'onboarding',
+    });
+  });
+
+  test('describes the paid allocation as 20,000 recurring monthly credits', async () => {
+    await expect(entitlements(environment(new CreditDatabase(0, 'pro')), 'user-1')).resolves.toMatchObject({
+      plan: 'pro',
+      includedCredits: 20000,
+      creditGrant: 'monthly',
     });
   });
 

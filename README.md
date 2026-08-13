@@ -10,7 +10,7 @@
 </p>
 <p align="center">
   <a href="https://www.video2ctx.dev">Live product</a> ·
-  <a href="https://api.video2ctx.dev/docs">API reference</a> ·
+  <a href="https://docs.video2ctx.dev">Documentation</a> ·
   <a href="./packages/all-things-youtube/README.md">npm library</a> ·
   <a href="#run-the-workspace-locally">Developer setup</a>
 </p>
@@ -41,7 +41,7 @@ Available now:
 | If you need…                                       | Start here                                                                                                                                   |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                  |
-| A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://api.video2ctx.dev/docs) |
+| A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction) |
 | A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                             |
 | To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                      |
 
@@ -228,6 +228,7 @@ Local secret placeholders are documented in [`platform/.dev.vars.example`](./pla
 | `OUTBOUND_PROXY_URL`                                                | Processor | Optional HTTP(S) proxy for outbound YouTube traffic                                                  |
 | `PLATFORM_API_BASE_URL`                                             | Web       | Overrides the platform origin; defaults to localhost in development and the public API in production |
 | `NEXT_PUBLIC_PLATFORM_API_BASE_URL`                                 | Web       | Browser-visible platform origin used by the anonymous landing-page inspection                        |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`                                    | Web       | Browser-visible Turnstile site key used by the Scale inquiry form                                     |
 
 Do not place production secrets in Git or build variables. Add Cloudflare runtime secrets interactively as described in [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md#cloudflare-setup).
 
@@ -272,7 +273,7 @@ Pull requests also run the `Platform`, `Web`, and `Documentation` GitHub Actions
 
 ## Help and maintenance
 
-Open an issue in this repository for reproducible bugs and focused feature requests. For API exploration and request/response details, start with the [interactive reference](https://api.video2ctx.dev/docs).
+Open an issue in this repository for reproducible bugs and focused feature requests. For API exploration and request/response details, start with the [interactive reference](https://docs.video2ctx.dev/api-reference/introduction).
 
 The project is maintained by [Himanshu Gupta](https://github.com/devhims).
 

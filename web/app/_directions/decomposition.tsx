@@ -19,7 +19,11 @@ import { SiteNav } from '../_components/site-nav';
  * are equal entry points, and the whole thing is self-hostable. */
 const WAYS_IN = [
   { label: 'Research workspace', name: 'Open the dashboard', href: '/dashboard' },
-  { label: 'Hosted API', name: 'api.video2ctx.dev', href: 'https://api.video2ctx.dev/docs' },
+  {
+    label: 'Hosted API',
+    name: 'docs.video2ctx.dev',
+    href: 'https://docs.video2ctx.dev/api-reference/introduction',
+  },
   { label: 'TypeScript package', name: 'all-things-youtube', href: 'https://www.npmjs.com/package/all-things-youtube' },
 ];
 
@@ -140,7 +144,10 @@ export function DecompositionDirection() {
 
         <p className='workflow-note'>
           Every route, request shape, and error is documented in the{' '}
-          <a href='https://api.video2ctx.dev/docs'>API reference</a>.
+          <a href='https://docs.video2ctx.dev/api-reference/introduction'>
+            API reference
+          </a>
+          .
         </p>
       </section>
 

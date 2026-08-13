@@ -12,7 +12,7 @@ export default function PrivacyPage() {
     <LegalPage
       eyebrow='Your information'
       title='Privacy policy'
-      effectiveDate='August 10, 2026'
+      effectiveDate='August 14, 2026'
       summary='This policy explains what video2ctx collects, why we use it, who processes it, and the controls available to you.'
     >
       <section>
@@ -55,6 +55,12 @@ export default function PrivacyPage() {
           such as the page visited, referring page, device or browser information, and an approximate location derived from a
           network address in accordance with its own privacy documentation.
         </p>
+        <h3>Commercial inquiries</h3>
+        <p>
+          If you ask about a Scale plan, we collect your name, role, company, work email, company size, expected usage range,
+          and the use case you describe. We also process a protected network identifier to prevent repeated or abusive form
+          submissions.
+        </p>
       </section>
 
       <section>
@@ -66,6 +72,7 @@ export default function PrivacyPage() {
           <li>Maintain caches, prevent duplicate work, enforce limits, and measure service usage.</li>
           <li>Detect abuse, protect accounts, troubleshoot failures, and improve reliability.</li>
           <li>Send requested sign-in links and enabled service notifications.</li>
+          <li>Review and respond to commercial inquiries you choose to submit.</li>
           <li>Comply with legal obligations and enforce our terms.</li>
         </ul>
       </section>
@@ -137,6 +144,10 @@ export default function PrivacyPage() {
           Account and workspace information is generally retained while your account remains active. Connected-account tokens
           are retained until you disconnect the provider, delete your account, or the connection is otherwise revoked. Cached
           public video information is retained according to operational cache periods and may be refreshed or deleted over time.
+        </p>
+        <p>
+          Commercial inquiry details are retained while we evaluate and respond to the request, and afterward only as needed for
+          business records, fraud prevention, or legal obligations. You may ask us to delete an inquiry unless we must retain it.
         </p>
         <p>
           When an account is deleted, video2ctx deletes the account’s database records, private stored objects, connected-account

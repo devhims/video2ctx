@@ -14,7 +14,10 @@ import { useEffect, useRef, useState } from 'react';
  * are equal surfaces of the same open-source product. */
 const LINKS = [
   { label: 'Workspace', href: '/dashboard' },
-  { label: 'API reference', href: 'https://api.video2ctx.dev/docs' },
+  {
+    label: 'API reference',
+    href: 'https://docs.video2ctx.dev/api-reference/introduction',
+  },
   { label: 'npm', href: 'https://www.npmjs.com/package/all-things-youtube' },
   { label: 'API keys', href: '/dashboard/developer' },
 ];

@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react';
 import { authClient } from '../../lib/auth-client';
 
 const LINKS = [
-  { label: 'Docs', href: 'https://api.video2ctx.dev/docs' },
-  { label: 'Pricing', href: 'https://api.video2ctx.dev/docs#tag/Billing' },
+  { label: 'Docs', href: 'https://docs.video2ctx.dev' },
+  { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
   { label: 'GitHub', href: 'https://github.com/devhims/video2ctx' },
   { label: 'NPM', href: 'https://www.npmjs.com/package/all-things-youtube' },
@@ -45,17 +45,20 @@ export function CraftNav() {
           className='craft-nav-links'
           aria-label='Product'
         >
-          {LINKS.map((link) => (
-            <a
-              key={link.label}
-              href={link.href}
-              target='_blank'
-              rel='noreferrer'
-              onClick={() => setOpen(false)}
-            >
-              {link.label}
-            </a>
-          ))}
+          {LINKS.map((link) => {
+            const external = link.href.startsWith('http');
+            return (
+              <a
+                key={link.label}
+                href={link.href}
+                target={external ? '_blank' : undefined}
+                rel={external ? 'noreferrer' : undefined}
+                onClick={() => setOpen(false)}
+              >
+                {link.label}
+              </a>
+            );
+          })}
         </nav>
 
         <div className='craft-nav-actions'>

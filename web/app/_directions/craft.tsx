@@ -13,6 +13,7 @@
 import { CraftDemo } from './craft-demo';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
+import { CraftPricing } from './craft-pricing';
 import { Flashlight } from './flashlight';
 import { ArrowRight } from '@phosphor-icons/react/ssr';
 
@@ -37,7 +38,7 @@ const WAYS = [
     label: 'Hosted API',
     body: 'Normalised JSON with the source links intact. Bearer auth, versioned under /v1.',
     action: 'Read the reference',
-    href: 'https://api.video2ctx.dev/docs',
+    href: 'https://docs.video2ctx.dev/api-reference/introduction',
   },
   {
     label: 'npm package',
@@ -155,9 +156,8 @@ export function CraftDirection() {
           <div className='craft-band-head'>
             <h2 id='craft-code-title'>Two lines from here to your agent.</h2>
             <p>
-              The demo above and the call below hit the same data. Everything
-              else — request shapes, errors, the private project routes — lives
-              in the reference.
+              The demo above and the call below hit the same data. Request
+              shapes, errors, and private project routes live in the reference.
             </p>
           </div>
           <CraftCode />
@@ -189,6 +189,10 @@ export function CraftDirection() {
             ))}
           </ul>
         </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <CraftPricing />
       </div>
 
       <div className='craft-reveal'>
@@ -231,12 +235,16 @@ export function CraftDirection() {
       {/* Ft4 — dense typographic colophon. */}
       <footer className='craft-colophon'>
         <p>
-          <b>video2ctx</b> — turn videos into context for LLMs and agents.
+          <b>video2ctx</b> - turn videos into context for LLMs and agents.
           YouTube first, not YouTube only. Apache 2.0.
         </p>
         <p>
           <a href='/privacy'>Privacy</a> · <a href='/terms'>Terms</a> ·{' '}
-          <a href='https://api.video2ctx.dev/docs'>API reference</a> ·{' '}
+          <a href='#pricing'>Pricing</a> ·{' '}
+          <a href='https://docs.video2ctx.dev/api-reference/introduction'>
+            API reference
+          </a>{' '}
+          ·{' '}
           <a href='https://www.npmjs.com/package/all-things-youtube'>
             all-things-youtube
           </a>

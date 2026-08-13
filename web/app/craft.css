@@ -24,7 +24,7 @@ html:has(.craft) body {
   --rule: oklch(27% 0.008 78);
   --rule-strong: oklch(36% 0.01 78);
   --accent: oklch(66% 0.19 31);
-  --accent-ink: oklch(98% 0.006 83);
+  --accent-ink: oklch(18% 0.006 75);
 
   /* Emil's curves. The built-in CSS easings are too weak to read as
    * intentional; these are the strong variants. `ease-in` is deliberately
@@ -53,12 +53,12 @@ html:has(.craft) body {
   box-sizing: border-box;
 }
 
-.craft :where(a, button, input) {
+.craft :where(a, button, input, select, textarea) {
   font: inherit;
 }
 
 /* Never animated — a focus ring that fades in is a focus ring that arrives late. */
-.craft :where(a, button, input):focus-visible {
+.craft :where(a, button, input, select, textarea):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -1626,6 +1626,365 @@ html:has(.craft) body {
   transition: transform var(--control) var(--out);
 }
 
+/* --------------------------------------------------------------- pricing */
+
+.craft-pricing {
+  scroll-margin-top: 5.5rem;
+}
+
+.craft-pricing-grid {
+  margin-top: clamp(var(--space-xl), 4vh, var(--space-2xl));
+  display: grid;
+  grid-template-columns: 0.92fr 1.16fr 0.92fr;
+  gap: var(--space-md);
+  align-items: stretch;
+}
+
+.craft-pricing-plan {
+  min-width: 0;
+  min-height: 29rem;
+  padding: clamp(var(--space-lg), 3vw, var(--space-xl));
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-lg);
+  background: var(--paper-raised);
+  display: flex;
+  flex-direction: column;
+}
+
+.craft-pricing-plan[data-recommended='true'] {
+  border-color: color-mix(in oklch, var(--accent) 58%, var(--rule));
+  background: color-mix(in oklch, var(--accent) 7%, var(--paper-raised));
+}
+
+.craft-pricing-plan-head {
+  min-height: 1.5rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.craft-pricing-plan-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.craft-pricing-plan-head span {
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.craft-pricing-price {
+  margin-top: var(--space-xl);
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.craft-pricing-price strong {
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 680;
+  letter-spacing: -0.065em;
+  line-height: 0.95;
+}
+
+.craft-pricing-price span {
+  color: var(--ink-muted);
+  font-size: 0.74rem;
+}
+
+.craft-pricing-credits {
+  margin: var(--space-xl) 0 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.craft-pricing-description {
+  min-height: 4.4rem;
+  margin: var(--space-sm) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.craft-pricing-plan ul {
+  margin: var(--space-lg) 0 var(--space-xl);
+  padding: var(--space-lg) 0 0;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.craft-pricing-plan li {
+  color: var(--ink-soft);
+  display: grid;
+  grid-template-columns: 0.875rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-xs);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.craft-pricing-plan li svg {
+  margin-top: 0.12rem;
+  color: var(--accent);
+}
+
+.craft-pricing-cta {
+  width: 100%;
+  min-height: 2.75rem;
+  margin-top: auto;
+  padding-inline: var(--space-lg);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 0.8rem;
+  font-weight: 630;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform var(--press) var(--out);
+}
+
+.craft-pricing-plan[data-recommended='true'] .craft-pricing-cta {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.craft-pricing-cta:active {
+  transform: scale(0.97);
+}
+
+/* --------------------------------------------------------- scale inquiry */
+
+.craft-inquiry-dialog {
+  width: min(100% - 2rem, 47rem);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-home-lg);
+  background: transparent;
+  color: var(--ink);
+  overflow: visible;
+}
+
+.craft-inquiry-dialog::backdrop {
+  background: oklch(6% 0.004 75 / 0.78);
+  backdrop-filter: blur(0.25rem);
+}
+
+.craft-inquiry-dialog:focus-visible {
+  outline: none;
+}
+
+.craft-inquiry-panel {
+  max-height: calc(100dvh - 2rem);
+  position: relative;
+  padding: clamp(var(--space-lg), 4vw, var(--space-2xl));
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-lg);
+  background: var(--paper-raised);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.craft-inquiry-close {
+  width: 2.25rem;
+  height: 2.25rem;
+  position: absolute;
+  inset: var(--space-md) var(--space-md) auto auto;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition:
+    color var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+.craft-inquiry-close:active,
+.craft-inquiry-footer button:active,
+.craft-inquiry-success button:active {
+  transform: scale(0.97);
+}
+
+.craft-inquiry-head {
+  padding-right: 3rem;
+}
+
+.craft-inquiry-head h2,
+.craft-inquiry-success h2 {
+  max-width: 18ch;
+  margin: 0;
+  font-size: clamp(1.45rem, 4vw, 2rem);
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
+}
+
+.craft-inquiry-head p,
+.craft-inquiry-success p {
+  max-width: 55ch;
+  margin: var(--space-sm) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.craft-inquiry-grid {
+  margin-top: var(--space-xl);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.craft-inquiry-grid label,
+.craft-inquiry-use-case {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-xs);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 590;
+}
+
+.craft-inquiry-grid input,
+.craft-inquiry-grid select,
+.craft-inquiry-use-case textarea {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 470;
+  transition: border-color var(--control) var(--out);
+}
+
+.craft-inquiry-grid select {
+  color-scheme: dark;
+}
+
+.craft-inquiry-use-case {
+  margin-top: var(--space-md);
+}
+
+.craft-inquiry-use-case textarea {
+  min-height: 6.5rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.craft-inquiry-use-case textarea::placeholder {
+  color: var(--ink-muted);
+}
+
+.craft-inquiry-grid :where(input, select):focus-visible,
+.craft-inquiry-use-case textarea:focus-visible {
+  border-color: color-mix(in oklch, var(--accent) 64%, var(--rule-strong));
+  outline: 1px solid color-mix(in oklch, var(--accent) 44%, transparent);
+  outline-offset: 1px;
+}
+
+.craft-inquiry-turnstile {
+  width: 100%;
+  min-height: 0;
+  margin-top: var(--space-md);
+}
+
+.craft-inquiry-error {
+  margin: var(--space-md) 0 0;
+  padding: var(--space-sm) var(--space-md);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in oklch, var(--accent) 9%, transparent);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.craft-inquiry-footer {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--rule);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.craft-inquiry-footer p {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.67rem;
+  line-height: 1.5;
+}
+
+.craft-inquiry-footer a {
+  color: var(--ink-soft);
+}
+
+.craft-inquiry-footer button,
+.craft-inquiry-success button {
+  min-height: 2.75rem;
+  padding-inline: var(--space-lg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-home-pill);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+  transition:
+    opacity var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+.craft-inquiry-footer button:disabled {
+  cursor: wait;
+  opacity: 0.52;
+}
+
+.craft-inquiry-success {
+  min-height: 22rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.craft-inquiry-success > svg {
+  margin-bottom: var(--space-lg);
+  color: var(--accent);
+}
+
+.craft-inquiry-success button {
+  margin-top: var(--space-xl);
+}
+
 /* ---------------------------------------------------------------- trust */
 
 .craft-trust {
@@ -1672,6 +2031,10 @@ html:has(.craft) body {
   .craft-limit-message a:hover,
   .craft-copy-action:hover,
   .craft-load-comments:hover {
+    transform: translateY(-1px);
+  }
+
+  .craft-pricing-cta:hover {
     transform: translateY(-1px);
   }
 
@@ -1771,9 +2134,18 @@ html:has(.craft) body {
 
 @media (max-width: 900px) {
   .craft-ways,
+  .craft-pricing-grid,
   .craft-trust {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-lg);
+  }
+
+  .craft-pricing-plan {
+    min-height: 0;
+  }
+
+  .craft-pricing-description {
+    min-height: 0;
   }
 
   .craft-source-grid {
@@ -1791,6 +2163,29 @@ html:has(.craft) body {
 }
 
 @media (max-width: 640px) {
+  .craft-inquiry-dialog {
+    width: calc(100% - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .craft-inquiry-panel {
+    max-height: calc(100dvh - 1rem);
+    padding: var(--space-lg);
+  }
+
+  .craft-inquiry-grid,
+  .craft-inquiry-footer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .craft-inquiry-footer {
+    align-items: stretch;
+  }
+
+  .craft-inquiry-footer button {
+    width: 100%;
+  }
+
   .craft-code-block {
     padding: var(--space-md);
     font-size: 0.72rem;
