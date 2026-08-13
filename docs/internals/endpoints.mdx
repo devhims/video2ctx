@@ -27,6 +27,7 @@ Called by the video2ctx web application or an explicit signed-in account action.
 | `DELETE` | `/v1/oauth/youtube` | `disconnectYouTube` | Disconnect the YouTube account | `sessionCookie` or `demoUser` | Mutates the account connection state; require an explicit user action. |
 | `GET` | `/v1/oauth/youtube/connect` | `createYouTubeConnectUrl` | Create a YouTube OAuth URL | `sessionCookie` or `demoUser` | Returns a state-bound OAuth URL; start it only from a user-initiated connection flow. |
 | `POST` | `/v1/resolve` | `resolveInput` | Route universal UI input | `sessionCookie` or `bearerApiKey` or `apiKey` or `demoUser` | First-party input router; its dispatch behavior is not a stable public API contract. |
+| `POST` | `/v1/scale-inquiries` | `submitScaleInquiry` | Submit a Scale plan inquiry | Public or protocol-signed | Public lead form; validate Turnstile and rate limits, and never let the caller choose the notification recipient. |
 
 ## Callbacks and signed links
 

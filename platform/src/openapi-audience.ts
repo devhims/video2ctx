@@ -15,6 +15,7 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   getOpenApiDocument: 'consumer',
   getApiReference: 'consumer',
   inspectLandingYouTubeVideo: 'first-party',
+  submitScaleInquiry: 'first-party',
   signInWithMagicLink: 'first-party',
   signInWithSocialProvider: 'first-party',
   createApiKey: 'first-party',
@@ -75,6 +76,7 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
  */
 export const OPENAPI_INTERNAL_SAFETY: Readonly<Record<string, string>> = {
   inspectLandingYouTubeVideo: 'Public, rate-limited demo route; do not use it as a credentialed bulk-data API.',
+  submitScaleInquiry: 'Public lead form; validate Turnstile and rate limits, and never let the caller choose the notification recipient.',
   signInWithMagicLink: 'Sends account email; rate-limit callers and never disclose whether an address is registered.',
   signInWithSocialProvider: 'Starts an interactive browser sign-in; do not call it with API-key credentials.',
   createApiKey: 'Creates a secret credential; expose the returned key once and keep it out of logs and client storage.',

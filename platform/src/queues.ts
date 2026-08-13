@@ -44,7 +44,7 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
     const response = await env.EMAIL.send({
       to: input.to,
       from: { email: env.EMAIL_FROM, name: 'video2ctx' },
-      replyTo: env.EMAIL_REPLY_TO,
+      replyTo: input.replyTo ?? env.EMAIL_REPLY_TO,
       subject: input.subject,
       html: input.html,
       text: input.text,

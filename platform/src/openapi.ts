@@ -280,6 +280,7 @@ export const openApiDocument = {
   tags: [
     { name: 'System', description: 'Service status and machine-readable documentation.' },
     { name: 'Demo', description: 'Anonymous product proof used by the public landing page.' },
+    { name: 'Sales', description: 'First-party commercial inquiry flow used by the public pricing section.' },
     { name: 'Authentication', description: 'Better Auth entry points used by the web application.' },
     { name: 'UI Helpers', description: 'Internal routing helpers used by the first-party web interface.' },
     { name: 'Providers', description: 'Supported external video providers and their capabilities.' },
@@ -346,6 +347,23 @@ export const openApiDocument = {
         requestBody: jsonBody(schemaRef('LandingDemoInspectionRequest')),
         responses: {
           '200': jsonResponse('A landing-page video inspection.', schemaRef('LandingDemoInspectionResponse')),
+          '422': responseRef('ValidationError'),
+          '429': responseRef('RateLimited'),
+          '503': responseRef('ServiceUnavailable'),
+        },
+      },
+    },
+    '/v1/scale-inquiries': {
+      post: {
+        tags: ['Sales'],
+        operationId: 'submitScaleInquiry',
+        summary: 'Submit a Scale plan inquiry',
+        description: 'First-party, Turnstile-protected pricing inquiry form. The server selects the internal recipient and sends one idempotent notification.',
+        'x-internal': true,
+        security: [],
+        requestBody: jsonBody(schemaRef('ScaleInquiryRequest')),
+        responses: {
+          '202': jsonResponse('The inquiry was accepted.', schemaRef('ScaleInquiryAccepted')),
           '422': responseRef('ValidationError'),
           '429': responseRef('RateLimited'),
           '503': responseRef('ServiceUnavailable'),
@@ -1425,6 +1443,29 @@ export const openApiDocument = {
           comments: schemaRef('LandingDemoComments'),
           quota: schemaRef('LandingDemoQuota'),
           partial: { type: 'boolean' },
+        },
+      },
+      ScaleInquiryRequest: {
+        type: 'object',
+        required: ['id', 'fullName', 'role', 'companyName', 'email', 'companySize', 'monthlyUsage', 'useCase', 'turnstileToken'],
+        properties: {
+          id: { type: 'string', format: 'uuid', description: 'Client-generated idempotency key.' },
+          fullName: { type: 'string', minLength: 2, maxLength: 100 },
+          role: { type: 'string', minLength: 2, maxLength: 100 },
+          companyName: { type: 'string', minLength: 2, maxLength: 120 },
+          email: { type: 'string', format: 'email', maxLength: 254 },
+          companySize: { type: 'string', enum: ['1', '2-10', '11-50', '51-200', '201-1000', '1000+'] },
+          monthlyUsage: { type: 'string', enum: ['under-10000', '10000-50000', '50000-250000', '250000-1000000', 'over-1000000'] },
+          useCase: { type: 'string', minLength: 20, maxLength: 1200 },
+          turnstileToken: { type: 'string', maxLength: 2048, writeOnly: true },
+        },
+      },
+      ScaleInquiryAccepted: {
+        type: 'object',
+        required: ['accepted'],
+        properties: {
+          accepted: { type: 'boolean', const: true },
+          id: { type: 'string', format: 'uuid' },
         },
       },
       ResolveResponse: {

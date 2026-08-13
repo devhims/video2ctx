@@ -37,6 +37,16 @@ export interface DigestEmailData {
   unsubscribeUrl: string;
 }
 
+export interface ScaleInquiryEmailData {
+  fullName: string;
+  role: string;
+  companyName: string;
+  email: string;
+  companySize: string;
+  monthlyUsage: string;
+  useCase: string;
+}
+
 export async function renderMonitorAlertEmail(data: MonitorAlertEmailData): Promise<{ html: string; text: string }> {
   return renderEmail(<MonitorAlertEmail {...data} />);
 }
@@ -47,6 +57,10 @@ export async function renderNotificationOptInEmail(data: NotificationOptInEmailD
 
 export async function renderDigestEmail(data: DigestEmailData): Promise<{ html: string; text: string }> {
   return renderEmail(<DigestEmail {...data} />);
+}
+
+export async function renderScaleInquiryEmail(data: ScaleInquiryEmailData): Promise<{ html: string; text: string }> {
+  return renderEmail(<ScaleInquiryEmail {...data} />);
 }
 
 export function MonitorAlertEmail({ recipientName, monitorLabel, videoTitle, videoUrl, settingsUrl, unsubscribeUrl }: MonitorAlertEmailData) {
@@ -92,6 +106,31 @@ export function DigestEmail({ recipientName, cadence, notifications, dashboardUr
   </EmailShell>;
 }
 
+export function ScaleInquiryEmail({
+  fullName,
+  role,
+  companyName,
+  email,
+  companySize,
+  monthlyUsage,
+  useCase,
+}: ScaleInquiryEmailData) {
+  return <EmailShell preview={`Scale inquiry from ${companyName}`}>
+    <Text style={eyebrow}>NEW SCALE INQUIRY</Text>
+    <Heading style={heading}>{companyName} wants to discuss Scale</Heading>
+    <Section style={highlight}>
+      <Text style={inquiryLine}><strong>Name:</strong> {fullName}</Text>
+      <Text style={inquiryLine}><strong>Role:</strong> {role}</Text>
+      <Text style={inquiryLine}><strong>Email:</strong> {email}</Text>
+      <Text style={inquiryLine}><strong>Company size:</strong> {companySize}</Text>
+      <Text style={inquiryLine}><strong>Expected monthly credits:</strong> {monthlyUsageLabel(monthlyUsage)}</Text>
+    </Section>
+    <Text style={highlightLabel}>WHAT THEY ARE BUILDING</Text>
+    <Text style={bodyText}>{useCase}</Text>
+    <Text style={supportingText}>Reply to this message to contact {fullName} directly.</Text>
+  </EmailShell>;
+}
+
 function EmailShell({ preview, children }: { preview: string; children: ReactNode }) {
   return <Html lang='en'>
     <Head />
@@ -127,3 +166,14 @@ const footerText: CSSProperties = { margin: 0, color: '#77766f', fontSize: '12px
 const footerLink: CSSProperties = { color: '#55554f', textDecoration: 'underline' };
 const digestItem: CSSProperties = { margin: '12px 0', padding: '15px 17px', border: '1px solid #e5e1d8', borderRadius: '8px', backgroundColor: '#faf8f3' };
 const digestBody: CSSProperties = { margin: 0, color: '#171714', fontSize: '14px', fontWeight: 600, lineHeight: '21px' };
+const inquiryLine: CSSProperties = { margin: '0 0 8px', color: '#171714', fontSize: '14px', lineHeight: '21px' };
+
+function monthlyUsageLabel(value: string): string {
+  return ({
+    'under-10000': 'Under 10,000',
+    '10000-50000': '10,000-50,000',
+    '50000-250000': '50,000-250,000',
+    '250000-1000000': '250,000-1,000,000',
+    'over-1000000': 'More than 1,000,000',
+  } as Record<string, string>)[value] ?? value;
+}

@@ -7,6 +7,7 @@ import { ApiError, body, escapeHtml, text } from '../../lib/http';
 import { claimLandingDemoQuota, type LandingDemoQuota } from '../../lib/landing-demo';
 import { routeInput } from '../../lib/youtube';
 import { getProvider } from '../../providers';
+import { submitScaleInquiry, type ScaleInquiryInput } from '../../lib/scale-inquiries';
 
 export const publicRoutes = new Hono<App>();
 
@@ -70,6 +71,12 @@ publicRoutes.post('/demo/youtube/inspect', async (c) => {
       comments.status !== 'ready' ||
       channel.status !== 'ready',
   });
+});
+
+publicRoutes.post('/scale-inquiries', async (c) => {
+  const payload = await body<ScaleInquiryInput>(c.req.raw);
+  const result = await submitScaleInquiry(c.env, c.req.raw, payload);
+  return c.json(result, 202);
 });
 
 publicRoutes.post('/billing/webhook', async (c) => {

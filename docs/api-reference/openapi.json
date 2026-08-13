@@ -3568,6 +3568,94 @@
           }
         }
       },
+      "ScaleInquiryRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "fullName",
+          "role",
+          "companyName",
+          "email",
+          "companySize",
+          "monthlyUsage",
+          "useCase",
+          "turnstileToken"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated idempotency key."
+          },
+          "fullName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "companyName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 120
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "companySize": {
+            "type": "string",
+            "enum": [
+              "1",
+              "2-10",
+              "11-50",
+              "51-200",
+              "201-1000",
+              "1000+"
+            ]
+          },
+          "monthlyUsage": {
+            "type": "string",
+            "enum": [
+              "under-10000",
+              "10000-50000",
+              "50000-250000",
+              "250000-1000000",
+              "over-1000000"
+            ]
+          },
+          "useCase": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 1200
+          },
+          "turnstileToken": {
+            "type": "string",
+            "maxLength": 2048,
+            "writeOnly": true
+          }
+        }
+      },
+      "ScaleInquiryAccepted": {
+        "type": "object",
+        "required": [
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ResolveResponse": {
         "oneOf": [
           {
