@@ -14,6 +14,9 @@ page weight.
 
 ## Regenerating
 
+Method and prompting guidance: `docs/HIGGSFIELD_ASSET_GUIDE.md`.
+
+
 Prompts and the exact settings are in `docs/CINEMATIC_ASSETS.md`. To re-encode a
 new PNG:
 

@@ -216,7 +216,9 @@ Resolved 2026-08-12: the stale `tokens.css` stamp, the missing
 - Promoting a different landing direction is one line: `DEFAULT_DIRECTION` in
   `_directions/registry.tsx`.
 - Regenerating the fold scene: prompts, settings and encode commands are in
-  `docs/CINEMATIC_ASSETS.md` and `web/public/scene/README.md`.
+  `docs/CINEMATIC_ASSETS.md` and `web/public/scene/README.md`. The reusable
+  method — model choice, prompting failures, the measurement harness — is in
+  `docs/HIGGSFIELD_ASSET_GUIDE.md`.
 - Verify motion work **on a real device**. Headless Chrome does not enforce
   autoplay policy — a mobile video bug shipped past a green emulator check
   because React's `muted` prop does not reliably reach the DOM property on a

@@ -1,5 +1,9 @@
 # Cinematic assets — generation recipe
 
+> **Reusable method:** `docs/HIGGSFIELD_ASSET_GUIDE.md` — model choice, prompting
+> failures, the measurement harness and the encode pipeline, generalised from the
+> hero loop that did ship.
+>
 > **Status: not generated.** The footage below was deferred and the credit
 > banked; `/explore/decomposition` ships with a CSS substrate instead. Kept as a
 > working recipe in case the cinematic is revisited. For the fold scene that
