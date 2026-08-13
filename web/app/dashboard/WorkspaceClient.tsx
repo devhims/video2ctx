@@ -5,19 +5,22 @@ import Link from 'next/link';
 import {
   canDeleteAccount,
   CREDIT_BALANCE_EVENT,
+  DEFAULT_NOTIFICATION_PREFERENCES,
   DELETE_ACCOUNT_CONFIRMATION,
   loadDashboardAccountData,
   publishCreditBalance,
   type DashboardUsage,
+  type DashboardNotification,
+  type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 
-type Mode = 'youtube' | 'inside' | 'ask';
 type ProviderId = 'youtube';
 type Section = DashboardSection;
 type SourceState = 'idle' | 'live' | 'degraded';
 type EntityType = 'video' | 'channel' | 'playlist';
+type SourceDataOption = 'transcript' | 'comments' | 'channel';
 type Thumbnail = { url: string; width?: number; height?: number };
 type SearchItem = {
   provider?: ProviderId; type: EntityType; id: string; title?: string; name?: string; description?: string;
@@ -25,16 +28,69 @@ type SearchItem = {
   viewCountText?: string; publishedTimeText?: string; isLive?: boolean; videoCountText?: string;
 };
 type Segment = { text: string; startMs: number; endMs: number; durationMs: number };
-type Transcript = { videoId: string; segments: Segment[]; text: string; track: { name: string; kind: string; languageCode: string } };
+type SourceMetadata = { source: string; fetchedAt: string; partial: boolean; warnings: string[] };
+type Transcript = { videoId: string; segments: Segment[]; text: string; granularity?: 'segment' | 'word'; meta: SourceMetadata; track: { name: string; kind: string; languageCode: string } };
+type CommentRecord = {
+  id: string;
+  author?: { id?: string; name?: string; thumbnails?: Thumbnail[] };
+  text?: string;
+  publishedTimeText?: string;
+  likeCount?: number;
+  likeCountText?: string;
+  replyCount?: number;
+  isPinned?: boolean;
+  isHearted?: boolean;
+};
+type CommentPage = {
+  videoId: string;
+  comments: CommentRecord[];
+  totalCount?: number;
+  continuation?: string;
+  meta: SourceMetadata;
+};
+type ChannelInfo = {
+  id: string;
+  name: string;
+  handle?: string;
+  thumbnails: Thumbnail[];
+  url: string;
+  about: {
+    description?: string;
+    links: Array<{ title: string; displayUrl: string; url: string }>;
+    moreInfo: {
+      canonicalChannelUrl: string;
+      displayCanonicalChannelUrl?: string;
+      joinedDate?: string;
+      joinedDateText?: string;
+      subscriberCount?: number;
+      subscriberCountText?: string;
+      videoCount?: number;
+      videoCountText?: string;
+      viewCount?: number;
+      viewCountText?: string;
+      businessEmailAvailable: boolean;
+    };
+  };
+  meta: SourceMetadata;
+};
 type Project = { id: string; name: string; description?: string; item_count?: number };
 type ProjectItem = { id: string; provider: ProviderId; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
 type ProjectDetail = Project & { items: ProjectItem[] };
-type Monitor = { id: string; provider: ProviderId; kind: string; target: string; enabled: number; last_checked_at?: number };
-type Citation = { index: number; text: string; provider?: ProviderId; entityId?: string; startMs?: number; score: number };
-type Answer = { answer: string; citations: Citation[] };
-type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; citations?: Citation[]; failedQuestion?: string };
-type ChatSession = { id: string; title: string; messages: ChatMessage[] };
-type Inspector = { provider: ProviderId; type: EntityType; id: string; data: Record<string, unknown>; transcript?: Transcript; comments?: Array<Record<string, unknown>> };
+type Monitor = {
+  id: string; provider: ProviderId; kind: string; target: string; query_json?: string; cadence?: string;
+  interval_minutes?: number; enabled: number; last_checked_at?: number; next_check_at?: number;
+};
+type Inspector = {
+  provider: ProviderId;
+  type: EntityType;
+  id: string;
+  data: Record<string, unknown>;
+  requestedData: SourceDataOption[];
+  unavailableData: SourceDataOption[];
+  transcript?: Transcript;
+  comments?: CommentPage;
+  channel?: ChannelInfo;
+};
 type TrendVideo = {
   id: string; title: string; channel: { id: string; name: string }; thumbnails: Thumbnail[];
   durationSeconds?: number; publishedTimeText?: string; publishDate?: string; ageHours?: number;
@@ -62,6 +118,19 @@ type Usage = DashboardUsage;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const YOUTUBE_API = '/v1/providers/youtube';
+const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
+  transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
+  comments: { shortLabel: 'Comments', description: 'Paginated public comments and replies' },
+  channel: { shortLabel: 'Channel info', description: 'Full creator profile, links, and totals' },
+};
+const MONITOR_INTERVAL_OPTIONS = [
+  { minutes: 60, label: 'Hour' },
+  { minutes: 360, label: '6 hours' },
+  { minutes: 720, label: '12 hours' },
+  { minutes: 1440, label: '24 hours' },
+  { minutes: 4320, label: '3 days' },
+  { minutes: 10080, label: 'Week' },
+] as const;
 
 async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const headers = new Headers(options.headers);
@@ -108,19 +177,17 @@ function isAbortError(cause: unknown) {
   return cause instanceof DOMException && cause.name === 'AbortError';
 }
 
-export default function WorkspaceClient({ initialSection = 'trends' }: { initialSection?: Section }) {
+export default function WorkspaceClient({ initialSection = 'trends', emailConsent }: { initialSection?: Section; emailConsent?: string }) {
   const { user, demoEnabled, signOut } = useDashboardSession();
   const [section, setSection] = useState<Section>(initialSection);
-  const [mode, setMode] = useState<Mode>('youtube');
   const [query, setQuery] = useState('');
-  const [entityFilter, setEntityFilter] = useState('all');
-  const [duration, setDuration] = useState('');
-  const [captionsOnly, setCaptionsOnly] = useState(false);
+  const [selectedData, setSelectedData] = useState<SourceDataOption[]>(['transcript']);
   const [items, setItems] = useState<SearchItem[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
-  const [answer, setAnswer] = useState<Answer | null>(null);
+  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
+  const [notificationPreferences, setNotificationPreferences] = useState<DashboardNotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
   const [inspector, setInspector] = useState<Inspector | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -134,10 +201,13 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [monitorSavingId, setMonitorSavingId] = useState<string>();
   const operationController = useRef<AbortController | null>(null);
   const projectController = useRef<AbortController | null>(null);
+  const monitorBackfillAttempted = useRef(new Set<string>());
   const searchInput = useRef<HTMLInputElement>(null);
   const authenticated = Boolean(user) || demoEnabled;
+  const playlistInput = isPlaylistUrl(query);
 
   const beginOperation = useCallback((label: string) => {
     operationController.current?.abort();
@@ -176,6 +246,8 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
     setProjects(data.projects);
     setMonitors(data.monitors);
     setUsage(data.usage);
+    setNotifications(data.notifications);
+    setNotificationPreferences(data.notificationPreferences);
   }, [authenticated]);
 
   useEffect(() => {
@@ -211,7 +283,6 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
     const requestedQuery = params.get('q');
     if (requestedQuery) {
       setQuery(requestedQuery);
-      setMode(params.get('mode') === 'inside' ? 'inside' : params.get('mode') === 'youtube' ? 'youtube' : 'ask');
       setSection('discover');
       window.requestAnimationFrame(() => searchInput.current?.focus());
     }
@@ -221,39 +292,56 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
     operationController.current?.abort(); projectController.current?.abort();
   }, []);
 
-  const runSearch = async (event?: FormEvent, requestedMode?: Mode) => {
+  useEffect(() => {
+    const legacy = monitors.filter((monitor) =>
+      isYouTubeChannelId(monitor.target) &&
+      !monitorQueryMetadata(monitor).label &&
+      !monitorBackfillAttempted.current.has(monitor.id));
+    if (!legacy.length) return;
+    legacy.forEach((monitor) => monitorBackfillAttempted.current.add(monitor.id));
+    let cancelled = false;
+    void Promise.all(legacy.map(async (monitor) => {
+      try {
+        const channel = await api<ChannelInfo>(`/v1/providers/${monitor.provider}/channels/${encodeURIComponent(monitor.target)}`);
+        const query = { label: channel.name, handle: channel.handle };
+        await api(`/v1/monitors/${monitor.id}`, { method: 'PATCH', body: JSON.stringify({ query }) });
+        return { id: monitor.id, queryJson: JSON.stringify(query) };
+      } catch { return null; }
+    })).then((updates) => {
+      if (cancelled) return;
+      const byId = new Map(updates.filter((update): update is { id: string; queryJson: string } => Boolean(update)).map((update) => [update.id, update.queryJson]));
+      if (byId.size) setMonitors((current) => current.map((monitor) => byId.has(monitor.id) ? { ...monitor, query_json: byId.get(monitor.id) } : monitor));
+    });
+    return () => { cancelled = true; };
+  }, [monitors]);
+
+  const runSearch = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!query.trim()) return;
-    const activeMode = requestedMode ?? mode;
     const controller = beginOperation('Resolving your query…');
     setHasSearched(true);
-    setAnswer(null); setInspector(null); setSection('discover');
+    setInspector(null); setSection('discover');
     try {
       const resolved = await api<{ kind: EntityType | 'search'; provider?: ProviderId; id?: string; query?: string }>('/v1/resolve', {
         method: 'POST', body: JSON.stringify({ input: query }), signal: controller.signal,
       });
-      if (resolved.kind !== 'search' && resolved.id) {
-        setOperationLabel('Opening the source and gathering evidence…');
-        await inspect(resolved.kind, resolved.id, controller, resolved.provider ?? 'youtube');
+      if (resolved.kind === 'video' && resolved.id) {
+        setOperationLabel('Opening the video and fetching your selected data…');
+        await inspect('video', resolved.id, controller, resolved.provider ?? 'youtube', selectedData);
         return;
       }
-      setOperationLabel(activeMode === 'ask' ? 'Building a cited answer…' : activeMode === 'inside' ? 'Searching indexed video moments…' : 'Searching live YouTube sources…');
-      const params = new URLSearchParams({ q: resolved.query ?? query });
-      if (activeMode === 'youtube') {
-        params.set('type', entityFilter);
-        if (duration) params.set('duration', duration);
-        if (captionsOnly) params.set('captions', 'true');
-        const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
-        setItems(data.results.map((item) => ({ ...item, provider: 'youtube' })));
-      } else if (activeMode === 'inside') {
-        const data = await api<{ results: Citation[] }>(`/v1/search?${params}`, { signal: controller.signal });
-        setItems(data.results.map((result) => evidenceToItem(result)));
-      } else {
-        const data = await api<Answer>('/v1/answers', {
-          method: 'POST', body: JSON.stringify({ question: resolved.query ?? query }), signal: controller.signal,
-        });
-        setAnswer(data);
+      if (resolved.kind === 'playlist' && resolved.id) {
+        setOperationLabel('Opening the playlist and loading its videos…');
+        await inspect('playlist', resolved.id, controller, resolved.provider ?? 'youtube', selectedData);
+        return;
       }
+      if (resolved.kind !== 'search') {
+        throw new Error('Sources opens videos and playlists. Paste a supported URL or search for a video by title or topic.');
+      }
+      setOperationLabel('Searching YouTube videos…');
+      const params = new URLSearchParams({ q: resolved.query ?? query, type: 'video' });
+      const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
+      setItems(data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' })));
       setSourceState('live');
     } catch (cause) {
       if (!isAbortError(cause)) { setError(cause instanceof Error ? cause.message : 'Search failed.'); setSourceState('degraded'); }
@@ -265,22 +353,30 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
     id: string,
     activeController?: AbortController,
     provider: ProviderId = 'youtube',
+    requestedData: SourceDataOption[] = selectedData,
   ) => {
-    const controller = activeController ?? beginOperation('Opening the source and gathering evidence…');
-    setError(''); setAnswer(null);
+    const controller = activeController ?? beginOperation(type === 'video' ? 'Opening the video and fetching your selected data…' : 'Opening the source…');
+    setError('');
     try {
       const plural = type === 'video' ? 'videos' : type === 'channel' ? 'channels' : 'playlists';
       const providerApi = `/v1/providers/${provider}`;
       const data = await api<Record<string, unknown>>(`${providerApi}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
-      const next: Inspector = { provider, type, id, data };
+      const next: Inspector = { provider, type, id, data, requestedData: type === 'video' ? [...requestedData] : [], unavailableData: [] };
       if (type === 'video') {
-        setOperationLabel('Loading captions and audience evidence…');
-        const [transcript, comments] = await Promise.all([
-          api<Transcript>(`${providerApi}/videos/${id}/transcript`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return undefined; }),
-          api<{ comments: Array<Record<string, unknown>> }>(`${providerApi}/videos/${id}/comments?all=true`, { signal: controller.signal }).catch((cause) => { if (isAbortError(cause)) throw cause; return { comments: [] }; }),
-        ]);
-        next.transcript = transcript;
-        next.comments = comments.comments;
+        setOperationLabel(`Fetching ${requestedData.map((option) => SOURCE_DATA_OPTIONS[option].shortLabel.toLowerCase()).join(', ')}…`);
+        const channelId = String((data.channel as { id?: string } | undefined)?.id ?? '');
+        await Promise.all(requestedData.map(async (option) => {
+          try {
+            if (option === 'transcript') next.transcript = await api<Transcript>(`${providerApi}/videos/${id}/transcript`, { signal: controller.signal });
+            if (option === 'comments') {
+              next.comments = await api<CommentPage>(`${providerApi}/videos/${id}/comments`, { signal: controller.signal });
+            }
+            if (option === 'channel' && channelId) next.channel = await api<ChannelInfo>(`${providerApi}/channels/${encodeURIComponent(channelId)}`, { signal: controller.signal });
+          } catch (cause) {
+            if (isAbortError(cause)) throw cause;
+            next.unavailableData.push(option);
+          }
+        }));
       }
       setInspector(next); setSourceState('live');
     } catch (cause) { if (!isAbortError(cause)) { setError(cause instanceof Error ? cause.message : 'Could not open this source.'); setSourceState('degraded'); } }
@@ -327,11 +423,76 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
 
   const addMonitor = async () => {
     if (!inspector) return;
-    const target = inspector.type === 'channel' ? inspector.id : String(inspector.data.channel ? (inspector.data.channel as { id?: string }).id : inspector.id);
+    const channel = inspector.type === 'channel'
+      ? { id: inspector.id, name: String(inspector.data.name ?? 'YouTube channel'), handle: String(inspector.data.handle ?? '') }
+      : inspector.data.channel as { id?: string; name?: string; handle?: string } | undefined;
+    const target = String(channel?.id ?? '');
+    const label = String(channel?.name ?? '').trim() || 'YouTube channel';
+    if (!target) { setError('This video does not include a channel that can be monitored.'); return; }
+    const query = { label, handle: channel?.handle || undefined, sourceVideoId: inspector.type === 'video' ? inspector.id : undefined };
     try {
-      await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type === 'channel' ? 'channel' : 'topic', target }) });
-      setNotice('Monitor enabled'); await refreshPrivateData();
+      const existing = monitors.find((monitor) => monitor.provider === inspector.provider && monitor.target === target);
+      if (existing) await api(`/v1/monitors/${existing.id}`, { method: 'PATCH', body: JSON.stringify({ query }) });
+      else await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: 'channel', target, query }) });
+      setNotice(existing ? `Already monitoring ${label}` : `Monitoring ${label} for new uploads`); await refreshPrivateData();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
+  };
+
+  const removeMonitor = async (id: string) => {
+    try {
+      await api(`/v1/monitors/${id}`, { method: 'DELETE' });
+      setMonitors((current) => current.filter((monitor) => monitor.id !== id));
+      setNotice('Monitor removed');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not remove monitor.'); }
+  };
+
+  const updateMonitorSchedule = async (id: string, intervalMinutes: number) => {
+    setMonitorSavingId(id); setError('');
+    try {
+      const schedule = await api<{ intervalMinutes: number; enabled: boolean; nextCheckAt?: number }>(`/v1/monitors/${id}`, {
+        method: 'PATCH', body: JSON.stringify({ intervalMinutes }),
+      });
+      setMonitors((current) => current.map((monitor) => monitor.id === id ? {
+        ...monitor,
+        interval_minutes: schedule.intervalMinutes,
+        enabled: schedule.enabled ? 1 : 0,
+        next_check_at: schedule.nextCheckAt,
+      } : monitor));
+      setNotice(`This monitor will check for new videos every ${monitorIntervalLabel(schedule.intervalMinutes)}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update the monitoring schedule.');
+    } finally {
+      setMonitorSavingId(undefined);
+    }
+  };
+
+  const markNotificationRead = async (id: string) => {
+    const readAt = Date.now();
+    setNotifications((current) => current.map((item) => item.id === id ? { ...item, read_at: readAt } : item));
+    try {
+      await api(`/v1/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' });
+    } catch {
+      setNotifications((current) => current.map((item) => item.id === id ? { ...item, read_at: null } : item));
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    const unread = notifications.filter((item) => !item.read_at);
+    if (!unread.length) return;
+    await Promise.all(unread.map((item) => markNotificationRead(item.id)));
+  };
+
+  const openNotification = async (notification: DashboardNotification) => {
+    if (!notification.read_at) await markNotificationRead(notification.id);
+    try {
+      const data = JSON.parse(notification.data_json) as { videoId?: string; provider?: ProviderId };
+      if (data.videoId) {
+        navigateTo('discover');
+        await inspect('video', data.videoId, undefined, data.provider ?? 'youtube', selectedData);
+      }
+    } catch {
+      navigateTo('monitors');
+    }
   };
 
   const filteredSegments = useMemo(() => {
@@ -340,11 +501,11 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
     return normalized ? segments.filter((segment) => segment.text.toLowerCase().includes(normalized)) : segments;
   }, [inspector, transcriptQuery]);
 
-  const searchCopy = {
-    youtube: { label: 'Search YouTube', placeholder: 'Search topics and channels, or paste a YouTube URL…', action: 'Find sources' },
-    inside: { label: 'Search captions', placeholder: 'Find a claim, phrase, or example across indexed videos…', action: 'Find moments' },
-    ask: { label: 'Ask with citations', placeholder: 'Ask a research question about your indexed sources…', action: 'Ask YouTube' },
-  }[mode];
+  const toggleSelectedData = (option: SourceDataOption) => {
+    setSelectedData((current) => current.includes(option)
+      ? current.length === 1 ? current : current.filter((value) => value !== option)
+      : [...current, option]);
+  };
 
   if (!authenticated) return <main className='auth-gate'>
     <p className='panel-label'>Private research workspace</p>
@@ -360,49 +521,69 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
       <div className='workspace-main'>
         <header className='topbar'>
           <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}</h1></div>
-          <div className='topbar-actions'><span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'idle' ? 'Ready to search' : 'Sources limited'}</span>{usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}<Link className='signin-button' href='/dashboard/developer'>API keys</Link></div>
+          <div className='topbar-actions'>
+            <span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'idle' ? 'Ready to search' : 'Sources limited'}</span>
+            <NotificationMenu
+              notifications={notifications}
+              enabled={notificationPreferences.inApp}
+              onOpen={(notification) => void openNotification(notification)}
+              onMarkAll={() => void markAllNotificationsRead()}
+              onSettings={() => navigateTo('settings')}
+            />
+            {usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}
+            <Link className='signin-button' href='/dashboard/developer'>API keys</Link>
+          </div>
         </header>
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
         <div className='workspace-view' hidden={section !== 'discover'}>
           <>
-            <section className='search-stage'>
-              <div className='search-intro'>
-                <div>
-                  <h2>Find sources. Keep the evidence attached.</h2>
-                  <p>Search YouTube, inspect exact moments, and ask questions without losing the source trail.</p>
+            <section className='source-studio' aria-labelledby='source-studio-title'>
+              <header className='source-studio-intro'>
+                <p className='panel-label'>YouTube data studio</p>
+                <h2 id='source-studio-title'>{playlistInput ? 'Open a playlist. Review every video.' : 'Find a video. Choose the data you need.'}</h2>
+                <p>{playlistInput ? 'Playlist details and its video index are included. Open any video when you are ready to fetch deeper data.' : 'Use a title, topic, video URL, or playlist URL. Video details are included; the additional datasets are up to you.'}</p>
+              </header>
+              <form onSubmit={runSearch} className='source-studio-form'>
+                <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
+                <div className='source-query-row'>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='Search videos, or paste a video or playlist URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : playlistInput ? 'Open playlist' : 'Search videos'} <span aria-hidden='true'>→</span></button>
                 </div>
-              </div>
-              <div className='search-console'>
-                <form onSubmit={runSearch} className='universal-search'>
-                  <div className='search-entry'>
-                    <label htmlFor='workspace-search'>{searchCopy.label}</label>
-                    <div><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={searchCopy.placeholder} /><kbd>⌘ K</kbd></div>
+                <fieldset className='source-data-picker'>
+                  <legend>{playlistInput ? 'Include when you open a video from this playlist' : 'Include when a video opens'}</legend>
+                  <div className='source-data-options'>
+                    {(Object.keys(SOURCE_DATA_OPTIONS) as SourceDataOption[]).map((option) => {
+                      const selected = selectedData.includes(option);
+                      const isOnlySelection = selected && selectedData.length === 1;
+                      return <label key={option} data-selected={selected} data-locked={isOnlySelection} title={isOnlySelection ? 'Choose another dataset before removing this one' : undefined}>
+                        <input type='checkbox' checked={selected} disabled={isOnlySelection} onChange={() => toggleSelectedData(option)} />
+                        <span aria-hidden='true'>{selected ? '✓' : '+'}</span>
+                        <b>{SOURCE_DATA_OPTIONS[option].shortLabel}</b>
+                        <small>{SOURCE_DATA_OPTIONS[option].description}</small>
+                      </label>;
+                    })}
                   </div>
-                  <button disabled={loading}>{loading ? 'Gathering…' : searchCopy.action} <span aria-hidden='true'>→</span></button>
-                </form>
-                <div className='search-controls'>
-                  <div className='mode-tabs' role='tablist' aria-label='Search mode'>{(['youtube','inside','ask'] as Mode[]).map((value) => <button type='button' role='tab' aria-selected={mode === value} key={value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}>{value === 'youtube' ? 'YouTube' : value === 'inside' ? 'Captions' : 'Ask'}</button>)}</div>
-                  {mode === 'youtube' && <div className='filter-row'><select aria-label='Source type' value={entityFilter} onChange={(event) => setEntityFilter(event.target.value)}><option value='all'>All types</option><option value='video'>Videos</option><option value='channel'>Channels</option><option value='playlist'>Playlists</option></select><select aria-label='Video duration' value={duration} onChange={(event) => setDuration(event.target.value)}><option value=''>Any duration</option><option value='short'>Under 4 min</option><option value='medium'>4–20 min</option><option value='long'>Over 20 min</option></select><label><input type='checkbox' checked={captionsOnly} onChange={(event) => setCaptionsOnly(event.target.checked)} /> Captions only</label></div>}
-                </div>
-              </div>
-              <div className='prompt-starters'><span>Try an inquiry</span><button onClick={() => { setMode('ask'); setQuery('What are the strongest arguments and where do the speakers disagree?'); }}>Compare viewpoints</button><button onClick={() => { setMode('inside'); setQuery('Find every claim supported by a concrete example'); }}>Find evidence</button><button onClick={() => { setMode('youtube'); setQuery('AI video research'); }}>Explore a topic</button></div>
+                  <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span> Select one or more datasets for any video you open.</p>
+                </fieldset>
+              </form>
             </section>
 
-            {loading && <div className='operation-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>{operationLabel}</strong><small>Previous results stay available while this finishes.</small></div><button onClick={cancelOperation}>Cancel</button></div>}
-            {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
-            {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
-            {answer && <AnswerPanel answer={answer} />}
+            {(loading || error || notice) && <div className='source-feedback'>
+              {loading && <div className='operation-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>{operationLabel}</strong><small>Previous results stay available while this finishes.</small></div><button onClick={cancelOperation}>Cancel</button></div>}
+              {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
+              {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
+            </div>}
             {inspector ? (
-              <InspectorPanel inspector={inspector} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => setInspector(null)} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} />
-            ) : !answer && (
-              <DiscoveryGrid items={items} projects={projects} monitors={monitors} sourceState={sourceState} onInspect={(type, id, provider) => void inspect(type, id, undefined, provider)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => setInspector(null)} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+            ) : (
+              <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
             )}
           </>
         </div>
         <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
-        <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); setMode('youtube'); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} /></div>
-        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} /></div>
+        <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} /></div>
+        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} isDemo={demoEnabled} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
@@ -410,11 +591,94 @@ export default function WorkspaceClient({ initialSection = 'trends' }: { initial
   );
 }
 
-function SettingsView({ email }: { email?: string }) {
+function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSettings }: {
+  notifications: DashboardNotification[];
+  enabled: boolean;
+  onOpen: (notification: DashboardNotification) => void;
+  onMarkAll: () => void;
+  onSettings: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const unread = enabled ? notifications.filter((notification) => !notification.read_at).length : 0;
+
+  return <div className='notification-menu'>
+    <button className='notification-trigger' aria-label={unread ? `${unread} unread notifications` : 'Notifications'} aria-expanded={open} aria-haspopup='dialog' onClick={() => setOpen((current) => !current)}>
+      <Icon name='bell' size={17} />
+      {unread > 0 && <span>{unread > 9 ? '9+' : unread}</span>}
+    </button>
+    {open && <section className='notification-popover' role='dialog' aria-label='Notifications'>
+      <header><div><strong>Notifications</strong><small>{enabled ? unread ? `${unread} unread` : 'You’re all caught up' : 'In-app alerts are off'}</small></div>{enabled && unread > 0 && <button onClick={onMarkAll}>Mark all read</button>}</header>
+      {!enabled ? <div className='notification-empty'><p>Turn on in-app alerts to see new monitor matches here.</p><button onClick={() => { setOpen(false); onSettings(); }}>Open settings</button></div>
+        : notifications.length ? <div className='notification-list'>{notifications.slice(0, 8).map((notification) => <button key={notification.id} data-unread={!notification.read_at} onClick={() => { setOpen(false); onOpen(notification); }}>
+          <i aria-hidden='true' />
+          <span><strong>{notification.title}</strong><small>{notification.body}</small><time>{relativeNotificationTime(notification.created_at)}</time></span>
+        </button>)}</div>
+        : <div className='notification-empty'><p>New videos found by your monitors will appear here.</p></div>}
+      <footer><button onClick={() => { setOpen(false); onSettings(); }}>Notification settings</button></footer>
+    </section>}
+  </div>;
+}
+
+function SettingsView({ email, emailConsent, isDemo, preferences, onPreferencesChange }: {
+  email?: string;
+  emailConsent?: string;
+  isDemo: boolean;
+  preferences: DashboardNotificationPreferences;
+  onPreferencesChange: (preferences: DashboardNotificationPreferences) => void;
+}) {
   const [confirmation, setConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [preferenceSaving, setPreferenceSaving] = useState<'inApp' | 'emailAlerts'>();
+  const [preferenceMessage, setPreferenceMessage] = useState('');
+  const [confirmationSaving, setConfirmationSaving] = useState(false);
+  const [confirmationMessage, setConfirmationMessage] = useState('');
   const confirmed = canDeleteAccount(confirmation);
+
+  const savePreference = async (key: 'inApp' | 'emailAlerts', value: boolean) => {
+    const previous = preferences;
+    const next = key === 'emailAlerts' && value
+      ? { ...preferences, emailAlerts: false, emailAlertsPending: true }
+      : { ...preferences, [key]: value, ...(key === 'emailAlerts' ? { emailAlertsPending: false } : {}) };
+    onPreferencesChange(next);
+    setPreferenceSaving(key);
+    setPreferenceMessage('');
+    try {
+      const saved = await api<DashboardNotificationPreferences>('/v1/notification-preferences', {
+        method: 'PUT', body: JSON.stringify({ [key]: value }),
+      });
+      onPreferencesChange(saved);
+      setPreferenceMessage(key === 'emailAlerts' && value
+        ? `Confirmation sent to ${email}. Email alerts remain off until you approve them.`
+        : 'Notification preferences saved.');
+    } catch (cause) {
+      onPreferencesChange(previous);
+      setPreferenceMessage(cause instanceof Error ? cause.message : 'Could not save notification preferences.');
+    } finally {
+      setPreferenceSaving(undefined);
+    }
+  };
+
+  const confirmEmailDelivery = async () => {
+    if (!emailConsent || confirmationSaving) return;
+    setConfirmationSaving(true);
+    setConfirmationMessage('');
+    try {
+      const saved = await api<DashboardNotificationPreferences>('/v1/notification-preferences/confirm-email', {
+        method: 'POST', body: JSON.stringify({ confirmation: emailConsent }),
+      });
+      onPreferencesChange(saved);
+      setConfirmationMessage(`Email alerts are now enabled for ${email}.`);
+      const params = new URLSearchParams(window.location.search);
+      params.delete('emailConsent');
+      const suffix = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}`);
+    } catch (cause) {
+      setConfirmationMessage(cause instanceof Error ? cause.message : 'Could not confirm email alerts.');
+    } finally {
+      setConfirmationSaving(false);
+    }
+  };
 
   const deleteAccount = async () => {
     if (!email || !confirmed || deleting) return;
@@ -431,22 +695,55 @@ function SettingsView({ email }: { email?: string }) {
 
   return <section className='content-section standalone max-w-6xl'>
     <div className='section-heading'>
-      <div><h2>Account settings</h2><p>Manage personal developer access and permanently remove your video2ctx account.</p></div>
+      <div><h2>Settings</h2><p>Choose how monitor updates reach you and manage your account.</p></div>
     </div>
+    <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
+      <div className='settings-notification-intro'>
+        <span className='panel-label'>Monitor updates</span>
+        <h3 className='settings-card-title' id='notification-settings-heading'>Notifications</h3>
+        <p className='settings-card-copy'>Control each delivery channel independently. Changes apply to every monitor.</p>
+      </div>
+      <div className='settings-toggle-list'>
+        {emailConsent && !preferences.emailAlerts && <div className='settings-email-confirmation' role='status'>
+          <span><strong>Finish enabling email alerts</strong><small>Confirm from this signed-in account before monitor emails can be sent to <b>{email}</b>.</small></span>
+          <button type='button' disabled={confirmationSaving} onClick={() => void confirmEmailDelivery()}>{confirmationSaving ? 'Confirming…' : 'Confirm email alerts'}</button>
+          {confirmationMessage && <p>{confirmationMessage}</p>}
+        </div>}
+        <label className='settings-toggle-row'>
+          <span><strong>In-app alerts</strong><small>Show new monitor matches in the notification inbox.</small></span>
+          <input type='checkbox' role='switch' checked={preferences.inApp} disabled={Boolean(preferenceSaving)} onChange={(event) => void savePreference('inApp', event.target.checked)} />
+          <i aria-hidden='true' />
+        </label>
+        <label className='settings-toggle-row' data-disabled={!email}>
+          <span><strong>Email alerts</strong><small>{email
+            ? preferences.emailAlerts
+              ? <>Confirmed for <b>{email}</b>. New monitor matches can be emailed immediately.</>
+              : preferences.emailAlertsPending
+                ? <>Waiting for confirmation from <b>{email}</b>. Monitor emails remain off.</>
+                : <>Off by default. Enabling sends a confirmation message to <b>{email}</b>.</>
+            : 'Sign in with an account to enable email delivery.'}</small></span>
+          <input type='checkbox' role='switch' checked={Boolean(email && (preferences.emailAlerts || preferences.emailAlertsPending))} disabled={!email || Boolean(preferenceSaving)} onChange={(event) => void savePreference('emailAlerts', event.target.checked)} />
+          <i aria-hidden='true' />
+        </label>
+        {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
+        {isDemo && <p className='settings-demo-note'>Email is disabled for the local demo identity so development checks cannot send to a placeholder address.</p>}
+        {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
+      </div>
+    </article>
     <article className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1'>
-      <div><span className='panel-label'>Signed-in account</span><h3 className='mt-2 mb-0 font-serif text-xl/[1.2] font-bold'>{email ?? 'Local demo account'}</h3><p className='mt-2 mb-0 max-w-[65ch] text-[.82rem]/[1.55] text-[var(--color-dashboard-ink-soft)]'>Personal API keys are managed separately from your account profile.</p></div>
+      <div><span className='panel-label'>Signed-in account</span><h3 className='settings-card-title mt-2 mb-0'>{email ?? 'Local demo account'}</h3><p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>Personal API keys are managed separately from your account profile.</p></div>
       <Link className='button secondary no-underline max-[43.75rem]:w-full' href='/dashboard/developer'>Manage API keys</Link>
     </article>
     <article className='mt-6 grid grid-cols-[minmax(0,1fr)_minmax(17rem,24rem)] items-start gap-10 rounded-[var(--radius-dashboard-md)] border border-[color-mix(in_srgb,var(--color-dashboard-danger)_45%,var(--color-dashboard-rule))] bg-[color-mix(in_srgb,var(--color-dashboard-danger)_4%,var(--color-dashboard-surface))] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='delete-account-heading'>
       <div>
         <span className='panel-label !text-[var(--color-dashboard-danger)]'>Danger zone</span>
-        <h3 className='mt-2 mb-0 font-serif text-xl/[1.2] font-bold' id='delete-account-heading'>Delete account permanently</h3>
-        <p className='mt-2 mb-0 max-w-[65ch] text-[.82rem]/[1.55] text-[var(--color-dashboard-ink-soft)]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
+        <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
+        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
       </div>
       {email ? <div className='grid gap-2'>
-        <label className='text-xs font-bold' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
+        <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
         <input
-          className='min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[.85rem] font-bold text-[var(--color-dashboard-ink)] [font-family:var(--font-dashboard-mono)]'
+          className='settings-confirm-input min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[var(--color-dashboard-ink)]'
           id='delete-account-confirmation'
           value={confirmation}
           onChange={(event) => setConfirmation(event.target.value)}
@@ -457,11 +754,11 @@ function SettingsView({ email }: { email?: string }) {
           disabled={deleting}
         />
         <small className='text-[.7rem] text-[var(--color-dashboard-muted)]' id='delete-account-help'>The confirmation is case-sensitive.</small>
-        <button className='mt-2 min-h-11 cursor-pointer rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-danger)] bg-[var(--color-dashboard-danger)] text-[.78rem] font-[750] text-white hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-45' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
+        <button className='settings-delete-button mt-2 min-h-11 cursor-pointer rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-danger)] bg-[var(--color-dashboard-danger)] text-white hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-45' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
           {deleting ? 'Deleting account…' : 'Delete account permanently'}
         </button>
-        {deleteError && <p className='!text-[var(--color-dashboard-danger)] font-semibold' role='alert'>{deleteError}</p>}
-      </div> : <p className='mt-2 mb-0 max-w-[65ch] text-[.82rem]/[1.55] font-semibold !text-[var(--color-dashboard-danger)]'>Account deletion is unavailable for the local demo identity.</p>}
+        {deleteError && <p className='settings-danger-message' role='alert'>{deleteError}</p>}
+      </div> : <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Account deletion is unavailable for the local demo identity.</p>}
     </article>
   </section>;
 }
@@ -612,140 +909,213 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Searching, enriching, and comparing public video signals. This stops automatically if the source takes too long.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function DiscoveryGrid({ items, projects, monitors, sourceState, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; projects: Project[]; monitors: Monitor[]; sourceState: SourceState; onInspect: (type: EntityType, id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
-  const savedSources = projects.reduce((total, project) => total + (project.item_count ?? 0), 0);
-  const activeMonitors = monitors.filter((monitor) => monitor.enabled).length;
-  return <section className='content-section discovery-section'>
-    <div className='research-layout'>
-      <div className='source-inbox'>
-        <div className='section-heading'><div><h2>{items.length ? 'Evidence to explore' : hasSearched ? 'No matching sources' : 'Open a source workspace'}</h2><p>{items.length ? 'Choose a result to inspect its captions, comments, and source details.' : hasSearched ? 'Try a broader topic, remove a filter, or paste a direct YouTube URL.' : 'Paste a video, channel, or playlist URL to begin with real source data.'}</p></div>{items.length ? <span>{items.length} sources · {loading ? 'previous results' : 'current results'}</span> : null}</div>
-        {!items.length && !loading ? <div className='source-onboarding'><Icon name='search' size={22} /><div><strong>{hasSearched ? 'Nothing matched this search.' : 'Your source inbox is empty.'}</strong><p>{hasSearched ? 'Change the query or filters and search again.' : 'Start with a URL or search term. The result will replace this guide.'}</p></div><button onClick={onStart}>{hasSearched ? 'Edit search' : 'Paste a YouTube URL'}</button></div> : null}
-        <div className='source-grid'>{loading && !items.length ? Array.from({length:4}).map((_,i)=><div className='source-card skeleton' key={i}/>) : items.map((item, index) => <button className={`source-card ${index === 0 ? 'featured' : ''}`} key={`${item.provider ?? 'youtube'}-${item.type}-${item.id}`} onClick={() => onInspect(item.type,item.id,item.provider)}>
-          <div className='thumbnail'>{item.thumbnails?.[0]?.url ? <img src={item.thumbnails[0].url} alt='' /> : <div className='thumb-placeholder'>YT</div>}<span className={`type-pill ${item.type}`}>{item.type}</span>{item.durationText && <time>{item.durationText}</time>}</div>
-          <div className='card-copy'><span className='evidence-label'><i />Ready to inspect</span><h3>{item.title ?? item.name}</h3><p>{item.channel?.name ?? item.description ?? `${item.videoCountText ?? ''}`}</p><div><span>{item.viewCountText ?? item.publishedTimeText ?? 'Source ready'}</span><b>Open evidence <span>→</span></b></div></div>
-        </button>)}</div>
-      </div>
-      <aside className='research-pulse'>
-        <div className='pulse-head'><div><p className='panel-label'>Workspace status</p><h3>Your research</h3></div><span className={`live-pill ${sourceState}`}><i />{sourceState === 'live' ? 'Live' : sourceState === 'idle' ? 'Ready' : 'Limited'}</span></div>
-        <div className='pulse-stats'><article><strong>{projects.length}</strong><span>active projects</span></article><article><strong>{savedSources}</strong><span>saved sources</span></article><article><strong>{activeMonitors}</strong><span>signal monitors</span></article></div>
-        <div className='pipeline-card'><div><span>Evidence pipeline</span><b>{sourceState === 'live' ? 'Healthy' : sourceState === 'idle' ? 'Ready' : 'Limited'}</b></div><ol><li className={sourceState === 'live' ? 'complete' : ''}><i>{sourceState === 'live' ? '✓' : '1'}</i><span><b>Source discovery</b><small>{sourceState === 'live' ? 'Live YouTube catalog' : sourceState === 'idle' ? 'Runs when you search' : 'Retry a search to reconnect'}</small></span></li><li className='complete'><i>✓</i><span><b>Transcript index</b><small>Exact moments retained</small></span></li><li><i>3</i><span><b>Cited synthesis</b><small>Ready when you ask</small></span></li></ol></div>
-        <p className='pulse-note'>Keep claims connected to the moment and source they came from.</p>
-      </aside>
-    </div>
+function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
+  return <section className='source-results' aria-labelledby='source-results-title'>
+    <header>
+      <div><p className='panel-label'>Search results</p><h2 id='source-results-title'>{items.length ? 'Choose a video to inspect' : hasSearched ? 'No matching videos' : 'Search results will appear here'}</h2></div>
+      {items.length ? <span>{items.length} videos{loading ? ' · refreshing' : ''}</span> : null}
+    </header>
+    {loading && !items.length ? <div className='source-result-skeletons' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : null}
+    {!items.length && !loading ? <div className='source-results-empty'><span aria-hidden='true'><Icon name='search' size={22} /></span><div><strong>{hasSearched ? 'Try a broader title or topic.' : 'One field handles search and direct URLs.'}</strong><p>{hasSearched ? 'You can also paste the exact YouTube video URL.' : 'Search by title or topic, then select a result to fetch only the datasets checked above.'}</p></div><button onClick={onStart}>{hasSearched ? 'Edit search' : 'Start searching'}</button></div> : null}
+    {items.length ? <div className='source-result-list'>{items.map((item) => {
+      const thumbnail = bestThumbnail(item.thumbnails);
+      return <button key={`${item.provider ?? 'youtube'}-${item.id}`} onClick={() => onInspect(item.id, item.provider)}>
+        <span className='source-result-thumb'>{thumbnail ? <img src={thumbnail.url} alt='' /> : <i>YT</i>}{item.durationText ? <time>{item.durationText}</time> : null}</span>
+        <span className='source-result-copy'><b>{item.title ?? 'Untitled video'}</b><small>{item.channel?.name ?? 'YouTube video'}</small><em>{[item.viewCountText, item.publishedTimeText].filter(Boolean).join(' · ') || 'Ready to inspect'}</em></span>
+        <span className='source-result-action'>Open <b aria-hidden='true'>→</b></span>
+      </button>;
+    })}</div> : null}
   </section>;
 }
 
-function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void }) {
+function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
-  const channel = inspector.data.channel as { name?: string } | undefined;
-  const chatSection = useRef<HTMLDivElement>(null);
-  const openChat = () => {
-    chatSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.setTimeout(() => chatSection.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }), 350);
-  };
-  return <section className='inspector'>
-    <div className='inspector-head'><button className='back' onClick={onClose}>← Back to discovery</button><div className='inspector-actions'><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor</button><button onClick={onSave}><Icon name='plus' size={15} />Save to project</button>{inspector.type === 'video' && <button className='primary' onClick={openChat}><Icon name='spark' size={15} />Open cited chat</button>}</div></div>
-    <div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{channel?.name ?? String(inspector.data.description ?? '').slice(0,160)}</p></div><div className='data-health'><i /> Fresh from YouTube<br /><small>Partial sections degrade safely</small></div></div>
-    {inspector.type === 'video' ? <>
-      <div className='source-research-layout'>
-        <section className='caption-workspace' aria-labelledby='caption-workspace-title'>
-          <header className='workspace-panel-head'><div><p className='panel-label'>Source captions</p><h3 id='caption-workspace-title'>Transcript</h3></div><span>{inspector.transcript?.segments.length ?? 0} moments</span></header>
-          <div className='caption-player'><div className='player'><iframe src={`https://www.youtube-nocookie.com/embed/${inspector.id}`} title={title} allowFullScreen /></div><div className='signal-strip'><span><b>{formatNumber(inspector.data.viewCount)}</b> views</span><span><b>{inspector.transcript?.segments.length ?? 0}</b> captions</span><span><b>{inspector.comments?.length ?? 0}</b> comments</span></div></div>
-          <div className='transcript-toolbar'><div><p className='panel-label'>Synchronized transcript</p><strong>{inspector.transcript?.track.name ?? 'No caption track'}</strong> <span>{inspector.transcript?.track.kind}</span></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event)=>setTranscriptQuery(event.target.value)} placeholder='Search captions…' /></label></div>
-          <div className='segments'>{segments.slice(0,300).map((segment) => <a key={`${segment.startMs}-${segment.text}`} href={`https://youtube.com/watch?v=${inspector.id}&t=${Math.floor(segment.startMs/1000)}s`} target='_blank' rel='noreferrer'><time>{formatTime(segment.startMs)}</time><p>{highlight(segment.text, transcriptQuery)}</p></a>)}{!segments.length && <div className='empty-state'>No matching caption moments.</div>}</div>
-        </section>
-        <div className='chat-workspace' ref={chatSection}><SourceChat key={inspector.id} inspector={inspector} /></div>
-      </div>
-      <CommentSample comments={inspector.comments ?? []} />
-    </> : <CatalogEntity inspector={inspector} />}
-  </section>;
-}
+  const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
+  const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
+  const [activePanel, setActivePanel] = useState<SourceDataOption>(panelOptions[0] ?? 'channel');
+  const [commentPage, setCommentPage] = useState(inspector.comments);
+  const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentsError, setCommentsError] = useState('');
 
-function SourceChat({ inspector }: { inspector: Inspector }) {
-  const [sessions, setSessions] = useState<ChatSession[]>([{ id: 'chat-1', title: 'New chat', messages: [] }]);
-  const [activeSessionId, setActiveSessionId] = useState('chat-1');
-  const [question, setQuestion] = useState('');
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const sessionCounter = useRef(1);
-  const messageCounter = useRef(0);
-  const request = useRef<{ controller: AbortController; sessionId: string; question: string } | null>(null);
-  const composer = useRef<HTMLTextAreaElement>(null);
-  const chatLog = useRef<HTMLDivElement>(null);
-  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0];
-
-  useEffect(() => () => request.current?.controller.abort(), []);
-  useEffect(() => {
-    if (chatLog.current) chatLog.current.scrollTop = chatLog.current.scrollHeight;
-  }, [activeSession?.messages.length, activeSessionId, pendingSessionId]);
-
-  const updateSession = (sessionId: string, updater: (session: ChatSession) => ChatSession) => {
-    setSessions((current) => current.map((session) => session.id === sessionId ? updater(session) : session));
-  };
-
-  const newChat = () => {
-    sessionCounter.current += 1;
-    const id = `chat-${sessionCounter.current}`;
-    setSessions((current) => [...current, { id, title: `New chat ${sessionCounter.current}`, messages: [] }]);
-    setActiveSessionId(id); setQuestion('');
-    window.requestAnimationFrame(() => composer.current?.focus());
-  };
-
-  const stopAnswer = () => {
-    const pending = request.current;
-    if (!pending) return;
-    pending.controller.abort();
-    updateSession(pending.sessionId, (session) => ({ ...session, messages: [...session.messages, { id: `message-${++messageCounter.current}`, role: 'assistant', content: 'Response stopped. You can ask the question again when you’re ready.', failedQuestion: pending.question }] }));
-    request.current = null; setPendingSessionId(null);
-  };
-
-  const sendQuestion = async (event?: FormEvent) => {
-    event?.preventDefault();
-    const nextQuestion = question.trim();
-    if (!nextQuestion || pendingSessionId || !activeSession) return;
-    const sessionId = activeSession.id;
-    const previousMessages = activeSession.messages.filter((message) => !message.failedQuestion).slice(-6);
-    const contextualQuestion = previousMessages.length ? `Continue this conversation about the same video source.\n\n${previousMessages.map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content.slice(0, 900)}`).join('\n')}\n\nUser's new question: ${nextQuestion}` : nextQuestion;
-    const userMessage: ChatMessage = { id: `message-${++messageCounter.current}`, role: 'user', content: nextQuestion };
-    updateSession(sessionId, (session) => ({ ...session, title: session.messages.length ? session.title : compactChatTitle(nextQuestion), messages: [...session.messages, userMessage] }));
-    setQuestion(''); setPendingSessionId(sessionId);
-    const controller = new AbortController(); request.current = { controller, sessionId, question: nextQuestion };
+  const loadMoreComments = async () => {
+    const continuation = commentPage?.continuation;
+    if (!continuation || commentsLoading) return;
+    setCommentsLoading(true);
+    setCommentsError('');
     try {
-      const response = await api<Answer>('/v1/answers', { method: 'POST', body: JSON.stringify({ question: contextualQuestion, provider: inspector.provider, entityId: inspector.id }), signal: controller.signal }, 25_000);
-      updateSession(sessionId, (session) => ({ ...session, messages: [...session.messages, { id: `message-${++messageCounter.current}`, role: 'assistant', content: response.answer, citations: response.citations }] }));
+      const params = new URLSearchParams({ continuation });
+      const page = await api<CommentPage>(`/v1/providers/${inspector.provider}/videos/${encodeURIComponent(inspector.id)}/comments?${params}`);
+      setCommentPage((current) => {
+        if (!current) return page;
+        const comments = new Map(current.comments.map((comment) => [comment.id, comment]));
+        page.comments.forEach((comment) => comments.set(comment.id, comment));
+        return {
+          ...page,
+          comments: [...comments.values()],
+          totalCount: page.totalCount ?? current.totalCount,
+          meta: {
+            ...page.meta,
+            warnings: [...new Set([...current.meta.warnings, ...page.meta.warnings])],
+            partial: current.meta.partial || page.meta.partial,
+          },
+        };
+      });
+      setCommentPagesLoaded((count) => count + 1);
     } catch (cause) {
-      if (!isAbortError(cause)) updateSession(sessionId, (session) => ({ ...session, messages: [...session.messages, { id: `message-${++messageCounter.current}`, role: 'assistant', content: cause instanceof Error ? cause.message : 'I could not create a cited answer. Save and index the source, then try again.', failedQuestion: nextQuestion }] }));
+      setCommentsError(cause instanceof Error ? cause.message : 'Could not load the next comments page.');
     } finally {
-      if (request.current?.controller === controller) { request.current = null; setPendingSessionId(null); }
+      setCommentsLoading(false);
     }
   };
 
-  const reuseFailedQuestion = (value: string) => {
-    setQuestion(value); window.requestAnimationFrame(() => composer.current?.focus());
-  };
+  if (inspector.type === 'playlist') return <PlaylistInspector inspector={inspector} onClose={onClose} onSave={onSave} onOpenVideo={onOpenVideo} />;
+  if (inspector.type !== 'video') return <section className='inspector'><div className='inspector-head'><button className='back' onClick={onClose}>← Back to Sources</button></div><div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{String(inspector.data.description ?? '').slice(0,160)}</p></div></div><CatalogEntity inspector={inspector} /></section>;
 
-  return <section className='source-chat' aria-labelledby='source-chat-title'>
-    <div className='chat-heading'><div><p className='panel-label'>Research assistant</p><h3 id='source-chat-title'>Cited chat</h3><p>Ask, follow up, and keep every answer attached to the source.</p></div><span><i />{inspector.transcript?.segments.length ?? 0} source moments</span></div>
-    <div className='chat-session-bar'><div className='chat-tabs' role='tablist' aria-label='Chat sessions'>{sessions.map((session) => <button type='button' role='tab' aria-selected={session.id === activeSessionId} className={session.id === activeSessionId ? 'active' : ''} key={session.id} onClick={() => setActiveSessionId(session.id)}><span aria-hidden='true'>◇</span>{session.title}</button>)}</div><button type='button' className='new-chat-button' aria-label='Start a new chat session' onClick={newChat}><b aria-hidden='true'>＋</b><span>New chat</span></button></div>
-    <div className='chat-surface'>
-      <div className='chat-log' ref={chatLog} role='log' aria-live='polite' aria-label={`Messages in ${activeSession.title}`}>
-        {!activeSession.messages.length && pendingSessionId !== activeSession.id && <div className='chat-empty'><div className='chat-empty-mark' aria-hidden='true'><Icon name='spark' size={17} /></div><h4>Ask this video anything</h4><p>Answers stay grounded in the captions.</p><div>{['Summarize with evidence','Show the strongest claims','Find a concrete example'].map((prompt) => <button key={prompt} onClick={() => { setQuestion(prompt); composer.current?.focus(); }}>{prompt}</button>)}</div></div>}
-        {activeSession.messages.map((message) => <ChatMessageBubble key={message.id} message={message} provider={inspector.provider} sourceId={inspector.id} onReuse={reuseFailedQuestion} />)}
-        {pendingSessionId === activeSession.id && <article className='chat-message assistant pending'><div className='chat-avatar' aria-hidden='true'>✦</div><div className='chat-bubble'><span>Evidence assistant</span><div className='chat-thinking' role='status'><i /><i /><i /><b>Reading source moments…</b></div><button className='stop-answer' onClick={stopAnswer}>Stop generating</button></div></article>}
-      </div>
-      <form className='chat-composer' onSubmit={(event) => void sendQuestion(event)}>
-        <label className='sr-only' htmlFor={`chat-question-${inspector.id}`}>Ask a question about this video</label><textarea ref={composer} id={`chat-question-${inspector.id}`} rows={2} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendQuestion(); } }} placeholder='Ask a follow-up about this video…' />
-        <div><small>Enter to send · Shift + Enter for a new line</small><button disabled={!question.trim() || Boolean(pendingSessionId)}><Icon name='spark' size={14} />{pendingSessionId ? 'Answering…' : 'Ask with citations'}</button></div>
-      </form>
+  return <section className='source-inspector' aria-labelledby='source-detail-title'>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave}><Icon name='plus' size={15} />Save to project</button></div></div>
+    <header className='source-detail-head'>
+      <div><p className='panel-label'>Video result</p><h2 id='source-detail-title'>{title}</h2><p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p></div>
+      <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
+    </header>
+
+    <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
+      <SourceVideoPreview inspector={inspector} title={title} />
+      {inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} unavailable={inspector.unavailableData.includes('channel')} /> : null}
     </div>
+
+    {panelOptions.length ? <>
+      <div className='source-data-tabs' role='tablist' aria-label='Fetched video data'>
+        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => setActivePanel(option)}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
+      </div>
+      <section className='source-data-panel' role='tabpanel'>
+        {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
+        {activePanel === 'comments' ? <CommentsDataPanel unavailable={inspector.unavailableData.includes('comments')} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+      </section>
+    </> : null}
+
+    <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />
   </section>;
 }
 
-function ChatMessageBubble({ message, provider, sourceId, onReuse }: { message: ChatMessage; provider: ProviderId; sourceId: string; onReuse: (question: string) => void }) {
-  return <article className={`chat-message ${message.role}${message.failedQuestion ? ' failed' : ''}`}><div className='chat-avatar' aria-hidden='true'>{message.role === 'user' ? 'You' : <Icon name='spark' size={15} />}</div><div className='chat-bubble'><span>{message.role === 'user' ? 'You' : 'Evidence assistant'}</span><p>{message.content}</p>{message.citations?.length ? <div className='chat-citations' aria-label='Sources cited in this answer'>{message.citations.map((citation) => <a key={`${message.id}-${citation.index}`} href={sourceUrl(citation.provider ?? provider, citation.entityId ?? sourceId, citation.startMs)} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,120)}{citation.text.length > 120 ? '…' : ''}</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div> : null}{message.failedQuestion && <button className='retry-chat' onClick={() => onReuse(message.failedQuestion ?? '')}>Put question back in composer</button>}</div></article>;
+function PlaylistInspector({ inspector, onClose, onSave, onOpenVideo }: { inspector: Inspector; onClose: () => void; onSave: () => void; onOpenVideo: (id: string) => void }) {
+  const title = String(inspector.data.title ?? 'YouTube playlist');
+  const channel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
+  const videos = (inspector.data.videos ?? []) as SearchItem[];
+  const thumbnail = bestThumbnail((inspector.data.thumbnails ?? videos[0]?.thumbnails ?? []) as Thumbnail[]);
+  const playlistUrl = String(inspector.data.url ?? `https://youtube.com/playlist?list=${inspector.id}`);
+  const returnedCount = videos.length;
+
+  return <section className='source-inspector playlist-inspector' aria-labelledby='playlist-detail-title'>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onSave}><Icon name='plus' size={15} />Save playlist</button></div></div>
+    <header className='source-detail-head'>
+      <div><p className='panel-label'>Playlist result</p><h2 id='playlist-detail-title'>{title}</h2><p>{[channel?.name, String(inspector.data.videoCountText ?? `${returnedCount} videos returned`)].filter(Boolean).join(' · ')}</p></div>
+      <a href={playlistUrl} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
+    </header>
+
+    <div className='playlist-overview'>
+      <div className='playlist-cover'>{thumbnail ? <img src={thumbnail.url} alt={`Thumbnail for ${title}`} /> : <span aria-hidden='true'>YT</span>}<b>{String(inspector.data.videoCountText ?? `${returnedCount} videos`)}</b></div>
+      <div><p className='panel-label'>Playlist summary</p><h3>{channel?.name ?? 'YouTube playlist'}</h3>{inspector.data.description ? <p>{String(inspector.data.description)}</p> : null}<dl><div><dt>Playlist ID</dt><dd>{inspector.id}</dd></div><div><dt>Videos returned</dt><dd>{returnedCount.toLocaleString()}</dd></div><div><dt>Result</dt><dd>{inspector.data.continuation ? 'More available' : 'Complete page'}</dd></div></dl></div>
+    </div>
+
+    <section className='playlist-videos' aria-labelledby='playlist-videos-title'>
+      <header><div><p className='panel-label'>Video index</p><h3 id='playlist-videos-title'>Videos in this playlist</h3></div><span>{returnedCount} returned</span></header>
+      {videos.length ? <div className='playlist-video-list'>{videos.map((video, index) => {
+        const videoThumbnail = bestThumbnail(video.thumbnails ?? []);
+        return <button key={video.id} onClick={() => onOpenVideo(video.id)}><span className='playlist-video-index'>{String(index + 1).padStart(2, '0')}</span><span className='source-result-thumb'>{videoThumbnail ? <img src={videoThumbnail.url} alt='' /> : <i>YT</i>}{video.durationText ? <time>{video.durationText}</time> : null}</span><span className='source-result-copy'><b>{video.title ?? 'Untitled video'}</b><small>{video.channel?.name ?? channel?.name ?? 'YouTube video'}</small><em>{[video.viewCountText, video.publishedTimeText].filter(Boolean).join(' · ') || 'Ready to inspect'}</em></span><span className='source-result-action'>Open video <b aria-hidden='true'>→</b></span></button>;
+      })}</div> : <p className='source-data-unavailable'>No public videos were returned for this playlist.</p>}
+      {inspector.data.continuation ? <p className='playlist-continuation'>More videos are available through the continuation returned by the API.</p> : null}
+    </section>
+
+    <aside className='source-api-guide playlist-api-guide' aria-labelledby='playlist-api-title'>
+      <div><p className='panel-label'>Continue with the API</p><h3 id='playlist-api-title'>Use the playlist endpoint in production</h3><p>The response includes playlist metadata, its current video page, and a continuation when more videos are available. Open a video ID with the separate transcript, comments, or channel endpoints.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+      <div className='source-api-endpoints'><div data-selected='true'><span>Playlist details and videos<b>selected</b></span><code>GET /v1/providers/youtube/playlists/{inspector.id}</code></div><div><span>Then open a video</span><code>GET /v1/providers/youtube/videos/{'{videoId}'}</code></div></div>
+    </aside>
+  </section>;
 }
 
-function compactChatTitle(value: string) {
-  return value.length > 34 ? `${value.slice(0, 34).trim()}…` : value;
+function SourceVideoPreview({ inspector, title }: { inspector: Inspector; title: string }) {
+  const [playing, setPlaying] = useState(false);
+  const thumbnail = bestThumbnail((inspector.data.thumbnails ?? []) as Thumbnail[]);
+  return <article className='source-video-preview'>
+    <div className='source-video-frame'>
+      {playing ? <iframe src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(inspector.id)}?autoplay=1&rel=0`} title={`Play ${title}`} allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share' allowFullScreen /> : <button type='button' onClick={() => setPlaying(true)} aria-label={`Play ${title}`}><img src={thumbnail?.url ?? `https://i.ytimg.com/vi/${inspector.id}/hqdefault.jpg`} alt={`Thumbnail for ${title}`} /><span>Play video</span></button>}
+    </div>
+    <dl className='source-video-facts'>
+      <div><dt>Views</dt><dd>{String(inspector.data.viewCountText ?? formatNumber(inspector.data.viewCount))}</dd></div>
+      <div><dt>Duration</dt><dd>{String(inspector.data.durationText ?? '—')}</dd></div>
+      <div><dt>Video ID</dt><dd>{inspector.id}</dd></div>
+    </dl>
+  </article>;
+}
+
+function SourceChannelOverview({ channel, fallback, unavailable }: { channel?: ChannelInfo; fallback?: { id?: string; name?: string; url?: string }; unavailable: boolean }) {
+  const about = channel?.about;
+  const info = about?.moreInfo;
+  const identity = { id: String(channel?.id ?? fallback?.id ?? ''), name: String(channel?.name ?? fallback?.name ?? 'YouTube channel'), url: String(channel?.url ?? fallback?.url ?? '') };
+  const avatar = bestThumbnail((channel?.thumbnails ?? []) as Thumbnail[]);
+  const facts = [
+    ['Subscribers', info?.subscriberCountText ?? (info?.subscriberCount != null ? info.subscriberCount.toLocaleString() : undefined)],
+    ['Videos', info?.videoCountText ?? (info?.videoCount != null ? info.videoCount.toLocaleString() : undefined)],
+    ['Channel views', info?.viewCountText ?? (info?.viewCount != null ? info.viewCount.toLocaleString() : undefined)],
+    ['Joined', info?.joinedDateText ?? info?.joinedDate],
+    ['Business email', info ? info.businessEmailAvailable ? 'Available on YouTube' : 'Not listed' : undefined],
+    ['Channel ID', identity.id || undefined],
+  ].filter((fact): fact is [string, string] => Boolean(fact[1]));
+
+  return <aside className='source-channel-overview' aria-label='Channel information'>
+    <div className='source-channel-identity'>{avatar ? <img src={avatar.url} alt='' /> : <span aria-hidden='true'>{identity.name.slice(0, 1).toUpperCase()}</span>}<div><p>Channel</p><h3>{identity.name}</h3>{channel?.handle ? <small>{String(channel.handle)}</small> : null}</div></div>
+    {unavailable ? <p className='source-data-unavailable'>Channel details could not be returned for this video.</p> : <>
+      {about?.description ? <p className='source-channel-description'>{about.description}</p> : null}
+      {facts.length ? <dl className='source-channel-facts'>{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : null}
+      <div className='source-channel-links'>{identity.url ? <a href={identity.url} target='_blank' rel='noreferrer'>{info?.displayCanonicalChannelUrl || 'View channel'} ↗</a> : null}{about?.links.map((link) => <a key={link.url} href={link.url} target='_blank' rel='noreferrer'>{link.title || link.displayUrl} ↗</a>)}</div>
+      {channel?.meta ? <div className='source-channel-meta'><span>{channel.meta.partial ? 'Partial source response' : 'Complete source response'} · fetched {new Date(channel.meta.fetchedAt).toLocaleString()}</span>{channel.meta.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
+    </>}
+  </aside>;
+}
+
+function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
+  if (inspector.unavailableData.includes('transcript')) return <p className='source-data-unavailable'>A transcript is not available for this video.</p>;
+  if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
+  return <>
+    <header className='source-panel-head'><div><h3>{inspector.transcript.track.name}</h3><p>{inspector.transcript.meta.partial ? 'Partial transcript' : 'Complete transcript'} · {inspector.transcript.track.languageCode.toUpperCase()} · {inspector.transcript.track.kind} · {inspector.transcript.segments.length.toLocaleString()} moments</p></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.target.value)} placeholder='Filter transcript…' /></label></header>
+    {inspector.transcript.meta.warnings.length ? <p className='source-data-warning'>{inspector.transcript.meta.warnings.join(' ')}</p> : null}
+    <ol className='source-transcript'>{segments.map((segment) => <li key={`${segment.startMs}-${segment.text}`}><a href={`https://youtube.com/watch?v=${inspector.id}&t=${Math.floor(segment.startMs / 1000)}s`} target='_blank' rel='noreferrer'>{formatTime(segment.startMs)}</a><p>{highlight(segment.text, transcriptQuery)}</p></li>)}</ol>
+    {!segments.length ? <p className='source-data-unavailable'>No transcript moments match this filter.</p> : null}
+  </>;
+}
+
+function CommentsDataPanel({ unavailable, page, pagesLoaded, loading, error, onLoadMore }: { unavailable: boolean; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void }) {
+  if (unavailable) return <p className='source-data-unavailable'>Comments are unavailable or turned off for this video.</p>;
+  const comments = page?.comments ?? [];
+  if (!comments.length) return <p className='source-data-unavailable'>No public comments were returned.</p>;
+  return <>
+    <header className='source-panel-head'><div><h3>Audience response</h3><p>{comments.length.toLocaleString()} loaded across {pagesLoaded.toLocaleString()} {pagesLoaded === 1 ? 'page' : 'pages'}{page?.totalCount != null ? ` · ${page.totalCount.toLocaleString()} reported by YouTube` : ''}</p></div></header>
+    {page?.meta.warnings.length ? <p className='source-data-warning'>{page.meta.warnings.join(' ')}</p> : null}
+    <ol className='source-comments'>{comments.map((comment, index) => {
+      const author = comment.author;
+      const avatar = bestThumbnail(author?.thumbnails ?? []);
+      return <li key={String(comment.id ?? index)} data-reply={comment.id.includes('.')}><div>{avatar ? <img src={avatar.url} alt='' /> : <span aria-hidden='true'>{String(author?.name ?? 'Viewer').slice(0, 1).toUpperCase()}</span>}<b>{author?.name ?? 'Viewer'}</b>{comment.isPinned ? <em>pinned</em> : null}{comment.isHearted ? <em>hearted</em> : null}</div><p>{String(comment.text ?? '')}</p><small>{[comment.publishedTimeText, comment.likeCountText ? `${comment.likeCountText} likes` : '', comment.replyCount ? `${comment.replyCount} replies` : '', comment.id.includes('.') ? 'reply' : ''].filter(Boolean).map(String).join(' · ')}</small></li>;
+    })}</ol>
+    <div className='source-comments-pagination'>
+      <span>{page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
+      {page?.continuation ? <button type='button' disabled={loading} onClick={onLoadMore}>{loading ? 'Loading…' : 'Load next page'}</button> : null}
+    </div>
+    {error ? <p className='source-data-warning' role='alert'>{error}</p> : null}
+  </>;
+}
+
+function SourceApiGuide({ inspector, channelId }: { inspector: Inspector; channelId?: string }) {
+  const endpoints = [
+    { option: null, label: 'Video details', path: `/v1/providers/youtube/videos/${inspector.id}` },
+    { option: 'transcript' as const, label: 'Full transcript', path: `/v1/providers/youtube/videos/${inspector.id}/transcript` },
+    { option: 'comments' as const, label: 'Paginated comments', path: `/v1/providers/youtube/videos/${inspector.id}/comments` },
+    ...(channelId ? [{ option: 'channel' as const, label: 'Channel About data', path: `/v1/providers/youtube/channels/${channelId}` }] : []),
+  ];
+  return <aside className='source-api-guide' aria-labelledby='source-api-title'>
+    <div><p className='panel-label'>Continue with the API</p><h3 id='source-api-title'>Use this data in your workflow</h3><p>The dashboard follows the same continuation tokens as the API for comments. Transcript and channel requests return their complete endpoint responses.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+    <div className='source-api-endpoints'>{endpoints.map((endpoint) => <div key={endpoint.path} data-selected={endpoint.option === null || inspector.requestedData.includes(endpoint.option)}><span>{endpoint.label}{endpoint.option && inspector.requestedData.includes(endpoint.option) ? <b>selected</b> : null}</span><code>GET {endpoint.path}</code></div>)}</div>
+  </aside>;
 }
 
 function CatalogEntity({ inspector }: { inspector: Inspector }) {
@@ -754,29 +1124,76 @@ function CatalogEntity({ inspector }: { inspector: Inspector }) {
   return <div className='catalog-layout'><div className='catalog-stats'><article><small>VIDEOS FOUND</small><strong>{videos.length}</strong></article><article><small>PLAYLISTS</small><strong>{playlists.length}</strong></article><article><small>INDEX STATE</small><strong>{inspector.data.continuation ? 'Partial' : 'Current'}</strong></article></div><div className='catalog-list'><h3>Catalog</h3>{[...videos,...playlists].slice(0,50).map((item)=><a key={item.id} href={item.type==='video'?`https://youtube.com/watch?v=${item.id}`:`https://youtube.com/playlist?list=${item.id}`} target='_blank' rel='noreferrer'><span>{item.type}</span><strong>{item.title}</strong><small>{item.viewCountText ?? item.videoCountText}</small></a>)}</div></div>;
 }
 
-function CommentSample({ comments }: { comments: Array<Record<string,unknown>> }) {
-  return <div className='comments-card'><div className='section-heading compact'><div><p className='panel-label'>Audience evidence</p><h3>Comment preview</h3></div><span>Showing {Math.min(3, comments.length)} of {comments.length}</span></div>{comments.slice(0,3).map((comment,index)=><blockquote key={String(comment.id ?? index)}><p>{String(comment.text ?? '')}</p><footer>{String((comment.author as {name?:string})?.name ?? 'Viewer')} · {String(comment.likeCountText ?? 'recent')}</footer></blockquote>)}{!comments.length&&<p className='muted'>No comments returned.</p>}</div>;
-}
-
-function AnswerPanel({ answer }: { answer: Answer }) {
-  return <section className='answer-panel'><div className='answer-mark'><Icon name='spark' size={17} /></div><div><p className='panel-label'>Cited synthesis</p><h2>Answer grounded in source moments</h2><div className='answer-copy'>{answer.answer}</div><div className='citations'>{answer.citations.map((citation)=><a key={citation.index} href={citation.entityId ? `https://youtube.com/watch?v=${citation.entityId}${citation.startMs !== undefined ? `&t=${Math.floor(citation.startMs/1000)}s` : ''}` : '#'} target='_blank' rel='noreferrer'><b>[{citation.index}]</b><span>{citation.text.slice(0,140)}…</span><time>{citation.startMs !== undefined ? formatTime(citation.startMs) : 'source'}</time></a>)}</div></div></section>;
-}
-
 function ProjectsView({ projects, selectedProject, loading, error, onCreate, onOpen, onBack, onFindSources, onOpenItem }: { projects: Project[]; selectedProject: ProjectDetail | null; loading: boolean; error: string; onCreate:()=>void; onOpen:(project:Project)=>void; onBack:()=>void; onFindSources:()=>void; onOpenItem:(item:ProjectItem)=>void }) {
   if (selectedProject) return <section className='content-section standalone project-detail'><div className='section-heading'><div><button className='back' onClick={onBack}>← All projects</button><h2>{selectedProject.name}</h2></div><button className='button primary' onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></div><p className='project-description'>{selectedProject.description || 'Saved sources, transcript moments, and evidence for this line of inquiry.'}</p><div className='project-item-list'>{selectedProject.items.map((item)=><article key={item.id}><span className={`type-pill ${item.entity_type}`}>{item.entity_type}</span><div><h3>{item.title || item.entity_id}</h3><p>{item.note || (item.start_ms != null ? `Saved moment at ${formatTime(item.start_ms)}` : 'Saved source')}</p></div><button onClick={() => onOpenItem(item)}>Open evidence →</button></article>)}{!selectedProject.items.length&&<div className='big-empty'><strong>This project is ready for evidence</strong><p>Find a video, channel, or playlist and save it here.</p><button className='button primary' onClick={onFindSources}>Find sources</button></div>}</div></section>;
   return <section className='content-section standalone'><div className='section-heading'><div><h2>Projects turn watching into research</h2><p>Group sources, transcript moments, and notes around one line of inquiry.</p></div>{projects.length>0&&<button className='button primary' onClick={onCreate}><Icon name='plus' size={15} />New project</button>}</div>{loading&&<div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}{error&&<div className='alert error' role='alert'>{error}</div>}<div className='project-grid'>{projects.map((project,index)=><article key={project.id}><span className={`project-color c${index%4}`}/><h3>{project.name}</h3><p>{project.description || 'Videos, transcript moments, notes, and cited intelligence.'}</p><footer><b>{project.item_count ?? 0} sources</b><button onClick={() => onOpen(project)}>Open project →</button></footer></article>)}{!projects.length&&<div className='big-empty'><strong>No projects yet</strong><p>Create a project, then collect videos, channels, playlists, and exact transcript moments.</p><button className='button primary' onClick={onCreate}>Create first project</button></div>}</div></section>;
 }
 
-function MonitorsView({ monitors, onFindSource, onOpenTarget }: { monitors: Monitor[]; onFindSource:()=>void; onOpenTarget:(target:string)=>void }) {
+function MonitorsView({ monitors, knownChannel, savingId, onFindSource, onOpenTarget, onSchedule, onRemove }: { monitors: Monitor[]; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onFindSource:()=>void; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
   const activeCount = monitors.filter((monitor) => monitor.enabled).length;
-  return <section className='content-section standalone'><div className='section-heading'><div><h2>Know what changed without refreshing</h2><p>Track new uploads and shifts in topic momentum.</p></div><span>{activeCount} active</span></div><div className='monitor-list'>{monitors.map((monitor)=><article key={monitor.id}><span className='pulse'/><div><small>{monitor.kind.toUpperCase()}</small><h3>{monitor.target}</h3><p>New uploads, keyword mentions, view velocity, and audience-theme changes.</p></div><div><b>{monitor.enabled ? 'Active' : 'Paused'}</b><small>{monitor.last_checked_at ? `Checked ${new Date(monitor.last_checked_at).toLocaleString()}` : 'First scan queued'}</small><button onClick={() => onOpenTarget(monitor.target)}>Open in Sources →</button></div></article>)}{!monitors.length&&<div className='big-empty'><strong>No monitors yet</strong><p>Start from a channel or topic, inspect it, then choose Monitor.</p><button className='button primary' onClick={onFindSource}>Find a source to monitor</button></div>}</div></section>;
+  return <section className='content-section standalone monitor-section'><div className='section-heading'><div><h2>Monitor new videos</h2><p>We compare the latest public upload with the previous check and notify you when a new video appears.</p></div><span>{activeCount} active</span></div><div className='monitor-list'>{monitors.map((monitor) => {
+    const details = monitorDetails(monitor, knownChannel);
+    const channelWatch = monitor.kind === 'channel' || isYouTubeChannelId(monitor.target);
+    const intervalMinutes = monitor.interval_minutes ?? 1440;
+    return <article className='monitor-card' key={monitor.id}>
+      <span className='pulse'/>
+      <div className='monitor-copy'><div className='monitor-kicker'><small>{channelWatch ? 'Channel monitor' : 'Search monitor'}</small><span>{monitor.enabled ? 'Active' : 'Paused'}</span></div><h3>{details.label}</h3><p>{details.handle ? `${details.handle} · ` : ''}{channelWatch ? 'Checks the channel’s latest public upload.' : 'Checks the newest public search result.'} {monitorStatusText(monitor)}</p></div>
+      <div className='monitor-controls'>
+        <label><span>{channelWatch ? 'Check latest upload every' : 'Check search every'}</span><select aria-label={`Monitoring frequency for ${details.label}`} value={intervalMinutes} disabled={savingId === monitor.id} onChange={(event) => onSchedule(monitor.id, Number(event.target.value))}>{MONITOR_INTERVAL_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}</select></label>
+        <span className='monitor-actions'><button className='monitor-source-action' onClick={() => onOpenTarget(details.label)}>Open in Sources</button>{channelWatch ? <a className='monitor-channel-action' href={`https://www.youtube.com/channel/${encodeURIComponent(monitor.target)}`} target='_blank' rel='noreferrer'>View on YouTube <span aria-hidden='true'>↗</span></a> : null}<button className='monitor-delete-action' aria-label={`Delete monitor for ${details.label}`} title='Delete monitor' onClick={() => onRemove(monitor.id)}><Icon name='trash' size={15}/></button></span>
+      </div>
+    </article>;
+  })}{!monitors.length&&<div className='big-empty'><strong>No channels watched yet</strong><p>Open any video, then choose Monitor channel to watch for new uploads.</p><button className='button primary' onClick={onFindSource}>Find a video</button></div>}</div></section>;
+}
+
+function monitorIntervalLabel(intervalMinutes: number): string {
+  if (intervalMinutes === 60) return 'hour';
+  if (intervalMinutes < 1440) return `${intervalMinutes / 60} hours`;
+  if (intervalMinutes === 1440) return '24 hours';
+  if (intervalMinutes === 10080) return 'week';
+  return `${intervalMinutes / 1440} days`;
+}
+
+function monitorStatusText(monitor: Monitor): string {
+  const next = monitor.next_check_at ? new Date(monitor.next_check_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : undefined;
+  if (!monitor.last_checked_at) return next ? `First check ${next}` : `Runs every ${monitorIntervalLabel(monitor.interval_minutes ?? 1440)}.`;
+  const last = new Date(monitor.last_checked_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return next ? `Last checked ${last} · Next ${next}` : `Last checked ${last}`;
+}
+
+function inspectorChannel(inspector: Inspector | null): { id: string; name: string; handle?: string } | undefined {
+  if (!inspector) return undefined;
+  if (inspector.type === 'channel') return { id: inspector.id, name: String(inspector.data.name ?? 'YouTube channel'), handle: String(inspector.data.handle ?? '') || undefined };
+  const channel = inspector.data.channel as { id?: string; name?: string; handle?: string } | undefined;
+  return channel?.id ? { id: channel.id, name: channel.name ?? 'YouTube channel', handle: channel.handle } : undefined;
+}
+
+function monitorDetails(monitor: Monitor, knownChannel?: { id: string; name: string; handle?: string }): { label: string; handle?: string } {
+  const query = monitorQueryMetadata(monitor);
+  if (query.label) return { label: query.label, handle: query.handle };
+  if (knownChannel?.id === monitor.target) return { label: knownChannel.name, handle: knownChannel.handle };
+  return { label: isYouTubeChannelId(monitor.target) ? 'YouTube channel' : monitor.target };
+}
+
+function monitorQueryMetadata(monitor: Monitor): { label?: string; handle?: string } {
+  let query: { label?: string; handle?: string } = {};
+  try {
+    const parsed = monitor.query_json ? JSON.parse(monitor.query_json) as unknown : {};
+    query = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as typeof query : {};
+  } catch { query = {}; }
+  return query;
+}
+
+function isYouTubeChannelId(value: string): boolean {
+  return /^UC[A-Za-z0-9_-]{22}$/.test(value);
 }
 
 function SignInDialog({ onClose }: { onClose:()=>void }) {
   const dialogRef = useDialogFocus<HTMLDivElement>(onClose);
   const [email,setEmail]=useState(''); const [message,setMessage]=useState('');
-  const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:'/'})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
-  const google=async()=>{const response=await fetch('/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:'/'})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
+  const callbackURL=()=>`${window.location.pathname}${window.location.search}`;
+  const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:callbackURL()})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
+  const google=async()=>{const response=await fetch('/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:callbackURL()})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
   return <div className='dialog-backdrop' onMouseDown={onClose}><div ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='sign-in-title' onMouseDown={(event)=>event.stopPropagation()}><button className='dialog-close' aria-label='Close sign-in dialog' onClick={onClose}>×</button><p className='panel-label'>Private workspace</p><h2 id='sign-in-title'>Sign in to your research</h2><p>Projects, notes, monitors, and YouTube sync stay private to you.</p><button className='google-button' onClick={()=>void google()}>Continue with Google</button><div className='or'><span/>or<span/></div><form onSubmit={magic}><label className='field-label' htmlFor='sign-in-email'>Email address</label><input id='sign-in-email' type='email' required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder='you@example.com'/><button>Send magic link</button></form><small className='dialog-message' role='status' aria-live='polite'>{message || '\u00a0'}</small></div></div>;
 }
 
@@ -806,9 +1223,16 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
   return dialogRef;
 }
 
-function evidenceToItem(result: Citation): SearchItem { return { provider:result.provider??'youtube',type:'video',id:result.entityId??result.index.toString(),title:result.text,description:`Match score ${Math.round(result.score*100)}% · ${result.startMs!==undefined?formatTime(result.startMs):'source'}`,thumbnails:[] }; }
-function sourceUrl(provider: ProviderId, id: string, startMs?: number) { return provider === 'youtube' ? `https://youtube.com/watch?v=${id}${startMs !== undefined ? `&t=${Math.floor(startMs/1000)}s` : ''}` : '#'; }
 function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;}
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}
+function relativeNotificationTime(timestamp:number){
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  if (elapsed < 60_000) return 'Just now';
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+  return `${Math.floor(elapsed / 86_400_000)}d ago`;
+}
 function highlight(value:string,query:string){if(!query.trim())return value;const parts=value.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`,'ig'));return parts.map((part,index)=>part.toLowerCase()===query.toLowerCase()?<mark key={index}>{part}</mark>:part);}
+function bestThumbnail(thumbnails: Thumbnail[]){return [...thumbnails].sort((a,b)=>(b.width??0)-(a.width??0))[0];}
+function isPlaylistUrl(value:string){try{const url=new URL(value.trim());return ['youtube.com','www.youtube.com','m.youtube.com'].includes(url.hostname)&&!url.searchParams.has('v')&&Boolean(url.searchParams.get('list'));}catch{return false;}}
