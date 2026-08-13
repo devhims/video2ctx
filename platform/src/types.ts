@@ -50,7 +50,7 @@ export interface TaskMessage {
 }
 
 export interface EmailMessage {
-  type: 'magic-link' | 'daily-digest' | 'weekly-digest';
+  type: 'magic-link' | 'notification-opt-in' | 'monitor-alert' | 'daily-digest' | 'weekly-digest';
   idempotencyKey: string;
   userId?: string;
   to: string;

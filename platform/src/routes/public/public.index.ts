@@ -3,7 +3,7 @@ import type { App } from '../../types';
 import { processStripeWebhook } from '../../lib/billing';
 import { unsubscribe } from '../../lib/digests';
 import { youtubeOAuthCallback } from '../../lib/oauth';
-import { ApiError, body, text } from '../../lib/http';
+import { ApiError, body, escapeHtml, text } from '../../lib/http';
 import { claimLandingDemoQuota, type LandingDemoQuota } from '../../lib/landing-demo';
 import { routeInput } from '../../lib/youtube';
 import { getProvider } from '../../providers';
@@ -77,9 +77,16 @@ publicRoutes.post('/billing/webhook', async (c) => {
   return c.json({ received: true });
 });
 
-publicRoutes.all('/email/unsubscribe', async (c) => {
+publicRoutes.get('/email/unsubscribe', (c) => {
+  const user = text(c.req.query('user'), 200);
+  const token = text(c.req.query('token'), 500);
+  const action = `/v1/email/unsubscribe?user=${encodeURIComponent(user)}&token=${encodeURIComponent(token)}`;
+  return c.html(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Turn off video2ctx emails</title><body><main><h1>Turn off email alerts?</h1><p>This stops monitor alerts and digests for your video2ctx account.</p><form method="post" action="${escapeHtml(action)}"><button type="submit">Turn off email alerts</button></form></main></body></html>`);
+});
+
+publicRoutes.post('/email/unsubscribe', async (c) => {
   const ok = await unsubscribe(c.env, text(c.req.query('user'), 200), text(c.req.query('token'), 500));
-  return ok ? c.text('Email digests disabled.') : c.text('Invalid unsubscribe link.', 400);
+  return ok ? c.text('Email alerts disabled.') : c.text('Invalid unsubscribe link.', 400);
 });
 
 publicRoutes.get('/oauth/youtube/callback', async (c) => {
