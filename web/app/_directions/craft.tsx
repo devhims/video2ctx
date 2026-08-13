@@ -12,7 +12,9 @@
 
 import { CraftDemo } from './craft-demo';
 import { CraftCode } from './craft-code';
+import { CraftNav } from './craft-nav';
 import { Flashlight } from './flashlight';
+import { ArrowRight } from '@phosphor-icons/react/ssr';
 
 const PARTS = [
   { name: 'Transcript', detail: 'every line, and the second it was said' },
@@ -68,16 +70,7 @@ const TRUST = [
 export function CraftDirection() {
   return (
     <main className='craft'>
-      {/* N2 — floating chip. Out of the way; the input is the page. */}
-      <header className='craft-chip'>
-        <a href='/' aria-label='video2ctx home'>
-          <img src='/brand/video2ctx-mark-red.svg' alt='' width='20' height='20' />
-          <span>video2ctx</span>
-        </a>
-        <a className='craft-chip-action' href='/dashboard'>
-          Open
-        </a>
-      </header>
+      <CraftNav />
 
       <section className='craft-fold'>
         {/* Fold scene. A pre-rendered still rather than a canvas: at this
@@ -98,26 +91,57 @@ export function CraftDirection() {
               media='(orientation: portrait) and (max-width: 900px)'
               srcSet='/scene/voxel-horizon-portrait.webp'
             />
-            <source media='(max-width: 1100px)' srcSet='/scene/voxel-horizon-900.webp' />
-            <img src='/scene/voxel-horizon.webp' alt='' width={1672} height={941} decoding='async' />
+            <source
+              media='(max-width: 1100px)'
+              srcSet='/scene/voxel-horizon-900.webp'
+            />
+            <img
+              src='/scene/voxel-horizon.webp'
+              alt=''
+              width={1672}
+              height={941}
+              decoding='async'
+            />
           </picture>
           <Flashlight />
         </div>
+        <a className='craft-build-cta' href='/dashboard/developer'>
+          <span>Explore API</span>
+          <span className='craft-build-cta-icon' aria-hidden='true'>
+            <ArrowRight size={12} weight='bold' />
+          </span>
+        </a>
         <h1>
-          A video is more
-          <br />
-          than a transcript.
+          Video in. <span className='craft-context-word'>Context</span> Out.
         </h1>
-        <p className='craft-sub'>Paste one and see everything that comes back with it.</p>
+        <p className='craft-sub'>
+          Everything an agent needs to understand videos.
+          <br />
+          100% open source.
+        </p>
         <CraftDemo />
       </section>
 
       <div className='craft-reveal'>
         <section className='craft-parts' aria-labelledby='craft-parts-title'>
-          <h2 id='craft-parts-title'>What came back</h2>
+          <h2 id='craft-parts-title'>What is video2ctx?</h2>
+          <p className='craft-parts-intro'>
+            video2ctx is an open-source toolkit for connecting AI agents to
+            video data. Give it a YouTube URL and it returns transcripts,
+            frames, comments, playlists, channel details, and metadata as
+            structured context, with timestamps and links back to the source.
+          </p>
+          <p className='craft-parts-integrations'>
+            Connect through the hosted API, MCP server, agent skill, or the{' '}
+            <b>all-things-youtube</b> npm package.
+          </p>
+          <h3>What comes back</h3>
           <ul>
             {PARTS.map((part, index) => (
-              <li key={part.name} style={{ '--i': index } as React.CSSProperties}>
+              <li
+                key={part.name}
+                style={{ '--i': index } as React.CSSProperties}
+              >
                 <b>{part.name}</b>
                 <span>{part.detail}</span>
               </li>
@@ -131,8 +155,9 @@ export function CraftDirection() {
           <div className='craft-band-head'>
             <h2 id='craft-code-title'>Two lines from here to your agent.</h2>
             <p>
-              The demo above and the call below hit the same data. Everything else — request
-              shapes, errors, the private project routes — lives in the reference.
+              The demo above and the call below hit the same data. Everything
+              else — request shapes, errors, the private project routes — lives
+              in the reference.
             </p>
           </div>
           <CraftCode />
@@ -143,11 +168,17 @@ export function CraftDirection() {
         <section className='craft-band' aria-labelledby='craft-ways-title'>
           <div className='craft-band-head'>
             <h2 id='craft-ways-title'>Three ways in.</h2>
-            <p>Same data, same source links. Pick whichever fits where you are working.</p>
+            <p>
+              Same data, same source links. Pick whichever fits where you are
+              working.
+            </p>
           </div>
           <ul className='craft-ways'>
             {WAYS.map((way, index) => (
-              <li key={way.label} style={{ '--i': index } as React.CSSProperties}>
+              <li
+                key={way.label}
+                style={{ '--i': index } as React.CSSProperties}
+              >
                 <h3>{way.label}</h3>
                 <p>{way.body}</p>
                 <a href={way.href}>
@@ -167,7 +198,10 @@ export function CraftDirection() {
           </div>
           <dl className='craft-trust'>
             {TRUST.map((item, index) => (
-              <div key={item.title} style={{ '--i': index } as React.CSSProperties}>
+              <div
+                key={item.title}
+                style={{ '--i': index } as React.CSSProperties}
+              >
                 <dt>{item.title}</dt>
                 <dd>{item.body}</dd>
               </div>
@@ -180,8 +214,8 @@ export function CraftDirection() {
         <section className='craft-close' aria-labelledby='craft-close-title'>
           <h2 id='craft-close-title'>Built to be cited, not scraped.</h2>
           <p>
-            Every segment keeps the timestamp it came from, so an agent can point at the source
-            instead of paraphrasing it.
+            Every segment keeps the timestamp it came from, so an agent can
+            point at the source instead of paraphrasing it.
           </p>
           <div className='craft-actions'>
             <a className='craft-primary' href='/dashboard'>
@@ -197,13 +231,15 @@ export function CraftDirection() {
       {/* Ft4 — dense typographic colophon. */}
       <footer className='craft-colophon'>
         <p>
-          <b>video2ctx</b> — turn videos into context for LLMs and agents. YouTube first, not
-          YouTube only. Apache 2.0.
+          <b>video2ctx</b> — turn videos into context for LLMs and agents.
+          YouTube first, not YouTube only. Apache 2.0.
         </p>
         <p>
           <a href='/privacy'>Privacy</a> · <a href='/terms'>Terms</a> ·{' '}
           <a href='https://api.video2ctx.dev/docs'>API reference</a> ·{' '}
-          <a href='https://www.npmjs.com/package/all-things-youtube'>all-things-youtube</a>
+          <a href='https://www.npmjs.com/package/all-things-youtube'>
+            all-things-youtube
+          </a>
         </p>
       </footer>
     </main>

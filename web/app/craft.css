@@ -63,47 +63,105 @@ html:has(.craft) body {
   outline-offset: 3px;
 }
 
-/* --------------------------------------------------------------- N2 chip */
+/* ---------------------------------------------------------- product nav */
 
-.craft-chip {
-  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-home-pill);
-  background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
-  backdrop-filter: blur(0.75rem);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-md);
+.craft-nav {
+  width: min(calc(100% - 2rem), 72rem);
   position: fixed;
   z-index: 20;
   inset: var(--space-md) auto auto 50%;
   transform: translateX(-50%);
 }
 
-.craft-chip > a {
+.craft-nav-inner {
+  min-height: 3.25rem;
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-pill);
+  background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
+  backdrop-filter: blur(0.75rem);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(var(--space-md), 3vw, var(--space-2xl));
+}
+
+.craft-nav-brand {
   color: var(--ink);
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  font-size: 0.78rem;
-  font-weight: 550;
-  letter-spacing: -0.01em;
   text-decoration: none;
   white-space: nowrap;
 }
 
-.craft-chip img {
+.craft-nav-brand img {
   display: block;
 }
 
-.craft-chip-action {
-  min-height: 1.9rem;
-  padding-inline: var(--space-md);
+.craft-nav-wordmark {
+  font-size: 0.9rem;
+  font-weight: 670;
+  letter-spacing: -0.035em;
+}
+
+.craft-nav-wordmark > span {
+  margin-left: 0.08em;
+  font-family: var(--font-home-pixel);
+  font-size: 1.04em;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.craft-nav-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(var(--space-md), 2.2vw, var(--space-xl));
+}
+
+.craft-nav-links a {
+  padding-block: var(--space-xs);
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 530;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--control) var(--out);
+}
+
+.craft-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.craft-nav-account {
+  min-height: 2.25rem;
+  padding-inline: var(--space-lg);
   border-radius: var(--radius-home-pill);
   background: var(--ink);
-  color: var(--paper) !important;
-  font-size: 0.74rem !important;
-  font-weight: 650 !important;
+  color: var(--paper);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform var(--press) var(--out);
+}
+
+.craft-nav-menu {
+  width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  display: none;
+  place-items: center;
   transition: transform var(--press) var(--out);
 }
 
@@ -333,7 +391,7 @@ html:has(.craft) body {
   min-height: 100svh;
   position: relative;
   isolation: isolate;
-  padding: clamp(7rem, 16vh, 11rem) clamp(var(--space-md), 6vw, 3rem)
+  padding: clamp(7.5rem, 15vh, 9.5rem) clamp(var(--space-md), 6vw, 3rem)
     clamp(4rem, 10vh, 7rem);
   display: grid;
   align-content: start;
@@ -346,15 +404,91 @@ html:has(.craft) body {
   z-index: 1;
 }
 
+.craft-build-cta {
+  min-height: 2.25rem;
+  margin-bottom: var(--space-xl);
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 570;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition:
+    color var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+.craft-build-cta::before {
+  content: '';
+  width: 9rem;
+  height: 9rem;
+  position: absolute;
+  z-index: -2;
+  top: 50%;
+  left: 50%;
+  background: conic-gradient(
+    transparent 0 76%,
+    color-mix(in oklch, var(--accent) 45%, transparent) 84%,
+    var(--accent) 90%,
+    transparent 98%
+  );
+  animation: craft-build-beam 5s linear infinite;
+}
+
+.craft-build-cta::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--paper-raised) 88%, transparent);
+  backdrop-filter: blur(0.75rem);
+}
+
+.craft-build-cta-icon {
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: var(--radius-home-pill);
+  background: var(--ink);
+  color: var(--paper);
+  display: grid;
+  place-items: center;
+  transition: transform var(--control) var(--out);
+}
+
+@keyframes craft-build-beam {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
 .craft-fold h1 {
   max-width: 18ch;
   margin: 0;
   font-size: clamp(2.4rem, 7vw, 4.75rem);
-  font-weight: 680;
+  font-weight: 500;
   letter-spacing: -0.055em;
   line-height: 0.98;
   overflow-wrap: anywhere;
   text-wrap: balance;
+}
+
+.craft-context-word {
+  display: inline-block;
+  font-family: var(--font-home-pixel);
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
 
 .craft-sub {
@@ -432,19 +566,13 @@ html:has(.craft) body {
   cursor: progress;
 }
 
-/* The label swaps under a light blur instead of hard-cutting between words.
- * Without it you briefly see two distinct strings overlapping; blur blends them
- * into a single transformation. Kept well under the 20px where it gets
- * expensive in Safari. */
 .craft-button-label {
-  transition:
-    filter var(--control) var(--out),
-    opacity var(--control) var(--out);
+  line-height: 1;
+  transition: opacity var(--control) var(--out);
 }
 
 .craft-form button[data-state='loading'] .craft-button-label {
-  filter: blur(2px);
-  opacity: 0.72;
+  opacity: 1;
 }
 
 /* A faster spinner makes the wait feel shorter even when it is not. */
@@ -476,10 +604,94 @@ html:has(.craft) body {
   color: var(--accent);
 }
 
+.craft-limit-message {
+  margin-top: var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  font-size: 0.75rem;
+}
+
+.craft-limit-message p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.craft-limit-message a {
+  min-height: 2.35rem;
+  padding-inline: var(--space-md);
+  border-radius: var(--radius-home-pill);
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform var(--press) var(--out);
+}
+
+.craft-limit-message a:active {
+  transform: scale(0.97);
+}
+
+.craft-inspection-progress {
+  min-height: 2.5rem;
+  margin-top: var(--space-md);
+}
+
+.craft-progress-live {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.craft-inspection-progress ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-sm);
+  list-style: none;
+}
+
+.craft-inspection-progress li {
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.6rem;
+  line-height: 1.35;
+  text-align: center;
+  transition:
+    border-color var(--control) var(--out),
+    color var(--control) var(--out);
+}
+
+.craft-inspection-progress li[data-state='done'] {
+  border-color: var(--rule-strong);
+  color: var(--ink-soft);
+}
+
+.craft-inspection-progress li[data-state='active'] {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
 /* ---------------------------------------------------------------- result */
 
 .craft-result {
+  width: min(calc(100vw - 2rem), 62rem);
   margin-top: clamp(var(--space-2xl), 6vh, 4rem);
+  margin-left: 50%;
+  transform: translateX(-50%);
   text-align: left;
 }
 
@@ -498,11 +710,12 @@ html:has(.craft) body {
 }
 
 .craft-result-head h2 {
+  max-width: 34ch;
   margin: 0;
-  font-size: clamp(1.15rem, 2.4vw, 1.5rem);
+  font-size: clamp(1.35rem, 3vw, 2rem);
   font-weight: 650;
   letter-spacing: -0.03em;
-  line-height: 1.25;
+  line-height: 1.15;
   text-wrap: balance;
 }
 
@@ -518,6 +731,210 @@ html:has(.craft) body {
 .craft-result-head a {
   color: var(--ink-soft);
   text-underline-offset: 0.2em;
+}
+
+.craft-source-grid {
+  margin-top: var(--space-xl);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-lg);
+  background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(19rem, 0.75fr);
+  overflow: hidden;
+}
+
+.craft-video-preview {
+  min-width: 0;
+  padding: var(--space-sm);
+}
+
+.craft-video-frame {
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-home-md);
+  background: oklch(10% 0.004 75);
+  overflow: hidden;
+}
+
+.craft-video-frame iframe,
+.craft-video-frame button,
+.craft-video-frame img {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.craft-video-frame button {
+  padding: 0;
+  position: relative;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.craft-video-frame img {
+  object-fit: cover;
+  transition:
+    transform var(--enter) var(--out),
+    opacity var(--control) var(--out);
+}
+
+.craft-video-frame button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    oklch(8% 0.004 75 / 0.72),
+    transparent 55%
+  );
+  pointer-events: none;
+}
+
+.craft-video-frame button span {
+  min-height: 2.5rem;
+  padding-inline: var(--space-lg);
+  border: 1px solid oklch(95% 0.006 83 / 0.32);
+  border-radius: var(--radius-home-pill);
+  background: oklch(15.5% 0.006 75 / 0.82);
+  backdrop-filter: blur(0.5rem);
+  display: inline-flex;
+  align-items: center;
+  position: absolute;
+  z-index: 1;
+  inset: auto auto var(--space-lg) var(--space-lg);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.craft-video-facts {
+  padding: var(--space-md) var(--space-xs) var(--space-xs);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.craft-video-facts span {
+  min-width: 0;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.craft-video-facts b {
+  margin-bottom: var(--space-3xs);
+  overflow: hidden;
+  color: var(--ink-soft);
+  display: block;
+  font-family: var(--font-home-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.craft-channel-overview {
+  min-width: 0;
+  padding: clamp(var(--space-lg), 3vw, var(--space-xl));
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+}
+
+.craft-channel-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.craft-channel-identity > img,
+.craft-channel-identity > span {
+  width: 3.5rem;
+  height: 3.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.craft-channel-identity > span {
+  background: var(--rule);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+
+.craft-channel-identity p,
+.craft-channel-identity h3 {
+  margin: 0;
+}
+
+.craft-channel-identity p {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.63rem;
+}
+
+.craft-channel-identity h3 {
+  margin-block: 0.18rem;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.craft-channel-description {
+  margin: var(--space-lg) 0 0;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+
+.craft-channel-facts {
+  margin: var(--space-lg) 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.craft-channel-facts div {
+  min-width: 0;
+}
+
+.craft-channel-facts dt {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+}
+
+.craft-channel-facts dd {
+  margin: var(--space-3xs) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.craft-channel-links {
+  margin-top: auto;
+  padding-top: var(--space-lg);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+}
+
+.craft-channel-links a {
+  color: var(--ink);
+  font-size: 0.72rem;
+  text-underline-offset: 0.22em;
 }
 
 /* ------------------------------------------------------------------ tabs */
@@ -582,10 +999,83 @@ html:has(.craft) body {
 }
 
 .craft-panel {
-  min-height: 18rem;
   margin-top: var(--space-lg);
-  padding-top: var(--space-lg);
   border-top: 1px solid var(--rule);
+}
+
+.craft-panel-heading {
+  min-height: 4.75rem;
+  padding-block: var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.craft-panel-heading h3,
+.craft-panel-heading p {
+  margin: 0;
+}
+
+.craft-panel-heading h3 {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.craft-panel-heading p {
+  margin-top: var(--space-3xs);
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+}
+
+.craft-copy-action {
+  width: 2.35rem;
+  min-height: 2.35rem;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  transition:
+    border-color var(--control) var(--out),
+    color var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+.craft-copy-action:active {
+  transform: scale(0.97);
+}
+
+.craft-copy-action-icon {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  transition:
+    opacity var(--control) var(--out),
+    transform var(--control) var(--out);
+}
+
+.craft-copy-action-icon:nth-of-type(2),
+.craft-copy-action[data-status='copied']
+  .craft-copy-action-icon:nth-of-type(1) {
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.craft-copy-action[data-status='copied'] {
+  border-color: color-mix(in oklch, var(--accent) 48%, var(--rule-strong));
+  color: var(--accent);
+}
+
+.craft-copy-action[data-status='copied']
+  .craft-copy-action-icon:nth-of-type(2) {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .craft-transcript,
@@ -593,6 +1083,13 @@ html:has(.craft) body {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.craft-transcript {
+  max-height: 31rem;
+  border-top: 1px solid var(--rule);
+  overflow-y: auto;
+  scrollbar-color: var(--rule-strong) transparent;
 }
 
 .craft-transcript li {
@@ -620,8 +1117,40 @@ html:has(.craft) body {
 }
 
 .craft-comments li {
-  padding: var(--space-md) 0;
-  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-home-md);
+  background: color-mix(in oklch, var(--paper-raised) 74%, transparent);
+}
+
+.craft-comments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.craft-comment-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.craft-comment-identity > img,
+.craft-comment-identity > span {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.craft-comment-identity > span {
+  background: var(--rule);
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 650;
 }
 
 .craft-comment-author {
@@ -644,39 +1173,62 @@ html:has(.craft) body {
 }
 
 .craft-comments > li > p + p {
-  margin-top: var(--space-xs);
+  margin-top: var(--space-md);
 }
 
-.craft-channel {
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: var(--space-lg);
-}
-
-.craft-channel dt {
-  color: var(--ink-muted);
+.craft-comment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  color: var(--ink-muted) !important;
   font-family: var(--font-home-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.craft-channel dd {
-  margin: var(--space-xs) 0 0;
-  overflow-wrap: anywhere;
-  font-size: 0.85rem;
-}
-
-.craft-channel a {
-  color: var(--ink);
-  text-underline-offset: 0.2em;
+  font-size: 0.62rem !important;
 }
 
 .craft-empty {
-  margin: 0;
+  margin: var(--space-xl) 0;
   color: var(--ink-muted);
   font-size: 0.85rem;
+}
+
+.craft-more-count {
+  margin: var(--space-md) 0 0;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.craft-comments-footer .craft-more-count {
+  margin: 0;
+}
+
+.craft-comments-footer {
+  margin-top: var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.craft-load-comments {
+  min-height: 2.35rem;
+  padding-inline: var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-home-pill);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 620;
+  white-space: nowrap;
+  transition:
+    color var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+.craft-load-comments:active {
+  transform: scale(0.97);
 }
 
 /* --------------------------------------------------------------- reveals */
@@ -751,8 +1303,39 @@ html:has(.craft) body {
   text-wrap: balance;
 }
 
-.craft-parts ul {
+.craft-parts-intro {
+  max-width: 62ch;
+  margin: var(--space-xl) 0 0;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 1.8vw, 1.15rem);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.craft-parts-integrations {
+  max-width: 62ch;
+  margin: var(--space-md) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.craft-parts-integrations b {
+  color: var(--ink-soft);
+  font-family: var(--font-home-mono);
+  font-size: 0.78rem;
+  font-weight: 560;
+}
+
+.craft-parts h3 {
   margin: var(--space-2xl) 0 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.craft-parts ul {
+  margin: var(--space-lg) 0 0;
   padding: 0;
   list-style: none;
   display: grid;
@@ -835,7 +1418,9 @@ html:has(.craft) body {
 
 .craft-primary:active,
 .craft-secondary:active,
-.craft-chip-action:active {
+.craft-build-cta:active,
+.craft-nav-account:active,
+.craft-nav-menu:active {
   transform: scale(0.97);
 }
 
@@ -1071,11 +1656,33 @@ html:has(.craft) body {
     color: var(--ink-soft);
   }
 
-  .craft-chip-action:hover,
+  .craft-nav-account:hover,
+  .craft-nav-menu:hover,
+  .craft-build-cta:hover,
   .craft-primary:hover,
   .craft-secondary:hover,
-  .craft-form button:hover {
+  .craft-form button:hover,
+  .craft-limit-message a:hover,
+  .craft-copy-action:hover,
+  .craft-load-comments:hover {
     transform: translateY(-1px);
+  }
+
+  .craft-nav-links a:hover {
+    color: var(--ink);
+  }
+
+  .craft-build-cta:hover {
+    color: var(--ink);
+  }
+
+  .craft-build-cta:hover .craft-build-cta-icon {
+    transform: translateX(2px);
+  }
+
+  .craft-video-frame button:hover img {
+    opacity: 0.86;
+    transform: scale(1.015);
   }
 
   .craft-colophon a:hover,
@@ -1087,8 +1694,71 @@ html:has(.craft) body {
     color: var(--ink);
   }
 
+  .craft-copy-action:hover,
+  .craft-load-comments:hover {
+    color: var(--ink);
+  }
+
   .craft-ways a:hover span {
     transform: translateX(3px);
+  }
+}
+
+@media (max-width: 720px) {
+  .craft-nav {
+    width: calc(100% - 1.5rem);
+  }
+
+  .craft-nav-inner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-sm);
+  }
+
+  .craft-nav-links {
+    padding: var(--space-sm);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-home-lg);
+    position: absolute;
+    inset: calc(100% + var(--space-xs)) 0 auto;
+    background: var(--paper-raised);
+    backdrop-filter: blur(1rem);
+    display: grid;
+    justify-content: stretch;
+    justify-items: stretch;
+    gap: 0;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-0.35rem);
+    transition:
+      opacity var(--control) var(--out),
+      transform var(--control) var(--out),
+      visibility var(--control) step-end;
+  }
+
+  .craft-nav[data-open='true'] .craft-nav-links {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition:
+      opacity var(--control) var(--out),
+      transform var(--control) var(--out),
+      visibility 0ms step-start;
+  }
+
+  .craft-nav-links a {
+    min-height: 2.75rem;
+    padding-inline: var(--space-md);
+    border-radius: var(--radius-home-md);
+    display: flex;
+    align-items: center;
+    color: var(--ink-soft);
+    font-size: 0.82rem;
+  }
+
+  .craft-nav-menu {
+    display: grid;
   }
 }
 
@@ -1097,6 +1767,19 @@ html:has(.craft) body {
   .craft-trust {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-lg);
+  }
+
+  .craft-source-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .craft-channel-overview {
+    border-top: 1px solid var(--rule);
+    border-left: 0;
+  }
+
+  .craft-channel-links {
+    margin-top: var(--space-lg);
   }
 }
 
@@ -1136,6 +1819,64 @@ html:has(.craft) body {
   .craft-tablist button[aria-selected='true'] {
     background: var(--ink);
     color: var(--paper);
+  }
+
+  .craft-result .craft-tablist {
+    grid-auto-flow: column;
+  }
+
+  .craft-result .craft-tablist button {
+    min-width: 0;
+    padding-inline: var(--space-sm);
+  }
+
+  .craft-result {
+    width: min(calc(100vw - 1.5rem), 62rem);
+  }
+
+  .craft-inspection-progress ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .craft-video-preview,
+  .craft-channel-overview {
+    padding: var(--space-sm);
+  }
+
+  .craft-video-facts {
+    gap: var(--space-xs);
+  }
+
+  .craft-video-facts b {
+    font-size: 0.68rem;
+  }
+
+  .craft-channel-facts,
+  .craft-comments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .craft-panel-heading {
+    align-items: flex-start;
+  }
+
+  .craft-comments-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .craft-more-count {
+    text-align: left;
+  }
+
+  .craft-limit-message {
+    align-items: stretch;
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .craft-limit-message a {
+    justify-content: center;
   }
 
   .craft-transcript li {

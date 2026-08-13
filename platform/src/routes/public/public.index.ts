@@ -27,6 +27,14 @@ publicRoutes.post('/demo/youtube/inspect', async (c) => {
 
   if (videoResult.status === 'rejected') throw inspectionError(videoResult.reason);
 
+  /* The channel is a second wave: its id only exists once the video resolves.
+   * Settled independently for the same reason transcript and comments are —
+   * a channel that fails to load must not take the inspection down with it. */
+  const channelId = videoResult.value.value.channel?.id;
+  const channelResult = channelId
+    ? await Promise.allSettled([provider.getChannel(c.env, channelId)])
+    : [{ status: 'rejected' as const, reason: undefined }];
+
   c.header('X-Demo-Limit', String(quota.limit));
   c.header('X-Demo-Remaining', String(quota.remaining));
   c.header('X-Demo-Reset', quota.resetAt);
@@ -43,16 +51,24 @@ publicRoutes.post('/demo/youtube/inspect', async (c) => {
     ? {
         status: 'ready' as const,
         totalCount: commentsResult.value.value.totalCount,
-        comments: commentsResult.value.value.comments.slice(0, 4),
+        comments: commentsResult.value.value.comments.slice(0, 12),
       }
+    : { status: 'unavailable' as const };
+
+  const channel = channelResult[0].status === 'fulfilled'
+    ? { status: 'ready' as const, channel: channelResult[0].value.value }
     : { status: 'unavailable' as const };
 
   return c.json({
     video: videoResult.value.value,
+    channel,
     transcript,
     comments,
     quota,
-    partial: transcript.status !== 'ready' || comments.status !== 'ready',
+    partial:
+      transcript.status !== 'ready' ||
+      comments.status !== 'ready' ||
+      channel.status !== 'ready',
   });
 });
 

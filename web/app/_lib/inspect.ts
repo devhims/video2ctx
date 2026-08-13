@@ -14,6 +14,7 @@ export interface Thumbnail {
 export interface DemoVideo {
   id: string;
   title: string;
+  description?: string;
   channel: { id: string; name: string; url: string };
   thumbnails: Thumbnail[];
   durationText?: string;
@@ -31,16 +32,44 @@ export interface TranscriptSegment {
 
 export interface DemoComment {
   id: string;
-  author: { name: string };
+  author: { id?: string; name: string; thumbnails?: Thumbnail[] };
   text: string;
   publishedTimeText?: string;
+  likeCount?: number;
   likeCountText?: string;
+  replyCount?: number;
   isPinned: boolean;
   isHearted: boolean;
 }
 
+export interface DemoChannel {
+  id: string;
+  name: string;
+  handle?: string;
+  thumbnails: Thumbnail[];
+  url: string;
+  about: {
+    description?: string;
+    links: { title: string; displayUrl: string; url: string }[];
+    moreInfo: {
+      joinedDate?: string;
+      joinedDateText?: string;
+      subscriberCount?: number;
+      subscriberCountText?: string;
+      videoCount?: number;
+      videoCountText?: string;
+      viewCount?: number;
+      viewCountText?: string;
+      businessEmailAvailable: boolean;
+    };
+  };
+}
+
 export interface DemoResponse {
   video: DemoVideo;
+  channel?:
+    | { status: 'ready'; channel: DemoChannel }
+    | { status: 'unavailable'; debugReason?: string };
   transcript:
     | {
         status: 'ready';
@@ -56,30 +85,50 @@ export interface DemoResponse {
   partial: boolean;
 }
 
-const apiBase =
-  process.env.NEXT_PUBLIC_PLATFORM_API_BASE_URL ??
-  (process.env.NODE_ENV === 'production'
-    ? 'https://api.video2ctx.dev'
-    : 'http://localhost:8787');
+export class InspectionRequestError extends Error {
+  readonly status: number;
+  readonly code: string | undefined;
+
+  constructor(
+    status: number,
+    code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'InspectionRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
 
 export async function inspect(url: string): Promise<DemoResponse> {
-  const response = await fetch(`${apiBase}/v1/demo/youtube/inspect`, {
+  const response = await fetch('/api/platform/v1/demo/youtube/inspect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   });
 
   const payload = (await response.json()) as DemoResponse & {
-    error?: { message?: string; details?: { resetAt?: string } };
+    error?: { code?: string; message?: string; details?: { resetAt?: string } };
   };
 
   if (!response.ok) {
     const reset = payload.error?.details?.resetAt;
     const retry = reset ? ` Try another video after ${formatReset(reset)}.` : '';
-    throw new Error(`${payload.error?.message ?? 'That video could not be inspected.'}${retry}`);
+    throw new InspectionRequestError(
+      response.status,
+      payload.error?.code,
+      `${payload.error?.message ?? 'That video could not be inspected.'}${retry}`,
+    );
   }
 
   return payload;
+}
+
+export function isLandingDemoLimitError(cause: unknown): boolean {
+  return cause instanceof InspectionRequestError
+    && cause.status === 429
+    && cause.code === 'LANDING_DEMO_LIMIT_REACHED';
 }
 
 export function describeError(cause: unknown): string {
@@ -102,6 +151,12 @@ export function formatTimestamp(milliseconds: number): string {
 export function timestampUrl(videoUrl: string, milliseconds: number): string {
   const separator = videoUrl.includes('?') ? '&' : '?';
   return `${videoUrl}${separator}t=${Math.floor(milliseconds / 1000)}s`;
+}
+
+export function transcriptExcerptText(segments: TranscriptSegment[]): string {
+  return segments
+    .map((segment) => `[${formatTimestamp(segment.startMs)}] ${segment.text}`)
+    .join('\n');
 }
 
 function formatReset(value: string): string {
