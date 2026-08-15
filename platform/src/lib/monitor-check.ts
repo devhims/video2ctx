@@ -1,6 +1,7 @@
 import { now } from './http';
 import { getProvider } from '../providers';
 import { queueMonitorAlertEmail } from './notification-delivery';
+import { getNotificationPreferences } from './notification-preferences';
 
 export interface MonitorRow {
   id: string;
@@ -47,6 +48,7 @@ export async function checkMonitor(env: Env, monitorId: string, userId: string):
     ? query.label.trim()
     : monitor.kind === 'channel' ? 'a monitored channel' : monitor.target;
   const notificationTitle = monitor.kind === 'channel' ? `New video from ${label}` : `New video matching ${label}`;
+  const { inApp } = await getNotificationPreferences(env, monitor.user_id);
 
   // Queue before advancing the cursor. If the following D1 batch fails, a retry
   // uses the same email idempotency key and cannot produce a duplicate message.
@@ -58,6 +60,13 @@ export async function checkMonitor(env: Env, monitorId: string, userId: string):
     videoTitle: newest.title,
   });
 
+  const cursorUpdate = env.DB.prepare('UPDATE monitors SET last_cursor=?, last_checked_at=? WHERE id=? AND user_id=?')
+    .bind(newest.id, checkedAt, monitor.id, monitor.user_id);
+  if (!inApp) {
+    await cursorUpdate.run();
+    return;
+  }
+
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO notifications (id,user_id,type,title,body,data_json,created_at)
@@ -67,8 +76,7 @@ export async function checkMonitor(env: Env, monitorId: string, userId: string):
       JSON.stringify({ monitorId: monitor.id, provider: monitor.provider, videoId: newest.id, target: monitor.target }),
       checkedAt,
     ),
-    env.DB.prepare('UPDATE monitors SET last_cursor=?, last_checked_at=? WHERE id=? AND user_id=?')
-      .bind(newest.id, checkedAt, monitor.id, monitor.user_id),
+    cursorUpdate,
   ]);
 }
 
