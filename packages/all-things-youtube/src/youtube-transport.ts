@@ -1,5 +1,8 @@
+import { YouTubeClientError } from './youtube-types';
+
 export interface YouTubeRetryPolicy {
   maxAttempts: number;
+  attemptTimeoutMs: number;
   baseDelayMs: number;
   maxDelayMs: number;
   retryStatuses: readonly number[];
@@ -37,10 +40,45 @@ export interface YouTubeTransport {
 
 const DEFAULT_POLICY: YouTubeRetryPolicy = {
   maxAttempts: 5,
+  attemptTimeoutMs: 10_000,
   baseDelayMs: 200,
   maxDelayMs: 2_000,
   retryStatuses: [408, 425, 429, 500, 502, 503, 504],
 };
+
+function requestSignal(request: YouTubeRequestAttempt): AbortSignal | null | undefined {
+  if (request.init?.signal) return request.init.signal;
+  return typeof Request !== 'undefined' && request.input instanceof Request
+    ? request.input.signal
+    : undefined;
+}
+
+function assertAttemptTimeout(timeoutMs: number): void {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      'retry.policy.attemptTimeoutMs must be a positive integer.',
+    );
+  }
+}
+
+function attemptSignal(request: YouTubeRequestAttempt, timeoutMs: number): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const existing = requestSignal(request);
+  if (!existing) return deadline;
+
+  const combined = new AbortController();
+  const forwardAbort = (signal: AbortSignal) => {
+    if (signal.aborted) {
+      combined.abort(signal.reason);
+      return;
+    }
+    signal.addEventListener('abort', () => combined.abort(signal.reason), { once: true });
+  };
+  forwardAbort(existing);
+  if (!combined.signal.aborted) forwardAbort(deadline);
+  return combined.signal;
+}
 
 async function runtimeWait(delayMs: number): Promise<void> {
   const runtimeScheduler = (globalThis as typeof globalThis & {
@@ -86,6 +124,7 @@ export function createYouTubeTransport(options: YouTubeRetryOptions & { fetch: t
         ...overrides,
         retryStatuses: overrides.retryStatuses ?? options.policy?.retryStatuses ?? DEFAULT_POLICY.retryStatuses,
       };
+      assertAttemptTimeout(policy.attemptTimeoutMs);
       const retryStatuses = new Set(policy.retryStatuses);
       let lastNetworkError: unknown;
 
@@ -93,10 +132,19 @@ export function createYouTubeTransport(options: YouTubeRetryOptions & { fetch: t
         const request = await requestFactory(attempt);
         let response: Response | undefined;
         try {
-          response = await fetchImpl(request.input, request.init);
+          response = await fetchImpl(request.input, {
+            ...request.init,
+            signal: attemptSignal(request, policy.attemptTimeoutMs),
+          });
         } catch (error) {
           lastNetworkError = error;
-          if (attempt === policy.maxAttempts) throw error;
+          if (attempt === policy.maxAttempts) {
+            throw new YouTubeClientError(
+              'UPSTREAM_ERROR',
+              `YouTube ${operation} network request failed after ${policy.maxAttempts} attempts.`,
+              { retryable: true, cause: error },
+            );
+          }
         }
 
         if (response && (!retryStatuses.has(response.status) || attempt === policy.maxAttempts)) {
@@ -116,7 +164,11 @@ export function createYouTubeTransport(options: YouTubeRetryOptions & { fetch: t
         await wait(delayMs);
       }
 
-      throw lastNetworkError ?? new Error(`YouTube ${operation} retry loop exhausted.`);
+      throw new YouTubeClientError(
+        'UPSTREAM_ERROR',
+        `YouTube ${operation} retry loop exhausted.`,
+        { retryable: true, cause: lastNetworkError },
+      );
     },
   };
 }

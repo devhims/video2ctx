@@ -2,9 +2,9 @@
 
 # all-things-youtube
 
-**A focused TypeScript toolkit for YouTube data.**
+**TypeScript toolkit for YouTube data.**
 
-Get transcripts/captions, comments, video details, channels, playlists, and more.
+Search YouTube and get transcripts/captions, comments, video details, channels, playlists, and more.
 
 [![Node.js 18+](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ready-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -19,10 +19,10 @@ Get transcripts/captions, comments, video details, channels, playlists, and more
 
 YouTube exposes useful public data across several different page experiences. `all-things-youtube` gives that data one small, task-oriented interface:
 
-- **One import, nine focused functions:** Get exactly the resource you need instead of constructing a large client or learning a raw response format.
+- **One import, ten focused functions:** Search or get exactly the resource you need instead of constructing a large client or learning a raw response format.
 - **Translation made simple:** Call `getTranscript()` with your desired output language. Supports 150+ languages when available.
 - **Complete channel and playlist data:** Channel About links and statistics, channel sorting, playlist cards, and continuation-based pagination are represented directly.
-- **Rate-limit aware by default:** Transient failures and `429` responses use bounded exponential backoff with jitter and `Retry-After` support.
+- **Bounded networking by default:** Each attempt has a ten-second deadline; transient failures and `429` responses use bounded exponential backoff with jitter and `Retry-After` support.
 - **Types included:** Request, response, pagination, retry, and error types ship with the package.
 
 Built for backend services, content tools, research workflows, accessibility products, AI pipelines, and server-side automation.
@@ -95,6 +95,7 @@ All functions are named exports and accept a single options object.
 
 | Resource          | Function                | Returns                                            |
 | ----------------- | ----------------------- | -------------------------------------------------- |
+| Search            | `search()`              | Paginated videos, channels, and playlists          |
 | Caption catalog   | `getTracks()`           | Source tracks and available translation languages  |
 | Transcript        | `getTranscript()`       | Full text plus timed segments or words             |
 | Comments          | `getComments()`         | One page or a bounded complete collection          |
@@ -111,6 +112,7 @@ The public entry point intentionally exposes these task functions rather than a 
 
 ### IDs, handles, and URLs
 
+- Search accepts a text `query`; extraction functions use the returned IDs.
 - Video functions accept an 11-character `videoId`.
 - Playlist functions accept a `playlistId`.
 - Channel functions accept either a channel ID or an `@handle`.
@@ -145,6 +147,37 @@ interface SourceMetadata {
 Check `meta.partial` and `meta.warnings` when completeness matters. A partial response is still usable, but a tab, sort order, or optional section may not have been available.
 
 ## API reference
+
+### `search(options)`
+
+Searches YouTube and returns normalized videos, channels, and playlists.
+
+```ts
+import { search } from 'all-things-youtube';
+
+const page = await search({
+  query: 'agent skills',
+  type: 'video',
+  captionsOnly: true,
+});
+
+console.log(page.videos);
+console.log(page.continuation);
+```
+
+| Option         | Type                                      | Required | Description                                  |
+| -------------- | ----------------------------------------- | -------- | -------------------------------------------- |
+| `query`        | `string`                                  | Yes      | YouTube search text                          |
+| `type`         | `'video' \| 'channel' \| 'playlist' \| 'all'` | No       | Keep one result type                         |
+| `channelId`    | `string`                                  | No       | Keep videos from one channel                 |
+| `duration`     | `'short' \| 'medium' \| 'long'`          | No       | Keep videos in one duration range            |
+| `captionsOnly` | `boolean`                                 | No       | Keep videos that advertise captions          |
+| `live`         | `'live' \| 'completed'`                   | No       | Keep live or non-live results                 |
+| `minViews`     | `number`                                  | No       | Keep videos at or above this view count      |
+| `sort`         | `'relevance' \| 'views'`                  | No       | Preserve relevance or sort parsed results by views |
+| `continuation` | `string`                                  | No       | Opaque token returned by the previous page   |
+
+Return a continuation only to the same query and filter set. Set an explicit page or item budget when following multiple pages.
 
 ### `getTracks(options)`
 
@@ -412,7 +445,7 @@ const video = await getDetails({
 });
 ```
 
-The supplied function must follow the standard `fetch` signature and return a `Response`.
+The supplied function must follow the standard `fetch` signature, forward `init.signal`, and return a `Response`. Forwarding the signal preserves the transport's request deadline.
 
 ## Retries and rate limits
 
@@ -422,7 +455,7 @@ Retries are enabled for network failures and these statuses by default:
 408  425  429  500  502  503  504
 ```
 
-The default policy makes up to five attempts, applies exponential backoff with full jitter, caps delays at two seconds, and honors `Retry-After` within that cap.
+The default policy gives each attempt a ten-second deadline, makes up to five attempts, applies exponential backoff with full jitter, caps delays at two seconds, and honors `Retry-After` within that cap. A timed-out attempt is retried as a network failure; exhausted timeouts reject with a retryable `UPSTREAM_ERROR`.
 
 ```ts
 import { getDetails } from 'all-things-youtube';
@@ -432,6 +465,7 @@ const video = await getDetails({
   retry: {
     policy: {
       maxAttempts: 6,
+      attemptTimeoutMs: 15_000,
       baseDelayMs: 300,
       maxDelayMs: 5_000,
     },
@@ -477,7 +511,7 @@ try {
 | `UPSTREAM_ERROR`   | A remote or network operation failed                                          |
 | `INVALID_RESPONSE` | The upstream response could not be parsed safely                              |
 
-Native network errors may also surface when every network attempt fails.
+When every network attempt fails, the library rejects with a retryable `UPSTREAM_ERROR` and preserves the original network error as `cause`.
 
 ## Using the library vs hosting an API
 

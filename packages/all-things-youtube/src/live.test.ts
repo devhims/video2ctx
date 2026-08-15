@@ -9,6 +9,7 @@ import {
   getDetails,
   getEndscreen,
   getPlaylist,
+  search,
   getTracks,
   getTranscript,
 } from './index';
@@ -21,6 +22,11 @@ describeLive('live public API', () => {
     const channelId = 'UCveZqqGewoyPiacooywP5Ig';
     const playlistId = 'PLn6yDpEottdgtKuLDWNMMLAhmxE2DgygM';
 
+    const searchResults = await search({
+      query: '3Blue1Brown convolution',
+      type: 'video',
+      captionsOnly: true,
+    });
     const details = await getDetails({ videoId });
     const tracks = await getTracks({ videoId });
     const transcript = await getTranscript({ videoId });
@@ -31,6 +37,8 @@ describeLive('live public API', () => {
     const playlists = await getChannelPlaylists({ channelId, sort: 'newest' });
     const playlist = await getPlaylist({ playlistId });
 
+    expect(searchResults.videos.length).toBeGreaterThan(0);
+    expect(searchResults.videos.every((video) => video.hasCaptions)).toBe(true);
     expect(details.id).toBe(videoId);
     expect(tracks.sourceTracks.length).toBeGreaterThan(0);
     expect(transcript.segments.length).toBeGreaterThan(0);

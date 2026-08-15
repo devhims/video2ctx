@@ -10,6 +10,7 @@ import type {
   CommentPage,
   EndscreenElement,
   Playlist,
+  SearchResponse,
   Transcript,
   Video,
   CaptionTrackList,
@@ -62,8 +63,33 @@ export interface PlaylistRequest extends LibraryOptions {
   continuation?: string;
 }
 
+export interface SearchRequest extends LibraryOptions {
+  query: string;
+  type?: 'video' | 'channel' | 'playlist' | 'all';
+  channelId?: string;
+  duration?: 'short' | 'medium' | 'long';
+  captionsOnly?: boolean;
+  live?: 'live' | 'completed';
+  minViews?: number;
+  sort?: 'relevance' | 'views';
+  continuation?: string;
+}
+
 export type CommentsPage = Omit<CommentPage, 'replyContinuations' | 'newestContinuation'>;
 export type CommentsCollection = Omit<CommentCollection, 'replyContinuations' | 'newestContinuation'>;
+
+/** Search YouTube for normalized videos, channels, and playlists. */
+export function search(options: SearchRequest): Promise<SearchResponse> {
+  const {
+    query,
+    fetch: _fetch,
+    language: _language,
+    region: _region,
+    retry: _retry,
+    ...filters
+  } = options;
+  return createYouTubeClient(optionsFrom(options)).search(query, filters);
+}
 
 function optionsFrom(options: LibraryOptions): YouTubeClientOptions {
   return {

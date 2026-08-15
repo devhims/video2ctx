@@ -1,9 +1,9 @@
 ---
 title: "Node.js library"
-description: "Use the extraction package directly without the hosted platform."
+description: "Use the search and extraction package directly without the hosted platform."
 ---
 
-`all-things-youtube` is the standalone TypeScript package underneath the YouTube provider adapter. Use it when you want direct extraction and will operate caching, rate limits, retries, and infrastructure yourself.
+`all-things-youtube` is the standalone TypeScript package underneath the YouTube provider adapter. Use it when you want direct search and extraction and will operate caching, rate limits, retries, and infrastructure yourself.
 
 ```bash
 npm install all-things-youtube
@@ -13,13 +13,13 @@ npm install all-things-youtube
 import { getTranscript } from 'all-things-youtube';
 
 const transcript = await getTranscript({
-  video: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+  videoId: 'dQw4w9WgXcQ',
 });
 
 console.log(transcript.text);
 ```
 
-The package supports video details, tracks, transcripts, comments, end screens, channels, channel catalogs, and playlists. It requires Node.js 18 or newer and should remain server-side.
+The package supports search, video details, tracks, transcripts, comments, end screens, channels, channel catalogs, and playlists. It requires Node.js 18 or newer and should remain server-side. Network attempts have a ten-second deadline by default, so stalled requests enter the retry loop and eventually reject as a retryable `UPSTREAM_ERROR`.
 
 <Note>
   Choose the hosted API when you need account projects, credits, monitoring, notifications, durable jobs, trend analysis, or managed infrastructure.

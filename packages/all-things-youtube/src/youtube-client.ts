@@ -129,6 +129,7 @@ const PLAYER_PROFILES: ClientProfile[] = [
 ];
 
 const API_ROOT = 'https://youtubei.googleapis.com/youtubei/v1';
+const SEARCH_CAPTIONS_PARAM = 'EgIoAQ==';
 
 const BROWSE_DESTINATIONS: Record<string, { category: string; browseId: string }> = {
   music: { category: 'music', browseId: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ' },
@@ -909,21 +910,41 @@ function captionTrackInfo(track: InternalCaptionTrack, index: number, defaultInd
 
 function parseCaptionTracks(player: JsonObject): CaptionCatalog {
   const renderer = object(object(player.captions).playerCaptionsTracklistRenderer);
-  const defaultIndex = number(renderer.defaultAudioTrackIndex) ?? 0;
-  const internal = array(renderer.captionTracks)
-    .flatMap((item): InternalCaptionTrack[] => {
+  const audioTracks = array(renderer.audioTracks).map(object);
+  const defaultAudioTrackIndex = number(renderer.defaultAudioTrackIndex);
+  const indexedDefaultAudioTrack = defaultAudioTrackIndex !== undefined
+    ? audioTracks[defaultAudioTrackIndex]
+    : undefined;
+  const defaultAudioTrack = indexedDefaultAudioTrack ??
+    audioTracks.find((track) => track.hasDefaultTrack === true) ??
+    audioTracks[0] ??
+    {};
+  const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex) ?? 0;
+  const parsedTracks = array(renderer.captionTracks)
+    .flatMap((item, sourceIndex): Array<{
+      sourceIndex: number;
+      track: InternalCaptionTrack;
+    }> => {
       const track = object(item);
       const baseUrl = string(track.baseUrl);
       if (!baseUrl) return [];
       return [{
-        baseUrl,
-        vssId: string(track.vssId),
-        languageCode: string(track.languageCode),
-        kind: string(track.kind),
-        name: track.name,
-        isTranslatable: track.isTranslatable === true,
+        sourceIndex,
+        track: {
+          baseUrl,
+          vssId: string(track.vssId),
+          languageCode: string(track.languageCode),
+          kind: string(track.kind),
+          name: track.name,
+          isTranslatable: track.isTranslatable === true,
+        },
       }];
     });
+  const internal = parsedTracks.map(({ track }) => track);
+  const parsedDefaultIndex = parsedTracks.findIndex(
+    ({ sourceIndex }) => sourceIndex === defaultCaptionTrackIndex
+  );
+  const defaultIndex = parsedDefaultIndex >= 0 ? parsedDefaultIndex : 0;
   const publicTracks = internal.map((track, index) =>
     captionTrackInfo(track, index, defaultIndex)
   );
@@ -1445,13 +1466,13 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     do {
       const page = await getCommentsPage({ videoId: allOptions.videoId, continuation });
       totalCount ??= page.totalCount;
-      pagesFetched += 1;
       if (preferNewest && page.newestContinuation) {
         continuation = page.newestContinuation;
         preferNewest = false;
         continue;
       }
       preferNewest = false;
+      pagesFetched += 1;
       for (const comment of page.comments) comments.set(comment.id, comment);
       replyQueue.push(...page.replyContinuations);
       continuation = page.continuation;
@@ -1504,16 +1525,22 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         'search',
         filters.continuation
           ? { continuation: filters.continuation }
-          : { query: query.trim() }
+          : {
+              query: query.trim(),
+              ...(filters.captionsOnly ? { params: SEARCH_CAPTIONS_PARAM } : {}),
+            }
       );
-      const allResults = parseSearchResults(raw);
+      const allResults = parseSearchResults(raw).map((result) =>
+        filters.captionsOnly && result.type === 'video'
+          ? { ...result, hasCaptions: true }
+          : result
+      );
       let results = filters.type && filters.type !== 'all'
         ? allResults.filter((result) => result.type === filters.type)
         : allResults;
       results = results.filter((result) => {
         if (result.type !== 'video') return true;
         if (filters.channelId && result.channel.id !== filters.channelId) return false;
-        if (filters.captionsOnly && !result.hasCaptions) return false;
         if (filters.minViews !== undefined && (result.viewCount ?? 0) < filters.minViews) return false;
         if (filters.live === 'live' && !result.isLive) return false;
         if (filters.live === 'completed' && result.isLive) return false;
@@ -1854,7 +1881,9 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         const url = new URL(selected.track.baseUrl);
         url.searchParams.set('fmt', 'json3');
         if (translatedTo) url.searchParams.set('tlang', translatedTo.languageCode);
-        return { selected, translatedTo, url, captionCookies };
+        const selectedTrackInfo = captions.public[selected.index] ??
+          captionTrackInfo(selected.track, selected.index);
+        return { selected, selectedTrackInfo, translatedTo, url, captionCookies };
       };
 
       let prepared: Awaited<ReturnType<typeof prepareRequest>> | undefined;
@@ -1915,7 +1944,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       }
       return {
         videoId: transcriptOptions.videoId,
-        track: captionTrackInfo(prepared.selected.track, prepared.selected.index),
+        track: prepared.selectedTrackInfo,
         translatedTo: prepared.translatedTo,
         segments,
         granularity: transcriptOptions.granularity ?? 'segment',

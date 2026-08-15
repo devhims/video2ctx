@@ -32,6 +32,7 @@ import {
   getDetails,
   getEndscreen,
   getPlaylist,
+  search,
   getTracks,
   getTranscript,
 } from './index';
@@ -53,10 +54,31 @@ describe('all-things-youtube public API', () => {
       getChannelVideos,
       getChannelPlaylists,
       getPlaylist,
+      search,
     ]) {
       expect(typeof exported).toBe('function');
     }
     expect(publicApi).not.toHaveProperty('createYouTubeClient');
+  });
+
+  test('maps stateless search to the normalized client', async () => {
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    mocks.client.search.mockResolvedValue({
+      query: 'agent skills', results: [], videos: [], channels: [], playlists: [], meta: {},
+    });
+
+    await search({
+      query: 'agent skills',
+      type: 'video',
+      captionsOnly: true,
+      continuation: 'SEARCH_PAGE_2',
+      fetch: fetchMock,
+    });
+
+    expect(mocks.createYouTubeClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: fetchMock }));
+    expect(mocks.client.search).toHaveBeenCalledWith('agent skills', {
+      type: 'video', captionsOnly: true, continuation: 'SEARCH_PAGE_2',
+    });
   });
 
   test('maps the video helpers to the normalized client', async () => {
