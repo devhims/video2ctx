@@ -32,8 +32,8 @@ export function CraftNav() {
           <img
             src='/brand/logo-120.png'
             alt=''
-            width='24'
-            height='24'
+            width='36'
+            height='36'
           />
           <span className='craft-nav-wordmark'>
             video2<span>ctx</span>
