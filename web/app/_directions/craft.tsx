@@ -116,7 +116,7 @@ export function CraftDirection() {
           Video in. <span className='craft-context-word'>Context</span> Out.
         </h1>
         <p className='craft-sub'>
-          Everything an agent needs to understand videos.
+          Everything your agent needs to understand videos.
           <br />
           100% open source.
         </p>

@@ -492,7 +492,7 @@ html:has(.craft) body {
 }
 
 .craft-sub {
-  max-width: 34ch;
+  max-width: 38ch;
   margin: var(--space-lg) 0 0;
   color: var(--ink-soft);
   font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
