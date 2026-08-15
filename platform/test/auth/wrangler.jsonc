@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-auth-test",
+  "main": "../auth-worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_ORIGIN": "http://auth.test",
+    "AUTH_BASE_URL": "http://auth.test",
+    "BETTER_AUTH_SECRET": "test-only-better-auth-secret-000000000000",
+    "GOOGLE_CLIENT_ID": "test-google-client",
+    "GOOGLE_CLIENT_SECRET": "test-google-secret"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "video2ctx-auth-test",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "EMAIL_TASKS", "queue": "video2ctx-auth-test-email" }
+    ]
+  }
+}

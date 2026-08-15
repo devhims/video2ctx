@@ -1,0 +1,25 @@
+{
+  "name": "video2ctx-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "video2ctx": "dist/cli.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "esbuild src/entry.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/cli.mjs --banner:js=\"#!/usr/bin/env node\"",
+    "skill:bundle": "node scripts/build-skill-bundles.mjs",
+    "skill:check": "node scripts/build-skill-bundles.mjs --check",
+    "test": "vitest run",
+    "verify": "npm run test && npm run build && node dist/cli.mjs --help"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.5",
+    "esbuild": "^0.25.12",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

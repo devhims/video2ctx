@@ -1,0 +1,4 @@
+interface:
+  display_name: 'all-things-youtube'
+  short_description: 'Search and extract YouTube data locally'
+  default_prompt: "Use $all-things-youtube to search YouTube locally and extract the selected video's transcript and channel data."

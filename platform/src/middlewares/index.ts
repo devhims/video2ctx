@@ -1,6 +1,7 @@
 export { applicationCors } from './application-cors';
 export {
   establishPrincipal,
+  restrictCliSessionAuthRoutes,
   requireAccountPrincipal,
   requireDataPrincipal,
   requirePrincipal,

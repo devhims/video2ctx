@@ -1,12 +1,16 @@
-import { betterAuth } from 'better-auth';
+import { APIError, betterAuth } from 'better-auth';
+import type { BetterAuthOptions } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
-import { magicLink } from 'better-auth/plugins';
+import { bearer, deviceAuthorization, magicLink } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
 
-export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
-  return betterAuth({
+export const DEVICE_AUTH_CLIENT_ID = 'video2ctx-cli';
+export const DEVICE_AUTH_SCOPE = 'data:read account:access';
+
+export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
+  return {
     appName: 'video2ctx',
     baseURL: env.AUTH_BASE_URL,
     basePath: '/api/auth',
@@ -51,6 +55,21 @@ export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<
           defaultPermissions: DEFAULT_API_KEY_PERMISSIONS,
         },
       }),
+      bearer(),
+      deviceAuthorization({
+        verificationUri: '/device',
+        expiresIn: '15m',
+        interval: '5s',
+        validateClient: async (clientId) => clientId === DEVICE_AUTH_CLIENT_ID,
+        onDeviceAuthRequest: async (_clientId, scope) => {
+          if (scope !== DEVICE_AUTH_SCOPE) {
+            throw new APIError('BAD_REQUEST', {
+              error: 'invalid_request',
+              error_description: 'Unsupported scope',
+            });
+          }
+        },
+      }),
       magicLink({
         expiresIn: 900,
         storeToken: 'hashed',
@@ -74,7 +93,11 @@ export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<
         handler: (promise) => executionCtx.waitUntil(promise),
       },
     },
-  });
+  } satisfies BetterAuthOptions;
+}
+
+export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
+  return betterAuth(createAuthOptions(env, executionCtx));
 }
 
 async function digest(value: string): Promise<string> {

@@ -1,6 +1,11 @@
 import { documentationApp } from './docs';
 import createApp from './lib/create-app';
-import { applicationCors, betterAuthContext, establishPrincipal } from './middlewares';
+import {
+  applicationCors,
+  betterAuthContext,
+  establishPrincipal,
+  restrictCliSessionAuthRoutes,
+} from './middlewares';
 import indexRoutes from './routes/index.route';
 import { dataRoutes } from './routes/data/data.index';
 import { publicRoutes } from './routes/public/public.index';
@@ -12,6 +17,7 @@ app.route('/', documentationApp);
 app.route('/', indexRoutes);
 
 app.use('/api/auth/*', applicationCors);
+app.use('/api/auth/*', restrictCliSessionAuthRoutes);
 app.use('/api/auth/*', betterAuthContext);
 app.on(['GET', 'POST'], '/api/auth/*', (c) => c.get('auth')!.handler(c.req.raw));
 

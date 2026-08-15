@@ -22,6 +22,8 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
+    "skill:bundle": "node scripts/build-skill-bundle.mjs",
+    "skill:check": "node scripts/build-skill-bundle.mjs --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepack": "npm test && npm run build"
@@ -65,7 +67,9 @@
   "devDependencies": {
     "@types/he": "^1.2.0",
     "@types/node": "^25.9.5",
+    "esbuild": "0.28.2",
     "typescript": "^6.0.3",
+    "undici": "6.28.0",
     "vitest": "^3.2.4"
   },
   "engines": {

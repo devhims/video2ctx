@@ -8,6 +8,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  library-and-skill:
+    name: Library and skill bundle
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/all-things-youtube
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/all-things-youtube/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run skill:check
+      - run: test -x ../../.agents/skills/all-things-youtube/scripts/youtube.mjs
+      - run: node ../../.agents/skills/all-things-youtube/scripts/youtube.mjs --help
+
   platform:
     name: Platform
     runs-on: ubuntu-latest
@@ -23,8 +43,27 @@ jobs:
           cache-dependency-path: |
             platform/package-lock.json
             platform/youtube-processor/package-lock.json
-      - run: npm ci
-      - run: npm run verify
+            packages/video2ctx-cli/package-lock.json
+            web/package-lock.json
+      - name: Install platform dependencies
+        run: npm ci
+      - name: Install hosted CLI dependencies
+        run: npm ci
+        working-directory: packages/video2ctx-cli
+      - name: Verify hosted CLI
+        run: npm run verify
+        working-directory: packages/video2ctx-cli
+      - name: Check hosted skill bundles
+        run: npm run skill:check
+        working-directory: packages/video2ctx-cli
+      - name: Verify platform
+        run: npm run verify
+      - name: Install web dependencies for auth E2E
+        run: npm ci --prefix ../web
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run CLI and browser auth E2E
+        run: npm --prefix .. run test:auth:e2e
 
   web:
     name: Web
@@ -40,6 +79,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
 
   documentation:

@@ -32,7 +32,7 @@ Available now:
 - Ask questions against indexed sources and keep conclusions connected to citations.
 - Organize exact video moments and notes into private research projects.
 - Compare topic momentum, monitor new material, and export collected research.
-- Access the data through the dashboard, hosted API, or `all-things-youtube` npm package.
+- Access the data through the dashboard, hosted API, published agent skills, or `all-things-youtube` npm package.
 
 > **Project status:** video2ctx is under active development. The platform API is versioned under `/v1`, but product behavior and pricing may still evolve. The supported external provider is currently YouTube.
 
@@ -42,14 +42,14 @@ Available now:
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                  |
 | A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction) |
+| A hosted API directly from a supported agent       | Use [`video2ctx-api`](./.agents/skills/video2ctx-api) for stateless reads or [`video2ctx-monitoring`](./.agents/skills/video2ctx-monitoring) for monitors       |
 | A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                             |
 | To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                      |
 
 ## Under development
 
 - **Video frames:** Extract and expose visual context alongside transcripts and metadata.
-- **Agent API:** Give agents a purpose-built interface for discovering and understanding video data.
-- **Agent skill:** Let supported agents use video2ctx without requiring developers to wire up the API themselves.
+- **Hosted agent tools:** Continue expanding the stateless API and monitoring skills while keeping authentication revocable and local to the user's machine.
 
 ## Hosted API quick start
 
@@ -63,7 +63,7 @@ curl \
   https://api.video2ctx.dev/v1/providers/youtube/videos/dQw4w9WgXcQ
 ```
 
-API keys and browser sessions use the same account and credit balance. Metered responses include `X-Credits-Charged` and `X-Credits-Remaining` headers. `X-API-Key` remains supported for compatibility, but bearer authentication is preferred.
+API keys, device-authorized CLI sessions, and browser sessions use the same account and credit balance. Metered responses include `X-Credits-Charged` and `X-Credits-Remaining` headers. `X-API-Key` remains supported for compatibility, but bearer authentication is preferred.
 
 Useful entry points:
 
@@ -111,6 +111,7 @@ git clone https://github.com/devhims/video2ctx.git
 cd video2ctx
 
 npm ci --prefix packages/all-things-youtube
+npm ci --prefix packages/video2ctx-cli
 npm ci --prefix platform
 npm ci --prefix platform/youtube-processor
 npm ci --prefix web
