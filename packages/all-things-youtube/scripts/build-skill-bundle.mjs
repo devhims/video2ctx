@@ -9,7 +9,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entryPoint = resolve(packageRoot, 'skill/entry.ts');
 const committedBundle = resolve(
   packageRoot,
-  '../../.agents/skills/all-things-youtube/scripts/youtube.mjs',
+  '../../.agents/skills/youtube-direct/scripts/youtube.mjs',
 );
 
 async function bundle(outfile) {
@@ -66,11 +66,11 @@ async function check() {
       readFile(committedBundle).catch(() => undefined),
     ]);
     if (!expected || !actual.equals(expected)) {
-      console.error('The all-things-youtube skill bundle is stale.');
+      console.error('The youtube-direct skill bundle is stale.');
       console.error(`Generated: ${digest(actual)}`);
       console.error(`Committed: ${expected ? digest(expected) : 'missing'}`);
       console.error('Run: npm --prefix packages/all-things-youtube run skill:bundle');
-      console.error('Then commit .agents/skills/all-things-youtube/scripts/youtube.mjs');
+      console.error('Then commit .agents/skills/youtube-direct/scripts/youtube.mjs');
       process.exitCode = 1;
     }
   } finally {

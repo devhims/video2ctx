@@ -4,11 +4,11 @@ Three [Agent Skills](https://agentskills.io) for working with YouTube data — d
 
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
-| `all-things-youtube` | You want stateless YouTube search or extraction directly from the user's machine, with no account, package installation, or hosted dependency | Node.js 18.17+ |
-| `video2ctx-api` | You want stateless discovery and extraction with managed caching, credit accounting, account boundaries, and usage reads over the hosted API | Browser login or an `aty_` API key |
+| `youtube-direct` | You want stateless YouTube search or extraction directly from the user's machine, with no account, package installation, or hosted dependency | Node.js 18.17+ |
+| `video2ctx-api` | You want the managed, authenticated alternative: supported endpoints, caching, credit accounting, account identity, and usage reads over the hosted API | Browser login or an `aty_` API key |
 | `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | Browser login or an `aty_` API key |
 
-The split follows real boundaries: `all-things-youtube` is a self-contained local executable; `video2ctx-api` adds stateless hosted discovery, caching, usage, and account boundaries; `video2ctx-monitoring` is the deliberate stateful exception.
+The split follows real boundaries: `youtube-direct` is a self-contained direct executable with no account; `video2ctx-api` is the managed, authenticated option for stateless hosted discovery, caching, usage, and account boundaries; `video2ctx-monitoring` is the deliberate stateful exception. Most users need only one of the first two data skills.
 
 ## Install
 
@@ -19,7 +19,7 @@ npx skills add devhims/video2ctx --list
 ```
 
 ```bash
-npx skills add devhims/video2ctx --skill all-things-youtube
+npx skills add devhims/video2ctx --skill youtube-direct
 ```
 
 Install all three:

@@ -1,6 +1,6 @@
 ---
 name: video2ctx-api
-description: Integrates stateless YouTube discovery and extraction through the production video2ctx HTTP API, including search, browse, transcripts, caption tracks, comments, video details, end screens, channels, playlists, usage, and account identity. Use for api.video2ctx.dev, hosted YouTube data, managed caching, API credits, video2ctx CLI login, or aty_ API-key fallback. Monitoring is the stateful exception and has its own skill.
+description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use instead of youtube-direct for supported endpoints, managed caching, usage and credit tracking, or account identity. Includes search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Requires video2ctx browser login or an aty_ API key; monitoring has its own skill.
 license: Apache-2.0
 ---
 

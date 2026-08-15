@@ -1,9 +1,9 @@
 ---
-name: all-things-youtube
-description: Searches YouTube and extracts transcripts, caption tracks, comments, video details, end screens, channels, and playlists by calling YouTube's internal HTTP endpoints directly from the user's machine. Use for YouTube search, local stateless YouTube discovery, transcript or caption extraction, comments, metadata, channels, and playlists without an API key, hosted service, or npm-package installation.
+name: youtube-direct
+description: Direct, no-account YouTube search and extraction from the user's machine. Use for stateless search, transcripts, caption tracks, comments, video details, end screens, channels, and playlists without a video2ctx account, API key, hosted service, or npm installation. Calls YouTube's internal HTTP endpoints directly; use video2ctx-api instead for managed authenticated access, caching, usage, or account identity.
 ---
 
-# all-things-youtube
+# YouTube Direct
 
 Run the bundled executable for stateless YouTube search and extraction. It sends requests from the user's machine directly to YouTube; it is self-contained and requires Node.js 18.17 or newer.
 
@@ -59,7 +59,7 @@ Use `--help` as the source of truth for flags and accepted values.
 
 ## Keep integration boundaries clear
 
-Use this skill for local stateless operations. Use `video2ctx-api` when the user explicitly wants the hosted API, account or usage operations, managed caching, or API-key access. Use `video2ctx-monitoring` for the stateful monitoring exception.
+Use this skill for direct, no-account stateless operations from the user's machine. Use `video2ctx-api` when the user wants the managed hosted API, account or usage operations, caching, or authenticated access. Use `video2ctx-monitoring` for the stateful monitoring exception.
 
 ## Done when
 

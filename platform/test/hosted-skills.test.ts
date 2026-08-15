@@ -6,6 +6,10 @@ const apiSkill = readFileSync(
   new URL('../../.agents/skills/video2ctx-api/SKILL.md', import.meta.url),
   'utf8',
 );
+const directSkill = readFileSync(
+  new URL('../../.agents/skills/youtube-direct/SKILL.md', import.meta.url),
+  'utf8',
+);
 const monitoringSkill = readFileSync(
   new URL('../../.agents/skills/video2ctx-monitoring/SKILL.md', import.meta.url),
   'utf8',
@@ -32,6 +36,18 @@ describe('hosted video2ctx skills', () => {
     expect(skill).not.toMatch(/all-things-youtube|youtubei\.googleapis\.com|www\.youtube\.com/);
     expect(skill).not.toMatch(/npm (?:install|add)|npx /);
     expect(skill).not.toMatch(/fetch\(|curl |Authorization: Bearer \$VIDEO2CTX_API_KEY/);
+  });
+
+  test('selector metadata distinguishes direct, hosted, and monitoring use', () => {
+    expect(directSkill).toMatch(/^---\nname: youtube-direct\n/);
+    expect(directSkill).toContain('Direct, no-account YouTube search and extraction');
+    expect(directSkill).toContain('use video2ctx-api instead');
+
+    expect(apiSkill).toContain('Managed, authenticated YouTube search and extraction');
+    expect(apiSkill).toContain('Use instead of youtube-direct');
+
+    expect(monitoringSkill).toContain('Stateful video2ctx monitoring');
+    expect(monitoringSkill).toContain('Use video2ctx-api for one-time hosted reads');
   });
 
   test('ships the same self-contained credential transport in both hosted skills', () => {

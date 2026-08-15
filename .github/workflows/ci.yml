@@ -25,8 +25,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run skill:check
-      - run: test -x ../../.agents/skills/all-things-youtube/scripts/youtube.mjs
-      - run: node ../../.agents/skills/all-things-youtube/scripts/youtube.mjs --help
+      - run: test -x ../../.agents/skills/youtube-direct/scripts/youtube.mjs
+      - run: node ../../.agents/skills/youtube-direct/scripts/youtube.mjs --help
 
   platform:
     name: Platform

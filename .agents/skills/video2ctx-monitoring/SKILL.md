@@ -1,6 +1,6 @@
 ---
 name: video2ctx-monitoring
-description: Creates, operates, and consumes production video2ctx monitors that watch a YouTube channel, topic, or search for new videos, along with notifications and delivery preferences. Use for api.video2ctx.dev monitor schedules, recurring video checks, monitor notifications, video2ctx CLI login, or in-app and email alert preferences.
+description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, monitor notifications, or video2ctx CLI login. Use video2ctx-api for one-time hosted reads and youtube-direct for direct no-account reads.
 license: Apache-2.0
 ---
 

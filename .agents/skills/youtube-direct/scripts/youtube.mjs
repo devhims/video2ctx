@@ -20884,7 +20884,7 @@ async function getPlaylist(options) {
 }
 
 // skill/cli.ts
-var HELP = `all-things-youtube
+var HELP = `youtube-direct
 
 Call YouTube's internal HTTP endpoints from this machine and print JSON.
 
