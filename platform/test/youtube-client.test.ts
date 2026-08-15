@@ -646,6 +646,10 @@ describe('normalized YouTube client', () => {
     const fixture = playerFixture('manual');
     const renderer = (fixture.captions as any).playerCaptionsTracklistRenderer;
     renderer.defaultAudioTrackIndex = 1;
+    renderer.audioTracks = [
+      { defaultCaptionTrackIndex: 0 },
+      { defaultCaptionTrackIndex: 1, hasDefaultTrack: true },
+    ];
     renderer.captionTracks = [
       {
         baseUrl: 'https://captions.test/en?lang=en', vssId: '.en', languageCode: 'en',

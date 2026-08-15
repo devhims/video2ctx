@@ -650,7 +650,11 @@ export const openApiDocument = {
           providerParameter,
           pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
-          queryParameter('all', 'Fetch all available pages rather than one page.', { type: 'boolean', default: false }),
+          queryParameter(
+            'all',
+            'Fetch a bounded newest-first collection rather than one provider-default-ranked page. Inspect meta.partial and meta.warnings before treating the collection as complete.',
+            { type: 'boolean', default: false },
+          ),
         ],
         responses: {
           '200': meteredJsonResponse('A comment page or collection.', schemaRef('CommentResponse')),

@@ -1157,7 +1157,7 @@
             "name": "all",
             "in": "query",
             "required": false,
-            "description": "Fetch all available pages rather than one page.",
+            "description": "Fetch a bounded newest-first collection rather than one provider-default-ranked page. Inspect meta.partial and meta.warnings before treating the collection as complete.",
             "schema": {
               "type": "boolean",
               "default": false

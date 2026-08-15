@@ -183,7 +183,7 @@ export async function searchYouTube(env: Env, query: string, filters: SearchFilt
 
 export async function searchYouTubeWithCache(env: Env, query: string, filters: SearchFilters = {}) {
   const key = await hash(JSON.stringify({ query, filters }));
-  return cached(env, 'search-v2', key, 5 * 60_000, { kind: 'search', query, filters });
+  return cached(env, 'search-v3', key, 5 * 60_000, { kind: 'search', query, filters });
 }
 
 export async function browseYouTube(env: Env, options: BrowseOptions = {}) {
@@ -305,7 +305,7 @@ export async function getAllComments(env: Env, id: string) {
 }
 
 export function getAllCommentsWithCache(env: Env, id: string) {
-  return cached(env, 'all-comments', `v5:${id}`, 15 * 60_000, {
+  return cached(env, 'all-comments', `v6:${id}`, 15 * 60_000, {
     kind: 'all-comments', id, maxPages: 100,
   });
 }
@@ -315,7 +315,7 @@ export async function getTranscript(env: Env, id: string, lang?: string): Promis
 }
 
 export function getTranscriptWithCache(env: Env, id: string, lang?: string) {
-  return cached(env, 'transcript-v4', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
+  return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
     kind: 'transcript', id, lang, granularity: 'word',
   });
 }

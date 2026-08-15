@@ -43,7 +43,7 @@ describe('provider search route', () => {
       query: 'research',
       filters: { type: 'all', continuation: 'NEXT_SEARCH_PAGE' },
     }));
-    const expectedCacheKey = `youtube:v1:${await sha256(JSON.stringify(['search-v2', expectedKey]))}`;
+    const expectedCacheKey = `youtube:v1:${await sha256(JSON.stringify(['search-v3', expectedKey]))}`;
 
     expect(response.status).toBe(200);
     expect(get).toHaveBeenCalledWith(expectedCacheKey, { type: 'json', cacheTtl: 60 });

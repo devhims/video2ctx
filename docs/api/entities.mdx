@@ -13,6 +13,8 @@ Start with video details, then request only the deeper datasets your workflow ne
 - `GET /v1/providers/youtube/videos/{id}/comments` — paginated public comments
 - `GET /v1/providers/youtube/videos/{id}/endscreen` — end-screen links
 
+The default comments request returns YouTube's default-ranked page. Add `all=true` for a bounded newest-first collection, then inspect `meta.partial` and `meta.warnings` before treating it as complete.
+
 ## Channels
 
 - `GET /v1/providers/youtube/channels/{id}` — profile, public totals, links, and metadata
@@ -24,5 +26,5 @@ Start with video details, then request only the deeper datasets your workflow ne
 `GET /v1/providers/youtube/playlists/{id}` returns playlist metadata and its paginated video index. Fetching a playlist does not automatically fetch transcripts or comments for every video.
 
 <Tip>
-  IDs, handles, and supported YouTube URLs are normalized by the underlying package, but hosted API path parameters should use the resource ID returned by discovery whenever possible.
+  IDs, handles, and supported YouTube URLs are normalized by the provider pipeline, but hosted API path parameters should use the resource ID returned by discovery whenever possible.
 </Tip>
