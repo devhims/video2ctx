@@ -32,7 +32,7 @@ Available now:
 - Ask questions against indexed sources and keep conclusions connected to citations.
 - Organize exact video moments and notes into private research projects.
 - Compare topic momentum, monitor new material, and export collected research.
-- Access the data through the dashboard, hosted API, published agent skills, `video2ctx-cli`, or the `all-things-youtube` npm package.
+- Access the data through the dashboard, hosted API, published agent skills, `@video2ctx/cli`, or the `all-things-youtube` npm package.
 
 > **Project status:** video2ctx is under active development. The platform API is versioned under `/v1`, but product behavior and pricing may still evolve. The supported external provider is currently YouTube.
 
@@ -43,7 +43,7 @@ Available now:
 | A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                  |
 | A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction) |
 | Direct YouTube data from a supported agent         | Use [`youtube-direct`](./.agents/skills/youtube-direct) with no video2ctx account, API key, hosted service, or npm installation                |
-| A hosted API directly from a supported agent       | Install [`video2ctx-cli`](./packages/video2ctx-cli), then use [`video2ctx-api`](./.agents/skills/video2ctx-api) for stateless reads or [`video2ctx-monitoring`](./.agents/skills/video2ctx-monitoring) for monitors |
+| A hosted API directly from a supported agent       | Install [`@video2ctx/cli`](./packages/video2ctx-cli), then use [`video2ctx-api`](./.agents/skills/video2ctx-api) for stateless reads or [`video2ctx-monitoring`](./.agents/skills/video2ctx-monitoring) for monitors |
 | A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                             |
 | To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                      |
 

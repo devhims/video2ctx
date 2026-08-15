@@ -1,5 +1,5 @@
 {
-  "name": "video2ctx-cli",
+  "name": "@video2ctx/cli",
   "version": "0.1.0",
   "description": "Command-line client for authenticated video2ctx API access and device login.",
   "type": "module",

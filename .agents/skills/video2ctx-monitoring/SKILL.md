@@ -10,10 +10,10 @@ Use the installed `video2ctx` CLI for authenticated requests to `https://api.vid
 
 ## Check the CLI
 
-Run `video2ctx --version`. When the command is unavailable, explain that this hosted skill requires the public `video2ctx-cli` npm package and ask the user to approve its installation. After approval, run:
+Run `video2ctx --version`. When the command is unavailable, explain that this hosted skill requires the public `@video2ctx/cli` npm package and ask the user to approve its installation. After approval, run:
 
 ```bash
-npm install --global video2ctx-cli
+npm install --global @video2ctx/cli
 ```
 
 Confirm `video2ctx --version` succeeds before continuing. Use that installed command for every request so authentication and versioning stay stable.

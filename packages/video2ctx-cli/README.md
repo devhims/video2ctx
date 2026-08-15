@@ -7,7 +7,7 @@ Authenticate with video2ctx and call its production HTTP API from a terminal or 
 Requires Node.js 22 or newer.
 
 ```bash
-npm install --global video2ctx-cli
+npm install --global @video2ctx/cli
 video2ctx --version
 ```
 
@@ -30,7 +30,7 @@ Run `video2ctx --help` for the command surface. Use the [video2ctx API documenta
 
 ## Development
 
-This package is developed in the [video2ctx monorepo](https://github.com/devhims/video2ctx/tree/main/packages/video2ctx-cli) and released independently as `video2ctx-cli`.
+This package is developed in the [video2ctx monorepo](https://github.com/devhims/video2ctx/tree/main/packages/video2ctx-cli) and released independently as `@video2ctx/cli`.
 
 ## License
 

@@ -32,10 +32,10 @@ Add `-g` to install globally for your user rather than into the current project,
 
 ## Authenticate to the hosted service
 
-The two hosted skills use the public `video2ctx-cli` npm package. Install it once, then authenticate:
+The two hosted skills use the public `@video2ctx/cli` npm package. Install it once, then authenticate:
 
 ```bash
-npm install --global video2ctx-cli
+npm install --global @video2ctx/cli
 video2ctx auth login
 video2ctx whoami --json
 ```
@@ -49,7 +49,7 @@ For non-interactive environments, set `VIDEO2CTX_API_KEY` in the process environ
 - Product: <https://www.video2ctx.dev>
 - Documentation: <https://docs.video2ctx.dev>
 - OpenAPI 3.1 contract: <https://api.video2ctx.dev/openapi.json>
-- Hosted-service CLI: <https://www.npmjs.com/package/video2ctx-cli>
+- Hosted-service CLI: <https://www.npmjs.com/package/@video2ctx/cli>
 - Optional npm library for application developers: <https://www.npmjs.com/package/all-things-youtube>
 - Source: <https://github.com/devhims/video2ctx>
 
@@ -61,4 +61,4 @@ Use of the hosted video2ctx service is additionally governed by its [Terms of Se
 
 ## Contributing
 
-These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-direct` carries its executable; the hosted skills use the independently versioned `video2ctx-cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
+These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-direct` carries its executable; the hosted skills use the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.

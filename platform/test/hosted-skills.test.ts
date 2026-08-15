@@ -21,7 +21,7 @@ describe('hosted video2ctx skills', () => {
   ])('%s stays on the authenticated production surface', (_name, skill) => {
     expect(skill).toContain('https://api.video2ctx.dev');
     expect(skill).toContain('video2ctx --version');
-    expect(skill).toContain('npm install --global video2ctx-cli');
+    expect(skill).toContain('npm install --global @video2ctx/cli');
     expect(skill).toContain('auth login');
     expect(skill).toContain('auth status --json');
     expect(skill).toContain('video2ctx api');
@@ -46,8 +46,8 @@ describe('hosted video2ctx skills', () => {
   });
 
   test('keeps installation explicit and reuses one public credential transport', () => {
-    expect(apiSkill).toContain('public `video2ctx-cli` npm package');
-    expect(monitoringSkill).toContain('public `video2ctx-cli` npm package');
+    expect(apiSkill).toContain('public `@video2ctx/cli` npm package');
+    expect(monitoringSkill).toContain('public `@video2ctx/cli` npm package');
     expect(apiSkill).toContain('ask the user to approve its installation');
     expect(monitoringSkill).toContain('ask the user to approve its installation');
   });
