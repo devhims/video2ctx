@@ -155,6 +155,7 @@ async function verifyTurnstile(env: Env, token: string, ip: string): Promise<voi
   // tests exercise Siteverify directly; production never takes this branch.
   if (env.ENVIRONMENT !== 'production') return;
   if (!env.TURNSTILE_SECRET || !token) throw invalid('Complete the security check and try again.');
+  const expectedHostname = appHostname(env.APP_ORIGIN);
 
   let response: Response;
   try {
@@ -176,9 +177,25 @@ async function verifyTurnstile(env: Env, token: string, ip: string): Promise<voi
   const result = await response.json<{
     success?: boolean;
     action?: string;
+    hostname?: string;
   }>();
-  if (!result.success || result.action !== 'scale_inquiry') {
+  if (
+    !result.success
+    || result.action !== 'scale_inquiry'
+    || typeof result.hostname !== 'string'
+    || result.hostname.toLowerCase() !== expectedHostname
+  ) {
     throw invalid('The security check expired. Please try again.');
+  }
+}
+
+function appHostname(appOrigin: string): string {
+  try {
+    const origin = new URL(appOrigin);
+    if (origin.protocol !== 'https:' || !origin.hostname) throw new Error('Invalid application origin');
+    return origin.hostname.toLowerCase();
+  } catch {
+    throw unavailable();
   }
 }
 

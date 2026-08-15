@@ -13,6 +13,7 @@ describe('Scale inquiries', () => {
     const siteverify = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       success: true,
       action: 'scale_inquiry',
+      hostname: 'www.video2ctx.dev',
     }), { headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', siteverify);
 
@@ -48,6 +49,7 @@ describe('Scale inquiries', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       success: true,
       action: 'scale_inquiry',
+      hostname: 'www.video2ctx.dev',
     }), { headers: { 'Content-Type': 'application/json' } })));
     const env = inquiryEnv(database, sent);
 
@@ -100,6 +102,24 @@ describe('Scale inquiries', () => {
     expect(sent).toHaveLength(0);
   });
 
+  test('rejects a Turnstile token issued for another hostname', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const database = inquiryDatabase();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      action: 'scale_inquiry',
+      hostname: 'attacker.example',
+    }), { headers: { 'Content-Type': 'application/json' } })));
+
+    await expect(submitScaleInquiry(
+      inquiryEnv(database, sent),
+      inquiryRequest(),
+      validInquiry(),
+    )).rejects.toMatchObject({ status: 422, code: 'INVALID_SCALE_INQUIRY' });
+    expect(database.inserts).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
   test('renders prospect content safely in the internal email', async () => {
     const rendered = await renderScaleInquiryEmail({
       fullName: 'Mira <script>alert(1)</script>',
@@ -141,6 +161,7 @@ function inquiryRequest(): Request {
 function inquiryEnv(database: ReturnType<typeof inquiryDatabase>, sent: Array<Record<string, unknown>>): Env {
   return {
     ENVIRONMENT: 'production',
+    APP_ORIGIN: 'https://www.video2ctx.dev',
     EMAIL_REPLY_TO: 'support@video2ctx.dev',
     TURNSTILE_SECRET: 'turnstile-secret',
     LANDING_RATE_LIMIT_SALT: 'rate-limit-salt',
