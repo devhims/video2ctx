@@ -44,7 +44,8 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(html).toContain('video2ctx API Reference');
     expect(html).toContain('./openapi.json');
-    expect(html).toContain('data:image/svg+xml');
+    expect(html).toContain('data:image/png;base64');
+    expect(html).not.toContain('data:image/svg+xml');
   });
 
   test('documents every concrete HTTP route declared by the Hono app', () => {

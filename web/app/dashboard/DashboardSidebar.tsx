@@ -47,7 +47,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
 
   return <aside className='sidebar'>
     <Link className='brand workspace-brand' aria-label='video2ctx home' href='/'>
-      <img src='/brand/video2ctx-mark-red.svg' alt='' width='36' height='36' />
+      <img src='/brand/logo-120.png' alt='' width='36' height='36' />
       <span className='workspace-wordmark'>video2<span>ctx</span></span>
     </Link>
     <nav aria-label='Dashboard navigation'>

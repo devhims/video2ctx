@@ -141,7 +141,7 @@ function ConceptShell({ hero }: { hero: 'orbit' | 'field' | 'engine' }) {
     <main className='demo-page'>
       <header className='demo-nav'>
         <a className='demo-brand' href='/' aria-label='video2ctx home'>
-          <img src='/brand/video2ctx-mark-red.svg' alt='' width='36' height='36' />
+          <img src='/brand/logo-120.png' alt='' width='36' height='36' />
           <span>video2ctx</span>
         </a>
         <p>Landing concept</p>
@@ -557,4 +557,3 @@ function formatReset(value: string): string {
     timeStyle: 'short',
   }).format(new Date(value));
 }
-

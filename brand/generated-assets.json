@@ -1,0 +1,18 @@
+{
+  "files": {
+    "brand/source/video2ctx-logo.png": "4b3126c170ddeaded8d18d63e65be8a80ee2f58763cfd78a9d04f35afb2991af",
+    "brand/source/video2ctx-logo-192.png": "44472cbe3e7ef39bc557278efc808ebc038effe90b96c8089387f5f5a6bf35ac",
+    "brand/source/video2ctx-favicon-32.png": "77ae28a2e39a6020442a3ba136145f52bb1155b195d453595cb8d597c083f38a",
+    "brand/source/video2ctx-favicon.ico": "2ce82549c6b86fa66fa8c1510b0c85a404c14aa9aadead05b02d02a74b6201e5",
+    "web/public/brand/logo-120.png": "d44f423ec5b91a584ed87ef41ffcb0a73a6ec69b13bc5d852f9d589723e03829",
+    "web/public/android-chrome-192x192.png": "44472cbe3e7ef39bc557278efc808ebc038effe90b96c8089387f5f5a6bf35ac",
+    "web/public/android-chrome-512x512.png": "4b3126c170ddeaded8d18d63e65be8a80ee2f58763cfd78a9d04f35afb2991af",
+    "web/app/icon.png": "4b3126c170ddeaded8d18d63e65be8a80ee2f58763cfd78a9d04f35afb2991af",
+    "web/app/apple-icon.png": "0fe814ed4ab3d78fea8bdb723b67218d89ccb2fa0e0f9a5d3d386d04cff99133",
+    "web/app/favicon.ico": "2ce82549c6b86fa66fa8c1510b0c85a404c14aa9aadead05b02d02a74b6201e5",
+    "docs/favicon.png": "77ae28a2e39a6020442a3ba136145f52bb1155b195d453595cb8d597c083f38a",
+    "docs/logo/light.svg": "5744539b3df809e3ba7a20d4a1faae4e0f59aad5b9e31f9b5b2973c3f1c438d4",
+    "docs/logo/dark.svg": "9e72ae6153580322d7a42c2690cb341aa14fcdc7953bc69e5573a37c2f5bf0e5",
+    "platform/src/generated/brand.ts": "bf05b3c5e6a33a1565e5e09f5d26da0f6d2376b15a049256acca5cebcd708d02"
+  }
+}

@@ -30,7 +30,7 @@ export function CraftNav() {
       <div className='craft-nav-inner'>
         <a className='craft-nav-brand' href='/' aria-label='video2ctx home'>
           <img
-            src='/brand/video2ctx-mark-red.svg'
+            src='/brand/logo-120.png'
             alt=''
             width='24'
             height='24'

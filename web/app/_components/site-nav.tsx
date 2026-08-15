@@ -44,7 +44,7 @@ export function SiteNav() {
       <header className='site-nav' data-floating={floating ? 'true' : 'false'}>
         <div className='site-nav-inner'>
           <a className='lens-brand' href='/' aria-label='video2ctx home'>
-            <img src='/brand/video2ctx-mark-red.svg' alt='' width='28' height='28' />
+            <img src='/brand/logo-120.png' alt='' width='28' height='28' />
             <span>video2ctx</span>
           </a>
 

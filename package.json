@@ -4,6 +4,8 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
+    "brand:generate": "node scripts/generate-brand-assets.mjs",
+    "brand:check": "node scripts/generate-brand-assets.mjs --check",
     "dev": "npm run dev:local",
     "dev:local": "node dev-local.mjs",
     "dev:web": "npm --prefix web run dev",
@@ -15,7 +17,10 @@
     "build:library": "npm --prefix packages/all-things-youtube run build",
     "test:library": "npm --prefix packages/all-things-youtube run test",
     "pack:library": "npm --prefix packages/all-things-youtube pack",
-    "build": "npm run build:library && npm --prefix platform run build && npm --prefix web run build",
+    "build": "npm run brand:check && npm run build:library && npm --prefix platform run build && npm --prefix web run build",
     "test": "npm run test:library && npm --prefix platform run test"
+  },
+  "devDependencies": {
+    "sharp": "0.35.3"
   }
 }

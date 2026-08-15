@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./web/public/brand/video2ctx-mark-red.svg" alt="video2ctx logo" width="88" />
+  <img src="./web/public/brand/logo-120.png" alt="video2ctx logo" width="88" />
 </p>
 <h1 align="center">video2ctx</h1>
 <p align="center"><strong>Turn videos into useful context for LLMs and AI agents.</strong></p>

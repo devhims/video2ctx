@@ -15,7 +15,7 @@ export function LegalPage({ title, eyebrow, effectiveDate, summary, children }: 
     <main className={styles.shell}>
       <header className={styles.header}>
         <Link className={styles.brand} href='/' aria-label='video2ctx home'>
-          <img src='/brand/video2ctx-mark-red.svg' alt='' width='36' height='36' />
+          <img src='/brand/logo-120.png' alt='' width='36' height='36' />
           <span>video2ctx</span>
         </Link>
         <nav aria-label='Legal pages'>
