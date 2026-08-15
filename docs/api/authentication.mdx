@@ -5,13 +5,14 @@ description: "Authenticate hosted requests with a CLI session or personal key."
 
 ## Agent and CLI access
 
-The published video2ctx skills include a self-contained CLI. Start device authorization from the skill directory:
+The hosted video2ctx skills use the public CLI package. Install it once, then start device authorization:
 
 ```bash
-node scripts/video2ctx.mjs auth login
+npm install --global video2ctx-cli
+video2ctx auth login
 ```
 
-The command opens `video2ctx.dev` and displays a short code. Sign in, confirm that the code and account are correct, and approve the device. The CLI stores the resulting revocable session in local user configuration with private file permissions. Check it with `auth status --json` or `whoami --json`, and revoke it with `auth logout`.
+The command opens `video2ctx.dev` and displays a short code. Sign in, confirm that the code and account are correct, and approve the device. The CLI stores the resulting revocable session in local user configuration with private file permissions. Check it with `video2ctx auth status --json` or `video2ctx whoami --json`, and revoke it with `video2ctx auth logout`.
 
 CLI sessions carry `data:read` and `account:access`. They can use provider data, usage, monitors, and notifications. API-key management, billing, connected-account changes, account deletion, and administration remain browser-session-only.
 

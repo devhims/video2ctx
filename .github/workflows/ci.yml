@@ -53,8 +53,8 @@ jobs:
       - name: Verify hosted CLI
         run: npm run verify
         working-directory: packages/video2ctx-cli
-      - name: Check hosted skill bundles
-        run: npm run skill:check
+      - name: Verify published CLI package contents
+        run: npm pack --dry-run
         working-directory: packages/video2ctx-cli
       - name: Verify platform
         run: npm run verify

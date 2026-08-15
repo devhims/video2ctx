@@ -1,28 +1,38 @@
 ---
 name: video2ctx-monitoring
-description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, monitor notifications, or video2ctx CLI login. Use video2ctx-api for one-time hosted reads and youtube-direct for direct no-account reads.
+description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, monitor notifications, or video2ctx CLI login. Requires the video2ctx CLI; use video2ctx-api for one-time hosted reads and youtube-direct for direct no-account reads.
 license: Apache-2.0
 ---
 
 # video2ctx Monitoring
 
-Use the bundled CLI for authenticated requests to `https://api.video2ctx.dev`. Resolve this skill's directory and invoke `node <skill-directory>/scripts/video2ctx.mjs`; replace the placeholder with its absolute path in every command.
+Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`.
+
+## Check the CLI
+
+Run `video2ctx --version`. When the command is unavailable, explain that this hosted skill requires the public `video2ctx-cli` npm package and ask the user to approve its installation. After approval, run:
+
+```bash
+npm install --global video2ctx-cli
+```
+
+Confirm `video2ctx --version` succeeds before continuing. Use that installed command for every request so authentication and versioning stay stable.
 
 ## Authenticate
 
-1. Run `node <skill-directory>/scripts/video2ctx.mjs auth status --json`.
-2. When unauthenticated, run `node <skill-directory>/scripts/video2ctx.mjs auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
-3. Confirm access with `node <skill-directory>/scripts/video2ctx.mjs whoami --json`.
+1. Run `video2ctx auth status --json`.
+2. When unauthenticated, run `video2ctx auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
+3. Confirm access with `video2ctx whoami --json`.
 
 The login flow stores a revocable CLI session in the user's local config with private file permissions. Keep the session out of prompts, logs, screenshots, and source control. The CLI also accepts `VIDEO2CTX_API_KEY` as a non-interactive fallback and gives it precedence over the stored session. Have the user create and configure a personal key at `https://video2ctx.dev/dashboard/developer` when they prefer that mode; never ask them to paste it into the conversation.
 
 Read `https://docs.video2ctx.dev/api/authentication`, `https://docs.video2ctx.dev/api/conventions`, and `https://docs.video2ctx.dev/api/monitoring` before operating monitors. Resolve every remaining method, path, parameter, request, and response question against `https://api.video2ctx.dev/openapi.json`.
 
-Run operations through the bundled transport:
+Run operations through the CLI:
 
 ```text
-node <skill-directory>/scripts/video2ctx.mjs api GET /v1/monitors --include-meta
-node <skill-directory>/scripts/video2ctx.mjs api POST /v1/monitors --data '<json>' --include-meta
+video2ctx api GET /v1/monitors --include-meta
+video2ctx api POST /v1/monitors --data '<json>' --include-meta
 ```
 
 ## Define the monitor
@@ -58,4 +68,4 @@ Projects, trends, research, and other composite workflows remain outside this sk
 
 ## Done when
 
-The CLI reports an authenticated account; every operation uses the bundled CLI and the live public contract; the provider, kind, target, interval, and label are valid; the baseline behavior is understood; each mutation targets the exact account-owned resource; delivery preferences are respected; notifications are marked read only after handling; and errors, partial results, and settled credit metadata remain visible.
+The installed CLI reports an authenticated account; every operation uses it with the live public contract; the provider, kind, target, interval, and label are valid; the baseline behavior is understood; each mutation targets the exact account-owned resource; delivery preferences are respected; notifications are marked read only after handling; and errors, partial results, and settled credit metadata remain visible.

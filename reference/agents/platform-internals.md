@@ -11,6 +11,7 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 - `platform/` owns authentication, authorization, credit metering, cache policy, and the public HTTP contract.
 - `platform/youtube-processor/` owns every outbound YouTube call. Reach YouTube through the processor rather than calling it from the Worker.
 - `packages/all-things-youtube/` is the extraction library. The processor image installs the pinned, published version — local library source is not copied into the production image, so publish and pin a library release before deploying platform behavior that depends on library changes.
+- `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both hosted skills, and verify the npm tarball before releasing it.
 
 ## Configuration
 

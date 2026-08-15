@@ -39,6 +39,16 @@ function dependencies(options: {
 }
 
 describe('video2ctx CLI authentication', () => {
+  test('reports a version for installation checks', async () => {
+    const state = dependencies();
+
+    const exitCode = await runCli(['--version'], state.deps);
+
+    expect(exitCode).toBe(0);
+    expect(state.stderr).toEqual([]);
+    expect(state.stdout).toEqual(['development']);
+  });
+
   test('prints verification instructions before polling and never prints credentials', async () => {
     const state = dependencies({ responses: [
       jsonResponse({

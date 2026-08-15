@@ -8,6 +8,10 @@ import {
 
 const DEFAULT_BASE_URL = 'https://api.video2ctx.dev';
 const REQUEST_TIMEOUT_MS = 30_000;
+declare const __VIDEO2CTX_VERSION__: string;
+const CLI_VERSION = typeof __VIDEO2CTX_VERSION__ === 'string'
+  ? __VIDEO2CTX_VERSION__
+  : 'development';
 
 export type CliDependencies = {
   fetch: typeof fetch;
@@ -28,6 +32,10 @@ export async function runCli(args: string[], dependencies: CliDependencies): Pro
   ].filter((value): value is string => Boolean(value));
 
   try {
+    if (args.includes('--version') || args[0] === 'version') {
+      dependencies.stdout(CLI_VERSION);
+      return 0;
+    }
     if (!args.length || args.includes('--help') || args[0] === 'help') {
       dependencies.stdout(helpText());
       return 0;
@@ -261,6 +269,7 @@ function compact(value: Record<string, unknown>): Record<string, unknown> {
 function helpText(): string {
   return [
     'video2ctx',
+    `Version: ${CLI_VERSION}`,
     '',
     'Commands:',
     '  video2ctx auth login [--no-browser] [--base-url URL]',

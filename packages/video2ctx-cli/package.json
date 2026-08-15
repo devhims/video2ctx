@@ -1,20 +1,49 @@
 {
   "name": "video2ctx-cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Command-line client for authenticated video2ctx API access and device login.",
   "type": "module",
   "bin": {
     "video2ctx": "dist/cli.mjs"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "video2ctx",
+    "youtube",
+    "cli",
+    "agent",
+    "agent-skills",
+    "device-authorization"
+  ],
+  "author": {
+    "name": "Himanshu Gupta",
+    "email": "thinktank.himanshu@gmail.com",
+    "url": "https://github.com/devhims"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devhims/video2ctx.git",
+    "directory": "packages/video2ctx-cli"
+  },
+  "homepage": "https://docs.video2ctx.dev/api/authentication",
+  "bugs": {
+    "url": "https://github.com/devhims/video2ctx/issues"
+  },
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "esbuild src/entry.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/cli.mjs --banner:js=\"#!/usr/bin/env node\"",
-    "skill:bundle": "node scripts/build-skill-bundles.mjs",
-    "skill:check": "node scripts/build-skill-bundles.mjs --check",
+    "build": "node scripts/build.mjs",
     "test": "vitest run",
-    "verify": "npm run test && npm run build && node dist/cli.mjs --help"
+    "verify": "npm run test && npm run build && node dist/cli.mjs --version && node dist/cli.mjs --help",
+    "prepack": "npm run verify"
   },
   "devDependencies": {
     "@types/node": "^25.9.5",

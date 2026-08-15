@@ -1,18 +1,28 @@
 ---
 name: video2ctx-api
-description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use instead of youtube-direct for supported endpoints, managed caching, usage and credit tracking, or account identity. Includes search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Requires video2ctx browser login or an aty_ API key; monitoring has its own skill.
+description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use instead of youtube-direct for supported endpoints, managed caching, usage and credit tracking, or account identity. Includes search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Requires the video2ctx CLI plus browser login or an aty_ API key; monitoring has its own skill.
 license: Apache-2.0
 ---
 
 # video2ctx API
 
-Use the bundled CLI for authenticated requests to `https://api.video2ctx.dev`. Resolve this skill's directory and invoke `node <skill-directory>/scripts/video2ctx.mjs`; replace the placeholder with its absolute path in every command.
+Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`.
+
+## Check the CLI
+
+Run `video2ctx --version`. When the command is unavailable, explain that this hosted skill requires the public `video2ctx-cli` npm package and ask the user to approve its installation. After approval, run:
+
+```bash
+npm install --global video2ctx-cli
+```
+
+Confirm `video2ctx --version` succeeds before continuing. Use that installed command for every request so authentication and versioning stay stable.
 
 ## Authenticate
 
-1. Run `node <skill-directory>/scripts/video2ctx.mjs auth status --json`.
-2. When unauthenticated, run `node <skill-directory>/scripts/video2ctx.mjs auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
-3. Confirm access with `node <skill-directory>/scripts/video2ctx.mjs whoami --json`.
+1. Run `video2ctx auth status --json`.
+2. When unauthenticated, run `video2ctx auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
+3. Confirm access with `video2ctx whoami --json`.
 
 The login flow stores a revocable CLI session in the user's local config with private file permissions. Keep the session out of prompts, logs, screenshots, and source control. The CLI also accepts `VIDEO2CTX_API_KEY` as a non-interactive fallback and gives it precedence over the stored session. Have the user create and configure a personal key at `https://video2ctx.dev/dashboard/developer` when they prefer that mode; never ask them to paste it into the conversation.
 
@@ -21,7 +31,7 @@ The login flow stores a revocable CLI session in the user's local config with pr
 Run public operations through:
 
 ```text
-node <skill-directory>/scripts/video2ctx.mjs api GET '/v1/path?encoded=query' --include-meta
+video2ctx api GET '/v1/path?encoded=query' --include-meta
 ```
 
 Use `--data '<json>'` only for a documented request body. `--include-meta` returns the response under `data` and settled status, request ID, and credit headers under `meta`.
@@ -49,4 +59,4 @@ Use the provider ID returned by `GET /v1/providers`; the current production prov
 
 ## Done when
 
-The CLI reports an authenticated account; every request uses the bundled CLI, targets a public production route, and remains stateless; no composite or browser-only operation was attempted; partial results and continuations retain their meaning; errors remain classified; and settled credit metadata was observed.
+The installed CLI reports an authenticated account; every request uses it to target a public production route and remains stateless; no composite or browser-only operation was attempted; partial results and continuations retain their meaning; errors remain classified; and settled credit metadata was observed.

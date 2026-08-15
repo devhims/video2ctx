@@ -14,27 +14,22 @@ const monitoringSkill = readFileSync(
   new URL('../../.agents/skills/video2ctx-monitoring/SKILL.md', import.meta.url),
   'utf8',
 );
-const apiCli = readFileSync(
-  new URL('../../.agents/skills/video2ctx-api/scripts/video2ctx.mjs', import.meta.url),
-);
-const monitoringCli = readFileSync(
-  new URL('../../.agents/skills/video2ctx-monitoring/scripts/video2ctx.mjs', import.meta.url),
-);
-
 describe('hosted video2ctx skills', () => {
   test.each([
     ['video2ctx-api', apiSkill],
     ['video2ctx-monitoring', monitoringSkill],
   ])('%s stays on the authenticated production surface', (_name, skill) => {
     expect(skill).toContain('https://api.video2ctx.dev');
-    expect(skill).toContain('scripts/video2ctx.mjs');
+    expect(skill).toContain('video2ctx --version');
+    expect(skill).toContain('npm install --global video2ctx-cli');
     expect(skill).toContain('auth login');
     expect(skill).toContain('auth status --json');
-    expect(skill).toContain('video2ctx.mjs api');
+    expect(skill).toContain('video2ctx api');
     expect(skill).toContain('VIDEO2CTX_API_KEY');
     expect(skill).toContain('https://api.video2ctx.dev/openapi.json');
     expect(skill).not.toMatch(/all-things-youtube|youtubei\.googleapis\.com|www\.youtube\.com/);
-    expect(skill).not.toMatch(/npm (?:install|add)|npx /);
+    expect(skill).not.toContain('scripts/video2ctx.mjs');
+    expect(skill).not.toMatch(/npx |<skill-directory>/);
     expect(skill).not.toMatch(/fetch\(|curl |Authorization: Bearer \$VIDEO2CTX_API_KEY/);
   });
 
@@ -47,13 +42,14 @@ describe('hosted video2ctx skills', () => {
     expect(apiSkill).toContain('Use instead of youtube-direct');
 
     expect(monitoringSkill).toContain('Stateful video2ctx monitoring');
-    expect(monitoringSkill).toContain('Use video2ctx-api for one-time hosted reads');
+    expect(monitoringSkill).toContain('use video2ctx-api for one-time hosted reads');
   });
 
-  test('ships the same self-contained credential transport in both hosted skills', () => {
-    expect(apiCli.byteLength).toBeGreaterThan(1_000);
-    expect(apiCli.equals(monitoringCli)).toBe(true);
-    expect(apiCli.toString('utf8')).toContain('video2ctx auth login');
+  test('keeps installation explicit and reuses one public credential transport', () => {
+    expect(apiSkill).toContain('public `video2ctx-cli` npm package');
+    expect(monitoringSkill).toContain('public `video2ctx-cli` npm package');
+    expect(apiSkill).toContain('ask the user to approve its installation');
+    expect(monitoringSkill).toContain('ask the user to approve its installation');
   });
 
   test('every explicitly documented hosted route exists in OpenAPI', () => {

@@ -5,8 +5,8 @@ Three [Agent Skills](https://agentskills.io) for working with YouTube data — d
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
 | `youtube-direct` | You want stateless YouTube search or extraction directly from the user's machine, with no account, package installation, or hosted dependency | Node.js 18.17+ |
-| `video2ctx-api` | You want the managed, authenticated alternative: supported endpoints, caching, credit accounting, account identity, and usage reads over the hosted API | Browser login or an `aty_` API key |
-| `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | Browser login or an `aty_` API key |
+| `video2ctx-api` | You want the managed, authenticated alternative: supported endpoints, caching, credit accounting, account identity, and usage reads over the hosted API | `video2ctx` CLI plus browser login or an `aty_` API key |
+| `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | `video2ctx` CLI plus browser login or an `aty_` API key |
 
 The split follows real boundaries: `youtube-direct` is a self-contained direct executable with no account; `video2ctx-api` is the managed, authenticated option for stateless hosted discovery, caching, usage, and account boundaries; `video2ctx-monitoring` is the deliberate stateful exception. Most users need only one of the first two data skills.
 
@@ -32,7 +32,15 @@ Add `-g` to install globally for your user rather than into the current project,
 
 ## Authenticate to the hosted service
 
-The two hosted skills include a self-contained CLI. It opens video2ctx in the browser, asks the user to approve a short-lived device code, and stores the resulting revocable CLI session in private local configuration. An agent can check the active identity with `video2ctx whoami` and revoke the session with `video2ctx auth logout` without reading or handling the credential itself.
+The two hosted skills use the public `video2ctx-cli` npm package. Install it once, then authenticate:
+
+```bash
+npm install --global video2ctx-cli
+video2ctx auth login
+video2ctx whoami --json
+```
+
+The CLI opens video2ctx in the browser, asks the user to approve a short-lived device code, and stores the resulting revocable session in private local configuration. An agent can check the active identity with `video2ctx whoami` and revoke the session with `video2ctx auth logout` without reading or handling the credential itself.
 
 For non-interactive environments, set `VIDEO2CTX_API_KEY` in the process environment. Create a personal key at [the developer dashboard](https://video2ctx.dev/dashboard/developer); never paste it into an agent conversation. CLI sessions and keys carry `data:read` and `account:access` permissions, while API-key management, billing, connected accounts, and account deletion remain browser-only.
 
@@ -41,6 +49,7 @@ For non-interactive environments, set `VIDEO2CTX_API_KEY` in the process environ
 - Product: <https://www.video2ctx.dev>
 - Documentation: <https://docs.video2ctx.dev>
 - OpenAPI 3.1 contract: <https://api.video2ctx.dev/openapi.json>
+- Hosted-service CLI: <https://www.npmjs.com/package/video2ctx-cli>
 - Optional npm library for application developers: <https://www.npmjs.com/package/all-things-youtube>
 - Source: <https://github.com/devhims/video2ctx>
 
@@ -52,4 +61,4 @@ Use of the hosted video2ctx service is additionally governed by its [Terms of Se
 
 ## Contributing
 
-These skills are generated and maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). The local skill carries its executable with it, so an installed copy behaves the same as a checked-out one. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
+These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-direct` carries its executable; the hosted skills use the independently versioned `video2ctx-cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
