@@ -47,7 +47,10 @@ test('authorizes the built CLI in the browser and revokes it on logout', async (
   await page.goto(`/device?user_code=${encodeURIComponent(code!)}`);
   await expect(page.getByText(browserSession.user.email)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Authorize video2ctx CLI?' })).toBeVisible();
-  await page.getByRole('button', { name: 'Approve' }).click();
+  const approveButton = page.getByRole('button', { name: 'Approve' });
+  await expect(approveButton).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+  await expect(approveButton).toHaveCSS('color', 'rgb(255, 255, 255)');
+  await approveButton.click();
   await expect(page.getByRole('heading', { name: 'Device approved' })).toBeVisible();
 
   const loginResult = await waitForExit(login);
