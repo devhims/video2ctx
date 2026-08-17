@@ -114,7 +114,7 @@ describe('OpenAPI and Scalar documentation', () => {
     }
   });
 
-  test('documents API-key authentication and credit response headers for data routes', () => {
+  test('documents API-key and CLI-session authentication with credit response headers for data routes', () => {
     const components = openApiDocument.components as Record<string, any>;
     const paths = openApiDocument.paths as Record<string, Record<string, any>>;
     const dataOperations = [
@@ -131,8 +131,12 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(components.securitySchemes.bearerApiKey).toMatchObject({
       type: 'http', scheme: 'bearer', bearerFormat: 'API key',
     });
+    expect(components.securitySchemes.cliSession).toMatchObject({
+      type: 'http', scheme: 'bearer', bearerFormat: 'CLI session',
+    });
     for (const operation of dataOperations) {
       expect(operation.security).toContainEqual({ bearerApiKey: [] });
+      expect(operation.security).toContainEqual({ cliSession: [] });
       expect(operation.security).toContainEqual({ apiKey: [] });
       expect(operation.responses['200'].headers).toMatchObject({
         'X-Credits-Charged': { $ref: '#/components/headers/CreditsCharged' },
@@ -143,6 +147,19 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(paths['/v1/projects']!.get.security).toContainEqual({ bearerApiKey: [] });
     expect(paths['/v1/billing/checkout']!.post.security).not.toContainEqual({ bearerApiKey: [] });
     expect(paths['/v1/account']!.delete.security).not.toContainEqual({ bearerApiKey: [] });
+    expect(paths['/v1/account']!.delete.security).not.toContainEqual({ cliSession: [] });
+    expect(paths['/v1/account']!.get.security).toContainEqual({ cliSession: [] });
+  });
+
+  test('documents the device authorization protocol without making browser approval a bearer operation', () => {
+    const paths = openApiDocument.paths as Record<string, Record<string, any>>;
+
+    expect(paths['/api/auth/device/code']!.post.security).toEqual([]);
+    expect(paths['/api/auth/device/token']!.post.security).toEqual([]);
+    expect(paths['/api/auth/device']!.get.security).toEqual([{ sessionCookie: [] }]);
+    expect(paths['/api/auth/device/approve']!.post.security).toEqual([{ sessionCookie: [] }]);
+    expect(paths['/api/auth/device/deny']!.post.security).toEqual([{ sessionCookie: [] }]);
+    expect(paths['/api/auth/sign-out']!.post.security).toContainEqual({ cliSession: [] });
   });
 
   test('documents categorized and paginated provider search responses', () => {

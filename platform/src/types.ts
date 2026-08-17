@@ -9,7 +9,7 @@ export interface AppUser {
   name: string;
 }
 
-export type AuthenticationMethod = 'session' | 'api-key' | 'demo';
+export type AuthenticationMethod = 'session' | 'cli-session' | 'api-key' | 'demo';
 
 export interface AuthPrincipal {
   user: AppUser;

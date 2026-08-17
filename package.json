@@ -16,8 +16,14 @@
     "docs:verify": "npm --prefix docs run verify",
     "build:library": "npm --prefix packages/all-things-youtube run build",
     "test:library": "npm --prefix packages/all-things-youtube run test",
-    "pack:library": "npm --prefix packages/all-things-youtube pack",
-    "build": "npm run brand:check && npm run build:library && npm --prefix platform run build && npm --prefix web run build",
+    "pack:library": "npm pack ./packages/all-things-youtube",
+    "skill:bundle": "npm --prefix packages/all-things-youtube run skill:bundle",
+    "skill:check": "npm --prefix packages/all-things-youtube run skill:check",
+    "pack:cli": "npm pack ./packages/video2ctx-cli",
+    "test:auth": "npm --prefix packages/video2ctx-cli test && npm --prefix platform run test:auth",
+    "test:auth:integration": "npm --prefix platform run test:auth:integration",
+    "test:auth:e2e": "npm --prefix packages/video2ctx-cli run build && npm --prefix platform run test:auth:e2e",
+    "build": "npm run brand:check && npm run build:library && npm --prefix packages/video2ctx-cli run build && npm --prefix platform run build && npm --prefix web run build",
     "test": "npm run test:library && npm --prefix platform run test"
   },
   "devDependencies": {

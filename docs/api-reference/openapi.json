@@ -22,6 +22,10 @@
       "description": "Service status and machine-readable documentation."
     },
     {
+      "name": "Authentication",
+      "description": "Better Auth entry points used by the web application."
+    },
+    {
       "name": "Providers",
       "description": "Supported external video providers and their capabilities."
     },
@@ -60,6 +64,10 @@
     {
       "name": "Billing",
       "description": "Checkout, usage, and Stripe webhook handling."
+    },
+    {
+      "name": "Account",
+      "description": "Account lifecycle operations."
     }
   ],
   "paths": {
@@ -152,6 +160,175 @@
         "x-video2ctx-audience": "consumer"
       }
     },
+    "/api/auth/device/code": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "startDeviceAuthorization",
+        "summary": "Start CLI device authorization",
+        "description": "Issues a short-lived device code and a user code for the registered video2ctx CLI client.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "client_id"
+                ],
+                "properties": {
+                  "client_id": {
+                    "type": "string",
+                    "const": "video2ctx-cli"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "const": "data:read account:access"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device authorization details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "device_code",
+                    "user_code",
+                    "verification_uri",
+                    "verification_uri_complete",
+                    "expires_in",
+                    "interval"
+                  ],
+                  "properties": {
+                    "device_code": {
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "user_code": {
+                      "type": "string"
+                    },
+                    "verification_uri": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "verification_uri_complete": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expires_in": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "interval": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/api/auth/device/token": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "operationId": "exchangeDeviceAuthorization",
+        "summary": "Poll for an approved CLI session",
+        "description": "Exchanges an approved device code for a revocable bearer session. Honor the issued polling interval and terminal OAuth device-flow errors.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "grant_type",
+                  "device_code",
+                  "client_id"
+                ],
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "const": "urn:ietf:params:oauth:grant-type:device_code"
+                  },
+                  "device_code": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "client_id": {
+                    "type": "string",
+                    "const": "video2ctx-cli"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approved CLI session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "access_token",
+                    "token_type",
+                    "expires_in",
+                    "scope"
+                  ],
+                  "properties": {
+                    "access_token": {
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "token_type": {
+                      "type": "string",
+                      "const": "Bearer"
+                    },
+                    "expires_in": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "scope": {
+                      "type": "string",
+                      "const": "data:read account:access"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
     "/v1/search": {
       "get": {
         "tags": [
@@ -166,6 +343,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -256,6 +436,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -320,6 +503,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -510,6 +696,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -646,6 +835,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -764,6 +956,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -845,6 +1040,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -933,6 +1131,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1016,6 +1217,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1111,6 +1315,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1217,6 +1424,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1297,6 +1507,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1382,6 +1595,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1493,6 +1709,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1601,6 +1820,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1686,6 +1908,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1735,6 +1960,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1798,6 +2026,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1854,6 +2085,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -1902,6 +2136,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -1980,6 +2217,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2056,6 +2296,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2111,6 +2354,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2188,6 +2434,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2261,6 +2510,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2338,6 +2590,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2412,6 +2667,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2492,6 +2750,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2541,6 +2802,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2602,6 +2866,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2681,6 +2948,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2726,6 +2996,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2779,6 +3052,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2843,6 +3119,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2881,6 +3160,9 @@
           },
           {
             "sessionCookie": []
+          },
+          {
+            "cliSession": []
           },
           {
             "apiKey": []
@@ -2944,6 +3226,9 @@
             "sessionCookie": []
           },
           {
+            "cliSession": []
+          },
+          {
             "apiKey": []
           },
           {
@@ -2981,6 +3266,100 @@
         },
         "x-video2ctx-audience": "consumer"
       }
+    },
+    "/v1/account": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "getAccountIdentity",
+        "summary": "Get the authenticated account identity",
+        "description": "Returns the account attached to the current browser session, CLI session, or personal API key without exposing credential material.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current account identity and authentication method.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "user",
+                    "authentication"
+                  ],
+                  "properties": {
+                    "user": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "email"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "authentication": {
+                      "type": "object",
+                      "required": [
+                        "method"
+                      ],
+                      "properties": {
+                        "method": {
+                          "type": "string",
+                          "enum": [
+                            "session",
+                            "cli-session",
+                            "api-key",
+                            "demo"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
     }
   },
   "components": {
@@ -3002,6 +3381,12 @@
         "scheme": "bearer",
         "bearerFormat": "API key",
         "description": "Permanent personal API key created in the dashboard. Example: curl -H \"Authorization: Bearer aty_…\" https://your-host/v1/projects"
+      },
+      "cliSession": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "CLI session",
+        "description": "Short-lived, revocable session issued by the video2ctx device authorization flow. The official CLI stores and sends this value; never paste it into prompts or logs."
       },
       "demoUser": {
         "type": "apiKey",

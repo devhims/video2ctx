@@ -12,3 +12,5 @@ dist/
 .dev.vars*
 !.dev.vars.example
 .scratch/
+playwright-report/
+test-results/

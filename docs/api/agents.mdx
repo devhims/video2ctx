@@ -1,9 +1,9 @@
 ---
 title: "Use video2ctx from agents"
-description: "Give an agent source-linked video context through the current REST API."
+description: "Give an agent authenticated, source-linked video context with a published skill."
 ---
 
-Agents can call the same hosted REST endpoints as any server application. A reliable integration separates discovery, selective retrieval, and evidence presentation.
+Install `youtube-direct` for direct, no-account stateless access from the user's machine. Install `video2ctx-api` instead for managed, authenticated hosted discovery and extraction, or `video2ctx-monitoring` for the stateful monitor exception. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
 
 <Steps>
   <Step title="Discover narrowly">Search for videos or resolve the relevant resource in your own application before requesting deeper datasets.</Step>
@@ -12,8 +12,6 @@ Agents can call the same hosted REST endpoints as any server application. A reli
   <Step title="Return verifiable evidence">Link claims back to the video and timestamp instead of treating model output as the source.</Step>
 </Steps>
 
-Use a server-side tool wrapper so the API key never enters a model prompt or browser bundle. Bound query length, response size, continuation depth, and the number of fresh operations an agent can initiate.
+Install the hosted CLI with `npm install --global @video2ctx/cli`. It keeps its revocable session in private local configuration. An existing `VIDEO2CTX_API_KEY` remains a non-interactive fallback and takes precedence. Bound query length, response size, continuation depth, and the number of fresh operations an agent can initiate.
 
-<Warning>
-  video2ctx does not currently publish a dedicated Agent API, hosted MCP server, or installable agent skill. Those names describe future product directions, not available contracts.
-</Warning>
+Use the API skill only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use the monitoring skill only for monitors, notifications, and delivery preferences.

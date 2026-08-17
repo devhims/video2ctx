@@ -1,19 +1,34 @@
 ---
 title: "Authentication"
-description: "Authenticate hosted API requests with a personal key."
+description: "Authenticate hosted requests with a CLI session or personal key."
 ---
 
-Use the standard `Authorization` header for server-to-server requests:
+## Agent and CLI access
+
+The hosted video2ctx skills use the public CLI package. Install it once, then start device authorization:
+
+```bash
+npm install --global @video2ctx/cli
+video2ctx auth login
+```
+
+The command opens `video2ctx.dev` and displays a short code. Sign in, confirm that the code and account are correct, and approve the device. The CLI stores the resulting revocable session in local user configuration with private file permissions. Check it with `video2ctx auth status --json` or `video2ctx whoami --json`, and revoke it with `video2ctx auth logout`.
+
+CLI sessions carry `data:read` and `account:access`. They can use provider data, usage, monitors, and notifications. API-key management, billing, connected-account changes, account deletion, and administration remain browser-session-only.
+
+## Personal API keys
+
+For unattended server-to-server applications, create a personal key and use the standard `Authorization` header:
 
 ```http
 Authorization: Bearer aty_…
 ```
 
-`X-API-Key` remains available for compatibility, but bearer authentication is preferred. Browser sessions and API keys share the same account resources and credit ledger.
+`X-API-Key` remains available for compatibility, but bearer authentication is preferred. Browser sessions, CLI sessions, and API keys share the same account and credit ledger.
 
 ## Permissions
 
-Personal API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session or platform operator authorization.
+Personal API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. The published agent skills intentionally expose a narrower surface; the public OpenAPI contract remains the source of truth for each route's accepted credential type.
 
 ## Key safety
 
@@ -23,5 +38,5 @@ Personal API keys can access normal user-owned data, projects, imports, exports,
 - Revoke a key immediately if it appears in logs, screenshots, source control, or support messages.
 
 <Warning>
-  Local demo identities are development-only. Production rejects the `X-Demo-User` header.
+  Never paste a CLI session or API key into an agent prompt. Local demo identities are development-only; production rejects the `X-Demo-User` header.
 </Warning>

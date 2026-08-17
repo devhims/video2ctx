@@ -41,8 +41,10 @@ const queryParameter = (name: string, description: string, schema: Schema, requi
 });
 
 const privateSecurity = [{ sessionCookie: [] }, { demoUser: [] }];
+const browserSessionSecurity = [{ sessionCookie: [] }];
 const personalAccessSecurity = [
   { sessionCookie: [] },
+  { cliSession: [] },
   { bearerApiKey: [] },
   { apiKey: [] },
   { demoUser: [] },
@@ -268,10 +270,10 @@ export const openApiDocument = {
     description: [
       'Interactive contract for the video2ctx platform Worker.',
       'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',
-      'Product routes accept either a Better Auth session cookie or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
+      'Product routes accept a Better Auth browser session, a device-authorized CLI session, or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
       'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',
       'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free. Composite analysis pricing is unchanged.',
-      'API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
+      'Device-authorized CLI sessions and API keys can access normal user-owned data, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
       'When running locally with ENVIRONMENT other than production, set X-Demo-User to any stable value to create and use an isolated demo account.',
     ].join('\n\n'),
   },
@@ -395,6 +397,137 @@ export const openApiDocument = {
           '200': jsonResponse('OAuth redirect details.', { type: 'object', additionalProperties: true }),
           '400': responseRef('BadRequest'),
           '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/api/auth/device/code': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'startDeviceAuthorization',
+        summary: 'Start CLI device authorization',
+        description: 'Issues a short-lived device code and a user code for the registered video2ctx CLI client.',
+        security: [],
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['client_id'],
+          properties: {
+            client_id: { type: 'string', const: 'video2ctx-cli' },
+            scope: { type: 'string', const: 'data:read account:access' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Device authorization details.', {
+            type: 'object',
+            required: ['device_code', 'user_code', 'verification_uri', 'verification_uri_complete', 'expires_in', 'interval'],
+            properties: {
+              device_code: { type: 'string', writeOnly: true },
+              user_code: { type: 'string' },
+              verification_uri: { type: 'string', format: 'uri' },
+              verification_uri_complete: { type: 'string', format: 'uri' },
+              expires_in: { type: 'integer', minimum: 1 },
+              interval: { type: 'integer', minimum: 1 },
+            },
+          }),
+          '400': responseRef('BadRequest'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/api/auth/device/token': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'exchangeDeviceAuthorization',
+        summary: 'Poll for an approved CLI session',
+        description: 'Exchanges an approved device code for a revocable bearer session. Honor the issued polling interval and terminal OAuth device-flow errors.',
+        security: [],
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['grant_type', 'device_code', 'client_id'],
+          properties: {
+            grant_type: { type: 'string', const: 'urn:ietf:params:oauth:grant-type:device_code' },
+            device_code: { type: 'string', writeOnly: true },
+            client_id: { type: 'string', const: 'video2ctx-cli' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Approved CLI session.', {
+            type: 'object',
+            required: ['access_token', 'token_type', 'expires_in', 'scope'],
+            properties: {
+              access_token: { type: 'string', writeOnly: true },
+              token_type: { type: 'string', const: 'Bearer' },
+              expires_in: { type: 'integer', minimum: 1 },
+              scope: { type: 'string', const: 'data:read account:access' },
+            },
+          }),
+          '400': responseRef('BadRequest'),
+          '500': responseRef('ServerError'),
+        },
+      },
+    },
+    '/api/auth/device': {
+      get: {
+        tags: ['Authentication'],
+        operationId: 'verifyDeviceAuthorization',
+        summary: 'Claim a device code in the browser',
+        security: browserSessionSecurity,
+        parameters: [queryParameter('user_code', 'Code displayed by the CLI.', { type: 'string' }, true)],
+        responses: {
+          '200': jsonResponse('Pending device authorization.', { type: 'object', additionalProperties: true }),
+          '400': responseRef('BadRequest'),
+          '401': responseRef('Unauthorized'),
+        },
+      },
+    },
+    '/api/auth/device/approve': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'approveDeviceAuthorization',
+        summary: 'Approve a claimed device code',
+        security: browserSessionSecurity,
+        requestBody: jsonBody({ type: 'object', required: ['userCode'], properties: { userCode: { type: 'string' } } }),
+        responses: {
+          '200': jsonResponse('Device approved.', { type: 'object', properties: { success: { type: 'boolean' } } }),
+          '400': responseRef('BadRequest'),
+          '401': responseRef('Unauthorized'),
+        },
+      },
+    },
+    '/api/auth/device/deny': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'denyDeviceAuthorization',
+        summary: 'Deny a claimed device code',
+        security: browserSessionSecurity,
+        requestBody: jsonBody({ type: 'object', required: ['userCode'], properties: { userCode: { type: 'string' } } }),
+        responses: {
+          '200': jsonResponse('Device denied.', { type: 'object', properties: { success: { type: 'boolean' } } }),
+          '400': responseRef('BadRequest'),
+          '401': responseRef('Unauthorized'),
+        },
+      },
+    },
+    '/api/auth/get-session': {
+      get: {
+        tags: ['Authentication'],
+        operationId: 'getAuthSession',
+        summary: 'Get the current Better Auth session',
+        security: [{ sessionCookie: [] }, { cliSession: [] }],
+        responses: {
+          '200': jsonResponse('Current session or null.', { type: ['object', 'null'], additionalProperties: true }),
+          '401': responseRef('Unauthorized'),
+        },
+      },
+    },
+    '/api/auth/sign-out': {
+      post: {
+        tags: ['Authentication'],
+        operationId: 'signOut',
+        summary: 'Revoke the current browser or CLI session',
+        security: [{ sessionCookie: [] }, { cliSession: [] }],
+        responses: {
+          '200': jsonResponse('Session revoked.', { type: 'object', additionalProperties: true }),
+          '401': responseRef('Unauthorized'),
         },
       },
     },
@@ -1213,6 +1346,40 @@ export const openApiDocument = {
       },
     },
     '/v1/account': {
+      get: {
+        tags: ['Account'],
+        operationId: 'getAccountIdentity',
+        summary: 'Get the authenticated account identity',
+        description: 'Returns the account attached to the current browser session, CLI session, or personal API key without exposing credential material.',
+        security: accountSecurity,
+        responses: {
+          '200': jsonResponse('Current account identity and authentication method.', {
+            type: 'object',
+            required: ['user', 'authentication'],
+            properties: {
+              user: {
+                type: 'object',
+                required: ['id', 'email'],
+                properties: {
+                  id: { type: 'string' },
+                  email: { type: 'string', format: 'email' },
+                  name: { type: ['string', 'null'] },
+                },
+              },
+              authentication: {
+                type: 'object',
+                required: ['method'],
+                properties: {
+                  method: { type: 'string', enum: ['session', 'cli-session', 'api-key', 'demo'] },
+                },
+              },
+            },
+          }),
+          '401': responseRef('Unauthorized'),
+          '403': responseRef('Forbidden'),
+          '500': responseRef('ServerError'),
+        },
+      },
       delete: {
         tags: ['Account'],
         operationId: 'deleteAccount',
@@ -1246,6 +1413,12 @@ export const openApiDocument = {
         scheme: 'bearer',
         bearerFormat: 'API key',
         description: 'Permanent personal API key created in the dashboard. Example: curl -H "Authorization: Bearer aty_…" https://your-host/v1/projects',
+      },
+      cliSession: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'CLI session',
+        description: 'Short-lived, revocable session issued by the video2ctx device authorization flow. The official CLI stores and sends this value; never paste it into prompts or logs.',
       },
       demoUser: {
         type: 'apiKey',

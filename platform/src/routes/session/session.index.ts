@@ -1,6 +1,11 @@
 import { Hono } from 'hono';
 import type { App, ImportPayload } from '../../types';
-import { requireAccountPrincipal, requireSessionPrincipal, requireUser } from '../../middlewares/authentication';
+import {
+  requireAccountPrincipal,
+  requirePrincipal,
+  requireSessionPrincipal,
+  requireUser,
+} from '../../middlewares/authentication';
 import { ApiError, asId, body, now, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
@@ -31,6 +36,7 @@ export const ACCOUNT_ROUTE_PATTERNS = [
   '/notifications',
   '/notifications/*',
   '/notification-preferences',
+  '/account',
 ] as const;
 
 export const SESSION_ONLY_ROUTE_PATTERNS = [
@@ -38,11 +44,18 @@ export const SESSION_ONLY_ROUTE_PATTERNS = [
   '/oauth/youtube',
   '/billing/checkout',
   '/admin/*',
-  '/account',
 ] as const;
 
 for (const path of ACCOUNT_ROUTE_PATTERNS) sessionRoutes.use(path, requireAccountPrincipal);
 for (const path of SESSION_ONLY_ROUTE_PATTERNS) sessionRoutes.use(path, requireSessionPrincipal);
+
+sessionRoutes.get('/account', (c) => {
+  const principal = requirePrincipal(c);
+  return c.json({
+    user: principal.user,
+    authentication: { method: principal.method },
+  });
+});
 
 sessionRoutes.get('/projects', async (c) => {
   const user = requireUser(c);
@@ -355,7 +368,7 @@ sessionRoutes.get('/admin/jobs', async (c) => {
   return c.json({ jobs: jobs.results });
 });
 
-sessionRoutes.delete('/account', async (c) => {
+sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
   await disconnectYoutube(c.env, user.id);
   await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);

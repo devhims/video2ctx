@@ -150,6 +150,38 @@ describe('request authentication', () => {
     await expect(keyResponse.json()).resolves.toMatchObject({ error: { code: 'SESSION_REQUIRED' } });
   });
 
+  test('classifies a non-API-key Bearer token as a restricted CLI session', async () => {
+    authState.getSession.mockResolvedValue(session());
+
+    const dataResponse = await request('/data', { authorization: 'Bearer cli-session-token' });
+    expect(dataResponse.status).toBe(200);
+    await expect(dataResponse.json()).resolves.toMatchObject({
+      method: 'cli-session',
+      permissions: { data: ['read'], account: ['access'] },
+    });
+
+    const accountResponse = await request('/account-data', { authorization: 'Bearer cli-session-token' });
+    expect(accountResponse.status).toBe(200);
+
+    const sessionOnlyResponse = await request('/session', { authorization: 'Bearer cli-session-token' });
+    expect(sessionOnlyResponse.status).toBe(403);
+    await expect(sessionOnlyResponse.json()).resolves.toMatchObject({ error: { code: 'SESSION_REQUIRED' } });
+    expect(authState.verifyApiKey).not.toHaveBeenCalled();
+  });
+
+  test('does not let an invalid CLI Bearer token fall back to a browser cookie', async () => {
+    authState.getSession.mockResolvedValue(null);
+
+    const response = await request('/data', {
+      authorization: 'Bearer invalid-cli-session',
+      cookie: 'better-auth.session_token=valid-browser-session',
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'INVALID_SESSION_TOKEN' } });
+    expect(authState.getSession).toHaveBeenCalledOnce();
+  });
+
   test('returns 403 when a valid API key lacks the route permission', async () => {
     authState.verifyApiKey.mockResolvedValue({
       ...validKey(),
@@ -209,6 +241,17 @@ describe('API key migration', () => {
     expect(sql).toContain('user_id TEXT REFERENCES user(id) ON DELETE CASCADE');
     expect(sql).toContain('project_id TEXT REFERENCES projects(id) ON DELETE CASCADE');
     expect(sql).toContain('search_item_id TEXT');
+  });
+
+  test('adds the Better Auth device authorization schema', () => {
+    const sql = readFileSync(new URL('../migrations/0013_device_authorization.sql', import.meta.url), 'utf8');
+    expect(sql).toContain('CREATE TABLE deviceCode');
+    expect(sql).toContain('deviceCode TEXT NOT NULL UNIQUE');
+    expect(sql).toContain('userCode TEXT NOT NULL UNIQUE');
+    expect(sql).toContain('userId TEXT REFERENCES user(id) ON DELETE CASCADE');
+    expect(sql).toContain('pollingInterval INTEGER');
+    expect(sql).toContain('clientId TEXT');
+    expect(sql).toContain('scope TEXT');
   });
 });
 
