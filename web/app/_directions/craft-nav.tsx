@@ -1,6 +1,6 @@
 'use client';
 
-import { List, X } from '@phosphor-icons/react';
+import { GithubLogo, List, X } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import { authClient } from '../../lib/auth-client';
 
@@ -8,7 +8,6 @@ const LINKS = [
   { label: 'Docs', href: 'https://docs.video2ctx.dev' },
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
-  { label: 'GitHub', href: 'https://github.com/devhims/video2ctx' },
   { label: 'CLI + Skill', href: '#agent-setup', isNew: true },
 ];
 
@@ -65,6 +64,16 @@ export function CraftNav() {
         <div className='craft-nav-actions'>
           <a className='craft-nav-account' href='/dashboard'>
             {session?.user ? 'Dashboard' : 'Sign in'}
+          </a>
+          <a
+            className='craft-nav-github'
+            href='https://github.com/devhims/video2ctx'
+            target='_blank'
+            rel='noreferrer'
+            aria-label='Open video2ctx on GitHub'
+            title='GitHub'
+          >
+            <GithubLogo size={18} weight='fill' aria-hidden='true' />
           </a>
           <button
             className='craft-nav-menu'

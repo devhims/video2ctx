@@ -151,6 +151,25 @@ html:has(.craft) body {
   gap: var(--space-xs);
 }
 
+.craft-nav-github {
+  width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--rule-strong));
+  border-radius: var(--radius-home-pill);
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition:
+    transform var(--press) var(--out),
+    border-color var(--control) var(--out),
+    background var(--control) var(--out),
+    color var(--control) var(--out);
+}
+
 .craft-nav-account {
   min-height: 2.25rem;
   padding-inline: var(--space-lg);
@@ -501,9 +520,31 @@ html:has(.craft) body {
 
 .craft-context-word {
   display: inline-block;
+  position: relative;
+  isolation: isolate;
   font-family: var(--font-home-pixel);
   font-weight: 500;
   letter-spacing: -0.02em;
+}
+
+/* The accessible word stays readable beneath a canvas of independently
+ * flickering cells. The canvas is text-masked in the component, so no pixel can
+ * escape the glyphs or compete with the rest of the headline. */
+.flickering-pixel-text-label {
+  color: var(--ink);
+}
+
+.craft-context-word[data-flicker-ready='true'] .flickering-pixel-text-label {
+  opacity: 0;
+}
+
+.flickering-pixel-text-canvas {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
 }
 
 .craft-sub {
@@ -1441,6 +1482,7 @@ html:has(.craft) body {
 .craft-primary:active,
 .craft-secondary:active,
 .craft-build-cta:active,
+.craft-nav-github:active,
 .craft-nav-account:active,
 .craft-nav-menu:active {
   transform: scale(0.97);
@@ -2054,6 +2096,7 @@ html:has(.craft) body {
   }
 
   .craft-nav-account:hover,
+  .craft-nav-github:hover,
   .craft-nav-menu:hover,
   .craft-build-cta:hover,
   .craft-primary:hover,
@@ -2063,6 +2106,12 @@ html:has(.craft) body {
   .craft-copy-action:hover,
   .craft-load-comments:hover {
     transform: translateY(-1px);
+  }
+
+  .craft-nav-github:hover {
+    border-color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 16%, transparent);
+    color: var(--ink);
   }
 
   .craft-pricing-cta:hover {
@@ -2339,6 +2388,15 @@ html:has(.craft) body {
 /* Reduced motion means fewer and gentler, not none — opacity survives because
  * it aids comprehension; movement and clipping do not. */
 @media (prefers-reduced-motion: reduce) {
+  .flickering-pixel-text-label {
+    color: var(--ink);
+    opacity: 1 !important;
+  }
+
+  .flickering-pixel-text-canvas {
+    display: none;
+  }
+
   .craft *,
   .craft *::before,
   .craft *::after {

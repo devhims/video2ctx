@@ -11,7 +11,7 @@ Search YouTube and get transcripts/captions, comments, video details, channels, 
 [![API key](https://img.shields.io/badge/API%20key-not%20required-2ea44f)](#scope-and-stability)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/devhims/video2ctx/blob/main/packages/all-things-youtube/LICENSE)
 
-[Quick start](#quick-start) · [API](#api-at-a-glance) · [Pagination](#pagination) · [Reliability](#retries-and-rate-limits) · [Hosting](#using-the-library-vs-hosting-an-api)
+[Website](https://video2ctx.dev/) · [Quick start](#quick-start) · [API](#api-at-a-glance) · [Pagination](#pagination) · [Reliability](#retries-and-rate-limits) · [Hosting](#using-the-library-vs-hosting-an-api)
 
 </div>
 
@@ -594,6 +594,10 @@ Live tests are best treated as integration checks: upstream availability, locali
 
 - Public data only; private videos, account gates, and regional restrictions are not bypassed.
 - No YouTube Data API key or OAuth setup is required.
+
+## Support the project
+
+`all-things-youtube` is open source and independently maintained as part of [video2ctx](https://video2ctx.dev/). If it brings value to your work, [starring the repository](https://github.com/devhims/video2ctx) is a simple way to support its continued development.
 
 ## Disclaimer
 
