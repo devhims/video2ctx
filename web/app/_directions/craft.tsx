@@ -15,6 +15,7 @@ import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
 import { CraftPricing } from './craft-pricing';
 import { Flashlight } from './flashlight';
+import { FlickeringPixelText } from '../_components/flickering-pixel-text';
 import { ArrowRight } from '@phosphor-icons/react/ssr';
 
 const PARTS = [
@@ -126,7 +127,11 @@ export function CraftDirection() {
           </span>
         </a>
         <h1>
-          Video in. <span className='craft-context-word'>Context</span> Out.
+          Video in.{' '}
+          <FlickeringPixelText className='craft-context-word'>
+            Context
+          </FlickeringPixelText>{' '}
+          Out.
         </h1>
         <p className='craft-sub'>
           Everything your agent needs to understand videos.
