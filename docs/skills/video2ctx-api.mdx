@@ -1,12 +1,13 @@
 ---
 title: "Use the hosted API skill"
-description: "Use video2ctx-api for managed reads, account and usage details, and fallback after direct access fails."
+description: "Use video2ctx-api for production applications, managed reads, account and usage details, and direct-access fallback."
 ---
 
 `video2ctx-api` teaches an agent to use the authenticated production API through the public `video2ctx` CLI. It provides managed infrastructure, caching and credit accounting while keeping credentials out of the prompt.
 
 ## Reach for it when
 
+- You are building a production application
 - You ask for account identity, usage, or credit balance
 - You explicitly want the managed hosted service
 - A [`youtube-direct`](/skills/youtube-direct) operation fails
@@ -19,7 +20,7 @@ The skill supports stateless YouTube search, browse, transcripts, caption tracks
 Install the CLI and authorize the machine once:
 
 ```bash
-npm install --global @video2ctx/cli
+npm i -g @video2ctx/cli
 video2ctx auth login
 video2ctx whoami --json
 ```
