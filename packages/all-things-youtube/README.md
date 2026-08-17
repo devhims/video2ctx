@@ -35,6 +35,8 @@ npm install all-things-youtube
 
 Requires Node.js 18 or newer. The package uses the runtime's standard `fetch`; you can supply your own implementation when needed.
 
+The optional `all-things-youtube/watch` entry point uses a system FFmpeg executable for exact frames. Storyboard and transcript indexing does not require FFmpeg.
+
 > Keep calls server-side. Direct browser calls are commonly blocked by CORS and make every user's browser responsible for upstream rate limits.
 
 ## Quick start
@@ -105,8 +107,43 @@ All functions are named exports and accept a single options object.
 | Channel videos    | `getChannelVideos()`    | One sorted, paginated Videos-tab page              |
 | Channel playlists | `getChannelPlaylists()` | One sorted, paginated Playlists-tab page           |
 | Playlist          | `getPlaylist()`         | Playlist metadata and one page of videos           |
+| Watch index       | `getWatchIndex()`       | Timed transcript and storyboard contact sheets     |
+| Exact frames      | `extractFrames()`       | Best-effort timestamped JPEG files                  |
 
-The public entry point intentionally exposes these task functions rather than a configurable low-level client.
+The original task functions remain on the main entry point. The two visual functions are exported from `all-things-youtube/watch`.
+
+## Visual context
+
+Use the storyboard/transcript index to choose focused timestamps before decoding exact frames:
+
+```ts
+import { getWatchIndex, extractFrames } from 'all-things-youtube/watch';
+
+const outputDir = '/tmp/youtube-watch';
+const index = await getWatchIndex({
+  videoId: '4vItmdk8F_M',
+  outputDir,
+  granularity: 'segment',
+});
+
+for (const sheet of index.storyboard?.sheets ?? []) {
+  console.log(sheet.path, sheet.firstFrameIndex, sheet.intervalMs);
+}
+
+const result = await extractFrames({
+  videoId: index.videoId,
+  timestampsMs: [30_000, 686_000],
+  outputDir,
+  maxWidth: 1280,
+});
+
+console.log(result.frames);
+console.log(result.failures);
+```
+
+`getWatchIndex()` returns complete contact-sheet paths and tile mappings without exposing YouTube's storyboard URLs. Transcript timing defaults to segments; pass `granularity: 'word'` only when word timing is necessary.
+
+`extractFrames()` accepts one to 30 timestamps, uses the best seekable public media format, and may fall back below 720p. It keeps signed media URLs in memory, gives FFmpeg a localhost proxy URL, and returns successful frames alongside per-timestamp failures. Install FFmpeg on `PATH`, set `FFMPEG_PATH`, or pass `ffmpegPath`.
 
 ## Working with responses
 

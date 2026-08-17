@@ -1,14 +1,15 @@
 # video2ctx agent skills
 
-Three [Agent Skills](https://agentskills.io) for working with YouTube data — directly from the user's machine, through the hosted HTTP API, or as scheduled monitors. They work in any skills-compatible agent (Claude Code, Codex, Cursor, OpenCode, and others).
+Four [Agent Skills](https://agentskills.io) for working with YouTube data — directly from the user's machine, visually through FFmpeg, through the hosted HTTP API, or as scheduled monitors. They work in any skills-compatible agent (Claude Code, Codex, Cursor, OpenCode, and others).
 
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
 | `youtube-direct` | You want an ordinary one-off public YouTube search, transcript summary, or extraction directly from the user's machine | Node.js 18.17+ |
+| `youtube-watch` | You need to inspect slides, charts, demonstrations, interfaces, on-screen text, or other visual evidence | Node.js 18.17+ and FFmpeg |
 | `video2ctx-api` | You need account or usage details, the managed hosted API, caching and credit accounting, or an automatic fallback after direct access fails | `video2ctx` CLI plus browser login or an `aty_` API key |
 | `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | `video2ctx` CLI plus browser login or an `aty_` API key |
 
-The split follows real boundaries: start ordinary stateless public data with the self-contained `youtube-direct` executable, then continue with `video2ctx-api` automatically if direct access fails. Route account and usage details, managed hosted workflows, and caching directly to `video2ctx-api`. `video2ctx-monitoring` is the deliberate stateful exception.
+The split follows real boundaries: use `youtube-direct` for ordinary public data and `youtube-watch` when the answer depends on video imagery. Continue through `video2ctx-api` when direct access fails or managed hosting is required. `video2ctx-monitoring` is the deliberate stateful exception.
 
 ## Install
 
@@ -22,7 +23,11 @@ npx skills add devhims/video2ctx --list
 npx skills add devhims/video2ctx --skill youtube-direct
 ```
 
-Install all three:
+```bash
+npx skills add devhims/video2ctx --skill youtube-watch
+```
+
+Install all four:
 
 ```bash
 npx skills add devhims/video2ctx --all
@@ -61,4 +66,4 @@ Use of the hosted video2ctx service is additionally governed by its [Terms of Se
 
 ## Contributing
 
-These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-direct` carries its executable; the hosted skills use the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
+These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). Both direct skills carry their executables; `youtube-watch` additionally uses the machine's FFmpeg installation. The hosted skills use the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
