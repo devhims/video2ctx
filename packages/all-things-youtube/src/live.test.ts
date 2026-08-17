@@ -13,6 +13,10 @@ import {
   getTracks,
   getTranscript,
 } from './index';
+import { extractFrames, getWatchIndex } from './watch';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const describeLive = process.env.YOUTUBE_LIVE === '1' ? describe : describe.skip;
 
@@ -49,4 +53,22 @@ describeLive('live public API', () => {
     expect(playlists.playlists.length).toBeGreaterThan(0);
     expect(playlist.id).toBe(playlistId);
   }, 120_000);
+
+  test('loads a storyboard index and exact best-effort frames', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'all-things-youtube-live-watch-'));
+    try {
+      const index = await getWatchIndex({
+        videoId: '4vItmdk8F_M', outputDir, maxStoryboardSheets: 1,
+      });
+      const frames = await extractFrames({
+        videoId: '4vItmdk8F_M', outputDir, timestampsMs: [30_000, 686_000, 1_000_000],
+      });
+      expect(index.storyboard?.sheets.length).toBe(1);
+      expect(index.transcript?.segments.length).toBeGreaterThan(0);
+      expect(frames.frames).toHaveLength(3);
+      expect(JSON.stringify({ index, frames })).not.toContain('googlevideo.com');
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

@@ -324,7 +324,10 @@ export type YouTubeErrorCode =
   | 'AUTH_REQUIRED'
   | 'RATE_LIMITED'
   | 'UPSTREAM_ERROR'
-  | 'INVALID_RESPONSE';
+  | 'INVALID_RESPONSE'
+  | 'DEPENDENCY_MISSING'
+  | 'MEDIA_UNAVAILABLE'
+  | 'FRAME_EXTRACTION_FAILED';
 
 export class YouTubeClientError extends Error {
   readonly code: YouTubeErrorCode;

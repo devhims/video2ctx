@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube Watch"
+  short_description: "Inspect YouTube transcripts, storyboards, and exact frames"
+  default_prompt: "Use $youtube-watch to inspect a YouTube video visually with timestamped frames."

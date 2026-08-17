@@ -6,13 +6,18 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const entryPoint = resolve(packageRoot, 'skill/entry.ts');
-const committedBundle = resolve(
-  packageRoot,
-  '../../.agents/skills/youtube-direct/scripts/youtube.mjs',
-);
+const bundles = [
+  {
+    entryPoint: resolve(packageRoot, 'skill/entry.ts'),
+    committedBundle: resolve(packageRoot, '../../.agents/skills/youtube-direct/scripts/youtube.mjs'),
+  },
+  {
+    entryPoint: resolve(packageRoot, 'skill/watch-entry.ts'),
+    committedBundle: resolve(packageRoot, '../../.agents/skills/youtube-watch/scripts/watch.mjs'),
+  },
+];
 
-async function bundle(outfile) {
+async function bundle(entryPoint, outfile) {
   const licenses = await Promise.all([
     ['all-things-youtube', resolve(packageRoot, 'LICENSE')],
     ['he', resolve(packageRoot, 'node_modules/he/LICENSE-MIT.txt')],
@@ -58,20 +63,21 @@ function digest(value) {
 
 async function check() {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), 'all-things-youtube-skill-'));
-  const candidate = join(temporaryDirectory, 'youtube.mjs');
   try {
-    await bundle(candidate);
-    const [actual, expected] = await Promise.all([
-      readFile(candidate),
-      readFile(committedBundle).catch(() => undefined),
-    ]);
-    if (!expected || !actual.equals(expected)) {
-      console.error('The youtube-direct skill bundle is stale.');
-      console.error(`Generated: ${digest(actual)}`);
-      console.error(`Committed: ${expected ? digest(expected) : 'missing'}`);
-      console.error('Run: npm --prefix packages/all-things-youtube run skill:bundle');
-      console.error('Then commit .agents/skills/youtube-direct/scripts/youtube.mjs');
-      process.exitCode = 1;
+    for (const [index, definition] of bundles.entries()) {
+      const candidate = join(temporaryDirectory, `skill-${index}.mjs`);
+      await bundle(definition.entryPoint, candidate);
+      const [actual, expected] = await Promise.all([
+        readFile(candidate),
+        readFile(definition.committedBundle).catch(() => undefined),
+      ]);
+      if (!expected || !actual.equals(expected)) {
+        console.error(`The ${definition.committedBundle.split('/').at(-3)} skill bundle is stale.`);
+        console.error(`Generated: ${digest(actual)}`);
+        console.error(`Committed: ${expected ? digest(expected) : 'missing'}`);
+        console.error('Run: npm --prefix packages/all-things-youtube run skill:bundle');
+        process.exitCode = 1;
+      }
     }
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
@@ -79,10 +85,12 @@ async function check() {
 }
 
 async function write() {
-  await mkdir(dirname(committedBundle), { recursive: true });
-  await bundle(committedBundle);
-  await chmod(committedBundle, 0o755);
-  console.log(`Wrote ${committedBundle}`);
+  for (const definition of bundles) {
+    await mkdir(dirname(definition.committedBundle), { recursive: true });
+    await bundle(definition.entryPoint, definition.committedBundle);
+    await chmod(definition.committedBundle, 0o755);
+    console.log(`Wrote ${definition.committedBundle}`);
+  }
 }
 
 if (process.argv.includes('--check')) {

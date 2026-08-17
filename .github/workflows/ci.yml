@@ -22,11 +22,17 @@ jobs:
           cache: npm
           cache-dependency-path: packages/all-things-youtube/package-lock.json
       - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install --yes ffmpeg
       - run: npm test
+        env:
+          WATCH_FFMPEG_TEST: '1'
       - run: npm run build
       - run: npm run skill:check
       - run: test -x ../../.agents/skills/youtube-direct/scripts/youtube.mjs
       - run: node ../../.agents/skills/youtube-direct/scripts/youtube.mjs --help
+      - run: test -x ../../.agents/skills/youtube-watch/scripts/watch.mjs
+      - run: node ../../.agents/skills/youtube-watch/scripts/watch.mjs --help
+      - run: npm pack --dry-run
 
   platform:
     name: Platform
