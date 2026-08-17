@@ -1,0 +1,68 @@
+---
+title: "Install agent skills"
+description: "Add the video2ctx skills to a compatible agent and configure hosted access only when needed."
+---
+
+The video2ctx skill collection supports two local workflows and two hosted workflows. Install only the skills you need, or add all four at once.
+
+## Requirements
+
+| Workflow | Requirements |
+| --- | --- |
+| Direct text and metadata | Node.js 18.17 or newer |
+| Visual inspection | Node.js 18.17 or newer; FFmpeg is required for exact frames |
+| Hosted API | `@video2ctx/cli` and a browser-authorized session or personal API key |
+| Monitoring | `@video2ctx/cli` and a browser-authorized session or personal API key |
+
+## Add the skills
+
+List the published skills before installing:
+
+```bash
+npx skills add devhims/video2ctx --list
+```
+
+Install the complete collection:
+
+```bash
+npx skills add devhims/video2ctx --all
+```
+
+Or install a single skill:
+
+```bash
+npx skills add devhims/video2ctx --skill youtube-direct
+```
+
+Add `-g` to install for your user instead of the current project. Use `-a <agent>` to target a particular compatible agent, and `-y` to skip the confirmation prompt.
+
+<Note>
+  The local `youtube-direct` and `youtube-watch` skills carry their own executables. They do not require a video2ctx account, API key, hosted service, or npm package.
+</Note>
+
+## Configure hosted access
+
+Only `video2ctx-api` and `video2ctx-monitoring` require the hosted CLI. Install it once, then authorize the machine in your browser:
+
+```bash
+npm install --global @video2ctx/cli
+video2ctx auth login
+video2ctx whoami --json
+```
+
+The login flow stores a revocable session in private local configuration. End the session at any time with:
+
+```bash
+video2ctx auth logout
+```
+
+For unattended environments, configure `VIDEO2CTX_API_KEY` in the process environment. Create a personal key in the [developer dashboard](https://video2ctx.dev/dashboard/developer). Never paste a CLI session or API key into an agent conversation.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Start with local data" icon="bolt" href="/skills/youtube-direct">Use the default skill for public YouTube text and metadata.</Card>
+  <Card title="Inspect video imagery" icon="eye" href="/skills/youtube-watch">Use storyboards and exact frames for visual questions.</Card>
+  <Card title="Use hosted reads" icon="cloud" href="/skills/video2ctx-api">Understand managed access, identity, usage, and fallback behavior.</Card>
+  <Card title="Set up monitoring" icon="radar" href="/skills/video2ctx-monitoring">Create recurring checks and consume notifications.</Card>
+</CardGroup>

@@ -1,0 +1,42 @@
+---
+title: 'Build with API'
+description: 'Bring normalized, source-linked video context into your own applications.'
+---
+
+The hosted video2ctx API is the programmatic route through the product. Use it to search and inspect YouTube data, retrieve normalized transcripts and related context, build research workflows, and manage monitors from server-side software.
+
+The production API is available at `https://api.video2ctx.dev`. Product routes use the versioned `/v1` prefix.
+
+<Card title='Make your first request' icon='terminal' href='/api/quickstart'>
+  Create a personal key and retrieve a normalized transcript from the hosted API.
+</Card>
+
+## Build an integration
+
+<CardGroup cols={2}>
+  <Card title='Authentication' icon='key' href='/api/authentication'>
+    Choose a personal API key or device-authorized CLI session and keep credentials safe.
+  </Card>
+  <Card title='Response conventions' icon='code' href='/api/conventions'>
+    Understand pagination, partial results, warnings, credit metadata, and errors.
+  </Card>
+  <Card title='Discover sources' icon='magnifying-glass' href='/api/discovery'>
+    Search for videos, channels, and playlists before requesting deeper datasets.
+  </Card>
+  <Card title='Node.js library' icon='node-js' href='/api/node-library'>
+    Use the supported TypeScript client in a server-side Node.js application.
+  </Card>
+</CardGroup>
+
+## Common workflows
+
+<CardGroup cols={2}>
+  <Card title='Provider entities' icon='database' href='/api/entities'>Retrieve videos, transcripts, comments, channels, playlists, and related metadata.</Card>
+  <Card title='Research' icon='book-open' href='/api/research'>Keep source-linked evidence and research outputs connected.</Card>
+  <Card title='Monitoring' icon='radar' href='/api/monitoring'>Create recurring checks and consume new-video notifications.</Card>
+  <Card title='Interactive reference' icon='brackets-curly' href='/api-reference/introduction'>Explore the complete OpenAPI contract and try requests interactively.</Card>
+</CardGroup>
+
+<Note>
+  Keep API keys and CLI sessions in private server or local configuration. Never expose them in browser bundles, prompts, logs, screenshots, or source control.
+</Note>

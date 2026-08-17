@@ -1,0 +1,49 @@
+---
+title: "Use the hosted API skill"
+description: "Use video2ctx-api for managed reads, account and usage details, and fallback after direct access fails."
+---
+
+`video2ctx-api` teaches an agent to use the authenticated production API through the public `video2ctx` CLI. It provides managed infrastructure, caching and credit accounting while keeping credentials out of the prompt.
+
+## Reach for it when
+
+- You ask for account identity, usage, or credit balance
+- You explicitly want the managed hosted service
+- A [`youtube-direct`](/skills/youtube-direct) operation fails
+- Your workflow needs hosted caching or a stable production API boundary
+
+The skill supports stateless YouTube search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Monitoring belongs to [`video2ctx-monitoring`](/skills/video2ctx-monitoring).
+
+## Authentication
+
+Install the CLI and authorize the machine once:
+
+```bash
+npm install --global @video2ctx/cli
+video2ctx auth login
+video2ctx whoami --json
+```
+
+The browser flow stores a revocable session in private local configuration. For non-interactive environments, configure `VIDEO2CTX_API_KEY` without placing the key in a conversation, log, screenshot, or source file.
+
+<Card title="Authentication details" icon="key" href="/api/authentication">
+  Learn how CLI sessions, personal API keys, permissions, and revocation work.
+</Card>
+
+## What the agent does
+
+<Steps>
+  <Step title="Confirm identity">Checks the installed CLI and active account before making a hosted data request.</Step>
+  <Step title="Use the shortest route">Fetches a known resource directly instead of spending a request on provider discovery.</Step>
+  <Step title="Request only what is needed">Uses compact transcript text by default and asks for deeper timing or additional datasets only when required.</Step>
+  <Step title="Preserve response meaning">Keeps partial flags, warnings, continuations, settled credit metadata, request IDs, and classified errors intact.</Step>
+</Steps>
+
+## Scope
+
+The API skill is intentionally narrower than the complete public API. It covers stateless provider data, account identity, and usage. Projects, trends, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration remain outside the skill.
+
+<CardGroup cols={2}>
+  <Card title="Response conventions" icon="code" href="/api/conventions">Understand pagination, warnings, credits, retries, and errors.</Card>
+  <Card title="Interactive API reference" icon="brackets-curly" href="/api-reference/introduction">Explore the complete public contract for application development.</Card>
+</CardGroup>

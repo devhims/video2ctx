@@ -27,6 +27,7 @@
       {
         "group": "Dashboard",
         "pages": [
+          "dashboard",
           "dashboard/getting-started",
           "dashboard/sources",
           "dashboard/data-options",
@@ -38,8 +39,20 @@
         ]
       },
       {
-        "group": "Build with the API",
+        "group": "Build with Agents",
         "pages": [
+          "agents",
+          "skills/installation",
+          "skills/youtube-direct",
+          "skills/youtube-watch",
+          "skills/video2ctx-api",
+          "skills/video2ctx-monitoring"
+        ]
+      },
+      {
+        "group": "Build with API",
+        "pages": [
+          "api",
           "api/quickstart",
           "api/authentication",
           "api/conventions",
@@ -47,8 +60,7 @@
           "api/entities",
           "api/research",
           "api/monitoring",
-          "api/node-library",
-          "api/agents"
+          "api/node-library"
         ]
       },
       {
