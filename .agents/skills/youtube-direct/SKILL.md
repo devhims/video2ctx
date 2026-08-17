@@ -1,6 +1,6 @@
 ---
 name: youtube-direct
-description: Direct, no-account YouTube search and extraction from the user's machine. This is the default for one-off public YouTube requests, especially fetching or summarizing a transcript, plus caption tracks, comments, video details, end screens, channels, and playlists. Requires no video2ctx account, API key, hosted service, or npm installation. Use video2ctx-api only for an explicitly requested hosted workflow, managed caching, usage or account data, or an approved fallback after direct access fails.
+description: Direct, no-account YouTube search and extraction from the user's machine. This is the first route for one-off public YouTube requests, especially fetching or summarizing a transcript, plus caption tracks, comments, video details, end screens, channels, and playlists. Requires no video2ctx account, API key, hosted service, or npm installation. If a direct operation fails, continue with video2ctx-api; use the hosted skill directly for account or usage details and managed hosted workflows.
 ---
 
 # YouTube Direct
@@ -61,7 +61,7 @@ Use `--help` as the source of truth for flags and accepted values.
 
 ## Keep integration boundaries clear
 
-Use this skill for ordinary stateless public YouTube operations from the user's machine, even when the hosted CLI happens to be installed or authenticated. Use `video2ctx-api` when the user explicitly wants the managed hosted API, account or usage operations, or as a fallback after direct access fails. Use `video2ctx-monitoring` for the stateful monitoring exception.
+Start ordinary stateless public YouTube operations from the user's machine with this skill. If a direct operation fails, continue with `video2ctx-api` without asking the user to choose a fallback. Use `video2ctx-api` directly for account or usage operations and managed hosted workflows. Use `video2ctx-monitoring` for the stateful monitoring exception.
 
 ## Done when
 

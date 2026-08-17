@@ -1,12 +1,12 @@
 ---
 name: video2ctx-api
-description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use only when the user explicitly asks for video2ctx or a hosted API, needs managed caching or infrastructure, wants account identity or usage and credit data, or approves hosted fallback after direct YouTube access fails. Includes stateless search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Ordinary one-off public YouTube requests belong to youtube-direct; monitoring has its own skill.
+description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use for account identity, usage and credit data, managed caching or infrastructure, an explicitly hosted workflow, or automatically when a youtube-direct operation fails. Includes stateless search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Start ordinary one-off public YouTube requests with youtube-direct; monitoring has its own skill.
 license: Apache-2.0
 ---
 
 # video2ctx API
 
-Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`. Do not select this skill merely because the CLI is installed or authenticated.
+Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`. Route account and usage requests here immediately. When `youtube-direct` fails, continue here without asking the user to choose a fallback.
 
 ## Check the CLI and identity
 

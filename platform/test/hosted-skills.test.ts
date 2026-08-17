@@ -45,16 +45,19 @@ describe('hosted video2ctx skills', () => {
   test('selector metadata distinguishes direct, hosted, and monitoring use', () => {
     expect(directSkill).toMatch(/^---\nname: youtube-direct\n/);
     expect(directSkill).toContain('Direct, no-account YouTube search and extraction');
-    expect(directSkill).toContain('default for one-off public YouTube requests');
+    expect(directSkill).toContain('first route for one-off public YouTube requests');
+    expect(directSkill).toContain('continue with `video2ctx-api` without asking the user');
     expect(directSelector).toContain('summarize a public YouTube video');
 
     expect(apiSkill).toContain('Managed, authenticated YouTube search and extraction');
-    expect(apiSkill).toContain('only when the user explicitly asks for video2ctx');
+    expect(apiSkill).toContain('automatically when a youtube-direct operation fails');
+    expect(apiSkill).toContain('Route account and usage requests here immediately');
+    expect(apiSkill).not.toContain('approved fallback');
     expect(apiSelector).toContain('managed hosted API');
     expect(apiSelector).not.toContain('retrieve a YouTube transcript');
 
     expect(monitoringSkill).toContain('Stateful video2ctx monitoring');
-    expect(monitoringSkill).toContain('use video2ctx-api only for explicitly hosted one-time reads');
+    expect(monitoringSkill).toContain('use video2ctx-api for account and usage details');
   });
 
   test('keeps installation explicit and reuses one public credential transport', () => {

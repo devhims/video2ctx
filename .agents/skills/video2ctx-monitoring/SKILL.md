@@ -1,6 +1,6 @@
 ---
 name: video2ctx-monitoring
-description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, or monitor notifications. Requires the video2ctx CLI; use video2ctx-api only for explicitly hosted one-time reads and youtube-direct for ordinary direct no-account reads.
+description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, or monitor notifications. Requires the video2ctx CLI; use video2ctx-api for account and usage details, managed one-time reads, and fallback after youtube-direct fails.
 license: Apache-2.0
 ---
 
