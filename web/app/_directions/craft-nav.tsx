@@ -9,7 +9,7 @@ const LINKS = [
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
   { label: 'GitHub', href: 'https://github.com/devhims/video2ctx' },
-  { label: 'NPM', href: 'https://www.npmjs.com/package/all-things-youtube' },
+  { label: 'CLI + Skill', href: '#agent-setup', isNew: true },
 ];
 
 export function CraftNav() {
@@ -56,6 +56,7 @@ export function CraftNav() {
                 onClick={() => setOpen(false)}
               >
                 {link.label}
+                {link.isNew ? <span className='craft-nav-new'>NEW</span> : null}
               </a>
             );
           })}

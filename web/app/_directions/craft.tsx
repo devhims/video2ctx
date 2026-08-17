@@ -25,14 +25,21 @@ const PARTS = [
   { name: 'Search', detail: 'the way in when you have a question, not a link' },
 ];
 
-/* Three equal doors. The API is one of them, not the product — the page reads
- * as an endpoint vendor without this section. */
+/* Each route has a distinct boundary. Skills hold agent guidance, the CLI and
+ * hosted skills form one complementary setup, and the npm package is the
+ * direct TypeScript library. */
 const WAYS = [
   {
-    label: 'Workspace',
-    body: 'Collect moments into projects, ask questions across them, and monitor channels over time.',
-    action: 'Open the dashboard',
-    href: '/dashboard',
+    label: 'YouTube Direct',
+    body: 'Install the skills and agents can handle one-off public YouTube requests directly. No CLI, account, API key, or hosted service is required.',
+    action: 'Browse the skills',
+    href: 'https://github.com/devhims/video2ctx/tree/main/.agents/skills',
+  },
+  {
+    label: 'CLI + Skill',
+    body: 'Install both for hosted agent work. The CLI handles browser authentication and stable commands; the skills provide routing and workflow guidance.',
+    action: '@video2ctx/cli',
+    href: 'https://www.npmjs.com/package/@video2ctx/cli',
   },
   {
     label: 'Hosted API',
@@ -41,10 +48,16 @@ const WAYS = [
     href: 'https://docs.video2ctx.dev/api-reference/introduction',
   },
   {
-    label: 'npm package',
+    label: 'NPM Package',
     body: 'A server-side TypeScript client for YouTube data, with no hosted service in the path.',
     action: 'all-things-youtube',
     href: 'https://www.npmjs.com/package/all-things-youtube',
+  },
+  {
+    label: 'Workspace',
+    body: 'Collect moments into projects, ask questions across them, and monitor channels over time.',
+    action: 'Open the dashboard',
+    href: '/dashboard',
   },
 ];
 
@@ -133,8 +146,10 @@ export function CraftDirection() {
             structured context, with timestamps and links back to the source.
           </p>
           <p className='craft-parts-integrations'>
-            Connect through the hosted API, MCP server, agent skill, or the{' '}
-            <b>all-things-youtube</b> npm package.
+            Start with the skills for direct work. Pair them with the{' '}
+            <b>@video2ctx/cli</b> for authenticated hosted operations, or use
+            the <b>all-things-youtube</b> npm package from server-side
+            TypeScript.
           </p>
           <h3>What comes back</h3>
           <ul>
@@ -152,12 +167,16 @@ export function CraftDirection() {
       </div>
 
       <div className='craft-reveal'>
-        <section className='craft-band' aria-labelledby='craft-code-title'>
+        <section
+          id='agent-setup'
+          className='craft-band craft-agent-setup'
+          aria-labelledby='craft-code-title'
+        >
           <div className='craft-band-head'>
-            <h2 id='craft-code-title'>Two lines from here to your agent.</h2>
+            <h2 id='craft-code-title'>Install once. Pick the right route.</h2>
             <p>
-              The demo above and the call below hit the same data. Request
-              shapes, errors, and private project routes live in the reference.
+              YouTube Direct needs only the skill. Hosted agent work pairs the
+              CLI with the skills. Applications can use the API or npm library.
             </p>
           </div>
           <CraftCode />
@@ -167,10 +186,10 @@ export function CraftDirection() {
       <div className='craft-reveal'>
         <section className='craft-band' aria-labelledby='craft-ways-title'>
           <div className='craft-band-head'>
-            <h2 id='craft-ways-title'>Three ways in.</h2>
+            <h2 id='craft-ways-title'>Choose your route.</h2>
             <p>
-              Same data, same source links. Pick whichever fits where you are
-              working.
+              Each surface has a clear job, whether an agent, application, or
+              person is doing the work.
             </p>
           </div>
           <ul className='craft-ways'>
@@ -243,6 +262,10 @@ export function CraftDirection() {
           <a href='#pricing'>Pricing</a> ·{' '}
           <a href='https://docs.video2ctx.dev/api-reference/introduction'>
             API reference
+          </a>{' '}
+          ·{' '}
+          <a href='https://www.npmjs.com/package/@video2ctx/cli'>
+            @video2ctx/cli
           </a>{' '}
           ·{' '}
           <a href='https://www.npmjs.com/package/all-things-youtube'>
