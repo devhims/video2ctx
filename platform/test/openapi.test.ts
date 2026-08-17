@@ -190,12 +190,15 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(tracksOperation.deprecated).not.toBe(true);
     expect(paths['/v1/providers/{provider}/videos/{id}/captions']).toBeUndefined();
     expect(parameterNames).toContain('lang');
+    expect(parameterNames).toContain('format');
     expect(parameterNames).not.toContain('translateTo');
     expect(parameterNames).not.toContain('language');
     expect(schemas.CaptionTrackList.required).toEqual(expect.arrayContaining([
       'tracks', 'sourceTracks', 'translationLanguages', 'autoTranslationTargets',
     ]));
     expect(schemas.Transcript.properties.translatedTo.$ref).toBe('#/components/schemas/TranslationLanguage');
+    expect(schemas.TranscriptText.required).toEqual(['videoId', 'track', 'text', 'meta']);
+    expect(schemas.TranscriptSegments.properties.segments.items.$ref).toBe('#/components/schemas/TranscriptSegment');
     expect(schemas.CommentResponse.properties.totalCount).toMatchObject({ type: 'integer', minimum: 0 });
     expect(schemas.CommentResponse.properties.estimatedTotal).toBeUndefined();
     expect(schemas.Video.required).toBeUndefined();

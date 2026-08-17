@@ -70,6 +70,58 @@ describe('standalone skill CLI', () => {
     expect(dependencies.close).toHaveBeenCalledOnce();
   });
 
+  test('emits a compact text transcript while keeping segment granularity upstream', async () => {
+    const io = captureIo();
+    const transcript = vi.fn(async () => ({
+      videoId: 'abcdefghijk',
+      track: { id: 'en', languageCode: 'en', name: 'English' },
+      segments: [{
+        startMs: 0,
+        durationMs: 1000,
+        endMs: 1000,
+        text: 'Hello world',
+        words: [{ text: 'Hello', startMs: 0, offsetMs: 0 }],
+      }],
+      granularity: 'segment',
+      text: 'Hello world',
+      meta: { provider: 'youtube', partial: false, warnings: [] },
+    }));
+    const dependencies = testDependencies('transcript', transcript);
+
+    const exitCode = await runSkillCli([
+      'transcript', '--video-id', 'abcdefghijk', '--format', 'text',
+    ], io, {}, dependencies);
+
+    expect(exitCode).toBe(0);
+    expect(transcript).toHaveBeenCalledWith(expect.objectContaining({
+      videoId: 'abcdefghijk',
+      granularity: 'segment',
+    }));
+    expect(JSON.parse(io.output[0]!)).toEqual({
+      videoId: 'abcdefghijk',
+      track: { id: 'en', languageCode: 'en', name: 'English' },
+      text: 'Hello world',
+      meta: { provider: 'youtube', partial: false, warnings: [] },
+    });
+  });
+
+  test('rejects conflicting transcript format and legacy granularity flags', async () => {
+    const io = captureIo();
+    const transcript = vi.fn(async () => ({}));
+    const dependencies = testDependencies('transcript', transcript);
+
+    const exitCode = await runSkillCli([
+      'transcript', '--video-id', 'abcdefghijk', '--format', 'words',
+      '--granularity', 'segment',
+    ], io, {}, dependencies);
+
+    expect(exitCode).toBe(2);
+    expect(transcript).not.toHaveBeenCalled();
+    expect(JSON.parse(io.errors[0]!)).toMatchObject({
+      error: { code: 'INVALID_INPUT', message: expect.stringContaining('cannot be combined') },
+    });
+  });
+
   test('enforces bounded all-comments options before making a request', async () => {
     const io = captureIo();
     const comments = vi.fn(async () => ({}));
@@ -201,6 +253,7 @@ describe('standalone skill CLI', () => {
     expect(exitCode).toBe(0);
     expect(io.output.join('')).toContain('search');
     expect(io.output.join('')).toContain('--proxy <url>');
+    expect(io.output.join('')).toContain('--format text|segments|words');
     expect(createFetch).not.toHaveBeenCalled();
   });
 });

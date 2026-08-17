@@ -20,6 +20,7 @@ function dependencies(options: {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const responses = [...(options.responses ?? [])];
   const store = options.store ?? new MemoryCredentialStore();
+  const sleep = vi.fn(async () => undefined);
   const deps: CliDependencies = {
     fetch: vi.fn(async (input, init) => {
       requests.push({ url: String(input), init });
@@ -31,11 +32,11 @@ function dependencies(options: {
     environment: options.environment ?? {},
     openBrowser: vi.fn(async () => undefined),
     now: () => 0,
-    sleep: async () => undefined,
+    sleep,
     stdout: (line) => { stdout.push(line); },
     stderr: (line) => { stderr.push(line); },
   };
-  return { deps, stdout, stderr, requests, store };
+  return { deps, stdout, stderr, requests, store, sleep };
 }
 
 describe('video2ctx CLI authentication', () => {
@@ -135,7 +136,9 @@ describe('video2ctx CLI authentication', () => {
     const exitCode = await runCli(['whoami'], state.deps);
 
     expect(exitCode).toBe(1);
-    expect(state.stderr.join('\n')).toContain('***');
+    expect(JSON.parse(state.stderr[0] ?? '')).toMatchObject({
+      error: { code: 'TRANSPORT_ERROR', retryable: true, message: expect.stringContaining('***') },
+    });
     expect(state.stderr.join('\n')).not.toContain('profile-session-token');
   });
 });
@@ -180,6 +183,111 @@ describe('video2ctx CLI API transport', () => {
       },
     });
     expect(state.stdout[0]).not.toContain('profile-session-token');
+  });
+
+  test('retrieves a compact transcript from a YouTube URL in one data request', async () => {
+    const state = dependencies({
+      store: new MemoryCredentialStore(profile()),
+      responses: [jsonResponse({
+        videoId: 'dQw4w9WgXcQ',
+        track: { id: 'en', languageCode: 'en', name: 'English' },
+        text: 'Never gonna give you up',
+        meta: { provider: 'youtube', partial: false, warnings: [] },
+      })],
+    });
+
+    const exitCode = await runCli([
+      'transcript', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      '--format', 'text', '--lang', 'en',
+    ], state.deps);
+
+    expect(exitCode).toBe(0);
+    expect(state.requests).toHaveLength(1);
+    expect(state.requests[0]?.url).toBe(
+      'https://api.video2ctx.dev/v1/providers/youtube/videos/dQw4w9WgXcQ/transcript?format=text&lang=en',
+    );
+    expect(JSON.parse(state.stdout[0] ?? '')).toMatchObject({
+      videoId: 'dQw4w9WgXcQ',
+      text: 'Never gonna give you up',
+    });
+  });
+
+  test('emits a structured API error on stderr with no stdout', async () => {
+    const response = jsonResponse({
+      error: {
+        code: 'INSUFFICIENT_CREDITS',
+        message: 'More credits are required.',
+        requestId: 'request-402',
+      },
+    }, 402);
+    const state = dependencies({
+      store: new MemoryCredentialStore(profile()),
+      responses: [response],
+    });
+
+    const exitCode = await runCli(['api', 'GET', '/v1/usage'], state.deps);
+
+    expect(exitCode).toBe(1);
+    expect(state.stdout).toEqual([]);
+    expect(JSON.parse(state.stderr[0] ?? '')).toEqual({
+      error: {
+        status: 402,
+        code: 'INSUFFICIENT_CREDITS',
+        message: 'More credits are required.',
+        requestId: 'request-402',
+        retryable: false,
+      },
+    });
+  });
+
+  test('retries a GET once for 429 and honors Retry-After', async () => {
+    const throttled = jsonResponse({ error: { code: 'RATE_LIMITED', message: 'Slow down.' } }, 429);
+    throttled.headers.set('Retry-After', '2');
+    const state = dependencies({
+      store: new MemoryCredentialStore(profile()),
+      responses: [throttled, jsonResponse({ creditBalance: 99 })],
+    });
+
+    const exitCode = await runCli(['api', 'GET', '/v1/usage'], state.deps);
+
+    expect(exitCode).toBe(0);
+    expect(state.requests).toHaveLength(2);
+    expect(state.sleep).toHaveBeenCalledWith(2000);
+  });
+
+  test('does not retry mutations or non-transient failures', async () => {
+    const state = dependencies({
+      store: new MemoryCredentialStore(profile()),
+      responses: [jsonResponse({ error: { code: 'INVALID_INPUT', message: 'Invalid.' } }, 422)],
+    });
+
+    const exitCode = await runCli([
+      'api', 'POST', '/v1/monitors', '--data', '{"name":"test"}', '--retries', '3',
+    ], state.deps);
+
+    expect(exitCode).toBe(1);
+    expect(state.requests).toHaveLength(1);
+  });
+
+  test('uses the longer data timeout by default and accepts a bounded override', async () => {
+    const state = dependencies({
+      store: new MemoryCredentialStore(profile()),
+      responses: [jsonResponse({ creditBalance: 100 }), jsonResponse({ creditBalance: 100 })],
+    });
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+
+    const defaultExitCode = await runCli(['api', 'GET', '/v1/usage'], state.deps);
+    const overrideExitCode = await runCli([
+      'api', 'GET', '/v1/usage', '--timeout-ms', '180000',
+    ], state.deps);
+
+    expect(defaultExitCode).toBe(0);
+    expect(overrideExitCode).toBe(0);
+    expect(timeout).toHaveBeenNthCalledWith(1, 150000);
+    expect(timeout).toHaveBeenNthCalledWith(2, 180000);
+    expect(state.requests[0]?.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(state.requests[0]?.init).toMatchObject({ method: 'GET' });
+    timeout.mockRestore();
   });
 });
 

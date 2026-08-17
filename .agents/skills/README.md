@@ -4,11 +4,11 @@ Three [Agent Skills](https://agentskills.io) for working with YouTube data — d
 
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
-| `youtube-direct` | You want stateless YouTube search or extraction directly from the user's machine, with no account, package installation, or hosted dependency | Node.js 18.17+ |
-| `video2ctx-api` | You want the managed, authenticated alternative: supported endpoints, caching, credit accounting, account identity, and usage reads over the hosted API | `video2ctx` CLI plus browser login or an `aty_` API key |
+| `youtube-direct` | You want an ordinary one-off public YouTube search, transcript summary, or extraction directly from the user's machine | Node.js 18.17+ |
+| `video2ctx-api` | You need account or usage details, the managed hosted API, caching and credit accounting, or an automatic fallback after direct access fails | `video2ctx` CLI plus browser login or an `aty_` API key |
 | `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | `video2ctx` CLI plus browser login or an `aty_` API key |
 
-The split follows real boundaries: `youtube-direct` is a self-contained direct executable with no account; `video2ctx-api` is the managed, authenticated option for stateless hosted discovery, caching, usage, and account boundaries; `video2ctx-monitoring` is the deliberate stateful exception. Most users need only one of the first two data skills.
+The split follows real boundaries: start ordinary stateless public data with the self-contained `youtube-direct` executable, then continue with `video2ctx-api` automatically if direct access fails. Route account and usage details, managed hosted workflows, and caching directly to `video2ctx-api`. `video2ctx-monitoring` is the deliberate stateful exception.
 
 ## Install
 

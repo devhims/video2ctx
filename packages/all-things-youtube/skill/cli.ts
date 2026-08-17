@@ -47,6 +47,7 @@ Operation options:
                       [--continuation <token>]
   tracks:             --video-id <id>
   transcript:         --video-id <id> [--lang <code>]
+                      [--format text|segments|words]
                       [--granularity segment|word]
   comments:           --video-id <id> [--continuation <token>]
                       [--all --max-pages <count>]
@@ -66,7 +67,7 @@ const operationFlags = {
     'min-views', 'sort', 'continuation',
   ],
   tracks: ['video-id'],
-  transcript: ['video-id', 'lang', 'granularity'],
+  transcript: ['video-id', 'lang', 'format', 'granularity'],
   comments: ['video-id', 'continuation', 'all', 'max-pages'],
   details: ['video-id'],
   endscreen: ['video-id'],
@@ -250,11 +251,14 @@ function operationOptions(operation: OperationName, flags: Flags, requestFetch: 
     case 'tracks':
       return compact({ ...shared, videoId: requiredString(flags, 'video-id') });
     case 'transcript':
+      if (flags.format !== undefined && flags.granularity !== undefined) {
+        throw new CliInputError('--format cannot be combined with --granularity.');
+      }
       return compact({
         ...shared,
         videoId: requiredString(flags, 'video-id'),
         lang: optionalString(flags, 'lang'),
-        granularity: optionalEnum(flags, 'granularity', ['segment', 'word']),
+        granularity: transcriptGranularity(flags),
       });
     case 'comments': {
       const all = flags.all === true;
@@ -302,6 +306,40 @@ function operationOptions(operation: OperationName, flags: Flags, requestFetch: 
         continuation: optionalString(flags, 'continuation'),
       });
   }
+}
+
+function transcriptGranularity(flags: Flags): 'segment' | 'word' | undefined {
+  const legacy = optionalEnum(flags, 'granularity', ['segment', 'word']);
+  if (legacy) return legacy;
+  const format = optionalEnum(flags, 'format', ['text', 'segments', 'words']);
+  if (format === 'words') return 'word';
+  if (format === 'text' || format === 'segments') return 'segment';
+  return undefined;
+}
+
+function formatResult(operation: OperationName, flags: Flags, result: unknown): unknown {
+  if (operation !== 'transcript' || !isRecord(result)) return result;
+  const format = optionalEnum(flags, 'format', ['text', 'segments', 'words']);
+  if (!format || format === 'words') return result;
+  if (format === 'text') {
+    return compact({
+      videoId: result.videoId,
+      track: result.track,
+      translatedTo: result.translatedTo,
+      text: result.text,
+      meta: result.meta,
+    });
+  }
+  const segments = Array.isArray(result.segments)
+    ? result.segments.map((segment) => isRecord(segment)
+      ? Object.fromEntries(Object.entries(segment).filter(([key]) => key !== 'words'))
+      : segment)
+    : result.segments;
+  return { ...result, segments, granularity: 'segment' };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function createRequestFetch(proxyUrl?: string): FetchResource {
@@ -378,7 +416,7 @@ export async function runSkillCli(
     const operations = { ...defaultOperations, ...dependencies.operations };
     const result = await operations[operation](operationOptions(operation, flags, fetchResource.fetch));
     const spacing = flags.pretty === true ? 2 : undefined;
-    io.stdout(`${JSON.stringify(result, null, spacing)}\n`);
+    io.stdout(`${JSON.stringify(formatResult(operation, flags, result), null, spacing)}\n`);
     return 0;
   } catch (error) {
     io.stderr(`${JSON.stringify(errorPayload(error))}\n`);

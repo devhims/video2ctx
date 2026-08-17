@@ -15,6 +15,7 @@ import { routeInput, type CacheStatus } from '../../lib/youtube';
 import { requireEvidence, searchPrivate, searchPublic } from '../../lib/search';
 import { citedAnswer } from '../../lib/analysis';
 import { transcriptEvidence } from '../../lib/evidence';
+import { parseTranscriptFormat, projectTranscript } from '../../lib/transcript-projection';
 import { generateTrendPlan, normalizeTrendPlanSignals } from '../../lib/trend-plan';
 import { creditBalance, entitlements } from '../../lib/entitlements';
 import { getProvider, providerDescriptors, type ProviderAdapter } from '../../providers';
@@ -175,8 +176,10 @@ dataRoutes.get('/providers/:provider/videos/:id/transcript', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const desiredLanguage = text(c.req.query('lang'), 20) || undefined;
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-transcript`, 'transcript', provider, () =>
-    provider.getTranscript(c.env, id, desiredLanguage)));
+  const format = parseTranscriptFormat(c.req.query('format'));
+  const transcript = await cachedRead(c, `${provider.descriptor.id}-video-transcript`, 'transcript', provider, () =>
+    provider.getTranscript(c.env, id, desiredLanguage));
+  return c.json(projectTranscript(transcript, format));
 });
 
 dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {

@@ -9,7 +9,7 @@ Start with video details, then request only the deeper datasets your workflow ne
 
 - `GET /v1/providers/youtube/videos/{id}` — core metadata
 - `GET /v1/providers/youtube/videos/{id}/tracks` — available transcript tracks
-- `GET /v1/providers/youtube/videos/{id}/transcript` — timed segments or words
+- `GET /v1/providers/youtube/videos/{id}/transcript?format=text|segments|words` — compact text, timed segments, or timed words; omitting `format` preserves the rich words response
 - `GET /v1/providers/youtube/videos/{id}/comments` — paginated public comments
 - `GET /v1/providers/youtube/videos/{id}/endscreen` — end-screen links
 

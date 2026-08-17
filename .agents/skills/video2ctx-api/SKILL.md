@@ -1,62 +1,76 @@
 ---
 name: video2ctx-api
-description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use instead of youtube-direct for supported endpoints, managed caching, usage and credit tracking, or account identity. Includes search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Requires the video2ctx CLI plus browser login or an aty_ API key; monitoring has its own skill.
+description: Managed, authenticated YouTube search and extraction through the production video2ctx hosted API. Use for account identity, usage and credit data, managed caching or infrastructure, an explicitly hosted workflow, or automatically when a youtube-direct operation fails. Includes stateless search, browse, transcripts, caption tracks, comments, video details, end screens, channels, and playlists. Start ordinary one-off public YouTube requests with youtube-direct; monitoring has its own skill.
 license: Apache-2.0
 ---
 
 # video2ctx API
 
-Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`.
+Use the installed `video2ctx` CLI for authenticated requests to `https://api.video2ctx.dev`. Route account and usage requests here immediately. When `youtube-direct` fails, continue here without asking the user to choose a fallback.
 
-## Check the CLI
+## Check the CLI and identity
 
-Run `video2ctx --version`. When the command is unavailable, explain that this hosted skill requires the public `@video2ctx/cli` npm package and ask the user to approve its installation. After approval, run:
+Run `video2ctx --version`. When unavailable, explain that this hosted skill requires the public `@video2ctx/cli` npm package and ask the user to approve its installation. After approval, run:
 
 ```bash
 npm install --global @video2ctx/cli
 ```
 
-Confirm `video2ctx --version` succeeds before continuing. Use that installed command for every request so authentication and versioning stay stable.
+Then run one identity check:
 
-## Authenticate
-
-1. Run `video2ctx auth status --json`.
-2. When unauthenticated, run `video2ctx auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
-3. Confirm access with `video2ctx whoami --json`.
-
-The login flow stores a revocable CLI session in the user's local config with private file permissions. Keep the session out of prompts, logs, screenshots, and source control. The CLI also accepts `VIDEO2CTX_API_KEY` as a non-interactive fallback and gives it precedence over the stored session. Have the user create and configure a personal key at `https://video2ctx.dev/dashboard/developer` when they prefer that mode; never ask them to paste it into the conversation.
-
-## Make requests
-
-Run public operations through:
-
-```text
-video2ctx api GET '/v1/path?encoded=query' --include-meta
+```bash
+video2ctx whoami --json
 ```
 
-Use `--data '<json>'` only for a documented request body. `--include-meta` returns the response under `data` and settled status, request ID, and credit headers under `meta`.
+If it reports `AUTHENTICATION_REQUIRED`, run `video2ctx auth login`, let the user approve the displayed device code in their browser, and retry `video2ctx whoami --json`. Do not run `auth status` before `whoami`; both resolve the same remote account.
 
-Before choosing a route, read `https://docs.video2ctx.dev/api/authentication` and `https://docs.video2ctx.dev/api/conventions`. Read the relevant discovery or entity guide, then resolve every remaining method, path, parameter, and response question against `https://api.video2ctx.dev/openapi.json`.
+The browser flow stores a revocable CLI session in the user's private local config. The CLI also accepts `VIDEO2CTX_API_KEY` as a non-interactive fallback and gives it precedence over the stored session. The user can create a personal key at `https://video2ctx.dev/dashboard/developer`; never ask them to paste a credential into the conversation.
 
-Stay within this skill's surface:
+## Use the shortest route
 
-- Search and browse provider content.
-- Read video details, tracks, transcripts, comments, and end screens.
-- Read channel details, channel videos, channel playlists, and playlist contents.
-- Read `GET /v1/usage` and account identity.
+For a known YouTube URL or video ID, fetch compact transcript text in one data request:
 
-Use the provider ID returned by `GET /v1/providers`; the current production provider is YouTube. Monitoring and notifications belong to `video2ctx-monitoring`. Projects, trends, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration are outside this skill. Direct the user to `https://video2ctx.dev` for browser-only account actions.
+```bash
+video2ctx transcript '<youtube-url-or-id>' --format text --include-meta
+```
+
+Add `--lang <code>` only when a particular output language is requested. Use `--format segments` for segment timestamps or `--format words` only for word timing.
+
+For other operations, use the tested production routes below. Percent-encode query values and replace brace placeholders with IDs.
+
+| Need | Command |
+| --- | --- |
+| Search | `video2ctx api GET '/v1/providers/youtube/search?q=<encoded>' --include-meta` |
+| Browse | `video2ctx api GET '/v1/providers/youtube/browse' --include-meta` |
+| Video details | `video2ctx api GET '/v1/providers/youtube/videos/{id}' --include-meta` |
+| Caption tracks | `video2ctx api GET '/v1/providers/youtube/videos/{id}/tracks' --include-meta` |
+| Transcript | `video2ctx api GET '/v1/providers/youtube/videos/{id}/transcript?format=text' --include-meta` |
+| Comments | `video2ctx api GET '/v1/providers/youtube/videos/{id}/comments' --include-meta` |
+| End screen | `video2ctx api GET '/v1/providers/youtube/videos/{id}/endscreen' --include-meta` |
+| Channel details | `video2ctx api GET '/v1/providers/youtube/channels/{id}' --include-meta` |
+| Channel videos | `video2ctx api GET '/v1/providers/youtube/channels/{id}/videos' --include-meta` |
+| Channel playlists | `video2ctx api GET '/v1/providers/youtube/channels/{id}/playlists' --include-meta` |
+| Playlist | `video2ctx api GET '/v1/providers/youtube/playlists/{id}' --include-meta` |
+| Usage and balance | `video2ctx api GET '/v1/usage' --include-meta` |
+| Account identity | `video2ctx whoami --json` |
+
+The provider for known YouTube resources is `youtube`; do not spend a request discovering it through `/v1/providers`. Provider listing and usage are free. Most provider reads cost 1 credit; a fresh search or comments request costs 2 credits. `--include-meta` exposes settled credit and request metadata.
+
+## Look up documentation only when needed
+
+The table is sufficient for the common paths. Read `https://docs.video2ctx.dev/api/authentication.md` or `https://docs.video2ctx.dev/api/conventions.md` only when the task raises an authentication, pagination, response, or error question. Read the relevant `.md` guide next, and consult `https://api.video2ctx.dev/openapi.json` only for a route or parameter not covered here or when the server rejects the documented call.
+
+Stay within stateless hosted data, account identity, and usage. Monitoring and notifications belong to `video2ctx-monitoring`. Projects, trends, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration are outside this skill. Direct the user to `https://video2ctx.dev` for browser-only account actions.
 
 ## Preserve response meaning
 
-- Request only the resource or subresource needed.
-- Return continuations only to the endpoint and encoded query that produced them.
-- Treat `comments?all=true` as bounded and newest-first.
-- Inspect `meta.partial` and `meta.warnings` within API data before presenting a result as complete.
-- Use the CLI's finite request deadline. Retry only idempotent reads after transient `429` or `503` responses, with a bounded attempt count and `Retry-After` when present.
-- Branch separately for `401`, `402`, `403`, `422`, `429`, and `503`. Preserve the API error code, request ID, and retry guidance in the user-facing explanation.
-- Read settled credits from `--include-meta`; use `GET /v1/usage` for the current balance and plan limits.
+- Request only the resource or detail level needed.
+- Return continuations only to the exact endpoint and encoded query that produced them.
+- Inspect `data.meta.partial` and `data.meta.warnings` before presenting a result as complete.
+- The CLI uses a 150-second data deadline by default and permits `--timeout-ms` from 1,000 through 300,000.
+- The CLI retries idempotent GET requests once after `429` or `503`, honoring `Retry-After`; change the bounded attempt count with `--retries 0..3`. It never retries mutations.
+- On failure, parse the single JSON value on stderr. Preserve `error.status`, `error.code`, `error.message`, `error.requestId`, `error.retryable`, and `error.retryAfterSeconds` when present.
 
 ## Done when
 
-The installed CLI reports an authenticated account; every request uses it to target a public production route and remains stateless; no composite or browser-only operation was attempted; partial results and continuations retain their meaning; errors remain classified; and settled credit metadata was observed.
+The CLI identity is confirmed; the minimum stateless production request completed; no unnecessary discovery or documentation request was made; partial results and continuations retain their meaning; and settled credit or classified error metadata was preserved.
