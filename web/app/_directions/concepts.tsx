@@ -272,7 +272,7 @@ function ContextEngineStage({
           <span className='engine-video-caption'>One video. Every usable signal.</span>
         </div>
         <div className='engine-video-meta'>
-          <strong>Video context, kept together</strong>
+          <strong>Video context, for everyone.</strong>
           <span>@source_channel</span>
         </div>
         <div className='engine-video-timeline'>
