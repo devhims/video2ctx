@@ -4217,8 +4217,8 @@
           },
           "source": {
             "type": "string",
-            "example": "allthingsyoutube",
-            "description": "Extractor or upstream implementation that produced the normalized response."
+            "example": "video2ctx",
+            "description": "Service or upstream implementation that produced the normalized response."
           },
           "fetchedAt": {
             "type": "string",

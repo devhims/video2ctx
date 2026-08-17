@@ -187,7 +187,7 @@ describe('platform YouTube container adapter', () => {
     expect(stale.cacheStatus).toBe('stale');
     expect(stale.value).toMatchObject({
       id: 'abcdefghijk',
-      meta: { source: 'allthingsyoutube' },
+      meta: { source: 'video2ctx' },
       freshness: { state: 'stale', reason: 'UPSTREAM_UNAVAILABLE' },
     });
   });
