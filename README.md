@@ -5,12 +5,14 @@
 <p align="center"><strong>Turn videos into useful context for LLMs and AI agents.</strong></p>
 <p align="center">
   <a href="https://www.npmjs.com/package/all-things-youtube"><img src="https://img.shields.io/npm/v/all-things-youtube?label=all-things-youtube" alt="all-things-youtube npm version" /></a>
+  <a href="https://www.npmjs.com/package/@video2ctx/cli"><img src="https://img.shields.io/npm/v/%40video2ctx%2Fcli?label=%40video2ctx%2Fcli" alt="video2ctx CLI npm version" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-339933?logo=node.js&amp;logoColor=white" alt="Node.js 22" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache License 2.0" /></a>
 </p>
 <p align="center">
   <a href="https://www.video2ctx.dev">Live product</a> ·
   <a href="https://docs.video2ctx.dev">Documentation</a> ·
+  <a href="#agent-skills-and-cli">Agent Skills and CLI</a> ·
   <a href="./packages/all-things-youtube/README.md">npm library</a> ·
   <a href="#run-the-workspace-locally">Developer setup</a>
 </p>
@@ -38,14 +40,43 @@ Available now:
 
 ## Choose how to use it
 
-| If you need…                                       | Start here                                                                                                                                   |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                  |
-| A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction) |
-| Direct YouTube data from a supported agent         | Use [`youtube-direct`](./.agents/skills/youtube-direct) with no video2ctx account, API key, hosted service, or npm installation                |
+| If you need…                                       | Start here                                                                                                                                                                                                           |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                                                                                          |
+| A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction)                                                  |
+| Direct YouTube data from a supported agent         | Use [`youtube-direct`](./.agents/skills/youtube-direct) with no video2ctx account, API key, hosted service, or npm installation                                                                                      |
 | A hosted API directly from a supported agent       | Install [`@video2ctx/cli`](./packages/video2ctx-cli), then use [`video2ctx-api`](./.agents/skills/video2ctx-api) for stateless reads or [`video2ctx-monitoring`](./.agents/skills/video2ctx-monitoring) for monitors |
-| A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                             |
-| To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                      |
+| A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                                                                                                     |
+| To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                                                                                              |
+
+## Agent Skills and CLI
+
+For the complete hosted agent setup, install the CLI, authenticate, and add the companion skills:
+
+```bash
+npm install --global @video2ctx/cli
+video2ctx auth login
+npx skills add devhims/video2ctx
+video2ctx whoami --json
+```
+
+The CLI and skills are complementary. The CLI owns browser authentication, hosted transport, retries, credential storage, and machine-readable commands. The skills teach agents which route to choose and how to use each operation safely.
+
+The collection contains three skills with separate responsibilities:
+
+- **`youtube-direct`** handles one-off public YouTube search and extraction directly from the user's machine. It needs no video2ctx account, API key, hosted service, or npm package.
+- **`video2ctx-api`** handles account and usage requests, managed hosted reads, and automatic fallback when a direct request fails.
+- **`video2ctx-monitoring`** handles the stateful exception: recurring checks, schedules, alerts, and notification preferences.
+
+`youtube-direct` is self-contained. If direct, one-off public YouTube access is all you need, install the skills and select `youtube-direct`; the CLI and video2ctx account are not required:
+
+```bash
+npx skills add devhims/video2ctx
+```
+
+The browser flow stores a revocable CLI session in private local configuration. For unattended environments, set `VIDEO2CTX_API_KEY` to a personal key instead. Never place credentials in prompts, logs, screenshots, or source control.
+
+After installation, an agent should use `youtube-direct` first for ordinary public one-off requests, continue through `video2ctx-api` automatically if direct access fails, and use `video2ctx-monitoring` only for recurring work. See the [`@video2ctx/cli` README](./packages/video2ctx-cli/README.md) and the [published skills](./.agents/skills) for the complete contracts.
 
 ## Under development
 
@@ -210,9 +241,9 @@ For the complete request path and reliability model, see [`reference/engineering
 | [`platform/`](./platform)                                       | TypeScript/Hono Cloudflare Worker with auth, API keys, billing, D1, R2, KV, AI, queues, workflows, and OpenAPI   |
 | [`platform/youtube-processor/`](./platform/youtube-processor)   | Private Node 22/Hono container for outbound YouTube operations and optional proxy egress                         |
 | [`packages/all-things-youtube/`](./packages/all-things-youtube) | Publishable normalized YouTube client and public TypeScript data model                                           |
-| [`packages/video2ctx-cli/`](./packages/video2ctx-cli)           | Independently published CLI for device login and authenticated hosted API access                                |
-| [`docs/`](./docs)                                               | Public Mintlify documentation site                                                                                |
-| [`reference/`](./reference)                                     | Internal architecture, design, deployment, and agent guidance                                                     |
+| [`packages/video2ctx-cli/`](./packages/video2ctx-cli)           | Independently published CLI for device login and authenticated hosted API access                                 |
+| [`docs/`](./docs)                                               | Public Mintlify documentation site                                                                               |
+| [`reference/`](./reference)                                     | Internal architecture, design, deployment, and agent guidance                                                    |
 | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)        | Pull-request verification for the platform and web application                                                   |
 
 ## Configuration
@@ -226,12 +257,12 @@ Local secret placeholders are documented in [`platform/.dev.vars.example`](./pla
 | `YOUTUBE_OAUTH_ENCRYPTION_KEY`                                      | Platform  | Encrypts stored YouTube refresh tokens                                                               |
 | `TURNSTILE_SECRET`                                                  | Platform  | Protects selected production endpoints                                                               |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID` | Platform  | Subscription checkout and webhook processing                                                         |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`                | Platform  | Stores the anonymous landing-page rolling quota                                                       |
-| `LANDING_RATE_LIMIT_SALT`                                           | Platform  | HMAC-hashes visitor IPs before they are used as Redis keys                                            |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`                | Platform  | Stores the anonymous landing-page rolling quota                                                      |
+| `LANDING_RATE_LIMIT_SALT`                                           | Platform  | HMAC-hashes visitor IPs before they are used as Redis keys                                           |
 | `OUTBOUND_PROXY_URL`                                                | Processor | Optional HTTP(S) proxy for outbound YouTube traffic                                                  |
 | `PLATFORM_API_BASE_URL`                                             | Web       | Overrides the platform origin; defaults to localhost in development and the public API in production |
 | `NEXT_PUBLIC_PLATFORM_API_BASE_URL`                                 | Web       | Browser-visible platform origin used by the anonymous landing-page inspection                        |
-| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`                                    | Web       | Browser-visible Turnstile site key used by the Scale inquiry form                                     |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`                                    | Web       | Browser-visible Turnstile site key used by the Scale inquiry form                                    |
 
 Do not place production secrets in Git or build variables. Add Cloudflare runtime secrets interactively as described in [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md#cloudflare-setup).
 
@@ -252,7 +283,7 @@ Common commands, run from the repository root:
 | `npm run docs:dev`                                        | Preview the Mintlify documentation site locally                                             |
 | `npm run docs:generate`                                   | Regenerate the consumer OpenAPI file and internal endpoint inventory                        |
 | `npm run docs:check`                                      | Fail when generated documentation artifacts are stale                                       |
-| `npm run docs:verify`                                     | Validate the Mintlify build, links, and accessibility                                        |
+| `npm run docs:verify`                                     | Validate the Mintlify build, links, and accessibility                                       |
 
 Before opening a pull request, run:
 

@@ -123,11 +123,26 @@ html:has(.craft) body {
 .craft-nav-links a {
   padding-block: var(--space-xs);
   color: var(--ink-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.75rem;
   font-weight: 530;
   text-decoration: none;
   white-space: nowrap;
   transition: color var(--control) var(--out);
+}
+
+.craft-nav-new {
+  padding: 0.1rem 0.28rem;
+  border-radius: 0.2rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0.025em;
+  transform: translateY(-0.26rem);
 }
 
 .craft-nav-actions {
@@ -1487,16 +1502,18 @@ html:has(.craft) body {
 }
 
 .craft-code-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-md);
+  display: block;
+}
+
+.craft-code-frame {
+  margin-top: var(--space-lg);
+  position: relative;
 }
 
 .craft-code-block {
-  margin: var(--space-lg) 0 0;
-  padding: var(--space-lg);
+  margin: 0;
+  padding: var(--space-lg) calc(var(--space-lg) + 2.75rem) var(--space-lg)
+    var(--space-lg);
   border: 1px solid var(--rule);
   border-radius: var(--radius-home-lg);
   background: oklch(12.5% 0.006 75);
@@ -1519,22 +1536,25 @@ html:has(.craft) body {
   font-size: 0.8rem;
 }
 
-/* Both labels sit stacked in the same grid cell and crossfade in place, so the
- * button never resizes mid-press. Success is quiet — no toast, no bounce. */
+/* The copy control belongs to the code surface it acts on. Both icons occupy
+ * the same grid cell, so success feedback never changes the button's size. */
 .craft-copy {
+  width: 2.25rem;
   min-height: 2.25rem;
-  padding-inline: var(--space-md);
+  padding: 0;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-home-pill);
-  background: transparent;
+  background: var(--paper-raised);
   color: var(--ink-soft);
   cursor: pointer;
   display: inline-grid;
   place-items: center;
-  font-size: 0.75rem;
-  font-weight: 600;
+  position: absolute;
+  z-index: 1;
+  inset: var(--space-sm) var(--space-sm) auto auto;
   transition:
     transform var(--press) var(--out),
+    border-color var(--control) var(--out),
     color var(--control) var(--out);
 }
 
@@ -1542,26 +1562,29 @@ html:has(.craft) body {
   transform: scale(0.97);
 }
 
-.craft-copy > span[aria-hidden] {
+.craft-copy-icon {
   grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
   transition:
     opacity var(--control) var(--out),
-    filter var(--control) var(--out);
+    transform var(--control) var(--out);
 }
 
-.craft-copy > span[aria-hidden]:nth-child(2),
-.craft-copy[data-copied='true'] > span[aria-hidden]:nth-child(1) {
+.craft-copy-icon:nth-of-type(2),
+.craft-copy[data-copied='true'] .craft-copy-icon:nth-of-type(1) {
   opacity: 0;
-  filter: blur(2px);
+  transform: scale(0.72);
 }
 
 .craft-copy[data-copied='true'] {
+  border-color: color-mix(in oklch, var(--accent) 48%, var(--rule-strong));
   color: var(--accent);
 }
 
-.craft-copy[data-copied='true'] > span[aria-hidden]:nth-child(2) {
+.craft-copy[data-copied='true'] .craft-copy-icon:nth-of-type(2) {
   opacity: 1;
-  filter: none;
+  transform: scale(1);
 }
 
 .craft-sr {
@@ -1583,8 +1606,12 @@ html:has(.craft) body {
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-xl);
+}
+
+.craft-ways li:first-child {
+  grid-column: 1 / -1;
 }
 
 .craft-ways li {
@@ -2014,6 +2041,10 @@ html:has(.craft) body {
   line-height: 1.65;
 }
 
+.craft-agent-setup {
+  scroll-margin-top: 6rem;
+}
+
 /* ------------------------------------------------------------ hover only */
 
 /* Touch devices fire hover on tap, so every hover state is gated. */
@@ -2127,6 +2158,10 @@ html:has(.craft) body {
     font-size: 0.82rem;
   }
 
+  .craft-nav-new {
+    transform: translateY(-0.2rem);
+  }
+
   .craft-nav-menu {
     display: grid;
   }
@@ -2142,6 +2177,10 @@ html:has(.craft) body {
 
   .craft-pricing-plan {
     min-height: 0;
+  }
+
+  .craft-ways li:first-child {
+    grid-column: auto;
   }
 
   .craft-pricing-description {
@@ -2187,13 +2226,9 @@ html:has(.craft) body {
   }
 
   .craft-code-block {
-    padding: var(--space-md);
+    padding: var(--space-md) calc(var(--space-md) + 2.75rem) var(--space-md)
+      var(--space-md);
     font-size: 0.72rem;
-  }
-
-  .craft-code-head {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .craft-form {
@@ -2210,6 +2245,20 @@ html:has(.craft) body {
     width: 100%;
     grid-auto-flow: row;
     grid-auto-columns: unset;
+  }
+
+  .craft-code .craft-tablist {
+    padding: var(--space-3xs);
+    border-radius: var(--radius-home-lg);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3xs);
+  }
+
+  .craft-code .craft-tablist button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: var(--space-sm);
+    border-radius: var(--radius-home-md);
   }
 
   /* The clipped duplicate assumes a horizontal row; on a stacked list it would

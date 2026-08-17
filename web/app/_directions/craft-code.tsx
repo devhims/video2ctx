@@ -1,19 +1,27 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { ChecksIcon, CopyIcon } from '@phosphor-icons/react';
 import { ClipTabs } from './clip-tabs';
 
-/* One code moment, not a route table.
- *
- * The audience is a developer deciding whether this beats writing their own
- * scraper, so exactly one honest example of each way in earns its place. Both
- * samples are real: the bearer-token curl is the documented auth scheme, and
- * the package call is `getTranscript` as the npm README actually exports it.
- */
+/* One install surface for the supported agent and developer routes. Keep every
+ * command copyable as-is: this is onboarding, not a decorative code sample. */
 
-type Sample = 'curl' | 'node';
+type Sample = 'skills' | 'cli-skill' | 'curl' | 'node';
 
 const SAMPLES: Record<Sample, { label: string; code: string; note: string }> = {
+  skills: {
+    label: 'Agent Skills',
+    note: 'Choose any or all three skills. YouTube Direct works immediately without an account or hosted service.',
+    code: 'npx skills add devhims/video2ctx',
+  },
+  'cli-skill': {
+    label: 'CLI + Skill',
+    note: 'The CLI handles authenticated hosted commands. The companion skills teach agents when and how to use them.',
+    code: `npm install --global @video2ctx/cli
+video2ctx auth login
+npx skills add devhims/video2ctx`,
+  },
   curl: {
     label: 'Hosted API',
     note: 'Any language, one request. Bearer auth with a key from the dashboard.',
@@ -21,23 +29,19 @@ const SAMPLES: Record<Sample, { label: string; code: string; note: string }> = {
   --header "Authorization: Bearer $VIDEO2CTX_API_KEY"`,
   },
   node: {
-    label: 'npm package',
+    label: 'NPM Package',
     note: 'Server-side TypeScript, no key and no hosted service in the path.',
-    code: `import { getTranscript } from 'all-things-youtube';
-
-const transcript = await getTranscript({
-  videoId: 'S4tdkSVuxZA',
-  lang: 'hi',
-});
-
-console.log(transcript.translatedTo); // { languageCode: 'hi', name: 'Hindi' }`,
+    code: 'npm install all-things-youtube',
   },
 };
 
-const TABS = (Object.keys(SAMPLES) as Sample[]).map((id) => ({ id, label: SAMPLES[id].label }));
+const TABS = (Object.keys(SAMPLES) as Sample[]).map((id) => ({
+  id,
+  label: SAMPLES[id].label,
+}));
 
 export function CraftCode() {
-  const [sample, setSample] = useState<Sample>('curl');
+  const [sample, setSample] = useState<Sample>('skills');
   const active = SAMPLES[sample];
 
   return (
@@ -50,18 +54,20 @@ export function CraftCode() {
           idPrefix='craft-code'
           label='Ways to call it'
         />
-        <CopyButton text={active.code} />
       </div>
 
-      <pre
-        className='craft-code-block'
-        role='tabpanel'
-        id={`craft-code-panel-${sample}`}
-        aria-labelledby={`craft-code-tab-${sample}`}
-        tabIndex={0}
-      >
-        <code>{active.code}</code>
-      </pre>
+      <div className='craft-code-frame'>
+        <pre
+          className='craft-code-block'
+          role='tabpanel'
+          id={`craft-code-panel-${sample}`}
+          aria-labelledby={`craft-code-tab-${sample}`}
+          tabIndex={0}
+        >
+          <code>{active.code}</code>
+        </pre>
+        <CopyButton text={active.code} />
+      </div>
 
       <p className='craft-code-note'>{active.note}</p>
     </div>
@@ -86,13 +92,23 @@ function CopyButton({ text }: { text: string }) {
   };
 
   return (
-    <button type='button' className='craft-copy' onClick={copy} data-copied={copied}>
-      {/* Both labels are always in the DOM and crossfade in place, so the button
-          never changes width mid-press — a resizing button under the cursor is
-          the kind of small wrongness that registers without being noticed. */}
-      <span aria-hidden='true'>Copy</span>
-      <span aria-hidden='true'>Copied</span>
-      <span className='craft-sr'>{copied ? 'Copied to clipboard' : 'Copy code'}</span>
+    <button
+      type='button'
+      className='craft-copy'
+      onClick={copy}
+      data-copied={copied}
+      aria-label={copied ? 'Code copied' : 'Copy code'}
+      title={copied ? 'Copied' : 'Copy code'}
+    >
+      <span className='craft-copy-icon' aria-hidden='true'>
+        <CopyIcon size={16} weight='regular' />
+      </span>
+      <span className='craft-copy-icon' aria-hidden='true'>
+        <ChecksIcon size={17} weight='bold' />
+      </span>
+      <span className='craft-sr' role='status' aria-live='polite'>
+        {copied ? 'Code copied' : ''}
+      </span>
     </button>
   );
 }
