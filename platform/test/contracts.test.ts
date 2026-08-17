@@ -16,7 +16,7 @@ describe('universal input routing', () => {
 });
 
 describe('public source metadata', () => {
-  test('brands cached provider metadata as allthingsyoutube', async () => {
+  test('brands cached provider metadata as video2ctx', async () => {
     const snapshot = {
       type: 'video', id: 'abcdefghijk', title: 'Cached video', channel: { id: '', name: '', url: '' },
       thumbnails: [], isLive: false, url: 'https://youtube.com/watch?v=abcdefghijk', keywords: [],
@@ -36,7 +36,7 @@ describe('public source metadata', () => {
 
     const video = await getVideo(env, 'abcdefghijk');
 
-    expect(video.meta.source).toBe('allthingsyoutube');
+    expect(video.meta.source).toBe('video2ctx');
     expect((video.meta as typeof video.meta & { provider: string }).provider).toBe('youtube');
   });
 });

@@ -77,7 +77,7 @@ const sourceMetadata: Schema = {
   required: ['provider', 'source', 'fetchedAt', 'partial', 'warnings'],
   properties: {
     provider: { type: 'string', enum: PROVIDER_IDS, description: 'Platform that owns the source resource.' },
-    source: { type: 'string', example: 'allthingsyoutube', description: 'Extractor or upstream implementation that produced the normalized response.' },
+    source: { type: 'string', example: 'video2ctx', description: 'Service or upstream implementation that produced the normalized response.' },
     fetchedAt: { type: 'string', format: 'date-time' },
     partial: { type: 'boolean' },
     warnings: { type: 'array', items: { type: 'string' } },

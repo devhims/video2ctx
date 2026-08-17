@@ -79,7 +79,7 @@ export function withYouTubeMetadata<T>(value: T): T {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return value;
   return {
     ...record,
-    meta: { ...metadata, source: 'allthingsyoutube', provider: 'youtube' },
+    meta: { ...metadata, source: 'video2ctx', provider: 'youtube' },
   } as T;
 }
 
