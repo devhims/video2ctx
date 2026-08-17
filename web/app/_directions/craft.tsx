@@ -120,8 +120,8 @@ export function CraftDirection() {
           </picture>
           <Flashlight />
         </div>
-        <a className='craft-build-cta' href='/dashboard/developer'>
-          <span>Explore API</span>
+        <a className='craft-build-cta' href='https://docs.video2ctx.dev/'>
+          <span>Get Started</span>
           <span className='craft-build-cta-icon' aria-hidden='true'>
             <ArrowRight size={12} weight='bold' />
           </span>
