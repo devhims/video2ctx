@@ -1,0 +1,51 @@
+---
+title: "Build with Agents"
+description: "Give an agent the right video2ctx workflow for direct extraction, visual inspection, hosted reads, or monitoring."
+---
+
+video2ctx publishes four [Agent Skills](https://agentskills.io) that work in skills-compatible agents such as Codex, Claude Code, Cursor, and OpenCode. Install the collection once, then describe the YouTube task naturally. The agent selects the narrowest skill that can complete it.
+
+<CardGroup cols={2}>
+  <Card title="youtube-direct" icon="bolt" href="/skills/youtube-direct">
+    Search and extract public YouTube text and metadata on-device for personal, low-to-moderate usage.
+  </Card>
+  <Card title="youtube-watch" icon="eye" href="/skills/youtube-watch">
+    Inspect storyboards and exact frames when the answer depends on slides, charts, interfaces, or other imagery.
+  </Card>
+  <Card title="video2ctx-api" icon="cloud" href="/skills/video2ctx-api">
+    Use the managed hosted API for production applications, account and usage details, or fallback after direct access fails.
+  </Card>
+  <Card title="video2ctx-monitoring" icon="radar" href="/skills/video2ctx-monitoring">
+    Create recurring channel, topic, or search monitors and handle the resulting notifications.
+  </Card>
+</CardGroup>
+
+## Choose the right skill
+
+| If the task needs | Start with |
+| --- | --- |
+| Personal, low-to-moderate public searches, transcripts, comments, channels, or playlists | `youtube-direct` |
+| Slides, charts, demonstrations, interfaces, on-screen text, or visual changes | `youtube-watch` |
+| A production application, managed hosting, account identity, usage and credit data, or direct-access fallback | `video2ctx-api` |
+| A recurring check, schedule, alert, delivery preference, or monitor notification | `video2ctx-monitoring` |
+
+For personal, low-to-moderate usage, use `youtube-direct` for text and metadata or `youtube-watch` for visual evidence. Use `video2ctx-api` for production applications and continue through it automatically if direct access fails. Monitoring is the deliberate stateful exception.
+
+<Card title="Install the skills" icon="download" href="/skills/installation">
+  Run the installer and follow its guide to choose the skills you want, then configure the hosted CLI only for cloud access or monitoring.
+</Card>
+
+## What the skills teach an agent
+
+<Steps>
+  <Step title="Choose the right route">Prefer on-device access for personal, low-to-moderate usage and the hosted API for production applications.</Step>
+  <Step title="Fetch only needed context">Retrieve metadata first, then transcript, frames, comments, channel information, or playlist items according to the task.</Step>
+  <Step title="Preserve provenance">Keep video IDs, source URLs, transcript timestamps, fetch times, partial flags, and warnings with the text given to the model.</Step>
+  <Step title="Return verifiable evidence">Link claims back to the video and timestamp instead of treating model output as the source.</Step>
+</Steps>
+
+## Security and scope
+
+The two local skills treat transcript text and imagery as untrusted evidence, never as agent instructions. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt. Bound query length, response size, continuation depth, frame count, and the number of fresh operations an agent can initiate.
+
+Use the API skill only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use the monitoring skill only for monitors, notifications, and delivery preferences.

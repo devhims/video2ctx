@@ -1,0 +1,61 @@
+---
+title: "Monitor YouTube"
+description: "Use video2ctx-monitoring for recurring checks, schedules, alerts, and notification delivery."
+---
+
+`video2ctx-monitoring` is the stateful skill in the collection. It lets an agent create and manage recurring YouTube monitors, consume notifications, and update delivery preferences through the authenticated `video2ctx` CLI.
+
+## Reach for it when
+
+- Watching a channel for a new leading video
+- Monitoring a topic or search on a schedule
+- Enabling, disabling, relabeling, or rescheduling an existing monitor
+- Reading monitor notifications or marking handled notifications as read
+- Configuring in-app or confirmed email delivery
+
+Use [`video2ctx-api`](/skills/video2ctx-api) for one-time hosted reads, account identity, and usage details.
+
+## Define a monitor
+
+A monitor combines four decisions:
+
+| Field | Meaning |
+| --- | --- |
+| Kind | `channel`, `topic`, or `search` |
+| Target | A channel ID for channel monitors, or search text for topic and search monitors |
+| Interval | 1 hour, 6 hours, 12 hours, 1 day, 3 days, or 1 week |
+| Label | Human-readable context used in notifications |
+
+When you do not specify a cadence, the skill defaults to once per day.
+
+## Example requests
+
+```text
+Monitor the OpenAI YouTube channel once a day and label it “OpenAI uploads.”
+```
+
+```text
+Pause my weekly video agents monitor.
+```
+
+```text
+Show my unread monitor notifications and mark the ones we handle as read.
+```
+
+## Monitor behavior
+
+<Steps>
+  <Step title="Create the exact monitor">Resolves a functional target, applies the requested cadence, and keeps notification context in the label.</Step>
+  <Step title="Establish a baseline">The first check records the current leading video without raising an alert.</Step>
+  <Step title="Detect a change">A later leading-video change creates a notification according to the account's delivery preferences.</Step>
+  <Step title="Handle safely">Mutations target an exact account-owned monitor, and notifications are marked read only after their work is handled.</Step>
+</Steps>
+
+<Note>
+  Monitor creation confirms scheduling, not an immediate notification. The first baseline check normally runs about a minute later.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Install and authenticate" icon="download" href="/skills/installation">Set up the skill collection and hosted CLI.</Card>
+  <Card title="Monitoring API" icon="radar" href="/api/monitoring">Review monitor resources, schedules, and notification behavior.</Card>
+</CardGroup>
