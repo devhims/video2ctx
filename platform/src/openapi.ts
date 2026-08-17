@@ -762,9 +762,12 @@ export const openApiDocument = {
           providerParameter,
           pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('lang', 'Desired transcript language. The backend selects the default source track and translates only when necessary.', { type: 'string', example: 'hi' }),
+          queryParameter('format', 'Response detail. text omits timing arrays, segments keeps segment timing, and words keeps word timing. Omitted preserves the rich words response.', { type: 'string', enum: ['text', 'segments', 'words'], default: 'words' }),
         ],
         responses: {
-          '200': meteredJsonResponse('Normalized timed transcript.', schemaRef('Transcript')),
+          '200': meteredJsonResponse('Normalized transcript in the requested detail format.', {
+            oneOf: [schemaRef('TranscriptText'), schemaRef('TranscriptSegments'), schemaRef('Transcript')],
+          }),
           '401': responseRef('Unauthorized'),
           '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),
@@ -1753,6 +1756,25 @@ export const openApiDocument = {
           translatedTo: schemaRef('TranslationLanguage'),
           segments: { type: 'array', items: schemaRef('TranscriptSegment') },
           granularity: { type: 'string', enum: ['segment', 'word'] }, text: { type: 'string' }, meta: schemaRef('SourceMetadata'),
+        },
+      },
+      TranscriptText: {
+        type: 'object',
+        required: ['videoId', 'track', 'text', 'meta'],
+        properties: {
+          videoId: { type: 'string' }, track: schemaRef('CaptionTrack'),
+          translatedTo: schemaRef('TranslationLanguage'),
+          text: { type: 'string' }, meta: schemaRef('SourceMetadata'),
+        },
+      },
+      TranscriptSegments: {
+        type: 'object',
+        required: ['videoId', 'track', 'segments', 'granularity', 'text', 'meta'],
+        properties: {
+          videoId: { type: 'string' }, track: schemaRef('CaptionTrack'),
+          translatedTo: schemaRef('TranslationLanguage'),
+          segments: { type: 'array', items: schemaRef('TranscriptSegment') },
+          granularity: { const: 'segment' }, text: { type: 'string' }, meta: schemaRef('SourceMetadata'),
         },
       },
       Video: {

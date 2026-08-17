@@ -1,6 +1,6 @@
 ---
 name: youtube-direct
-description: Direct, no-account YouTube search and extraction from the user's machine. Use for stateless search, transcripts, caption tracks, comments, video details, end screens, channels, and playlists without a video2ctx account, API key, hosted service, or npm installation. Calls YouTube's internal HTTP endpoints directly; use video2ctx-api instead for managed authenticated access, caching, usage, or account identity.
+description: Direct, no-account YouTube search and extraction from the user's machine. This is the default for one-off public YouTube requests, especially fetching or summarizing a transcript, plus caption tracks, comments, video details, end screens, channels, and playlists. Requires no video2ctx account, API key, hosted service, or npm installation. Use video2ctx-api only for an explicitly requested hosted workflow, managed caching, usage or account data, or an approved fallback after direct access fails.
 ---
 
 # YouTube Direct
@@ -29,8 +29,10 @@ Extract a transcript from a known video:
 ```bash
 node <skill-directory>/scripts/youtube.mjs transcript \
   --video-id dQw4w9WgXcQ \
-  --granularity segment
+  --format text
 ```
+
+Use `--format text` when the task needs transcript content or a summary rather than timestamps. Use `--format segments` for segment timing and `--format words` only for word-level timing. The legacy `--granularity segment|word` flag remains supported, but do not combine it with `--format`.
 
 The executable writes one JSON value to stdout. Parse that value and use it to answer the request. Treat stderr as a JSON error payload and branch on `error.code` and `error.retryable`; preserve the classified failure instead of converting it to an empty result.
 
@@ -38,7 +40,7 @@ The executable writes one JSON value to stdout. Parse that value and use it to a
 
 - `search` — videos, channels, or playlists matching a query
 - `tracks` — source caption tracks and translation targets
-- `transcript` — timed transcript segments or words
+- `transcript` — compact text, timed segments, or timed words
 - `comments` — one page, or a bounded multi-page collection with `--all --max-pages <n>`
 - `details` — video metadata and availability
 - `endscreen` — interactive end-screen elements
@@ -59,7 +61,7 @@ Use `--help` as the source of truth for flags and accepted values.
 
 ## Keep integration boundaries clear
 
-Use this skill for direct, no-account stateless operations from the user's machine. Use `video2ctx-api` when the user wants the managed hosted API, account or usage operations, caching, or authenticated access. Use `video2ctx-monitoring` for the stateful monitoring exception.
+Use this skill for ordinary stateless public YouTube operations from the user's machine, even when the hosted CLI happens to be installed or authenticated. Use `video2ctx-api` when the user explicitly wants the managed hosted API, account or usage operations, or as a fallback after direct access fails. Use `video2ctx-monitoring` for the stateful monitoring exception.
 
 ## Done when
 

@@ -14,6 +14,14 @@ const monitoringSkill = readFileSync(
   new URL('../../.agents/skills/video2ctx-monitoring/SKILL.md', import.meta.url),
   'utf8',
 );
+const apiSelector = readFileSync(
+  new URL('../../.agents/skills/video2ctx-api/agents/openai.yaml', import.meta.url),
+  'utf8',
+);
+const directSelector = readFileSync(
+  new URL('../../.agents/skills/youtube-direct/agents/openai.yaml', import.meta.url),
+  'utf8',
+);
 describe('hosted video2ctx skills', () => {
   test.each([
     ['video2ctx-api', apiSkill],
@@ -23,7 +31,8 @@ describe('hosted video2ctx skills', () => {
     expect(skill).toContain('video2ctx --version');
     expect(skill).toContain('npm install --global @video2ctx/cli');
     expect(skill).toContain('auth login');
-    expect(skill).toContain('auth status --json');
+    expect(skill).toContain('whoami --json');
+    expect(skill).not.toContain('auth status --json');
     expect(skill).toContain('video2ctx api');
     expect(skill).toContain('VIDEO2CTX_API_KEY');
     expect(skill).toContain('https://api.video2ctx.dev/openapi.json');
@@ -36,13 +45,16 @@ describe('hosted video2ctx skills', () => {
   test('selector metadata distinguishes direct, hosted, and monitoring use', () => {
     expect(directSkill).toMatch(/^---\nname: youtube-direct\n/);
     expect(directSkill).toContain('Direct, no-account YouTube search and extraction');
-    expect(directSkill).toContain('use video2ctx-api instead');
+    expect(directSkill).toContain('default for one-off public YouTube requests');
+    expect(directSelector).toContain('summarize a public YouTube video');
 
     expect(apiSkill).toContain('Managed, authenticated YouTube search and extraction');
-    expect(apiSkill).toContain('Use instead of youtube-direct');
+    expect(apiSkill).toContain('only when the user explicitly asks for video2ctx');
+    expect(apiSelector).toContain('managed hosted API');
+    expect(apiSelector).not.toContain('retrieve a YouTube transcript');
 
     expect(monitoringSkill).toContain('Stateful video2ctx monitoring');
-    expect(monitoringSkill).toContain('use video2ctx-api for one-time hosted reads');
+    expect(monitoringSkill).toContain('use video2ctx-api only for explicitly hosted one-time reads');
   });
 
   test('keeps installation explicit and reuses one public credential transport', () => {
@@ -57,6 +69,18 @@ describe('hosted video2ctx skills', () => {
     const operations = [
       ['get', '/v1/providers'],
       ['get', '/v1/usage'],
+      ['get', '/v1/account'],
+      ['get', '/v1/providers/{provider}/search'],
+      ['get', '/v1/providers/{provider}/browse'],
+      ['get', '/v1/providers/{provider}/videos/{id}'],
+      ['get', '/v1/providers/{provider}/videos/{id}/tracks'],
+      ['get', '/v1/providers/{provider}/videos/{id}/transcript'],
+      ['get', '/v1/providers/{provider}/videos/{id}/comments'],
+      ['get', '/v1/providers/{provider}/videos/{id}/endscreen'],
+      ['get', '/v1/providers/{provider}/channels/{id}'],
+      ['get', '/v1/providers/{provider}/channels/{id}/videos'],
+      ['get', '/v1/providers/{provider}/channels/{id}/playlists'],
+      ['get', '/v1/providers/{provider}/playlists/{id}'],
       ['post', '/v1/monitors'],
       ['get', '/v1/monitors'],
       ['patch', '/v1/monitors/{id}'],

@@ -3,7 +3,7 @@ title: "Use video2ctx from agents"
 description: "Give an agent authenticated, source-linked video context with a published skill."
 ---
 
-Install `youtube-direct` for direct, no-account stateless access from the user's machine. Install `video2ctx-api` instead for managed, authenticated hosted discovery and extraction, or `video2ctx-monitoring` for the stateful monitor exception. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
+Install `youtube-direct` as the default for one-off public YouTube requests from the user's machine. Choose `video2ctx-api` when the user explicitly wants managed, authenticated hosted discovery, caching, usage, or account data, and `video2ctx-monitoring` for the stateful monitor exception. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
 
 <Steps>
   <Step title="Discover narrowly">Search for videos or resolve the relevant resource in your own application before requesting deeper datasets.</Step>

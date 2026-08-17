@@ -1,6 +1,6 @@
 ---
 name: video2ctx-monitoring
-description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, monitor notifications, or video2ctx CLI login. Requires the video2ctx CLI; use video2ctx-api for one-time hosted reads and youtube-direct for direct no-account reads.
+description: Stateful video2ctx monitoring for watching YouTube channels, topics, or searches and receiving new-video notifications. Use for recurring checks, schedules, alerts, delivery preferences, or monitor notifications. Requires the video2ctx CLI; use video2ctx-api only for explicitly hosted one-time reads and youtube-direct for ordinary direct no-account reads.
 license: Apache-2.0
 ---
 
@@ -20,13 +20,11 @@ Confirm `video2ctx --version` succeeds before continuing. Use that installed com
 
 ## Authenticate
 
-1. Run `video2ctx auth status --json`.
-2. When unauthenticated, run `video2ctx auth login`. Relay the displayed URL and code if the user must continue in a browser. Use `--no-browser` only when opening a browser is unavailable.
-3. Confirm access with `video2ctx whoami --json`.
+Run `video2ctx whoami --json`. When it reports `AUTHENTICATION_REQUIRED`, run `video2ctx auth login`. Relay the displayed URL and code if the user must continue in a browser, use `--no-browser` only when opening a browser is unavailable, and then retry `video2ctx whoami --json`. Do not run `auth status` first; both identity commands resolve the same remote account.
 
 The login flow stores a revocable CLI session in the user's local config with private file permissions. Keep the session out of prompts, logs, screenshots, and source control. The CLI also accepts `VIDEO2CTX_API_KEY` as a non-interactive fallback and gives it precedence over the stored session. Have the user create and configure a personal key at `https://video2ctx.dev/dashboard/developer` when they prefer that mode; never ask them to paste it into the conversation.
 
-Read `https://docs.video2ctx.dev/api/authentication`, `https://docs.video2ctx.dev/api/conventions`, and `https://docs.video2ctx.dev/api/monitoring` before operating monitors. Resolve every remaining method, path, parameter, request, and response question against `https://api.video2ctx.dev/openapi.json`.
+The operations below cover the common contract. Read `https://docs.video2ctx.dev/api/authentication.md`, `https://docs.video2ctx.dev/api/conventions.md`, or `https://docs.video2ctx.dev/api/monitoring.md` only when the task raises an unresolved authentication, response, or monitoring question. Use `https://api.video2ctx.dev/openapi.json` for any remaining method, path, parameter, request, or response uncertainty.
 
 Run operations through the CLI:
 
@@ -37,7 +35,7 @@ video2ctx api POST /v1/monitors --data '<json>' --include-meta
 
 ## Define the monitor
 
-1. Confirm the provider with `GET /v1/providers`; the current production provider is YouTube.
+1. Use provider `youtube`; do not spend a request discovering the known provider.
 2. Choose `kind`: `channel` uses a channel ID as `target`; `topic` and `search` use search text.
 3. Put human-readable notification context in `query.label` while keeping `target` functional.
 4. Choose `intervalMinutes`: `60`, `360`, `720`, `1440`, `4320`, or `10080`. Use `1440` when the user gives no cadence.

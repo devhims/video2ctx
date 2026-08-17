@@ -17,9 +17,15 @@ vi.mock('../src/lib/youtube', async (importOriginal) => {
         isTranslatable: true, isDefault: true,
       },
       translatedTo: { languageCode: 'hi', name: 'Hindi' },
-      segments: [],
+      segments: [{
+        startMs: 0,
+        durationMs: 1000,
+        endMs: 1000,
+        text: 'Hello world',
+        words: [{ text: 'Hello', startMs: 0, offsetMs: 0 }],
+      }],
       granularity: 'word',
-      text: '',
+      text: 'Hello world',
       meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
     }, cacheStatus: 'hit' as const })),
   };
@@ -41,6 +47,42 @@ describe('transcript route', () => {
     expect(response.status).toBe(200);
     expect(getTranscriptWithCache).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', 'hi');
     warning.mockRestore();
+  });
+
+  test('returns compact text when requested without changing the cached upstream shape', async () => {
+    const response = await app.request(
+      '/v1/providers/youtube/videos/abcdefghijk/transcript?format=text',
+      {},
+      {} as Env,
+      { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      videoId: 'abcdefghijk',
+      text: 'Hello world',
+      meta: { partial: false },
+    });
+    expect(payload).not.toHaveProperty('segments');
+    expect(payload).not.toHaveProperty('granularity');
+    expect(getTranscriptWithCache).toHaveBeenLastCalledWith(expect.anything(), 'abcdefghijk', undefined);
+  });
+
+  test('rejects an unsupported transcript format before loading data', async () => {
+    const calls = vi.mocked(getTranscriptWithCache).mock.calls.length;
+    const response = await app.request(
+      '/v1/providers/youtube/videos/abcdefghijk/transcript?format=srt',
+      {},
+      {} as Env,
+      { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_TRANSCRIPT_FORMAT' },
+    });
+    expect(getTranscriptWithCache).toHaveBeenCalledTimes(calls);
   });
 });
 

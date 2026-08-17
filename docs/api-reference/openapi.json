@@ -1262,15 +1262,40 @@
               "type": "string",
               "example": "hi"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Response detail. text omits timing arrays, segments keeps segment timing, and words keeps word timing. Omitted preserves the rich words response.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "segments",
+                "words"
+              ],
+              "default": "words"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Normalized timed transcript.",
+            "description": "Normalized transcript in the requested detail format.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Transcript"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TranscriptText"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TranscriptSegments"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Transcript"
+                    }
+                  ]
                 }
               }
             },
@@ -4699,6 +4724,69 @@
               "segment",
               "word"
             ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "TranscriptText": {
+        "type": "object",
+        "required": [
+          "videoId",
+          "track",
+          "text",
+          "meta"
+        ],
+        "properties": {
+          "videoId": {
+            "type": "string"
+          },
+          "track": {
+            "$ref": "#/components/schemas/CaptionTrack"
+          },
+          "translatedTo": {
+            "$ref": "#/components/schemas/TranslationLanguage"
+          },
+          "text": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          }
+        }
+      },
+      "TranscriptSegments": {
+        "type": "object",
+        "required": [
+          "videoId",
+          "track",
+          "segments",
+          "granularity",
+          "text",
+          "meta"
+        ],
+        "properties": {
+          "videoId": {
+            "type": "string"
+          },
+          "track": {
+            "$ref": "#/components/schemas/CaptionTrack"
+          },
+          "translatedTo": {
+            "$ref": "#/components/schemas/TranslationLanguage"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            }
+          },
+          "granularity": {
+            "const": "segment"
           },
           "text": {
             "type": "string"
