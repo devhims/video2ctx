@@ -126,18 +126,18 @@ const transcript = await getTranscript({
 console.log(transcript.text);
 ```
 
-Visual context is available through the Node-only watch subpath. FFmpeg is needed only for exact frames:
+YouTube's native storyboard contact sheets are available as a package primitive:
 
 ```ts
-import { getWatchIndex, extractFrames } from 'all-things-youtube/watch';
+import { getStoryboard } from 'all-things-youtube';
 
-const outputDir = '/tmp/youtube-watch';
-const index = await getWatchIndex({ videoId: '4vItmdk8F_M', outputDir });
-const frames = await extractFrames({
-  videoId: index.videoId,
-  timestampsMs: [30_000, 686_000],
-  outputDir,
+const storyboard = await getStoryboard({
+  videoId: '4vItmdk8F_M',
+  outputDir: '/tmp/youtube-storyboard',
+  maxSheets: 12,
 });
+
+console.log(storyboard.sheets);
 ```
 
 The package requires Node.js 18 or newer, includes its own types, and does not require a YouTube Data API key. Keep it server-side: browser requests are commonly blocked by CORS and distribute upstream rate-limit pressure across users.

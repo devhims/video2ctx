@@ -1,7 +1,7 @@
 {
   "name": "all-things-youtube",
-  "version": "0.3.0",
-  "description": "TypeScript toolkit for YouTube transcripts, metadata, storyboards, and timestamped visual context.",
+  "version": "0.4.0",
+  "description": "TypeScript toolkit for YouTube transcripts, metadata, storyboards, comments, channels, and playlists.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -9,11 +9,6 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
-    },
-    "./watch": {
-      "types": "./dist/watch/index.d.ts",
-      "require": "./dist/watch/index.js",
-      "default": "./dist/watch/index.js"
     }
   },
   "files": [
@@ -42,7 +37,6 @@
     "youtube-comments",
     "youtube-channel",
     "youtube-playlist",
-    "youtube-frames",
     "youtube-storyboard",
     "transcript",
     "captions",

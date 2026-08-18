@@ -19,7 +19,7 @@ Search YouTube and get transcripts/captions, comments, video details, channels, 
 
 YouTube exposes useful public data across several different page experiences. `all-things-youtube` gives that data one small, task-oriented interface:
 
-- **One import, ten focused functions:** Search or get exactly the resource you need instead of constructing a large client or learning a raw response format.
+- **One import, eleven focused functions:** Search or get exactly the resource you need instead of constructing a large client or learning a raw response format.
 - **Translation made simple:** Call `getTranscript()` with your desired output language. Supports 150+ languages when available.
 - **Complete channel and playlist data:** Channel About links and statistics, channel sorting, playlist cards, and continuation-based pagination are represented directly.
 - **Bounded networking by default:** Each attempt has a ten-second deadline; transient failures and `429` responses use bounded exponential backoff with jitter and `Retry-After` support.
@@ -35,7 +35,7 @@ npm install all-things-youtube
 
 Requires Node.js 18 or newer. The package uses the runtime's standard `fetch`; you can supply your own implementation when needed.
 
-The optional `all-things-youtube/watch` entry point uses a system FFmpeg executable for exact frames. Storyboard and transcript indexing does not require FFmpeg.
+Storyboard contact sheets are downloaded as JPEG files beneath a caller-owned output directory. The package does not require FFmpeg.
 
 > Keep calls server-side. Direct browser calls are commonly blocked by CORS and make every user's browser responsible for upstream rate limits.
 
@@ -100,6 +100,7 @@ All functions are named exports and accept a single options object.
 | Search            | `search()`              | Paginated videos, channels, and playlists          |
 | Caption catalog   | `getTracks()`           | Source tracks and available translation languages  |
 | Transcript        | `getTranscript()`       | Full text plus timed segments or words             |
+| Storyboard        | `getStoryboard()`       | Contact sheets plus timestamp-ready tile mappings  |
 | Comments          | `getComments()`         | One page or a bounded complete collection          |
 | Video             | `getDetails()`          | Core metadata, channel, keywords, and availability |
 | End screen        | `getEndscreen()`        | Timed video, playlist, and channel elements        |
@@ -107,43 +108,29 @@ All functions are named exports and accept a single options object.
 | Channel videos    | `getChannelVideos()`    | One sorted, paginated Videos-tab page              |
 | Channel playlists | `getChannelPlaylists()` | One sorted, paginated Playlists-tab page           |
 | Playlist          | `getPlaylist()`         | Playlist metadata and one page of videos           |
-| Watch index       | `getWatchIndex()`       | Timed transcript and storyboard contact sheets     |
-| Exact frames      | `extractFrames()`       | Best-effort timestamped JPEG files                  |
 
-The original task functions remain on the main entry point. The two visual functions are exported from `all-things-youtube/watch`.
+Every function is exported from the main `all-things-youtube` entry point.
 
-## Visual context
+## Storyboards
 
-Use the storyboard/transcript index to choose focused timestamps before decoding exact frames:
+Download YouTube's native storyboard contact sheets when you need a lightweight visual index:
 
 ```ts
-import { getWatchIndex, extractFrames } from 'all-things-youtube/watch';
+import { getStoryboard } from 'all-things-youtube';
 
-const outputDir = '/tmp/youtube-watch';
-const index = await getWatchIndex({
+const storyboard = await getStoryboard({
   videoId: '4vItmdk8F_M',
-  outputDir,
-  granularity: 'segment',
+  outputDir: '/tmp/youtube-storyboard',
+  maxSheets: 12,
 });
 
-for (const sheet of index.storyboard?.sheets ?? []) {
+for (const sheet of storyboard.sheets) {
   console.log(sheet.path, sheet.firstFrameIndex, sheet.intervalMs);
 }
-
-const result = await extractFrames({
-  videoId: index.videoId,
-  timestampsMs: [30_000, 686_000],
-  outputDir,
-  maxWidth: 1280,
-});
-
-console.log(result.frames);
-console.log(result.failures);
 ```
 
-`getWatchIndex()` returns complete contact-sheet paths and tile mappings without exposing YouTube's storyboard URLs. Transcript timing defaults to segments; pass `granularity: 'word'` only when word timing is necessary.
-
-`extractFrames()` accepts one to 30 timestamps, uses the best seekable public media format, and may fall back below 720p. It keeps signed media URLs in memory, gives FFmpeg a localhost proxy URL, and returns successful frames alongside per-timestamp failures. Install FFmpeg on `PATH`, set `FFMPEG_PATH`, or pass `ffmpegPath`.
+The returned sheet paths are absolute. A tile's timestamp is
+`(firstFrameIndex + row * columns + column) * intervalMs`. The package downloads at most 12 sheets by default; `maxSheets` accepts 1–20. Storyboard URLs remain internal and are never returned.
 
 ## Working with responses
 
@@ -265,6 +252,33 @@ for (const segment of transcript.segments) {
 | `granularity` | `'segment' \| 'word'` | No       | `'segment'`     | Include word-level timing when requested                  |
 
 Omit `lang` to return the default source track. Supplying `lang` asks for that output language regardless of whether the source captions are English, Spanish, or another supported language. If translation is unavailable, the call rejects with `INVALID_INPUT`.
+
+### `getStoryboard(options)`
+
+Downloads YouTube's native storyboard contact sheets and returns the information needed to map every tile to a timestamp.
+
+```ts
+import { getStoryboard } from 'all-things-youtube';
+
+const storyboard = await getStoryboard({
+  videoId: '4vItmdk8F_M',
+  outputDir: '/tmp/youtube-storyboard',
+  maxSheets: 12,
+});
+
+for (const sheet of storyboard.sheets) {
+  console.log(sheet.path, sheet.columns, sheet.rows, sheet.intervalMs);
+}
+```
+
+| Option      | Type     | Required | Default | Description                         |
+| ----------- | -------- | -------- | ------- | ----------------------------------- |
+| `videoId`   | `string` | Yes      | —       | YouTube video ID                    |
+| `outputDir` | `string` | Yes      | —       | Caller-owned directory for JPEGs    |
+| `maxSheets` | `number` | No       | `12`    | Sheet budget from 1 through 20      |
+
+The highest usable storyboard level is selected. A tile at `row` and `column` represents
+`(firstFrameIndex + row * columns + column) * intervalMs`. The package creates a `storyboards` child directory but never recursively deletes `outputDir`.
 
 ### `getComments(options)`
 

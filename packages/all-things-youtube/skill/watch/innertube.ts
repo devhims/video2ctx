@@ -1,5 +1,5 @@
-import { createYouTubeTransport } from '../youtube-transport';
-import { YouTubeClientError, type YouTubeClientOptions } from '../youtube-types';
+import { createYouTubeTransport } from '../../src/youtube-transport';
+import { YouTubeClientError, type YouTubeClientOptions } from '../../src/youtube-types';
 
 export type JsonObject = Record<string, unknown>;
 

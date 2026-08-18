@@ -4498,8 +4498,8 @@ var require_util2 = __commonJS({
         return true;
       }
       const strongest = getStrongestMetadata(parsedMetadata);
-      const metadata2 = filterMetadataListByAlgorithm(parsedMetadata, strongest);
-      for (const item of metadata2) {
+      const metadata3 = filterMetadataListByAlgorithm(parsedMetadata, strongest);
+      for (const item of metadata3) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
         let actualValue = crypto.createHash(algorithm).update(bytes).digest("base64");
@@ -4517,10 +4517,10 @@ var require_util2 = __commonJS({
       return false;
     }
     var parseHashWithOptions = /(?<algo>sha256|sha384|sha512)-((?<hash>[A-Za-z0-9+/]+|[A-Za-z0-9_-]+)={0,2}(?:\s|$)( +[!-~]*)?)?/i;
-    function parseMetadata(metadata2) {
+    function parseMetadata(metadata3) {
       const result = [];
       let empty = true;
-      for (const token of metadata2.split(" ")) {
+      for (const token of metadata3.split(" ")) {
         empty = false;
         const parsedToken = parseHashWithOptions.exec(token);
         if (parsedToken === null || parsedToken.groups === void 0 || parsedToken.groups.algo === void 0) {
@@ -4542,13 +4542,13 @@ var require_util2 = __commonJS({
         return algorithm;
       }
       for (let i = 1; i < metadataList.length; ++i) {
-        const metadata2 = metadataList[i];
-        if (metadata2.algo[3] === "5") {
+        const metadata3 = metadataList[i];
+        if (metadata3.algo[3] === "5") {
           algorithm = "sha512";
           break;
         } else if (algorithm[3] === "3") {
           continue;
-        } else if (metadata2.algo[3] === "3") {
+        } else if (metadata3.algo[3] === "3") {
           algorithm = "sha384";
         }
       }
@@ -19160,6 +19160,152 @@ function createYouTubeTransport(options) {
   };
 }
 
+// src/storyboard.ts
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+var DEFAULT_MAX_SHEETS = 12;
+var MAX_SHEETS = 20;
+var MAX_SHEET_BYTES = 4 * 1024 * 1024;
+function object(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : void 0;
+}
+function parseStoryboardSpec(raw) {
+  const renderer = object(object(raw.storyboards).playerStoryboardSpecRenderer);
+  const spec = typeof renderer.spec === "string" ? renderer.spec : void 0;
+  if (!spec) return void 0;
+  const [template, ...encodedLevels] = spec.split("|");
+  if (!template || !template.startsWith("https://")) return void 0;
+  const levels = encodedLevels.flatMap((encoded, index) => {
+    const fields = encoded.split("#");
+    const tileWidth = positiveInteger(fields[0]);
+    const tileHeight = positiveInteger(fields[1]);
+    const frameCount = positiveInteger(fields[2]);
+    const columns = positiveInteger(fields[3]);
+    const rows = positiveInteger(fields[4]);
+    const intervalMs = positiveInteger(fields[5]);
+    const namePattern = fields[6];
+    const signature = fields[7];
+    if (!tileWidth || !tileHeight || !frameCount || !columns || !rows || !intervalMs || !namePattern || !signature) return [];
+    return [{
+      index,
+      tileWidth,
+      tileHeight,
+      frameCount,
+      columns,
+      rows,
+      intervalMs,
+      namePattern,
+      signature
+    }];
+  });
+  return levels.length ? { template, levels } : void 0;
+}
+function sheetUrl(spec, level, sheet) {
+  const name = level.namePattern.replaceAll("$M", String(sheet));
+  let value = spec.template.replaceAll("$L", String(level.index)).replaceAll("$N", name);
+  if (value.includes("$S")) value = value.replaceAll("$S", level.signature);
+  else {
+    const url = new URL(value);
+    url.searchParams.set("sigh", level.signature);
+    value = url.toString();
+  }
+  return value;
+}
+async function jpegResponse(response) {
+  if (!response.ok) {
+    throw new YouTubeClientError("UPSTREAM_ERROR", `Storyboard request failed with status ${response.status}.`, {
+      status: response.status,
+      retryable: response.status === 429 || response.status >= 500
+    });
+  }
+  const type = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!type.startsWith("image/jpeg") && !type.startsWith("image/jpg")) {
+    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned a non-JPEG storyboard.");
+  }
+  const advertised = Number(response.headers.get("content-length"));
+  if (Number.isFinite(advertised) && advertised > MAX_SHEET_BYTES) {
+    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an oversized storyboard.");
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 255 || bytes[1] !== 216) {
+    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an invalid storyboard JPEG.");
+  }
+  return bytes;
+}
+function validateOptions(options) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(options.videoId)) {
+    throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
+  }
+  if (typeof options.outputDir !== "string" || !options.outputDir.trim()) {
+    throw new YouTubeClientError("INVALID_INPUT", "outputDir is required.");
+  }
+  const maxSheets = options.maxSheets ?? DEFAULT_MAX_SHEETS;
+  if (!Number.isSafeInteger(maxSheets) || maxSheets < 1 || maxSheets > MAX_SHEETS) {
+    throw new YouTubeClientError(
+      "INVALID_INPUT",
+      `maxSheets must be an integer from 1 to ${MAX_SHEETS}.`
+    );
+  }
+  return maxSheets;
+}
+function metadata(warnings) {
+  return {
+    source: "allthingsyoutube",
+    fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    partial: warnings.length > 0,
+    warnings
+  };
+}
+async function downloadStoryboard(raw, options, fetchImpl) {
+  const maxSheets = validateOptions(options);
+  const spec = parseStoryboardSpec(raw);
+  if (!spec) {
+    throw new YouTubeClientError("NOT_FOUND", "No storyboard is available for this video.");
+  }
+  const level = [...spec.levels].sort(
+    (a, b) => b.tileWidth * b.tileHeight - a.tileWidth * a.tileHeight
+  )[0];
+  if (!level) {
+    throw new YouTubeClientError("NOT_FOUND", "No usable storyboard level is available for this video.");
+  }
+  const capacity = level.columns * level.rows;
+  const availableSheets = Math.ceil(level.frameCount / capacity);
+  const requestedSheets = Math.min(availableSheets, maxSheets);
+  const directory = resolve(options.outputDir, "storyboards");
+  await mkdir(directory, { recursive: true });
+  const sheets = [];
+  for (let sheet = 0; sheet < requestedSheets; sheet += 1) {
+    const response = await fetchImpl(sheetUrl(spec, level, sheet));
+    const bytes = await jpegResponse(response);
+    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.jpg`);
+    await writeFile(path, bytes);
+    const firstFrameIndex = sheet * capacity;
+    sheets.push({
+      path,
+      tileWidth: level.tileWidth,
+      tileHeight: level.tileHeight,
+      columns: level.columns,
+      rows: level.rows,
+      firstFrameIndex,
+      frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
+      intervalMs: level.intervalMs
+    });
+  }
+  const warnings = requestedSheets < availableSheets ? [`Storyboard: limited to ${requestedSheets} sheets`] : [];
+  return {
+    videoId: options.videoId,
+    level: level.index,
+    frameCount: level.frameCount,
+    intervalMs: level.intervalMs,
+    sheets,
+    meta: metadata(warnings)
+  };
+}
+
 // src/browse-contract.ts
 var BROWSE_CATEGORIES = ["music", "news", "sports", "live"];
 var BROWSE_REGIONS = ["US", "IN"];
@@ -19262,7 +19408,7 @@ function browseLocale(options) {
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function object(value) {
+function object2(value) {
   return isObject(value) ? value : {};
 }
 function array(value) {
@@ -19281,21 +19427,21 @@ function number(value) {
 }
 function rendererText(value) {
   if (typeof value === "string") return import_he.default.decode((0, import_striptags.default)(value)).trim();
-  const source = object(value);
+  const source = object2(value);
   const content = string(source.content);
   if (content !== void 0) return import_he.default.decode((0, import_striptags.default)(content)).trim();
   const simple = string(source.simpleText);
   if (simple !== void 0) return import_he.default.decode((0, import_striptags.default)(simple)).trim();
-  const runs = array(source.runs).map((run) => string(object(run).text) ?? "").join("");
+  const runs = array(source.runs).map((run) => string(object2(run).text) ?? "").join("");
   return runs ? import_he.default.decode((0, import_striptags.default)(runs)).trim() : void 0;
 }
 function rendererThumbnails(value) {
-  const source = object(value);
+  const source = object2(value);
   const thumbnails = array(
-    source.thumbnails ?? object(source.thumbnail).thumbnails ?? source.sources ?? object(source.image).sources
+    source.thumbnails ?? object2(source.thumbnail).thumbnails ?? source.sources ?? object2(source.image).sources
   );
   return thumbnails.flatMap((item) => {
-    const thumbnail = object(item);
+    const thumbnail = object2(item);
     const url = string(thumbnail.url);
     if (!url) return [];
     return [{
@@ -19325,17 +19471,17 @@ function continuationToken(root) {
   let token;
   walkObjects(root, (candidate) => {
     if (token) return;
-    const command = object(object(candidate.continuationEndpoint).continuationCommand);
+    const command = object2(object2(candidate.continuationEndpoint).continuationCommand);
     token = string(command.token);
-    if (!token) token = string(object(candidate.continuationCommand).token);
-    if (!token) token = string(object(candidate.nextContinuationData).continuation);
+    if (!token) token = string(object2(candidate.continuationCommand).token);
+    if (!token) token = string(object2(candidate.nextContinuationData).continuation);
   });
   return token;
 }
 function directContinuationToken(value) {
-  const renderer = object(object(value).continuationItemRenderer);
-  const command = object(object(renderer.continuationEndpoint).continuationCommand);
-  return string(command.token) ?? string(object(renderer.nextContinuationData).continuation) ?? continuationToken(renderer);
+  const renderer = object2(object2(value).continuationItemRenderer);
+  const command = object2(object2(renderer.continuationEndpoint).continuationCommand);
+  return string(command.token) ?? string(object2(renderer.nextContinuationData).continuation) ?? continuationToken(renderer);
 }
 function commentContinuationTokens(root) {
   let continuation;
@@ -19346,7 +19492,7 @@ function commentContinuationTokens(root) {
       for (const item of array(command.continuationItems)) {
         const direct = directContinuationToken(item);
         if (direct) continuation = direct;
-        const thread = object(object(item).commentThreadRenderer);
+        const thread = object2(object2(item).commentThreadRenderer);
         const reply = continuationToken(thread.replies);
         if (reply) replyContinuations.add(reply);
       }
@@ -19354,7 +19500,7 @@ function commentContinuationTokens(root) {
   }
   for (const menu of findRenderers(root, "sortFilterSubMenuRenderer")) {
     for (const itemValue of array(menu.subMenuItems)) {
-      const item = object(itemValue);
+      const item = object2(itemValue);
       const title = string(item.title) ?? rendererText(item.title);
       if (title?.toLowerCase().startsWith("newest")) {
         newestContinuation = continuationToken(item);
@@ -19446,25 +19592,25 @@ function assertPlaylistId(playlistId) {
   }
 }
 function channelFromRuns(value, navigationEndpoint) {
-  const source = object(value);
-  const firstRun = object(array(source.runs)[0]);
-  const commandRun = object(array(source.commandRuns)[0]);
+  const source = object2(value);
+  const firstRun = object2(array(source.runs)[0]);
+  const commandRun = object2(array(source.commandRuns)[0]);
   const navigationCandidates = [
     firstRun.navigationEndpoint,
-    object(object(commandRun.onTap).innertubeCommand),
+    object2(object2(commandRun.onTap).innertubeCommand),
     navigationEndpoint,
-    object(object(navigationEndpoint).innertubeCommand)
+    object2(object2(navigationEndpoint).innertubeCommand)
   ];
-  const id = navigationCandidates.map((candidate) => string(object(object(candidate).browseEndpoint).browseId)).find(Boolean) ?? "";
+  const id = navigationCandidates.map((candidate) => string(object2(object2(candidate).browseEndpoint).browseId)).find(Boolean) ?? "";
   const rawName = string(firstRun.text) ?? rendererText(value) ?? "Unknown channel";
   const name = id ? rawName.replace(/^by\s+/i, "") : rawName;
   return { id, name, url: id ? `https://www.youtube.com/channel/${id}` : "" };
 }
 function channelFromMetadataRows(value) {
-  for (const metadata2 of findRenderers(value, "contentMetadataViewModel")) {
-    for (const row of array(metadata2.metadataRows)) {
-      for (const partValue of array(object(row).metadataParts)) {
-        const part = object(partValue);
+  for (const metadata3 of findRenderers(value, "contentMetadataViewModel")) {
+    for (const row of array(metadata3.metadataRows)) {
+      for (const partValue of array(object2(row).metadataParts)) {
+        const part = object2(partValue);
         const channel = channelFromRuns(part.text);
         if (channel.id) return channel;
       }
@@ -19490,7 +19636,7 @@ function parseVideoRenderer(renderer) {
     type: "video",
     id,
     title,
-    description: rendererText(renderer.descriptionSnippet) ?? array(renderer.detailedMetadataSnippets).map((snippet) => rendererText(object(snippet).snippetText)).filter(Boolean).join(" "),
+    description: rendererText(renderer.descriptionSnippet) ?? array(renderer.detailedMetadataSnippets).map((snippet) => rendererText(object2(snippet).snippetText)).filter(Boolean).join(" "),
     channel: channelFromRuns(
       renderer.ownerText ?? renderer.longBylineText ?? renderer.shortBylineText
     ),
@@ -19509,7 +19655,7 @@ function parseChannelRenderer(renderer) {
   const id = string(renderer.channelId);
   const name = rendererText(renderer.title);
   if (!id || !name) return null;
-  const handle = rendererText(renderer.navigationEndpoint ? object(renderer.navigationEndpoint).commandMetadata : void 0) ?? rendererText(renderer.subscriberCountText);
+  const handle = rendererText(renderer.navigationEndpoint ? object2(renderer.navigationEndpoint).commandMetadata : void 0) ?? rendererText(renderer.subscriberCountText);
   return {
     type: "channel",
     id,
@@ -19535,13 +19681,13 @@ function parsePlaylistRenderer(renderer) {
     channel: channelFromRuns(renderer.longBylineText ?? renderer.shortBylineText),
     thumbnails: firstRendererThumbnails(
       renderer.thumbnail,
-      object(array(renderer.thumbnails)[0])
+      object2(array(renderer.thumbnails)[0])
     ),
     videoCount: parseCompactNumber(videoCountText),
     videoCountText,
     isPodcast: false,
     playUrl: (() => {
-      const videoId = string(object(object(renderer.navigationEndpoint).watchEndpoint).videoId);
+      const videoId = string(object2(object2(renderer.navigationEndpoint).watchEndpoint).videoId);
       return videoId ? `https://www.youtube.com/watch?v=${videoId}&list=${id}` : void 0;
     })(),
     url: `https://www.youtube.com/playlist?list=${id}`
@@ -19550,12 +19696,12 @@ function parsePlaylistRenderer(renderer) {
 function parseLockupViewModel(renderer, fallbackChannel) {
   const id = string(renderer.contentId);
   const contentType = string(renderer.contentType);
-  const metadata2 = object(object(renderer.metadata).lockupMetadataViewModel);
-  const title = rendererText(metadata2.title);
+  const metadata3 = object2(object2(renderer.metadata).lockupMetadataViewModel);
+  const title = rendererText(metadata3.title);
   if (!id || !title) return null;
-  const contentMetadata = object(object(metadata2.metadata).contentMetadataViewModel);
+  const contentMetadata = object2(object2(metadata3.metadata).contentMetadataViewModel);
   const metadataRows = array(contentMetadata.metadataRows).map(
-    (row) => array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter(
+    (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter(
       (value) => Boolean(value)
     )
   );
@@ -19563,9 +19709,9 @@ function parseLockupViewModel(renderer, fallbackChannel) {
   const thumbnailRenderer = findRenderers(renderer.contentImage, "thumbnailViewModel")[0] ?? {};
   const thumbnails = rendererThumbnails(thumbnailRenderer.image);
   const badgeTexts = findRenderers(renderer.contentImage, "thumbnailBadgeViewModel").map((badge) => rendererText(badge.text)).filter((value) => Boolean(value));
-  const metadataBadgeTexts = findRenderers(metadata2, "badgeViewModel").flatMap((badge) => [
+  const metadataBadgeTexts = findRenderers(metadata3, "badgeViewModel").flatMap((badge) => [
     rendererText(badge.badgeText),
-    rendererText(object(object(badge.rendererContext).accessibilityContext).label)
+    rendererText(object2(object2(badge.rendererContext).accessibilityContext).label)
   ]).filter((value) => Boolean(value));
   if (contentType === "LOCKUP_CONTENT_TYPE_VIDEO") {
     const statsRow = metadataRows.find((row) => row.length >= 2 && row.some((value) => /\d/.test(value)));
@@ -19574,7 +19720,7 @@ function parseLockupViewModel(renderer, fallbackChannel) {
       (value) => /\b(?:ago|streamed|premiered)\b/i.test(value)
     ) ?? statsRow?.[1];
     const durationText = badgeTexts.find((value) => /^\d+(?::\d+)+$/.test(value));
-    const channel = channelFromMetadataRows(metadata2) ?? fallbackChannel ?? { id: "", name: "Unknown channel", url: "" };
+    const channel = channelFromMetadataRows(metadata3) ?? fallbackChannel ?? { id: "", name: "Unknown channel", url: "" };
     return {
       type: "video",
       id,
@@ -19594,8 +19740,8 @@ function parseLockupViewModel(renderer, fallbackChannel) {
   if (contentType === "LOCKUP_CONTENT_TYPE_PLAYLIST" || contentType === "LOCKUP_CONTENT_TYPE_PODCAST") {
     const videoCountText = badgeTexts.find((value) => /\b(?:videos?|episodes?)$/i.test(value));
     const updatedTimeText = metadataParts.find((value) => /^updated\b/i.test(value));
-    const command = object(object(object(renderer.rendererContext).commandContext).onTap);
-    const firstVideoId = string(object(object(command.innertubeCommand).watchEndpoint).videoId);
+    const command = object2(object2(object2(renderer.rendererContext).commandContext).onTap);
+    const firstVideoId = string(object2(object2(command.innertubeCommand).watchEndpoint).videoId);
     return {
       type: "playlist",
       id,
@@ -19660,9 +19806,9 @@ function parseSearchResults(root, fallbackChannel) {
 }
 function channelTabBrowseOptions(root, suffix) {
   for (const tab of findRenderers(root, "tabRenderer")) {
-    const endpoint = object(tab.endpoint);
-    const commandUrl = string(object(object(endpoint.commandMetadata).webCommandMetadata).url);
-    const browse = object(endpoint.browseEndpoint);
+    const endpoint = object2(tab.endpoint);
+    const commandUrl = string(object2(object2(endpoint.commandMetadata).webCommandMetadata).url);
+    const browse = object2(endpoint.browseEndpoint);
     const browseId = string(browse.browseId);
     const params = string(browse.params);
     if (commandUrl?.endsWith(suffix) && browseId && params) return { browseId, params };
@@ -19673,8 +19819,8 @@ function channelVideoSortContinuation(root, sort) {
   const label = sort === "latest" ? "Latest" : sort === "popular" ? "Popular" : "Oldest";
   for (const chip of findRenderers(root, "chipViewModel")) {
     if (rendererText(chip.text) !== label) continue;
-    const command = object(object(chip.tapCommand).innertubeCommand);
-    const token = string(object(command.continuationCommand).token);
+    const command = object2(object2(chip.tapCommand).innertubeCommand);
+    const token = string(object2(command.continuationCommand).token);
     if (token) return token;
   }
   return void 0;
@@ -19683,9 +19829,9 @@ function channelPlaylistSortBrowseOptions(root, sort) {
   const label = sort === "newest" ? "Date added (newest)" : "Last video added";
   for (const menu of findRenderers(root, "sortFilterSubMenuRenderer")) {
     for (const item of array(menu.subMenuItems)) {
-      const option = object(item);
+      const option = object2(item);
       if (string(option.title) !== label) continue;
-      const browse = object(object(option.navigationEndpoint).browseEndpoint);
+      const browse = object2(object2(option.navigationEndpoint).browseEndpoint);
       const browseId = string(browse.browseId);
       const params = string(browse.params);
       if (browseId && params) return { browseId, params };
@@ -19715,9 +19861,9 @@ function catalogContinuationToken(root) {
 }
 function channelHeaderCounts(root) {
   const header = findRenderers(root, "pageHeaderViewModel")[0];
-  const metadata2 = header ? findRenderers(header, "contentMetadataViewModel")[0] : void 0;
-  const values2 = array(metadata2?.metadataRows).flatMap(
-    (row) => array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter(
+  const metadata3 = header ? findRenderers(header, "contentMetadataViewModel")[0] : void 0;
+  const values2 = array(metadata3?.metadataRows).flatMap(
+    (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter(
       (value) => Boolean(value)
     )
   );
@@ -19741,11 +19887,11 @@ function directExternalUrl(value) {
 function channelExternalLinks(root) {
   return findRenderers(root, "channelExternalLinkViewModel").flatMap((renderer) => {
     const title = rendererText(renderer.title);
-    const link = object(renderer.link);
+    const link = object2(renderer.link);
     const displayUrl = rendererText(link);
-    const commandRun = object(array(link.commandRuns)[0]);
-    const command = object(object(commandRun.onTap).innertubeCommand);
-    const commandUrl = string(object(command.urlEndpoint).url) ?? string(object(object(command.commandMetadata).webCommandMetadata).url);
+    const commandRun = object2(array(link.commandRuns)[0]);
+    const command = object2(object2(commandRun.onTap).innertubeCommand);
+    const commandUrl = string(object2(command.urlEndpoint).url) ?? string(object2(object2(command.commandMetadata).webCommandMetadata).url);
     const url = directExternalUrl(commandUrl);
     return title && displayUrl && url ? [{ title, displayUrl, url }] : [];
   });
@@ -19796,13 +19942,13 @@ function playlistHeaderData(root) {
   const secondary = findRenderers(root, "playlistSidebarSecondaryInfoRenderer")[0] ?? {};
   const ownerRenderer = findRenderers(secondary, "videoOwnerRenderer")[0] ?? {};
   const avatarStack = findRenderers(pageHeader, "avatarStackViewModel")[0] ?? {};
-  const metadata2 = findRenderers(root, "playlistMetadataRenderer")[0] ?? {};
+  const metadata3 = findRenderers(root, "playlistMetadataRenderer")[0] ?? {};
   const microformat = findRenderers(root, "microformatDataRenderer")[0] ?? {};
   const playlistThumbnail = findRenderers(primary.thumbnailRenderer, "playlistVideoThumbnailRenderer")[0] ?? {};
   const metadataValues = [
     ...findRenderers(pageHeader, "contentMetadataViewModel").flatMap(
       (viewModel) => array(viewModel.metadataRows).flatMap(
-        (row) => array(object(row).metadataParts).map((part) => rendererText(object(part).text)).filter((value) => Boolean(value))
+        (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter((value) => Boolean(value))
       )
     ),
     ...array(primary.stats).map((stat2) => rendererText(stat2)).filter((value) => Boolean(value))
@@ -19815,8 +19961,8 @@ function playlistHeaderData(root) {
   ];
   const channel = channelCandidates.find((candidate) => candidate.id) ?? channelCandidates.find((candidate) => candidate.name !== "Unknown channel") ?? { id: "", name: "Unknown channel", url: "" };
   return {
-    title: rendererText(legacy.title) ?? string(pageHeader.pageTitle) ?? rendererText(object(findRenderers(pageHeader, "dynamicTextViewModel")[0]).text) ?? rendererText(primary.title) ?? string(metadata2.title),
-    description: rendererText(legacy.descriptionText) ?? rendererText(primary.description) ?? string(metadata2.description) ?? string(microformat.description),
+    title: rendererText(legacy.title) ?? string(pageHeader.pageTitle) ?? rendererText(object2(findRenderers(pageHeader, "dynamicTextViewModel")[0]).text) ?? rendererText(primary.title) ?? string(metadata3.title),
+    description: rendererText(legacy.descriptionText) ?? rendererText(primary.description) ?? string(metadata3.description) ?? string(microformat.description),
     channel,
     thumbnails: firstRendererThumbnails(
       legacy.playlistHeaderBanner,
@@ -19873,14 +20019,14 @@ function captionTrackInfo(track, index, defaultIndex = 0) {
   };
 }
 function parseCaptionTracks(player) {
-  const renderer = object(object(player.captions).playerCaptionsTracklistRenderer);
-  const audioTracks = array(renderer.audioTracks).map(object);
+  const renderer = object2(object2(player.captions).playerCaptionsTracklistRenderer);
+  const audioTracks = array(renderer.audioTracks).map(object2);
   const defaultAudioTrackIndex = number(renderer.defaultAudioTrackIndex);
   const indexedDefaultAudioTrack = defaultAudioTrackIndex !== void 0 ? audioTracks[defaultAudioTrackIndex] : void 0;
   const defaultAudioTrack = indexedDefaultAudioTrack ?? audioTracks.find((track) => track.hasDefaultTrack === true) ?? audioTracks[0] ?? {};
   const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex) ?? 0;
   const parsedTracks = array(renderer.captionTracks).flatMap((item, sourceIndex) => {
-    const track = object(item);
+    const track = object2(item);
     const baseUrl = string(track.baseUrl);
     if (!baseUrl) return [];
     return [{
@@ -19904,7 +20050,7 @@ function parseCaptionTracks(player) {
     (track, index) => captionTrackInfo(track, index, defaultIndex)
   );
   const translations = array(renderer.translationLanguages).map((item) => {
-    const language = object(item);
+    const language = object2(item);
     return {
       languageCode: string(language.languageCode) ?? "und",
       name: rendererText(language.languageName) ?? string(language.languageCode) ?? "Unknown"
@@ -19966,7 +20112,7 @@ function extractAssignedJson(html, markers) {
       else if (character === "{") depth += 1;
       else if (character === "}" && --depth === 0) {
         try {
-          return object(JSON.parse(html.slice(start, index + 1)));
+          return object2(JSON.parse(html.slice(start, index + 1)));
         } catch {
           break;
         }
@@ -20002,9 +20148,9 @@ function chooseCaptionTrack(internal, language, trackId, defaultTrackId) {
 }
 function parseEndscreen(player) {
   return findRenderers(player.endscreen, "endscreenElementRenderer").map((renderer) => {
-    const endpoint = object(renderer.endpoint);
-    const watchEndpoint = object(endpoint.watchEndpoint);
-    const browseEndpoint = object(endpoint.browseEndpoint);
+    const endpoint = object2(renderer.endpoint);
+    const watchEndpoint = object2(endpoint.watchEndpoint);
+    const browseEndpoint = object2(endpoint.browseEndpoint);
     const style = string(renderer.style) ?? "";
     const type = style.includes("VIDEO") ? "video" : style.includes("PLAYLIST") ? "playlist" : style.includes("CHANNEL") ? "channel" : "unknown";
     return {
@@ -20013,7 +20159,7 @@ function parseEndscreen(player) {
       metadata: rendererText(renderer.metadata),
       videoId: string(watchEndpoint.videoId),
       playlistId: string(watchEndpoint.playlistId),
-      channelId: string(browseEndpoint.browseId) ?? string(object(renderer.hovercardButton).channelId),
+      channelId: string(browseEndpoint.browseId) ?? string(object2(renderer.hovercardButton).channelId),
       startMs: number(renderer.startMs) ?? 0,
       endMs: number(renderer.endMs) ?? 0,
       thumbnails: rendererThumbnails(renderer.image),
@@ -20027,12 +20173,12 @@ function parseEndscreen(player) {
   });
 }
 function parseComment(renderer) {
-  const commentWrapper = object(renderer.comment);
-  const comment = object(commentWrapper.commentRenderer ?? renderer.comment ?? renderer);
+  const commentWrapper = object2(renderer.comment);
+  const comment = object2(commentWrapper.commentRenderer ?? renderer.comment ?? renderer);
   const id = string(comment.commentId) ?? string(renderer.commentId);
   const text = rendererText(comment.contentText ?? comment.content);
   if (!id || !text) return null;
-  const authorEndpoint = object(object(comment.authorEndpoint).browseEndpoint);
+  const authorEndpoint = object2(object2(comment.authorEndpoint).browseEndpoint);
   return {
     id,
     author: {
@@ -20051,10 +20197,10 @@ function parseComment(renderer) {
   };
 }
 function parseCommentEntity(payload) {
-  const properties = object(payload.properties);
-  const author = object(payload.author);
-  const toolbar = object(payload.toolbar);
-  const content = object(properties.content);
+  const properties = object2(payload.properties);
+  const author = object2(payload.author);
+  const toolbar = object2(payload.toolbar);
+  const content = object2(properties.content);
   const id = string(properties.commentId);
   const text = string(content.content);
   if (!id || !text) return null;
@@ -20167,7 +20313,7 @@ function createYouTubeClient(options = {}) {
       );
     }
     try {
-      return object(await response.json());
+      return object2(await response.json());
     } catch (cause) {
       throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned invalid JSON.", {
         cause,
@@ -20189,7 +20335,7 @@ function createYouTubeClient(options = {}) {
           profile
         );
         firstResponse ??= response;
-        const status = string(object(response.playabilityStatus).status);
+        const status = string(object2(response.playabilityStatus).status);
         const tracks = parseCaptionTracks(response).internal;
         if (status === "OK" && (!requireCaptionTrack || tracks.length)) return response;
         attempts.push(`${profile.name}: ${status ?? "UNKNOWN"}`);
@@ -20445,8 +20591,8 @@ function createYouTubeClient(options = {}) {
     },
     async getVideo(videoId) {
       const raw = await player(videoId, false);
-      const details = object(raw.videoDetails);
-      const status = object(raw.playabilityStatus);
+      const details = object2(raw.videoDetails);
+      const status = object2(raw.playabilityStatus);
       const author = string(details.author) ?? "Unknown channel";
       const channelId = string(details.channelId) ?? "";
       const playability = string(status.status) ?? "UNKNOWN";
@@ -20499,36 +20645,36 @@ function createYouTubeClient(options = {}) {
       }
       const aboutRaw = await desktopChannelAbout(channelId);
       const raw = aboutRaw ?? await rawBrowse({ browseId: channelId });
-      const metadata2 = findRenderers(raw, "channelMetadataRenderer")[0] ?? {};
+      const metadata3 = findRenderers(raw, "channelMetadataRenderer")[0] ?? {};
       const about = findRenderers(raw, "aboutChannelViewModel")[0] ?? {};
-      if (!string(metadata2.externalId) && !string(metadata2.title) && !rendererText(metadata2.title) && !string(about.channelId)) {
+      if (!string(metadata3.externalId) && !string(metadata3.title) && !rendererText(metadata3.title) && !string(about.channelId)) {
         throw new YouTubeClientError("NOT_FOUND", `YouTube channel ${channelId} was not found.`, {
           status: 404
         });
       }
-      const name = string(metadata2.title) ?? rendererText(metadata2.title) ?? "Unknown channel";
-      const resolvedId = string(about.channelId) ?? string(metadata2.externalId) ?? channelId;
+      const name = string(metadata3.title) ?? rendererText(metadata3.title) ?? "Unknown channel";
+      const resolvedId = string(about.channelId) ?? string(metadata3.externalId) ?? channelId;
       const headerCounts = channelHeaderCounts(raw);
-      const subscriberCountText = string(about.subscriberCountText) ?? headerCounts.subscriberCountText ?? rendererText(metadata2.subscriberCountText);
-      const videoCountText = string(about.videoCountText) ?? headerCounts.videoCountText ?? rendererText(metadata2.videoCountText);
+      const subscriberCountText = string(about.subscriberCountText) ?? headerCounts.subscriberCountText ?? rendererText(metadata3.subscriberCountText);
+      const videoCountText = string(about.videoCountText) ?? headerCounts.videoCountText ?? rendererText(metadata3.videoCountText);
       const viewCountText = string(about.viewCountText);
       const joinedDateText = rendererText(about.joinedDateText);
       const canonicalChannelUrl = normalizedChannelUrl(
-        string(about.canonicalChannelUrl) ?? string(metadata2.channelUrl),
+        string(about.canonicalChannelUrl) ?? string(metadata3.channelUrl),
         resolvedId
       );
       const handleCandidate = canonicalChannelUrl.split("/").pop();
-      const metadataHandle = string(metadata2.vanityChannelUrl)?.split("/").pop();
+      const metadataHandle = string(metadata3.vanityChannelUrl)?.split("/").pop();
       const hasAbout = Object.keys(about).length > 0;
       return {
         type: "channel",
         id: resolvedId,
         name,
         handle: handleCandidate?.startsWith("@") ? handleCandidate : metadataHandle?.startsWith("@") ? metadataHandle : void 0,
-        thumbnails: rendererThumbnails(metadata2.avatar),
+        thumbnails: rendererThumbnails(metadata3.avatar),
         url: canonicalChannelUrl,
         about: {
-          description: string(about.description) ?? string(metadata2.description),
+          description: string(about.description) ?? string(metadata3.description),
           links: channelExternalLinks(raw),
           moreInfo: {
             canonicalChannelUrl,
@@ -20541,7 +20687,7 @@ function createYouTubeClient(options = {}) {
             videoCountText,
             viewCount: parseCompactNumber(viewCountText),
             viewCountText,
-            businessEmailAvailable: Object.keys(object(about.signInForBusinessEmail)).length > 0
+            businessEmailAvailable: Object.keys(object2(about.signInForBusinessEmail)).length > 0
           }
         },
         meta: meta(hasAbout ? [] : ["Channel About details are unavailable."], !hasAbout)
@@ -20570,12 +20716,12 @@ function createYouTubeClient(options = {}) {
       });
       const [channelRaw, page] = await Promise.all([channelRawPromise, pagePromise]);
       const pageRaw = page?.raw;
-      const metadata2 = findRenderers(channelRaw, "channelMetadataRenderer")[0] ?? {};
-      const resolvedId = string(metadata2.externalId) ?? channelId;
+      const metadata3 = findRenderers(channelRaw, "channelMetadataRenderer")[0] ?? {};
+      const resolvedId = string(metadata3.externalId) ?? channelId;
       const channelSummary = {
         id: resolvedId,
-        name: string(metadata2.title) ?? rendererText(metadata2.title) ?? "Unknown channel",
-        url: string(metadata2.channelUrl) ?? `https://www.youtube.com/channel/${resolvedId}`
+        name: string(metadata3.title) ?? rendererText(metadata3.title) ?? "Unknown channel",
+        url: string(metadata3.channelUrl) ?? `https://www.youtube.com/channel/${resolvedId}`
       };
       const videos = pageRaw ? parseSearchResults(pageRaw, channelSummary).filter(
         (item) => item.type === "video"
@@ -20615,12 +20761,12 @@ function createYouTubeClient(options = {}) {
       });
       const [channelRaw, page] = await Promise.all([channelRawPromise, pagePromise]);
       const pageRaw = page?.raw;
-      const metadata2 = findRenderers(channelRaw, "channelMetadataRenderer")[0] ?? {};
-      const resolvedId = string(metadata2.externalId) ?? channelId;
+      const metadata3 = findRenderers(channelRaw, "channelMetadataRenderer")[0] ?? {};
+      const resolvedId = string(metadata3.externalId) ?? channelId;
       const channelSummary = {
         id: resolvedId,
-        name: string(metadata2.title) ?? rendererText(metadata2.title) ?? "Unknown channel",
-        url: string(metadata2.channelUrl) ?? `https://www.youtube.com/channel/${resolvedId}`
+        name: string(metadata3.title) ?? rendererText(metadata3.title) ?? "Unknown channel",
+        url: string(metadata3.channelUrl) ?? `https://www.youtube.com/channel/${resolvedId}`
       };
       const playlists = pageRaw ? parseSearchResults(pageRaw, channelSummary).filter(
         (item) => item.type === "playlist"
@@ -20725,7 +20871,7 @@ function createYouTubeClient(options = {}) {
       }
       let json;
       try {
-        json = object(await response.json());
+        json = object2(await response.json());
       } catch (cause) {
         throw new YouTubeClientError(
           "INVALID_RESPONSE",
@@ -20735,12 +20881,12 @@ function createYouTubeClient(options = {}) {
       }
       const segments = [];
       for (const value of array(json.events)) {
-        const event = object(value);
+        const event = object2(value);
         if (event.aAppend === 1 || !Array.isArray(event.segs)) continue;
         const startMs = number(event.tStartMs) ?? 0;
         const durationMs = number(event.dDurationMs) ?? 0;
         const words = array(event.segs).map((segmentValue) => {
-          const segment = object(segmentValue);
+          const segment = object2(segmentValue);
           const rawText = string(segment.utf8) ?? "";
           const text2 = import_he.default.decode((0, import_striptags.default)(rawText));
           const offsetMs = number(segment.tOffsetMs) ?? 0;
@@ -20766,6 +20912,13 @@ function createYouTubeClient(options = {}) {
         meta: meta([], segments.length === 0)
       };
     },
+    async getStoryboard(storyboardOptions) {
+      return downloadStoryboard(
+        await player(storyboardOptions.videoId, false),
+        storyboardOptions,
+        fetchImpl
+      );
+    },
     getComments: getCommentsPage,
     getAllComments,
     async getEndscreen(videoId) {
@@ -20781,18 +20934,42 @@ function decodeContinuation(token) {
   }
 }
 
-// src/watch/index.ts
-import { resolve as resolve3 } from "node:path";
-import { mkdir as mkdir3 } from "node:fs/promises";
+// src/index.ts
+function optionsFrom(options) {
+  return {
+    fetch: options.fetch,
+    language: options.language,
+    region: options.region,
+    retry: options.retry
+  };
+}
+function getTranscript(options) {
+  return createYouTubeClient(optionsFrom(options)).getTranscript({
+    videoId: options.videoId,
+    translateTo: options.lang,
+    granularity: options.granularity
+  });
+}
+function getStoryboard(options) {
+  const { videoId, outputDir, maxSheets } = options;
+  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets });
+}
+function getDetails(options) {
+  return createYouTubeClient(optionsFrom(options)).getVideo(options.videoId);
+}
 
-// src/watch/ffmpeg.ts
+// skill/watch/workflow.ts
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { resolve as resolve3 } from "node:path";
+
+// skill/watch/ffmpeg.ts
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { access, mkdir as mkdir2, readFile, rm, stat } from "node:fs/promises";
+import { delimiter, extname, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
-// src/watch/jpeg.ts
+// skill/watch/jpeg.ts
 var START_OF_FRAME = /* @__PURE__ */ new Set([
   192,
   193,
@@ -20832,7 +21009,7 @@ function jpegDimensions(bytes) {
   return void 0;
 }
 
-// src/watch/ffmpeg.ts
+// skill/watch/ffmpeg.ts
 var FRAME_TIMEOUT_MS = 3e4;
 function pathValue(environment, platform) {
   if (platform !== "win32") return environment.PATH ?? "";
@@ -20859,7 +21036,7 @@ async function resolveFfmpegExecutable(command, environment = process.env, platf
   const names = executableNames(trimmed, environment, platform);
   for (const directory of directories) {
     for (const name of names) {
-      const candidate = hasPath ? resolve(name) : resolve(directory, name);
+      const candidate = hasPath ? resolve2(name) : resolve2(directory, name);
       if (await isExecutable(candidate)) return candidate;
     }
   }
@@ -20899,9 +21076,9 @@ function conciseError(stderr) {
   return "FFmpeg could not decode the requested frame.";
 }
 async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs, maxWidth, sourceWidth, sourceHeight) {
-  const directory = resolve(outputDir, "frames");
-  await mkdir(directory, { recursive: true });
-  const path = join(directory, `${videoId}-${timestampMs}-${randomUUID()}.jpg`);
+  const directory = resolve2(outputDir, "frames");
+  await mkdir2(directory, { recursive: true });
+  const path = join2(directory, `${videoId}-${timestampMs}-${randomUUID()}.jpg`);
   const seconds = (timestampMs / 1e3).toFixed(3);
   try {
     const result = await runProcess(ffmpegPath, [
@@ -20956,7 +21133,7 @@ async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs
   }
 }
 
-// src/watch/innertube.ts
+// skill/watch/innertube.ts
 var IOS_PROFILE = {
   name: "ios",
   clientName: "IOS",
@@ -21009,7 +21186,7 @@ var API_ROOT2 = "https://youtubei.googleapis.com/youtubei/v1";
 function isObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function object2(value) {
+function object3(value) {
   return isObject2(value) ? value : {};
 }
 async function callWatchPlayer(videoId, profile, options) {
@@ -21065,10 +21242,10 @@ async function callWatchPlayer(videoId, profile, options) {
       retryable: true
     });
   }
-  const normalized = object2(raw);
-  const playability = String(object2(normalized.playabilityStatus).status ?? "UNKNOWN");
+  const normalized = object3(raw);
+  const playability = String(object3(normalized.playabilityStatus).status ?? "UNKNOWN");
   if (playability !== "OK") {
-    const reason = object2(normalized.playabilityStatus).reason;
+    const reason = object3(normalized.playabilityStatus).reason;
     throw new YouTubeClientError(
       playability === "LOGIN_REQUIRED" ? "AUTH_REQUIRED" : "UNAVAILABLE",
       typeof reason === "string" ? reason : `Video is not playable through ${profile.name}.`,
@@ -21077,12 +21254,9 @@ async function callWatchPlayer(videoId, profile, options) {
   }
   return { profile: profile.name, raw: normalized };
 }
-function callIosWatchPlayer(videoId, options) {
-  return callWatchPlayer(videoId, IOS_PROFILE, options);
-}
 
-// src/watch/media.ts
-function object3(value) {
+// skill/watch/media.ts
+function object4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
 function values(value) {
@@ -21094,7 +21268,7 @@ function finiteNumber(value) {
 }
 function formats(value, progressive) {
   return values(value).flatMap((item) => {
-    const format = object3(item);
+    const format = object4(item);
     const url = typeof format.url === "string" ? format.url : void 0;
     const mimeType = typeof format.mimeType === "string" ? format.mimeType : "";
     if (!url || !mimeType.startsWith("video/")) return [];
@@ -21115,7 +21289,7 @@ function codecPreference(candidate) {
   return 3;
 }
 function selectCandidates(raw, maxWidth) {
-  const streaming = object3(raw.streamingData);
+  const streaming = object4(raw.streamingData);
   const all = [
     ...formats(streaming.formats, true),
     ...formats(streaming.adaptiveFormats, false)
@@ -21142,11 +21316,12 @@ async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options)
   }
 }
 
-// src/watch/range-proxy.ts
+// skill/watch/range-proxy.ts
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 var DEFAULT_PREFIX_CACHE_BYTES = 4 * 1024 * 1024;
 var DEFAULT_TRANSFER_LIMIT_BYTES = 256 * 1024 * 1024;
+var LOOPBACK_HOST = "127.0.0.1";
 var TransferBudget = class {
   constructor(limit = DEFAULT_TRANSFER_LIMIT_BYTES) {
     this.limit = limit;
@@ -21275,7 +21450,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
   });
   await new Promise((resolve5, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, LOOPBACK_HOST, () => {
       server.off("error", reject);
       resolve5();
     });
@@ -21286,7 +21461,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
     throw new Error("Could not bind the media range proxy.");
   }
   return {
-    url: `http://127.0.0.1:${address.port}/${token}`,
+    url: `http://${LOOPBACK_HOST}:${address.port}/${token}`,
     close: async () => {
       for (const controller of controllers) controller.abort();
       server.closeAllConnections?.();
@@ -21295,127 +21470,13 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
   };
 }
 
-// src/watch/storyboard.ts
-import { mkdir as mkdir2, writeFile } from "node:fs/promises";
-import { join as join2, resolve as resolve2 } from "node:path";
-var MAX_SHEET_BYTES = 4 * 1024 * 1024;
-function object4(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-function positiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : void 0;
-}
-function parseStoryboardSpec(raw) {
-  const storyboards = object4(raw.storyboards);
-  const renderer = object4(storyboards.playerStoryboardSpecRenderer);
-  const spec = typeof renderer.spec === "string" ? renderer.spec : void 0;
-  if (!spec) return void 0;
-  const [template, ...encodedLevels] = spec.split("|");
-  if (!template || !template.startsWith("https://")) return void 0;
-  const levels = encodedLevels.flatMap((encoded, index) => {
-    const fields = encoded.split("#");
-    const tileWidth = positiveInteger(fields[0]);
-    const tileHeight = positiveInteger(fields[1]);
-    const frameCount = positiveInteger(fields[2]);
-    const columns = positiveInteger(fields[3]);
-    const rows = positiveInteger(fields[4]);
-    const intervalMs = positiveInteger(fields[5]);
-    const namePattern = fields[6];
-    const signature = fields[7];
-    if (!tileWidth || !tileHeight || !frameCount || !columns || !rows || !intervalMs || !namePattern || !signature) return [];
-    return [{
-      index,
-      tileWidth,
-      tileHeight,
-      frameCount,
-      columns,
-      rows,
-      intervalMs,
-      namePattern,
-      signature
-    }];
-  });
-  return levels.length ? { template, levels } : void 0;
-}
-function sheetUrl(spec, level, sheet) {
-  const name = level.namePattern.replaceAll("$M", String(sheet));
-  let value = spec.template.replaceAll("$L", String(level.index)).replaceAll("$N", name);
-  if (value.includes("$S")) value = value.replaceAll("$S", level.signature);
-  else {
-    const url = new URL(value);
-    url.searchParams.set("sigh", level.signature);
-    value = url.toString();
-  }
-  return value;
-}
-async function jpegResponse(response) {
-  if (!response.ok) {
-    throw new YouTubeClientError("UPSTREAM_ERROR", `Storyboard request failed with status ${response.status}.`, {
-      status: response.status,
-      retryable: response.status === 429 || response.status >= 500
-    });
-  }
-  const type = response.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!type.startsWith("image/jpeg") && !type.startsWith("image/jpg")) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned a non-JPEG storyboard.");
-  }
-  const advertised = Number(response.headers.get("content-length"));
-  if (Number.isFinite(advertised) && advertised > MAX_SHEET_BYTES) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an oversized storyboard.");
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 255 || bytes[1] !== 216) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an invalid storyboard JPEG.");
-  }
-  return bytes;
-}
-async function downloadStoryboard(raw, videoId, outputDir, maxSheets, options) {
-  const spec = parseStoryboardSpec(raw);
-  if (!spec) return void 0;
-  const level = [...spec.levels].sort(
-    (a, b) => b.tileWidth * b.tileHeight - a.tileWidth * a.tileHeight
-  )[0];
-  if (!level) return void 0;
-  const capacity = level.columns * level.rows;
-  const availableSheets = Math.ceil(level.frameCount / capacity);
-  const requestedSheets = Math.min(availableSheets, maxSheets);
-  const directory = resolve2(outputDir, "storyboards");
-  await mkdir2(directory, { recursive: true });
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  const sheets = [];
-  for (let sheet = 0; sheet < requestedSheets; sheet += 1) {
-    const response = await fetchImpl(sheetUrl(spec, level, sheet));
-    const bytes = await jpegResponse(response);
-    const path = join2(directory, `${videoId}-level-${level.index}-sheet-${sheet}.jpg`);
-    await writeFile(path, bytes);
-    const firstFrameIndex = sheet * capacity;
-    sheets.push({
-      path,
-      tileWidth: level.tileWidth,
-      tileHeight: level.tileHeight,
-      columns: level.columns,
-      rows: level.rows,
-      firstFrameIndex,
-      frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
-      intervalMs: level.intervalMs
-    });
-  }
-  return {
-    level: level.index,
-    frameCount: level.frameCount,
-    intervalMs: level.intervalMs,
-    sheets
-  };
-}
-
-// src/watch/index.ts
+// skill/watch/workflow.ts
 var DEFAULT_MAX_STORYBOARD_SHEETS = 12;
 var MAX_STORYBOARD_SHEETS = 20;
 var DEFAULT_MAX_WIDTH = 1280;
 var MAX_WIDTH = 1920;
 var MAX_TIMESTAMPS = 30;
-function optionsFrom(options) {
+function optionsFrom2(options) {
   return {
     fetch: options.fetch,
     language: options.language,
@@ -21442,7 +21503,7 @@ function validateIndexRequest(options) {
   }
   return maxSheets;
 }
-function metadata(warnings, partial) {
+function metadata2(warnings, partial) {
   return {
     source: "allthingsyoutube",
     fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -21456,17 +21517,22 @@ function safeWarning(prefix, error) {
 }
 async function getWatchIndex(options) {
   const maxSheets = validateIndexRequest(options);
-  const clientOptions = optionsFrom(options);
-  const client = createYouTubeClient(clientOptions);
+  const clientOptions = optionsFrom2(options);
   const outputDir = resolve3(options.outputDir);
-  const [video, transcriptResult, playerResult] = await Promise.all([
-    client.getVideo(options.videoId),
-    client.getTranscript({
+  const [video, transcriptResult, storyboardResult] = await Promise.all([
+    getDetails({ videoId: options.videoId, ...clientOptions }),
+    getTranscript({
       videoId: options.videoId,
-      translateTo: options.lang,
-      granularity: options.granularity ?? "segment"
+      lang: options.lang,
+      granularity: options.granularity ?? "segment",
+      ...clientOptions
     }).then((value) => ({ value })).catch((error) => ({ error })),
-    callIosWatchPlayer(options.videoId, clientOptions).then((value) => ({ value })).catch((error) => ({ error }))
+    getStoryboard({
+      videoId: options.videoId,
+      outputDir,
+      maxSheets,
+      ...clientOptions
+    }).then((value) => ({ value })).catch((error) => ({ error }))
   ]);
   if (video.isLive) {
     throw new YouTubeClientError("UNAVAILABLE", "Live videos are not supported by watch extraction.");
@@ -21476,26 +21542,9 @@ async function getWatchIndex(options) {
   if ("error" in transcriptResult) {
     warnings.push(safeWarning("Transcript", transcriptResult.error));
   }
-  let storyboard;
-  if ("value" in playerResult) {
-    try {
-      storyboard = await downloadStoryboard(
-        playerResult.value.raw,
-        options.videoId,
-        outputDir,
-        maxSheets,
-        clientOptions
-      );
-      if (!storyboard) warnings.push("Storyboard: unavailable");
-      else if (storyboard.sheets.length < Math.ceil(
-        storyboard.frameCount / (storyboard.sheets[0].columns * storyboard.sheets[0].rows)
-      )) warnings.push(`Storyboard: limited to ${storyboard.sheets.length} sheets`);
-    } catch (error) {
-      warnings.push(safeWarning("Storyboard", error));
-    }
-  } else {
-    warnings.push(safeWarning("Storyboard", playerResult.error));
-  }
+  const storyboard = "value" in storyboardResult ? storyboardResult.value : void 0;
+  if ("error" in storyboardResult) warnings.push(safeWarning("Storyboard", storyboardResult.error));
+  else if (storyboard.meta.partial) warnings.push(...storyboard.meta.warnings);
   if (!transcript && !storyboard?.sheets.length) {
     throw new YouTubeClientError("UNAVAILABLE", "No transcript or storyboard index is available.");
   }
@@ -21506,7 +21555,7 @@ async function getWatchIndex(options) {
     strategy,
     transcript,
     storyboard,
-    meta: metadata(warnings, warnings.length > 0)
+    meta: metadata2(warnings, warnings.length > 0)
   };
 }
 function validateFrameRequest(options) {
@@ -21561,9 +21610,8 @@ async function extractConcurrent(timestamps2, run) {
 }
 async function extractFrames(options) {
   const { timestamps: timestamps2, maxWidth } = validateFrameRequest(options);
-  const clientOptions = optionsFrom(options);
-  const client = createYouTubeClient(clientOptions);
-  const video = await client.getVideo(options.videoId);
+  const clientOptions = optionsFrom2(options);
+  const video = await getDetails({ videoId: options.videoId, ...clientOptions });
   if (video.isLive) {
     throw new YouTubeClientError("UNAVAILABLE", "Live videos are not supported by watch extraction.");
   }
@@ -21638,7 +21686,7 @@ async function extractFrames(options) {
     videoId: options.videoId,
     frames: orderedFrames,
     failures,
-    meta: metadata(warnings, failures.length > 0)
+    meta: metadata2(warnings, failures.length > 0)
   };
 }
 

@@ -1,6 +1,7 @@
 import he from 'he';
 import striptags from 'striptags';
 import { createYouTubeTransport } from './youtube-transport';
+import { downloadStoryboard } from './storyboard';
 import {
   normalizeBrowseCategory,
   normalizeBrowseLanguage,
@@ -31,6 +32,8 @@ import {
   SearchResponse,
   SearchResult,
   SourceMetadata,
+  StoryboardIndex,
+  StoryboardOptions,
   Thumbnail,
   Transcript,
   TranscriptOptions,
@@ -1224,6 +1227,7 @@ export interface YouTubeClient {
   getPlaylist(playlistId: string, continuation?: string): Promise<Playlist>;
   getCaptionTracks(videoId: string): Promise<CaptionTrackList>;
   getTranscript(options: TranscriptOptions): Promise<Transcript>;
+  getStoryboard(options: StoryboardOptions): Promise<StoryboardIndex>;
   getComments(options: CommentOptions): Promise<CommentPage>;
   getAllComments(options: AllCommentOptions): Promise<CommentCollection>;
   getEndscreen(videoId: string): Promise<EndscreenElement[]>;
@@ -1951,6 +1955,14 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         text: segments.map((segment) => segment.text).join('\n'),
         meta: meta([], segments.length === 0),
       };
+    },
+
+    async getStoryboard(storyboardOptions) {
+      return downloadStoryboard(
+        await player(storyboardOptions.videoId, false),
+        storyboardOptions,
+        fetchImpl,
+      );
     },
 
     getComments: getCommentsPage,

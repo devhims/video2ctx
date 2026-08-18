@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, join, resolve } from 'node:path';
 
-import { YouTubeClientError } from '../youtube-types';
+import { YouTubeClientError } from '../../src/youtube-types';
 import { jpegDimensions } from './jpeg';
 import type { ExtractedFrame } from './types';
 

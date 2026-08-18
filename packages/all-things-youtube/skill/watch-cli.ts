@@ -6,9 +6,11 @@ import { YouTubeClientError } from '../src';
 import {
   extractFrames,
   getWatchIndex,
-  type ExtractFramesRequest,
-  type WatchIndexRequest,
-} from '../src/watch';
+} from './watch/workflow';
+import type {
+  ExtractFramesRequest,
+  WatchIndexRequest,
+} from './watch/types';
 import { createRequestFetch, type FetchResource } from './cli';
 
 const HELP = `youtube-watch

@@ -1,11 +1,19 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import { YouTubeClientError, type YouTubeClientOptions } from '../youtube-types';
-import type { StoryboardContactSheet, StoryboardIndex } from './types';
-import type { JsonObject } from './innertube';
+import {
+  YouTubeClientError,
+  type SourceMetadata,
+  type StoryboardContactSheet,
+  type StoryboardIndex,
+  type StoryboardOptions,
+} from './youtube-types';
 
+const DEFAULT_MAX_SHEETS = 12;
+const MAX_SHEETS = 20;
 const MAX_SHEET_BYTES = 4 * 1024 * 1024;
+
+type JsonObject = Record<string, unknown>;
 
 interface StoryboardLevel {
   index: number;
@@ -36,8 +44,7 @@ function positiveInteger(value: string | undefined): number | undefined {
 }
 
 export function parseStoryboardSpec(raw: JsonObject): StoryboardSpec | undefined {
-  const storyboards = object(raw.storyboards);
-  const renderer = object(storyboards.playerStoryboardSpecRenderer);
+  const renderer = object(object(raw.storyboards).playerStoryboardSpecRenderer);
   const spec = typeof renderer.spec === 'string' ? renderer.spec : undefined;
   if (!spec) return undefined;
   const [template, ...encodedLevels] = spec.split('|');
@@ -95,30 +102,58 @@ async function jpegResponse(response: Response): Promise<Uint8Array> {
   return bytes;
 }
 
+function validateOptions(options: StoryboardOptions): number {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(options.videoId)) {
+    throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
+  }
+  if (typeof options.outputDir !== 'string' || !options.outputDir.trim()) {
+    throw new YouTubeClientError('INVALID_INPUT', 'outputDir is required.');
+  }
+  const maxSheets = options.maxSheets ?? DEFAULT_MAX_SHEETS;
+  if (!Number.isSafeInteger(maxSheets) || maxSheets < 1 || maxSheets > MAX_SHEETS) {
+    throw new YouTubeClientError(
+      'INVALID_INPUT',
+      `maxSheets must be an integer from 1 to ${MAX_SHEETS}.`,
+    );
+  }
+  return maxSheets;
+}
+
+function metadata(warnings: string[]): SourceMetadata {
+  return {
+    source: 'allthingsyoutube',
+    fetchedAt: new Date().toISOString(),
+    partial: warnings.length > 0,
+    warnings,
+  };
+}
+
 export async function downloadStoryboard(
   raw: JsonObject,
-  videoId: string,
-  outputDir: string,
-  maxSheets: number,
-  options: YouTubeClientOptions,
-): Promise<StoryboardIndex | undefined> {
+  options: StoryboardOptions,
+  fetchImpl: typeof fetch,
+): Promise<StoryboardIndex> {
+  const maxSheets = validateOptions(options);
   const spec = parseStoryboardSpec(raw);
-  if (!spec) return undefined;
+  if (!spec) {
+    throw new YouTubeClientError('NOT_FOUND', 'No storyboard is available for this video.');
+  }
   const level = [...spec.levels].sort((a, b) =>
     (b.tileWidth * b.tileHeight) - (a.tileWidth * a.tileHeight)
   )[0];
-  if (!level) return undefined;
+  if (!level) {
+    throw new YouTubeClientError('NOT_FOUND', 'No usable storyboard level is available for this video.');
+  }
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
   const requestedSheets = Math.min(availableSheets, maxSheets);
-  const directory = resolve(outputDir, 'storyboards');
+  const directory = resolve(options.outputDir, 'storyboards');
   await mkdir(directory, { recursive: true });
-  const fetchImpl = options.fetch ?? globalThis.fetch;
   const sheets: StoryboardContactSheet[] = [];
   for (let sheet = 0; sheet < requestedSheets; sheet += 1) {
     const response = await fetchImpl(sheetUrl(spec, level, sheet));
     const bytes = await jpegResponse(response);
-    const path = join(directory, `${videoId}-level-${level.index}-sheet-${sheet}.jpg`);
+    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.jpg`);
     await writeFile(path, bytes);
     const firstFrameIndex = sheet * capacity;
     sheets.push({
@@ -132,10 +167,15 @@ export async function downloadStoryboard(
       intervalMs: level.intervalMs,
     });
   }
+  const warnings = requestedSheets < availableSheets
+    ? [`Storyboard: limited to ${requestedSheets} sheets`]
+    : [];
   return {
+    videoId: options.videoId,
     level: level.index,
     frameCount: level.frameCount,
     intervalMs: level.intervalMs,
     sheets,
+    meta: metadata(warnings),
   };
 }

@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { YouTubeClientError } from '../youtube-types';
+import { YouTubeClientError } from '../../src/youtube-types';
 
 const mocks = vi.hoisted(() => ({
-  client: { getVideo: vi.fn(), getTranscript: vi.fn() },
-  callIosWatchPlayer: vi.fn(),
-  downloadStoryboard: vi.fn(),
+  getDetails: vi.fn(),
+  getTranscript: vi.fn(),
+  getStoryboard: vi.fn(),
   resolveFfmpegExecutable: vi.fn(),
   extractJpeg: vi.fn(),
   loadMediaCandidateGroup: vi.fn(),
@@ -13,9 +13,12 @@ const mocks = vi.hoisted(() => ({
   proxyClose: vi.fn(),
 }));
 
-vi.mock('../youtube-client', () => ({ createYouTubeClient: () => mocks.client }));
-vi.mock('./innertube', () => ({ callIosWatchPlayer: mocks.callIosWatchPlayer }));
-vi.mock('./storyboard', () => ({ downloadStoryboard: mocks.downloadStoryboard }));
+vi.mock('../../src', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src')>(),
+  getDetails: mocks.getDetails,
+  getTranscript: mocks.getTranscript,
+  getStoryboard: mocks.getStoryboard,
+}));
 vi.mock('./ffmpeg', () => ({
   resolveFfmpegExecutable: mocks.resolveFfmpegExecutable,
   extractJpeg: mocks.extractJpeg,
@@ -26,7 +29,7 @@ vi.mock('./range-proxy', () => ({
   startMediaRangeProxy: mocks.startMediaRangeProxy,
 }));
 
-import { extractFrames, getWatchIndex } from './index';
+import { extractFrames, getWatchIndex } from './workflow';
 
 const video = {
   id: 'abcdefghijk',
@@ -55,6 +58,7 @@ const transcript = {
 };
 
 const storyboard = {
+  videoId: 'abcdefghijk',
   level: 2,
   frameCount: 25,
   intervalMs: 10_000,
@@ -62,15 +66,15 @@ const storyboard = {
     path: '/tmp/sheet.jpg', tileWidth: 160, tileHeight: 90, columns: 5, rows: 5,
     firstFrameIndex: 0, frameCount: 25, intervalMs: 10_000,
   }],
+  meta: { source: 'allthingsyoutube', fetchedAt: 'now', partial: false, warnings: [] },
 };
 
-describe('watch module interface', () => {
+describe('youtube-watch workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.client.getVideo.mockResolvedValue(video);
-    mocks.client.getTranscript.mockResolvedValue(transcript);
-    mocks.callIosWatchPlayer.mockResolvedValue({ profile: 'ios', raw: {} });
-    mocks.downloadStoryboard.mockResolvedValue(storyboard);
+    mocks.getDetails.mockResolvedValue(video);
+    mocks.getTranscript.mockResolvedValue(transcript);
+    mocks.getStoryboard.mockResolvedValue(storyboard);
     mocks.resolveFfmpegExecutable.mockResolvedValue('/usr/local/bin/ffmpeg');
     mocks.loadMediaCandidateGroup.mockImplementation(async (profileIndex: number) =>
       profileIndex === 0 ? {
@@ -89,14 +93,14 @@ describe('watch module interface', () => {
   test('uses segment timing by default and returns contact-sheet evidence', async () => {
     const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test' });
 
-    expect(mocks.client.getTranscript).toHaveBeenCalledWith({
-      videoId: 'abcdefghijk', translateTo: undefined, granularity: 'segment',
+    expect(mocks.getTranscript).toHaveBeenCalledWith({
+      videoId: 'abcdefghijk', lang: undefined, granularity: 'segment',
     });
     expect(result).toMatchObject({ strategy: 'storyboard-transcript', transcript, storyboard });
   });
 
   test('keeps a storyboard-only index usable when captions fail', async () => {
-    mocks.client.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
+    mocks.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
 
     const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test' });
 
@@ -106,8 +110,8 @@ describe('watch module interface', () => {
   });
 
   test('rejects only when neither transcript nor storyboard is usable', async () => {
-    mocks.client.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
-    mocks.downloadStoryboard.mockResolvedValue(undefined);
+    mocks.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
+    mocks.getStoryboard.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No storyboard.'));
 
     await expect(getWatchIndex({
       videoId: 'abcdefghijk', outputDir: '/tmp/watch-test',

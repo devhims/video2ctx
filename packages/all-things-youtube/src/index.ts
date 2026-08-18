@@ -33,6 +33,11 @@ export interface TranscriptRequest extends VideoRequest {
   granularity?: 'segment' | 'word';
 }
 
+export interface StoryboardRequest extends VideoRequest {
+  outputDir: string;
+  maxSheets?: number;
+}
+
 export interface CommentsRequest extends VideoRequest {
   continuation?: string;
   all?: false;
@@ -155,6 +160,12 @@ export function getTranscript(options: TranscriptRequest): Promise<Transcript> {
     translateTo: options.lang,
     granularity: options.granularity,
   });
+}
+
+/** Download normalized YouTube storyboard contact sheets and timestamp mappings. */
+export function getStoryboard(options: StoryboardRequest) {
+  const { videoId, outputDir, maxSheets } = options;
+  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets });
 }
 
 export function getComments(options: AllCommentsRequest): Promise<CommentsCollection>;
