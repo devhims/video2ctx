@@ -1,8 +1,14 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { getDetails, getStoryboard, getTranscript, YouTubeClientError } from '../../src';
-import type { SourceMetadata, YouTubeClientOptions } from '../../src/youtube-types';
+import {
+  getDetails,
+  getStoryboard,
+  getTranscript,
+  YouTubeClientError,
+  type SourceMetadata,
+  type YouTubeClientOptions,
+} from 'all-things-youtube';
 import { extractJpeg, resolveFfmpegExecutable } from './ffmpeg';
 import { loadMediaCandidateGroup } from './media';
 import { startMediaRangeProxy, TransferBudget } from './range-proxy';
@@ -99,7 +105,7 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
 
   const storyboard = 'value' in storyboardResult ? storyboardResult.value : undefined;
   if ('error' in storyboardResult) warnings.push(safeWarning('Storyboard', storyboardResult.error));
-  else if (storyboard.meta.partial) warnings.push(...storyboard.meta.warnings);
+  else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
 
   if (!transcript && !storyboard?.sheets.length) {
     throw new YouTubeClientError('UNAVAILABLE', 'No transcript or storyboard index is available.');

@@ -1,5 +1,5 @@
-import { createYouTubeTransport } from '../../src/youtube-transport';
-import { YouTubeClientError, type YouTubeClientOptions } from '../../src/youtube-types';
+import { YouTubeClientError, type YouTubeClientOptions } from 'all-things-youtube';
+import { createSkillTransport } from '../transport';
 
 export type JsonObject = Record<string, unknown>;
 
@@ -80,7 +80,7 @@ export async function callWatchPlayer(
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new YouTubeClientError('INVALID_INPUT', 'A fetch implementation is required.');
-  const transport = createYouTubeTransport({ fetch: fetchImpl, ...options.retry });
+  const transport = createSkillTransport({ fetch: fetchImpl, ...options.retry });
   const response = await transport.fetch(`youtube:watch-player:${profile.name}`, () => ({
     input: `${API_ROOT}/player?prettyPrint=false`,
     init: {

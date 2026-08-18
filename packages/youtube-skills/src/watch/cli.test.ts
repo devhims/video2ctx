@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { YouTubeClientError } from '../src';
+import { YouTubeClientError } from 'all-things-youtube';
 import {
   runWatchCli,
   type WatchCliDependencies,
   type WatchCliIo,
-} from './watch-cli';
+} from './cli';
 
 const directories: string[] = [];
 

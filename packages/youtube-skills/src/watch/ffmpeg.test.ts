@@ -27,7 +27,7 @@ async function executable(name = 'ffmpeg'): Promise<{ directory: string; path: s
   return { directory, path };
 }
 
-describe('youtube-watch FFmpeg executable resolution', () => {
+describe('youtube-watch private FFmpeg executable resolution', () => {
   test('resolves a bare executable name from PATH without launching it', async () => {
     const fake = await executable();
 

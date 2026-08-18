@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { YouTubeClientError } from '../../src/youtube-types';
+import { YouTubeClientError } from 'all-things-youtube';
 
 const mocks = vi.hoisted(() => ({
   getDetails: vi.fn(),
@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   proxyClose: vi.fn(),
 }));
 
-vi.mock('../../src', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src')>(),
+vi.mock('all-things-youtube', async (importOriginal) => ({
+  ...await importOriginal<typeof import('all-things-youtube')>(),
   getDetails: mocks.getDetails,
   getTranscript: mocks.getTranscript,
   getStoryboard: mocks.getStoryboard,

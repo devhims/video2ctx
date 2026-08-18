@@ -37,9 +37,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/he/he.js
+// ../all-things-youtube/node_modules/he/he.js
 var require_he = __commonJS({
-  "node_modules/he/he.js"(exports, module) {
+  "../all-things-youtube/node_modules/he/he.js"(exports, module) {
     (function(root) {
       var freeExports = typeof exports == "object" && exports;
       var freeModule = typeof module == "object" && module && module.exports == freeExports && module;
@@ -287,9 +287,9 @@ var require_he = __commonJS({
   }
 });
 
-// node_modules/striptags/src/striptags.js
+// ../all-things-youtube/node_modules/striptags/src/striptags.js
 var require_striptags = __commonJS({
-  "node_modules/striptags/src/striptags.js"(exports, module) {
+  "../all-things-youtube/node_modules/striptags/src/striptags.js"(exports, module) {
     "use strict";
     (function(global2) {
       if (typeof Symbol2 !== "function") {
@@ -19020,16 +19020,16 @@ var require_undici = __commonJS({
   }
 });
 
-// skill/watch-cli.ts
+// src/watch/cli.ts
 import { mkdtemp, readFile as readFile2, realpath, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve4, sep } from "node:path";
 
-// src/youtube-client.ts
+// ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
 var import_striptags = __toESM(require_striptags());
 
-// src/youtube-types.ts
+// ../all-things-youtube/src/youtube-types.ts
 var YouTubeClientError = class extends Error {
   code;
   status;
@@ -19046,7 +19046,7 @@ var YouTubeClientError = class extends Error {
   }
 };
 
-// src/youtube-transport.ts
+// ../all-things-youtube/src/youtube-transport.ts
 var DEFAULT_POLICY = {
   maxAttempts: 5,
   attemptTimeoutMs: 1e4,
@@ -19160,7 +19160,7 @@ function createYouTubeTransport(options) {
   };
 }
 
-// src/storyboard.ts
+// ../all-things-youtube/src/storyboard.ts
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 var DEFAULT_MAX_SHEETS = 12;
@@ -19306,7 +19306,7 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   };
 }
 
-// src/browse-contract.ts
+// ../all-things-youtube/src/browse-contract.ts
 var BROWSE_CATEGORIES = ["music", "news", "sports", "live"];
 var BROWSE_REGIONS = ["US", "IN"];
 var BROWSE_LANGUAGES = ["en", "hi"];
@@ -19325,7 +19325,7 @@ function normalizeBrowseLanguage(value) {
   return supportedValue((value ?? "en").trim().toLowerCase(), BROWSE_LANGUAGES, "language");
 }
 
-// src/youtube-client.ts
+// ../all-things-youtube/src/youtube-client.ts
 var WEB_PROFILE = {
   name: "web",
   clientName: "WEB",
@@ -20934,7 +20934,7 @@ function decodeContinuation(token) {
   }
 }
 
-// src/index.ts
+// ../all-things-youtube/src/index.ts
 function optionsFrom(options) {
   return {
     fetch: options.fetch,
@@ -20958,18 +20958,18 @@ function getDetails(options) {
   return createYouTubeClient(optionsFrom(options)).getVideo(options.videoId);
 }
 
-// skill/watch/workflow.ts
+// src/watch/workflow.ts
 import { mkdir as mkdir3 } from "node:fs/promises";
 import { resolve as resolve3 } from "node:path";
 
-// skill/watch/ffmpeg.ts
+// src/watch/ffmpeg.ts
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir as mkdir2, readFile, rm, stat } from "node:fs/promises";
 import { delimiter, extname, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
-// skill/watch/jpeg.ts
+// src/watch/jpeg.ts
 var START_OF_FRAME = /* @__PURE__ */ new Set([
   192,
   193,
@@ -21009,7 +21009,7 @@ function jpegDimensions(bytes) {
   return void 0;
 }
 
-// skill/watch/ffmpeg.ts
+// src/watch/ffmpeg.ts
 var FRAME_TIMEOUT_MS = 3e4;
 function pathValue(environment, platform) {
   if (platform !== "win32") return environment.PATH ?? "";
@@ -21133,7 +21133,110 @@ async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs
   }
 }
 
-// skill/watch/innertube.ts
+// src/transport.ts
+var DEFAULT_POLICY2 = {
+  maxAttempts: 5,
+  attemptTimeoutMs: 1e4,
+  baseDelayMs: 200,
+  maxDelayMs: 2e3,
+  retryStatuses: [408, 425, 429, 500, 502, 503, 504]
+};
+function requestSignal2(request) {
+  if (request.init?.signal) return request.init.signal;
+  return typeof Request !== "undefined" && request.input instanceof Request ? request.input.signal : void 0;
+}
+function attemptSignal2(request, timeoutMs) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const existing = requestSignal2(request);
+  if (!existing) return deadline;
+  const combined = new AbortController();
+  const forwardAbort = (signal) => {
+    if (signal.aborted) combined.abort(signal.reason);
+    else signal.addEventListener("abort", () => combined.abort(signal.reason), { once: true });
+  };
+  forwardAbort(existing);
+  if (!combined.signal.aborted) forwardAbort(deadline);
+  return combined.signal;
+}
+async function runtimeWait2(delayMs) {
+  await new Promise((resolve5) => setTimeout(resolve5, delayMs));
+}
+function retryAfterMs2(response, now) {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) return void 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1e3);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : void 0;
+}
+function retryDelay2(response, attempt, policy, random, now) {
+  const requestedDelay = response ? retryAfterMs2(response, now()) : void 0;
+  if (requestedDelay !== void 0) return Math.min(policy.maxDelayMs, requestedDelay);
+  const ceiling = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1));
+  return Math.max(0, Math.round(ceiling * Math.min(1, Math.max(0, random()))));
+}
+function createSkillTransport(options) {
+  const wait = options.wait ?? runtimeWait2;
+  const random = options.random ?? Math.random;
+  const now = options.now ?? Date.now;
+  const policy = {
+    ...DEFAULT_POLICY2,
+    ...options.policy,
+    retryStatuses: options.policy?.retryStatuses ?? DEFAULT_POLICY2.retryStatuses
+  };
+  if (!Number.isSafeInteger(policy.attemptTimeoutMs) || policy.attemptTimeoutMs < 1) {
+    throw new YouTubeClientError(
+      "INVALID_INPUT",
+      "retry.policy.attemptTimeoutMs must be a positive integer."
+    );
+  }
+  return {
+    async fetch(operation, requestFactory) {
+      const retryStatuses = new Set(policy.retryStatuses);
+      let lastNetworkError;
+      for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+        const request = await requestFactory(attempt);
+        let response;
+        try {
+          response = await options.fetch(request.input, {
+            ...request.init,
+            signal: attemptSignal2(request, policy.attemptTimeoutMs)
+          });
+        } catch (error) {
+          lastNetworkError = error;
+          if (attempt === policy.maxAttempts) {
+            throw new YouTubeClientError(
+              "UPSTREAM_ERROR",
+              `YouTube ${operation} network request failed after ${policy.maxAttempts} attempts.`,
+              { retryable: true, cause: error }
+            );
+          }
+        }
+        if (response && (!retryStatuses.has(response.status) || attempt === policy.maxAttempts)) {
+          return response;
+        }
+        const delayMs = retryDelay2(response, attempt, policy, random, now);
+        options.onRetry?.({
+          operation,
+          attempt,
+          maxAttempts: policy.maxAttempts,
+          status: response?.status,
+          delayMs,
+          reason: response ? "response" : "network"
+        });
+        if (response?.body) await response.body.cancel().catch(() => void 0);
+        await wait(delayMs);
+      }
+      throw new YouTubeClientError(
+        "UPSTREAM_ERROR",
+        `YouTube ${operation} retry loop exhausted.`,
+        { retryable: true, cause: lastNetworkError }
+      );
+    }
+  };
+}
+
+// src/watch/innertube.ts
 var IOS_PROFILE = {
   name: "ios",
   clientName: "IOS",
@@ -21195,7 +21298,7 @@ async function callWatchPlayer(videoId, profile, options) {
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new YouTubeClientError("INVALID_INPUT", "A fetch implementation is required.");
-  const transport = createYouTubeTransport({ fetch: fetchImpl, ...options.retry });
+  const transport = createSkillTransport({ fetch: fetchImpl, ...options.retry });
   const response = await transport.fetch(`youtube:watch-player:${profile.name}`, () => ({
     input: `${API_ROOT2}/player?prettyPrint=false`,
     init: {
@@ -21255,7 +21358,7 @@ async function callWatchPlayer(videoId, profile, options) {
   return { profile: profile.name, raw: normalized };
 }
 
-// skill/watch/media.ts
+// src/watch/media.ts
 function object4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
@@ -21316,7 +21419,7 @@ async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options)
   }
 }
 
-// skill/watch/range-proxy.ts
+// src/watch/range-proxy.ts
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 var DEFAULT_PREFIX_CACHE_BYTES = 4 * 1024 * 1024;
@@ -21470,7 +21573,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
   };
 }
 
-// skill/watch/workflow.ts
+// src/watch/workflow.ts
 var DEFAULT_MAX_STORYBOARD_SHEETS = 12;
 var MAX_STORYBOARD_SHEETS = 20;
 var DEFAULT_MAX_WIDTH = 1280;
@@ -21544,7 +21647,7 @@ async function getWatchIndex(options) {
   }
   const storyboard = "value" in storyboardResult ? storyboardResult.value : void 0;
   if ("error" in storyboardResult) warnings.push(safeWarning("Storyboard", storyboardResult.error));
-  else if (storyboard.meta.partial) warnings.push(...storyboard.meta.warnings);
+  else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
   if (!transcript && !storyboard?.sheets.length) {
     throw new YouTubeClientError("UNAVAILABLE", "No transcript or storyboard index is available.");
   }
@@ -21690,8 +21793,8 @@ async function extractFrames(options) {
   };
 }
 
-// skill/cli.ts
-var import_undici = __toESM(require_undici());
+// src/direct/cli.ts
+var import_undici = __toESM(require_undici(), 1);
 var CliInputError = class extends Error {
   code = "INVALID_INPUT";
   constructor(message) {
@@ -21731,7 +21834,7 @@ function createRequestFetch(proxyUrl) {
   };
 }
 
-// skill/watch-cli.ts
+// src/watch/cli.ts
 var HELP = `youtube-watch
 
 Inspect a YouTube storyboard and transcript, then extract exact timestamped frames.
@@ -21938,7 +22041,7 @@ async function runWatchCli(argv, io, environment = process.env, dependencies = {
   }
 }
 
-// skill/watch-entry.ts
+// src/watch/entry.ts
 process.exitCode = await runWatchCli(process.argv.slice(2), {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value)

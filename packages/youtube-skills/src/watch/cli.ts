@@ -2,16 +2,16 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { YouTubeClientError } from '../src';
+import { YouTubeClientError } from 'all-things-youtube';
 import {
   extractFrames,
   getWatchIndex,
-} from './watch/workflow';
+} from './workflow';
 import type {
   ExtractFramesRequest,
   WatchIndexRequest,
-} from './watch/types';
-import { createRequestFetch, type FetchResource } from './cli';
+} from './types';
+import { createRequestFetch, type FetchResource } from '../direct/cli';
 
 const HELP = `youtube-watch
 

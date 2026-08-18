@@ -5,7 +5,7 @@ import type {
   Video,
   YouTubeClientOptions,
   YouTubeErrorCode,
-} from '../../src/youtube-types';
+} from 'all-things-youtube';
 
 export interface WatchIndexRequest extends YouTubeClientOptions {
   videoId: string;

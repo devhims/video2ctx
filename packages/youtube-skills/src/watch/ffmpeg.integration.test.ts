@@ -21,7 +21,7 @@ afterAll(async () => {
   })));
 });
 
-describeFfmpeg('youtube-watch FFmpeg range integration', () => {
+describeFfmpeg('youtube-watch private FFmpeg range integration', () => {
   test('decodes a remote timestamp through the localhost proxy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'watch-ffmpeg-test-'));
     directories.push(directory);

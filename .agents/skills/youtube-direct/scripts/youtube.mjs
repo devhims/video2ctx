@@ -18598,9 +18598,9 @@ var require_undici = __commonJS({
   }
 });
 
-// node_modules/he/he.js
+// ../all-things-youtube/node_modules/he/he.js
 var require_he = __commonJS({
-  "node_modules/he/he.js"(exports, module) {
+  "../all-things-youtube/node_modules/he/he.js"(exports, module) {
     (function(root) {
       var freeExports = typeof exports == "object" && exports;
       var freeModule = typeof module == "object" && module && module.exports == freeExports && module;
@@ -18848,9 +18848,9 @@ var require_he = __commonJS({
   }
 });
 
-// node_modules/striptags/src/striptags.js
+// ../all-things-youtube/node_modules/striptags/src/striptags.js
 var require_striptags = __commonJS({
-  "node_modules/striptags/src/striptags.js"(exports, module) {
+  "../all-things-youtube/node_modules/striptags/src/striptags.js"(exports, module) {
     "use strict";
     (function(global2) {
       if (typeof Symbol2 !== "function") {
@@ -19020,14 +19020,14 @@ var require_striptags = __commonJS({
   }
 });
 
-// skill/cli.ts
-var import_undici = __toESM(require_undici());
+// src/direct/cli.ts
+var import_undici = __toESM(require_undici(), 1);
 
-// src/youtube-client.ts
+// ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
 var import_striptags = __toESM(require_striptags());
 
-// src/youtube-types.ts
+// ../all-things-youtube/src/youtube-types.ts
 var YouTubeClientError = class extends Error {
   code;
   status;
@@ -19044,7 +19044,7 @@ var YouTubeClientError = class extends Error {
   }
 };
 
-// src/youtube-transport.ts
+// ../all-things-youtube/src/youtube-transport.ts
 var DEFAULT_POLICY = {
   maxAttempts: 5,
   attemptTimeoutMs: 1e4,
@@ -19158,7 +19158,7 @@ function createYouTubeTransport(options) {
   };
 }
 
-// src/storyboard.ts
+// ../all-things-youtube/src/storyboard.ts
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 var DEFAULT_MAX_SHEETS = 12;
@@ -19304,7 +19304,7 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   };
 }
 
-// src/browse-contract.ts
+// ../all-things-youtube/src/browse-contract.ts
 var BROWSE_CATEGORIES = ["music", "news", "sports", "live"];
 var BROWSE_REGIONS = ["US", "IN"];
 var BROWSE_LANGUAGES = ["en", "hi"];
@@ -19323,7 +19323,7 @@ function normalizeBrowseLanguage(value) {
   return supportedValue((value ?? "en").trim().toLowerCase(), BROWSE_LANGUAGES, "language");
 }
 
-// src/youtube-client.ts
+// ../all-things-youtube/src/youtube-client.ts
 var WEB_PROFILE = {
   name: "web",
   clientName: "WEB",
@@ -20932,7 +20932,7 @@ function decodeContinuation(token) {
   }
 }
 
-// src/index.ts
+// ../all-things-youtube/src/index.ts
 function search(options) {
   const {
     query,
@@ -21036,7 +21036,7 @@ async function getPlaylist(options) {
   );
 }
 
-// skill/cli.ts
+// src/direct/cli.ts
 var HELP = `youtube-direct
 
 Call YouTube's internal HTTP endpoints from this machine and print JSON.
@@ -21396,7 +21396,7 @@ async function runSkillCli(argv, io, environment = process.env, dependencies = {
   }
 }
 
-// skill/entry.ts
+// src/direct/entry.ts
 process.exitCode = await runSkillCli(process.argv.slice(2), {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value)

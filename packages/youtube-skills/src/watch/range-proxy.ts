@@ -5,7 +5,7 @@ import type { MediaCandidate } from './media';
 
 const DEFAULT_PREFIX_CACHE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TRANSFER_LIMIT_BYTES = 256 * 1024 * 1024;
-const LOOPBACK_HOST = '127.0.0.1';
+const LOOPBACK_HOST = '127.0.0.1' as const;
 
 export class TransferBudget {
   used = 0;

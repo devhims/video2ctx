@@ -36,7 +36,7 @@ async function upstream(payload: Buffer): Promise<{ url: string; ranges: Array<s
   return { url: `http://127.0.0.1:${port}/media`, ranges };
 }
 
-describe('youtube-watch media range proxy', () => {
+describe('youtube-watch private media range proxy', () => {
   test('replays a cached stream prefix without another upstream request', async () => {
     const source = await upstream(Buffer.from('abcdefghijklmnopqrstuvwxyz'));
     const budget = new TransferBudget(1_024);
