@@ -11,7 +11,7 @@ import {
   getTracks,
   getTranscript,
   search,
-} from '../src/index';
+} from 'all-things-youtube';
 
 const HELP = `youtube-direct
 
@@ -109,16 +109,16 @@ class CliInputError extends Error {
 }
 
 const defaultOperations: SkillOperations = {
-  search: search as SkillOperation,
-  tracks: getTracks as SkillOperation,
-  transcript: getTranscript as SkillOperation,
-  comments: getComments as SkillOperation,
-  details: getDetails as SkillOperation,
-  endscreen: getEndscreen as SkillOperation,
-  'channel-info': getChannelInfo as SkillOperation,
-  'channel-videos': getChannelVideos as SkillOperation,
-  'channel-playlists': getChannelPlaylists as SkillOperation,
-  playlist: getPlaylist as SkillOperation,
+  search: search as unknown as SkillOperation,
+  tracks: getTracks as unknown as SkillOperation,
+  transcript: getTranscript as unknown as SkillOperation,
+  comments: getComments as unknown as SkillOperation,
+  details: getDetails as unknown as SkillOperation,
+  endscreen: getEndscreen as unknown as SkillOperation,
+  'channel-info': getChannelInfo as unknown as SkillOperation,
+  'channel-videos': getChannelVideos as unknown as SkillOperation,
+  'channel-playlists': getChannelPlaylists as unknown as SkillOperation,
+  playlist: getPlaylist as unknown as SkillOperation,
 };
 
 const sharedFlags = ['language', 'region', 'proxy', 'pretty'] as const;

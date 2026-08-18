@@ -126,18 +126,18 @@ const transcript = await getTranscript({
 console.log(transcript.text);
 ```
 
-Visual context is available through the Node-only watch subpath. FFmpeg is needed only for exact frames:
+YouTube's native storyboard contact sheets are available as a package primitive:
 
 ```ts
-import { getWatchIndex, extractFrames } from 'all-things-youtube/watch';
+import { getStoryboard } from 'all-things-youtube';
 
-const outputDir = '/tmp/youtube-watch';
-const index = await getWatchIndex({ videoId: '4vItmdk8F_M', outputDir });
-const frames = await extractFrames({
-  videoId: index.videoId,
-  timestampsMs: [30_000, 686_000],
-  outputDir,
+const storyboard = await getStoryboard({
+  videoId: '4vItmdk8F_M',
+  outputDir: '/tmp/youtube-storyboard',
+  maxSheets: 12,
 });
+
+console.log(storyboard.sheets);
 ```
 
 The package requires Node.js 18 or newer, includes its own types, and does not require a YouTube Data API key. Keep it server-side: browser requests are commonly blocked by CORS and distribute upstream rate-limit pressure across users.
@@ -159,6 +159,7 @@ git clone https://github.com/devhims/video2ctx.git
 cd video2ctx
 
 npm ci --prefix packages/all-things-youtube
+npm ci --prefix packages/youtube-skills
 npm ci --prefix packages/video2ctx-cli
 npm ci --prefix platform
 npm ci --prefix platform/youtube-processor
@@ -257,6 +258,7 @@ For the complete request path and reliability model, see [`reference/engineering
 | [`platform/`](./platform)                                       | TypeScript/Hono Cloudflare Worker with auth, API keys, billing, D1, R2, KV, AI, queues, workflows, and OpenAPI   |
 | [`platform/youtube-processor/`](./platform/youtube-processor)   | Private Node 22/Hono container for outbound YouTube operations and optional proxy egress                         |
 | [`packages/all-things-youtube/`](./packages/all-things-youtube) | Publishable normalized YouTube client and public TypeScript data model                                           |
+| [`packages/youtube-skills/`](./packages/youtube-skills)         | Private source, tests, and bundling for the self-contained direct YouTube skills                                 |
 | [`packages/video2ctx-cli/`](./packages/video2ctx-cli)           | Independently published CLI for device login and authenticated hosted API access                                 |
 | [`docs/`](./docs)                                               | Public Mintlify documentation site                                                                               |
 | [`reference/`](./reference)                                     | Internal architecture, design, deployment, and agent guidance                                                    |
@@ -294,6 +296,8 @@ Common commands, run from the repository root:
 | `npm --prefix platform run verify`                        | Install processor dependencies, type-check the Worker, and run platform and processor tests |
 | `npm --prefix platform run test:container`                | Run only the processor contract tests                                                       |
 | `npm --prefix packages/all-things-youtube run test:watch` | Run the library suite in watch mode                                                         |
+| `npm run test:skills`                                    | Test, type-check, and verify the private direct-skill source and committed bundles          |
+| `npm run skill:bundle`                                   | Regenerate the committed self-contained direct-skill executables                            |
 | `npm --prefix packages/video2ctx-cli run verify`          | Test and build the hosted-service CLI                                                       |
 | `npm pack ./packages/video2ctx-cli --dry-run`             | Verify the public CLI tarball contents before release                                       |
 | `npm run docs:dev`                                        | Preview the Mintlify documentation site locally                                             |
@@ -306,6 +310,7 @@ Before opening a pull request, run:
 ```bash
 npm run build
 npm test
+npm run test:skills
 npm --prefix web test
 npm run docs:check
 npm run docs:verify

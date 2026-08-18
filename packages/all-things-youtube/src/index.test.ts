@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
     getAllComments: vi.fn(),
     getVideo: vi.fn(),
     getEndscreen: vi.fn(),
+    getStoryboard: vi.fn(),
     getChannel: vi.fn(),
     getChannelVideos: vi.fn(),
     getChannelPlaylists: vi.fn(),
@@ -32,6 +33,7 @@ import {
   getDetails,
   getEndscreen,
   getPlaylist,
+  getStoryboard,
   search,
   getTracks,
   getTranscript,
@@ -54,11 +56,14 @@ describe('all-things-youtube public API', () => {
       getChannelVideos,
       getChannelPlaylists,
       getPlaylist,
+      getStoryboard,
       search,
     ]) {
       expect(typeof exported).toBe('function');
     }
     expect(publicApi).not.toHaveProperty('createYouTubeClient');
+    expect(publicApi).not.toHaveProperty('getWatchIndex');
+    expect(publicApi).not.toHaveProperty('extractFrames');
   });
 
   test('maps stateless search to the normalized client', async () => {
@@ -87,11 +92,13 @@ describe('all-things-youtube public API', () => {
     mocks.client.getTranscript.mockResolvedValue({ segments: [] });
     mocks.client.getVideo.mockResolvedValue({ id: 'abcdefghijk' });
     mocks.client.getEndscreen.mockResolvedValue([]);
+    mocks.client.getStoryboard.mockResolvedValue({ sheets: [] });
 
     await getTracks({ videoId: 'abcdefghijk', fetch: fetchMock });
     await getTranscript({ videoId: 'abcdefghijk', lang: 'hi', granularity: 'word' });
     await getDetails({ videoId: 'abcdefghijk' });
     await getEndscreen({ videoId: 'abcdefghijk' });
+    await getStoryboard({ videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3 });
 
     expect(mocks.createYouTubeClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: fetchMock }));
     expect(mocks.client.getCaptionTracks).toHaveBeenCalledWith('abcdefghijk');
@@ -100,6 +107,9 @@ describe('all-things-youtube public API', () => {
     });
     expect(mocks.client.getVideo).toHaveBeenCalledWith('abcdefghijk');
     expect(mocks.client.getEndscreen).toHaveBeenCalledWith('abcdefghijk');
+    expect(mocks.client.getStoryboard).toHaveBeenCalledWith({
+      videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3,
+    });
   });
 
   test('keeps comment continuation internals out of the public result', async () => {

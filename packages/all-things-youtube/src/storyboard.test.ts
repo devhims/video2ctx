@@ -47,16 +47,15 @@ describe('storyboard contact sheets', () => {
       { headers: { 'content-type': 'image/jpeg' } },
     ));
 
-    const result = await downloadStoryboard(
-      rawSpec(),
-      'abcdefghijk',
-      directory,
-      1,
-      { fetch: fetchMock as unknown as typeof fetch },
-    );
+    const result = await downloadStoryboard(rawSpec(), {
+      videoId: 'abcdefghijk', outputDir: directory, maxSheets: 1,
+    }, fetchMock as unknown as typeof fetch);
 
-    expect(result).toMatchObject({ level: 2, frameCount: 30, intervalMs: 10_000 });
-    expect(result?.sheets).toEqual([expect.objectContaining({
+    expect(result).toMatchObject({
+      videoId: 'abcdefghijk', level: 2, frameCount: 30, intervalMs: 10_000,
+      meta: { partial: true, warnings: ['Storyboard: limited to 1 sheets'] },
+    });
+    expect(result.sheets).toEqual([expect.objectContaining({
       tileWidth: 160,
       tileHeight: 90,
       columns: 5,
@@ -65,11 +64,25 @@ describe('storyboard contact sheets', () => {
       frameCount: 25,
       intervalMs: 10_000,
     })]);
-    const requestedUrl = String(fetchMock.mock.calls[0]?.[0]);
+    const requestedUrl = String(fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('i.ytimg.test')
+    )?.[0]);
     expect(requestedUrl).toContain('storyboard3_L2/M0.jpg');
     expect(requestedUrl).toContain('sigh=signature-two');
-    expect(await readFile(result!.sheets[0]!.path)).toEqual(
+    expect(await readFile(result.sheets[0]!.path)).toEqual(
       Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
     );
+  });
+
+  test('rejects malformed requests before contacting YouTube', async () => {
+    const fetchMock = vi.fn();
+
+    await expect(downloadStoryboard(rawSpec(), {
+      videoId: 'short', outputDir: '/tmp/storyboard-test',
+    }, fetchMock as unknown as typeof fetch)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(downloadStoryboard(rawSpec(), {
+      videoId: 'abcdefghijk', outputDir: '/tmp/storyboard-test', maxSheets: 21,
+    }, fetchMock as unknown as typeof fetch)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

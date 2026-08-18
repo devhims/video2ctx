@@ -5,6 +5,7 @@ import type { MediaCandidate } from './media';
 
 const DEFAULT_PREFIX_CACHE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TRANSFER_LIMIT_BYTES = 256 * 1024 * 1024;
+const LOOPBACK_HOST = '127.0.0.1' as const;
 
 export class TransferBudget {
   used = 0;
@@ -154,7 +155,7 @@ export async function startMediaRangeProxy(
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(0, LOOPBACK_HOST, () => {
       server.off('error', reject);
       resolve();
     });
@@ -165,7 +166,7 @@ export async function startMediaRangeProxy(
     throw new Error('Could not bind the media range proxy.');
   }
   return {
-    url: `http://127.0.0.1:${address.port}/${token}`,
+    url: `http://${LOOPBACK_HOST}:${address.port}/${token}`,
     close: async () => {
       for (const controller of controllers) controller.abort();
       server.closeAllConnections?.();

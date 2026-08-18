@@ -9,11 +9,11 @@ import {
   getDetails,
   getEndscreen,
   getPlaylist,
+  getStoryboard,
   search,
   getTracks,
   getTranscript,
 } from './index';
-import { extractFrames, getWatchIndex } from './watch';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,21 +54,16 @@ describeLive('live public API', () => {
     expect(playlist.id).toBe(playlistId);
   }, 120_000);
 
-  test('loads a storyboard index and exact best-effort frames', async () => {
-    const outputDir = await mkdtemp(join(tmpdir(), 'all-things-youtube-live-watch-'));
+  test('loads storyboard contact sheets through the public primitive', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'all-things-youtube-live-storyboard-'));
     try {
-      const index = await getWatchIndex({
-        videoId: '4vItmdk8F_M', outputDir, maxStoryboardSheets: 1,
+      const storyboard = await getStoryboard({
+        videoId: '4vItmdk8F_M', outputDir, maxSheets: 1,
       });
-      const frames = await extractFrames({
-        videoId: '4vItmdk8F_M', outputDir, timestampsMs: [30_000, 686_000, 1_000_000],
-      });
-      expect(index.storyboard?.sheets.length).toBe(1);
-      expect(index.transcript?.segments.length).toBeGreaterThan(0);
-      expect(frames.frames).toHaveLength(3);
-      expect(JSON.stringify({ index, frames })).not.toContain('googlevideo.com');
+      expect(storyboard.sheets).toHaveLength(1);
+      expect(JSON.stringify(storyboard)).not.toContain('i.ytimg.com');
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 120_000);
 });

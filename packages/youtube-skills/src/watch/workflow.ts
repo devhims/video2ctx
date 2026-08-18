@@ -1,13 +1,17 @@
-import { resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
-import { createYouTubeClient } from '../youtube-client';
-import { YouTubeClientError, type SourceMetadata, type YouTubeClientOptions } from '../youtube-types';
+import {
+  getDetails,
+  getStoryboard,
+  getTranscript,
+  YouTubeClientError,
+  type SourceMetadata,
+  type YouTubeClientOptions,
+} from 'all-things-youtube';
 import { extractJpeg, resolveFfmpegExecutable } from './ffmpeg';
-import { callIosWatchPlayer } from './innertube';
 import { loadMediaCandidateGroup } from './media';
 import { startMediaRangeProxy, TransferBudget } from './range-proxy';
-import { downloadStoryboard } from './storyboard';
 import type {
   ExtractedFrame,
   ExtractFramesRequest,
@@ -71,16 +75,21 @@ function safeWarning(prefix: string, error: unknown): string {
 export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIndex> {
   const maxSheets = validateIndexRequest(options);
   const clientOptions = optionsFrom(options);
-  const client = createYouTubeClient(clientOptions);
   const outputDir = resolve(options.outputDir);
-  const [video, transcriptResult, playerResult] = await Promise.all([
-    client.getVideo(options.videoId),
-    client.getTranscript({
+  const [video, transcriptResult, storyboardResult] = await Promise.all([
+    getDetails({ videoId: options.videoId, ...clientOptions }),
+    getTranscript({
       videoId: options.videoId,
-      translateTo: options.lang,
+      lang: options.lang,
       granularity: options.granularity ?? 'segment',
+      ...clientOptions,
     }).then((value) => ({ value })).catch((error: unknown) => ({ error })),
-    callIosWatchPlayer(options.videoId, clientOptions)
+    getStoryboard({
+      videoId: options.videoId,
+      outputDir,
+      maxSheets,
+      ...clientOptions,
+    })
       .then((value) => ({ value }))
       .catch((error: unknown) => ({ error })),
   ]);
@@ -94,26 +103,9 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
     warnings.push(safeWarning('Transcript', transcriptResult.error));
   }
 
-  let storyboard;
-  if ('value' in playerResult) {
-    try {
-      storyboard = await downloadStoryboard(
-        playerResult.value.raw,
-        options.videoId,
-        outputDir,
-        maxSheets,
-        clientOptions,
-      );
-      if (!storyboard) warnings.push('Storyboard: unavailable');
-      else if (storyboard.sheets.length < Math.ceil(
-        storyboard.frameCount / (storyboard.sheets[0]!.columns * storyboard.sheets[0]!.rows),
-      )) warnings.push(`Storyboard: limited to ${storyboard.sheets.length} sheets`);
-    } catch (error) {
-      warnings.push(safeWarning('Storyboard', error));
-    }
-  } else {
-    warnings.push(safeWarning('Storyboard', playerResult.error));
-  }
+  const storyboard = 'value' in storyboardResult ? storyboardResult.value : undefined;
+  if ('error' in storyboardResult) warnings.push(safeWarning('Storyboard', storyboardResult.error));
+  else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
 
   if (!transcript && !storyboard?.sheets.length) {
     throw new YouTubeClientError('UNAVAILABLE', 'No transcript or storyboard index is available.');
@@ -191,8 +183,7 @@ async function extractConcurrent(
 export async function extractFrames(options: ExtractFramesRequest): Promise<FrameExtractionResult> {
   const { timestamps, maxWidth } = validateFrameRequest(options);
   const clientOptions = optionsFrom(options);
-  const client = createYouTubeClient(clientOptions);
-  const video = await client.getVideo(options.videoId);
+  const video = await getDetails({ videoId: options.videoId, ...clientOptions });
   if (video.isLive) {
     throw new YouTubeClientError('UNAVAILABLE', 'Live videos are not supported by watch extraction.');
   }

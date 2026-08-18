@@ -1,4 +1,4 @@
-import type { YouTubeClientOptions } from '../youtube-types';
+import type { YouTubeClientOptions } from 'all-things-youtube';
 import { callWatchPlayer, type JsonObject, WATCH_MEDIA_PROFILES } from './innertube';
 
 function object(value: unknown): JsonObject {

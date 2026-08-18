@@ -1,10 +1,11 @@
 import type {
   SourceMetadata,
+  StoryboardIndex,
   Transcript,
   Video,
   YouTubeClientOptions,
   YouTubeErrorCode,
-} from '../youtube-types';
+} from 'all-things-youtube';
 
 export interface WatchIndexRequest extends YouTubeClientOptions {
   videoId: string;
@@ -12,24 +13,6 @@ export interface WatchIndexRequest extends YouTubeClientOptions {
   lang?: string;
   granularity?: 'segment' | 'word';
   maxStoryboardSheets?: number;
-}
-
-export interface StoryboardContactSheet {
-  path: string;
-  tileWidth: number;
-  tileHeight: number;
-  columns: number;
-  rows: number;
-  firstFrameIndex: number;
-  frameCount: number;
-  intervalMs: number;
-}
-
-export interface StoryboardIndex {
-  level: number;
-  frameCount: number;
-  intervalMs: number;
-  sheets: StoryboardContactSheet[];
 }
 
 export interface WatchIndex {

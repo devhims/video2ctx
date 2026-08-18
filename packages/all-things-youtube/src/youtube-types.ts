@@ -170,6 +170,32 @@ export interface Transcript {
   meta: SourceMetadata;
 }
 
+export interface StoryboardContactSheet {
+  path: string;
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  firstFrameIndex: number;
+  frameCount: number;
+  intervalMs: number;
+}
+
+export interface StoryboardIndex {
+  videoId: string;
+  level: number;
+  frameCount: number;
+  intervalMs: number;
+  sheets: StoryboardContactSheet[];
+  meta: SourceMetadata;
+}
+
+export interface StoryboardOptions {
+  videoId: string;
+  outputDir: string;
+  maxSheets?: number;
+}
+
 export interface TranscriptOptions {
   videoId: string;
   language?: string;

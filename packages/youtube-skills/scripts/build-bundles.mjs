@@ -5,24 +5,25 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(skillRoot, '../..');
 const bundles = [
   {
-    entryPoint: resolve(packageRoot, 'skill/entry.ts'),
-    committedBundle: resolve(packageRoot, '../../.agents/skills/youtube-direct/scripts/youtube.mjs'),
+    entryPoint: resolve(skillRoot, 'src/direct/entry.ts'),
+    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-direct/scripts/youtube.mjs'),
   },
   {
-    entryPoint: resolve(packageRoot, 'skill/watch-entry.ts'),
-    committedBundle: resolve(packageRoot, '../../.agents/skills/youtube-watch/scripts/watch.mjs'),
+    entryPoint: resolve(skillRoot, 'src/watch/entry.ts'),
+    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-watch/scripts/watch.mjs'),
   },
 ];
 
 async function bundle(entryPoint, outfile) {
   const licenses = await Promise.all([
-    ['all-things-youtube', resolve(packageRoot, 'LICENSE')],
-    ['he', resolve(packageRoot, 'node_modules/he/LICENSE-MIT.txt')],
-    ['striptags', resolve(packageRoot, 'node_modules/striptags/LICENSE')],
-    ['undici', resolve(packageRoot, 'node_modules/undici/LICENSE')],
+    ['all-things-youtube', resolve(skillRoot, '../all-things-youtube/LICENSE')],
+    ['he', resolve(skillRoot, 'node_modules/he/LICENSE-MIT.txt')],
+    ['striptags', resolve(skillRoot, 'node_modules/striptags/LICENSE')],
+    ['undici', resolve(skillRoot, 'node_modules/undici/LICENSE')],
   ].map(async ([name, path]) => {
     const notice = `${name}\n${await readFile(path, 'utf8')}`;
     return notice.replaceAll('*/', '* /');
@@ -35,10 +36,13 @@ async function bundle(entryPoint, outfile) {
   ].join('\n');
 
   await build({
-    absWorkingDir: packageRoot,
+    absWorkingDir: skillRoot,
     entryPoints: [entryPoint],
     outfile,
     bundle: true,
+    alias: {
+      'all-things-youtube': resolve(skillRoot, '../all-things-youtube/src/index.ts'),
+    },
     platform: 'node',
     target: 'node18.17',
     format: 'esm',
@@ -75,7 +79,7 @@ async function check() {
         console.error(`The ${definition.committedBundle.split('/').at(-3)} skill bundle is stale.`);
         console.error(`Generated: ${digest(actual)}`);
         console.error(`Committed: ${expected ? digest(expected) : 'missing'}`);
-        console.error('Run: npm --prefix packages/all-things-youtube run skill:bundle');
+        console.error('Run: npm --prefix packages/youtube-skills run bundle');
         process.exitCode = 1;
       }
     }

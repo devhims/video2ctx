@@ -1,4 +1,4 @@
-export interface JpegDimensions {
+interface JpegDimensions {
   width: number;
   height: number;
 }

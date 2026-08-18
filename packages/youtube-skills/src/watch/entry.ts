@@ -1,4 +1,4 @@
-import { runWatchCli } from './watch-cli';
+import { runWatchCli } from './cli';
 
 process.exitCode = await runWatchCli(process.argv.slice(2), {
   stdout: (value) => process.stdout.write(value),

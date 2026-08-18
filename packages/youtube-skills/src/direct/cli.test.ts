@@ -2,7 +2,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http';
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, test, vi } from 'vitest';
-import { YouTubeClientError } from '../src';
+import { YouTubeClientError } from 'all-things-youtube';
 import { createRequestFetch, runSkillCli, type CliDependencies, type CliIo } from './cli';
 
 function captureIo(): CliIo & { output: string[]; errors: string[] } {
@@ -45,7 +45,7 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-describe('standalone skill CLI', () => {
+describe('youtube-direct CLI', () => {
   test('maps search flags to the shared library operation and emits JSON', async () => {
     const io = captureIo();
     const search = vi.fn(async () => ({ query: 'agent skills', videos: [] }));
