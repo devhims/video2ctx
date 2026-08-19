@@ -16,6 +16,8 @@ Parse the JSON response. Read the available timed transcript and, when present, 
 (firstFrameIndex + row * columns + column) * intervalMs
 ```
 
+This formula returns an integer `timestampMs`. Keep storyboard-derived timestamps in milliseconds. When `video.durationSeconds` is available, require each value to be less than `video.durationSeconds * 1000`.
+
 Use `--granularity word` only when word-level timing materially changes the task.
 
 After reading the index, answer directly when it provides enough evidence for the requested claims. Storyboards are suited to video structure, scene or slide sequences, locating demonstrations, and rough visual changes.
@@ -29,8 +31,12 @@ Choose no more than 30 timestamps that answer the user's question. Prefer a smal
 ```bash
 node <skill-directory>/scripts/watch.mjs frames \
   --workspace <workspace-from-index> \
-  --timestamps 30,686,1000
+  --timestamps-ms 1000,4500,11000
 ```
+
+Use `--timestamps-ms` for values calculated from the storyboard index. Use `--timestamps` only for timestamps expressed in seconds, including decimals such as `1,4.5,11`. Never pass storyboard millisecond values to `--timestamps`.
+
+If validation identifies an out-of-range timestamp, check the selected flag and its unit before editing the list. Do not guess which value failed or retry by dropping values speculatively.
 
 Explicitly open every returned `frames[].path` with the image-viewing tool. Keep each image associated with `timestampMs`; a file path alone is not visual context. Reflect `failures` and `meta.warnings` when the answer depends on missing or low-resolution evidence.
 

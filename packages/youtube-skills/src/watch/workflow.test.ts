@@ -162,4 +162,14 @@ describe('youtube-ctx visual workflow', () => {
     })).rejects.toMatchObject({ code: 'DEPENDENCY_MISSING' });
     expect(mocks.loadMediaCandidateGroup).not.toHaveBeenCalled();
   });
+
+  test('identifies an out-of-range timestamp and the video duration in milliseconds', async () => {
+    await expect(extractFrames({
+      videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', timestampsMs: [59_000, 60_000],
+    })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: 'Timestamp 60000ms must be less than the video duration of 60000ms.',
+    });
+    expect(mocks.resolveFfmpegExecutable).not.toHaveBeenCalled();
+  });
 });

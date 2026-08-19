@@ -95,6 +95,24 @@ describe('youtube-ctx visual CLI', () => {
     expect(JSON.parse(io.output[0]!).meta.partial).toBe(true);
   });
 
+  test('accepts storyboard timestamps in milliseconds without rescaling them', async () => {
+    const io = capture();
+    const workspace = await markedWorkspace();
+    const extractFrames = vi.fn(async () => ({
+      videoId: 'abcdefghijk', frames: [], failures: [],
+      meta: { partial: false, warnings: [] },
+    }));
+
+    const code = await runWatchCli([
+      'frames', '--workspace', workspace, '--timestamps-ms', '1000,4500,11000',
+    ], io, {}, { ...fetchDependency(), extractFrames });
+
+    expect(code).toBe(0);
+    expect(extractFrames).toHaveBeenCalledWith(expect.objectContaining({
+      timestampsMs: [1_000, 4_500, 11_000],
+    }));
+  });
+
   test('preserves structured missing-FFmpeg errors', async () => {
     const io = capture();
     const workspace = await markedWorkspace();
@@ -142,6 +160,25 @@ describe('youtube-ctx visual CLI', () => {
     expect(extractFrames).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['neither timestamp flag', []],
+    ['both timestamp flags', ['--timestamps', '1', '--timestamps-ms', '1000']],
+  ])('requires exactly one timestamp unit for %s', async (_case, timestampArguments) => {
+    const workspace = await markedWorkspace();
+    const io = capture();
+    const extractFrames = vi.fn();
+
+    const code = await runWatchCli([
+      'frames', '--workspace', workspace, ...timestampArguments,
+    ], io, {}, { ...fetchDependency(), extractFrames });
+
+    expect(code).toBe(2);
+    expect(JSON.parse(io.errors[0]!).error.message).toBe(
+      'Provide exactly one of --timestamps or --timestamps-ms.',
+    );
+    expect(extractFrames).not.toHaveBeenCalled();
+  });
+
   test('prints youtube-ctx visual help without constructing a client', async () => {
     const io = capture();
     const createFetch = vi.fn();
@@ -149,6 +186,7 @@ describe('youtube-ctx visual CLI', () => {
     expect(await runWatchCli(['--help'], io, {}, { createFetch })).toBe(0);
     expect(io.output.join('')).toContain('youtube-ctx visual');
     expect(io.output.join('')).toContain('watch.mjs index');
+    expect(io.output.join('')).toContain('--timestamps-ms <ms,...>');
     expect(createFetch).not.toHaveBeenCalled();
   });
 });

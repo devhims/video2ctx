@@ -19,7 +19,7 @@ Inspect a YouTube storyboard and transcript, then optionally extract exact times
 
 Usage:
   watch.mjs index --video-id <id> [options]
-  watch.mjs frames --workspace <path> --timestamps <seconds,...> [options]
+  watch.mjs frames --workspace <path> (--timestamps <seconds,...> | --timestamps-ms <milliseconds,...>) [options]
   watch.mjs cleanup --workspace <path> [--pretty]
 
 Shared options:
@@ -33,7 +33,8 @@ Index options:
 
 Frame options:
   --workspace <path>             Workspace returned by index
-  --timestamps <seconds,...>     One to 30 decimal timestamps
+  --timestamps <seconds,...>     One to 30 decimal timestamps in seconds
+  --timestamps-ms <ms,...>       One to 30 integer timestamps in milliseconds
   --max-width <pixels>           Output width cap from 320 to 1920
   --ffmpeg-path <path>           FFmpeg executable; defaults to FFMPEG_PATH or ffmpeg
 `;
@@ -101,7 +102,7 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
   }
   const allowed: Record<Operation, string[]> = {
     index: ['video-id', 'lang', 'granularity', 'proxy', 'pretty'],
-    frames: ['workspace', 'timestamps', 'max-width', 'ffmpeg-path', 'proxy', 'pretty'],
+    frames: ['workspace', 'timestamps', 'timestamps-ms', 'max-width', 'ffmpeg-path', 'proxy', 'pretty'],
     cleanup: ['workspace', 'pretty'],
   };
   for (const name of Object.keys(flags)) {
@@ -128,16 +129,28 @@ function integerFlag(flags: Flags, name: string): number | undefined {
 }
 
 function timestamps(flags: Flags): number[] {
-  const value = stringFlag(flags, 'timestamps', true)!;
+  const secondsValue = stringFlag(flags, 'timestamps');
+  const millisecondsValue = stringFlag(flags, 'timestamps-ms');
+  if ((secondsValue === undefined) === (millisecondsValue === undefined)) {
+    throw new WatchCliInputError('Provide exactly one of --timestamps or --timestamps-ms.');
+  }
+  const name = secondsValue === undefined ? 'timestamps-ms' : 'timestamps';
+  const value = secondsValue ?? millisecondsValue!;
   const parts = value.split(',');
   if (parts.length < 1 || parts.length > 30) {
-    throw new WatchCliInputError('--timestamps must contain between 1 and 30 values.');
+    throw new WatchCliInputError(`--${name} must contain between 1 and 30 values.`);
   }
   const result = parts.map((part) => Number(part.trim()));
-  if (result.some((seconds) => !Number.isFinite(seconds) || seconds < 0)) {
-    throw new WatchCliInputError('--timestamps must contain non-negative seconds.');
+  if (secondsValue !== undefined) {
+    if (result.some((seconds) => !Number.isFinite(seconds) || seconds < 0)) {
+      throw new WatchCliInputError('--timestamps must contain non-negative seconds.');
+    }
+    return [...new Set(result.map((seconds) => Math.round(seconds * 1_000)))];
   }
-  return [...new Set(result.map((seconds) => Math.round(seconds * 1_000)))];
+  if (result.some((milliseconds) => !Number.isSafeInteger(milliseconds) || milliseconds < 0)) {
+    throw new WatchCliInputError('--timestamps-ms must contain non-negative integer milliseconds.');
+  }
+  return [...new Set(result)];
 }
 
 async function createWorkspace(): Promise<string> {

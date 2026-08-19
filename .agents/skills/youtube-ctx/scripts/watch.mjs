@@ -21720,8 +21720,12 @@ async function extractFrames(options) {
   }
   if (video.durationSeconds !== void 0) {
     const durationMs = video.durationSeconds * 1e3;
-    if (timestamps2.some((timestamp) => timestamp >= durationMs)) {
-      throw new YouTubeClientError("INVALID_INPUT", "Every timestamp must be within the video duration.");
+    const invalidTimestamp = timestamps2.find((timestamp) => timestamp >= durationMs);
+    if (invalidTimestamp !== void 0) {
+      throw new YouTubeClientError(
+        "INVALID_INPUT",
+        `Timestamp ${invalidTimestamp}ms must be less than the video duration of ${durationMs}ms.`
+      );
     }
   }
   const outputDir = resolve3(options.outputDir);
@@ -21841,7 +21845,7 @@ Inspect a YouTube storyboard and transcript, then optionally extract exact times
 
 Usage:
   watch.mjs index --video-id <id> [options]
-  watch.mjs frames --workspace <path> --timestamps <seconds,...> [options]
+  watch.mjs frames --workspace <path> (--timestamps <seconds,...> | --timestamps-ms <milliseconds,...>) [options]
   watch.mjs cleanup --workspace <path> [--pretty]
 
 Shared options:
@@ -21855,7 +21859,8 @@ Index options:
 
 Frame options:
   --workspace <path>             Workspace returned by index
-  --timestamps <seconds,...>     One to 30 decimal timestamps
+  --timestamps <seconds,...>     One to 30 decimal timestamps in seconds
+  --timestamps-ms <ms,...>       One to 30 integer timestamps in milliseconds
   --max-width <pixels>           Output width cap from 320 to 1920
   --ffmpeg-path <path>           FFmpeg executable; defaults to FFMPEG_PATH or ffmpeg
 `;
@@ -21896,7 +21901,7 @@ function parseArguments(argv) {
   }
   const allowed = {
     index: ["video-id", "lang", "granularity", "proxy", "pretty"],
-    frames: ["workspace", "timestamps", "max-width", "ffmpeg-path", "proxy", "pretty"],
+    frames: ["workspace", "timestamps", "timestamps-ms", "max-width", "ffmpeg-path", "proxy", "pretty"],
     cleanup: ["workspace", "pretty"]
   };
   for (const name of Object.keys(flags)) {
@@ -21920,16 +21925,28 @@ function integerFlag(flags, name) {
   return parsed;
 }
 function timestamps(flags) {
-  const value = stringFlag(flags, "timestamps", true);
+  const secondsValue = stringFlag(flags, "timestamps");
+  const millisecondsValue = stringFlag(flags, "timestamps-ms");
+  if (secondsValue === void 0 === (millisecondsValue === void 0)) {
+    throw new WatchCliInputError("Provide exactly one of --timestamps or --timestamps-ms.");
+  }
+  const name = secondsValue === void 0 ? "timestamps-ms" : "timestamps";
+  const value = secondsValue ?? millisecondsValue;
   const parts = value.split(",");
   if (parts.length < 1 || parts.length > 30) {
-    throw new WatchCliInputError("--timestamps must contain between 1 and 30 values.");
+    throw new WatchCliInputError(`--${name} must contain between 1 and 30 values.`);
   }
   const result = parts.map((part) => Number(part.trim()));
-  if (result.some((seconds) => !Number.isFinite(seconds) || seconds < 0)) {
-    throw new WatchCliInputError("--timestamps must contain non-negative seconds.");
+  if (secondsValue !== void 0) {
+    if (result.some((seconds) => !Number.isFinite(seconds) || seconds < 0)) {
+      throw new WatchCliInputError("--timestamps must contain non-negative seconds.");
+    }
+    return [...new Set(result.map((seconds) => Math.round(seconds * 1e3)))];
   }
-  return [...new Set(result.map((seconds) => Math.round(seconds * 1e3)))];
+  if (result.some((milliseconds) => !Number.isSafeInteger(milliseconds) || milliseconds < 0)) {
+    throw new WatchCliInputError("--timestamps-ms must contain non-negative integer milliseconds.");
+  }
+  return [...new Set(result)];
 }
 async function createWorkspace() {
   return await mkdtemp(join3(tmpdir(), WORKSPACE_PREFIX));
