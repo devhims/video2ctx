@@ -21037,7 +21037,7 @@ async function getPlaylist(options) {
 }
 
 // src/direct/cli.ts
-var HELP = `youtube-direct
+var HELP = `youtube-ctx direct
 
 Call YouTube's internal HTTP endpoints from this machine and print JSON.
 

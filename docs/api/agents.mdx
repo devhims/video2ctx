@@ -3,7 +3,7 @@ title: "Use video2ctx from agents"
 description: "Give an agent authenticated, source-linked video context with a published skill."
 ---
 
-Start ordinary public YouTube requests with `youtube-direct` on the user's machine. Use `youtube-watch` when the answer depends on slides, charts, demonstrations, interfaces, on-screen text, or other visual evidence; it requires local FFmpeg for exact frames. Continue with `video2ctx-api` automatically if direct access fails, and use `video2ctx-monitoring` for the stateful monitor exception. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
+Start personal, low-to-moderate public YouTube requests with `youtube-ctx` on the user's machine. It routes text and metadata work to direct extraction, and visual questions to a transcript/storyboard scan that uses local FFmpeg only when exact-frame verification is necessary. Use `video2ctx-platform` for production or cloud-backed search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, account data, and recurring workflows; continue through its data branch automatically if direct access fails. The platform skill uses the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
 
 <Steps>
   <Step title="Discover narrowly">Search for videos or resolve the relevant resource in your own application before requesting deeper datasets.</Step>
@@ -14,4 +14,4 @@ Start ordinary public YouTube requests with `youtube-direct` on the user's machi
 
 Install the hosted CLI with `npm i -g @video2ctx/cli`. It keeps its revocable session in private local configuration. An existing `VIDEO2CTX_API_KEY` remains a non-interactive fallback and takes precedence. Bound query length, response size, continuation depth, and the number of fresh operations an agent can initiate.
 
-Use the API skill only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use the monitoring skill only for monitors, notifications, and delivery preferences.
+Use the platform skill's data branch only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use its monitoring branch only for monitors, notifications, and delivery preferences.

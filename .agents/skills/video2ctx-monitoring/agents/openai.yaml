@@ -1,4 +1,0 @@
-interface:
-  display_name: "video2ctx Monitoring"
-  short_description: "Create and operate video monitor schedules"
-  default_prompt: "Use $video2ctx-monitoring to monitor a YouTube channel for new videos."

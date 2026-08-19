@@ -44,9 +44,8 @@ Available now:
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A visual research workspace                        | [Open video2ctx](https://www.video2ctx.dev)                                                                                                                                                                          |
 | A hosted API for an agent or application           | [Create an API key](https://www.video2ctx.dev/dashboard/developer), then use the [interactive API reference](https://docs.video2ctx.dev/api-reference/introduction)                                                  |
-| Direct YouTube data from a supported agent         | Use [`youtube-direct`](./.agents/skills/youtube-direct) with no video2ctx account, API key, hosted service, or npm installation                                                                                      |
-| Visual YouTube context from a supported agent      | Use [`youtube-watch`](./.agents/skills/youtube-watch) for storyboard-guided timestamped frames; requires local FFmpeg                                                                                              |
-| A hosted API directly from a supported agent       | Install [`@video2ctx/cli`](./packages/video2ctx-cli), then use [`video2ctx-api`](./.agents/skills/video2ctx-api) for stateless reads or [`video2ctx-monitoring`](./.agents/skills/video2ctx-monitoring) for monitors |
+| Local YouTube context from a supported agent       | Use [`youtube-ctx`](./.agents/skills/youtube-ctx) for direct data and progressive visual inspection with no video2ctx account, API key, hosted service, or npm installation                                          |
+| The hosted platform from a supported agent         | Install [`@video2ctx/cli`](./packages/video2ctx-cli), then use [`video2ctx-platform`](./.agents/skills/video2ctx-platform) for production or cloud-backed YouTube data, account access, and recurring workflows             |
 | A server-side TypeScript YouTube client            | Install [`all-things-youtube`](./packages/all-things-youtube/README.md) from npm                                                                                                                                     |
 | To contribute to or self-host the complete product | [Run the workspace locally](#run-the-workspace-locally)                                                                                                                                                              |
 
@@ -63,14 +62,12 @@ video2ctx whoami --json
 
 The CLI and skills are complementary. The CLI owns browser authentication, hosted transport, retries, credential storage, and machine-readable commands. The skills teach agents which route to choose and how to use each operation safely.
 
-The collection contains four skills with separate responsibilities:
+The collection contains two skills with separate responsibilities:
 
-- **`youtube-direct`** handles one-off public YouTube search and extraction directly from the user's machine. It needs no video2ctx account, API key, hosted service, or npm package.
-- **`youtube-watch`** handles questions that require slides, charts, interfaces, demonstrations, or other visual evidence. It builds a storyboard/transcript index and extracts focused frames with local FFmpeg.
-- **`video2ctx-api`** handles account and usage requests, managed hosted reads, and automatic fallback when a direct request fails.
-- **`video2ctx-monitoring`** handles the stateful exception: recurring checks, schedules, alerts, and notification preferences.
+- **`youtube-ctx`** handles one-off public YouTube context directly from the user's machine. Its direct branch covers search, transcripts, metadata, comments, channels, and playlists. Its visual branch scans a storyboard/transcript index first and extracts focused frames with local FFmpeg only when the requested detail requires them.
+- **`video2ctx-platform`** handles authenticated production and cloud-backed work. Its data branch covers managed search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, account and usage requests, and automatic fallback when direct local access fails. Its monitoring branch covers recurring checks, schedules, alerts, and notification preferences.
 
-Both direct skills carry their Node executables. If local public YouTube access is all you need, install the skills without the hosted CLI; `youtube-watch` additionally requires FFmpeg:
+The local skill carries both Node executables. If local public YouTube access is all you need, install it without the hosted CLI. The `youtube-ctx` storyboard scan needs no additional dependency; install FFmpeg only for exact-frame verification:
 
 ```bash
 npx skills add devhims/video2ctx
@@ -78,12 +75,12 @@ npx skills add devhims/video2ctx
 
 The browser flow stores a revocable CLI session in private local configuration. For unattended environments, set `VIDEO2CTX_API_KEY` to a personal key instead. Never place credentials in prompts, logs, screenshots, or source control.
 
-After installation, an agent should use `youtube-direct` for text and metadata, `youtube-watch` when imagery matters, `video2ctx-api` for managed hosted reads or direct-access fallback, and `video2ctx-monitoring` only for recurring work. See the [`@video2ctx/cli` README](./packages/video2ctx-cli/README.md) and the [published skills](./.agents/skills) for the complete contracts.
+After installation, an agent should use `youtube-ctx` for personal, low-to-moderate local text, metadata, and visual context, and `video2ctx-platform` for managed hosted YouTube data, production or cloud-backed applications, account access, direct-access fallback, or recurring work. See the [`@video2ctx/cli` README](./packages/video2ctx-cli/README.md) and the [published skills](./.agents/skills) for the complete contracts.
 
 ## Under development
 
 - **Hosted visual context:** Bring local storyboard and frame extraction into managed jobs after media-compliance, artifact-retention, and metering work.
-- **Hosted agent tools:** Continue expanding the stateless API and monitoring skills while keeping authentication revocable and local to the user's machine.
+- **Hosted agent tools:** Continue expanding the hosted data and monitoring branches while keeping authentication revocable and local to the user's machine.
 
 ## Hosted API quick start
 

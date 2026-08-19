@@ -45,7 +45,7 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-describe('youtube-direct CLI', () => {
+describe('youtube-ctx direct CLI', () => {
   test('maps search flags to the shared library operation and emits JSON', async () => {
     const io = captureIo();
     const search = vi.fn(async () => ({ query: 'agent skills', videos: [] }));
@@ -251,6 +251,7 @@ describe('youtube-direct CLI', () => {
     const exitCode = await runSkillCli(['--help'], io, {}, { createFetch });
 
     expect(exitCode).toBe(0);
+    expect(io.output.join('')).toContain('youtube-ctx direct');
     expect(io.output.join('')).toContain('search');
     expect(io.output.join('')).toContain('--proxy <url>');
     expect(io.output.join('')).toContain('--format text|segments|words');

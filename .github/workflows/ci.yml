@@ -33,10 +33,10 @@ jobs:
           WATCH_FFMPEG_TEST: '1'
       - run: npm run typecheck --prefix ../youtube-skills
       - run: npm run bundle:check --prefix ../youtube-skills
-      - run: test -x ../../.agents/skills/youtube-direct/scripts/youtube.mjs
-      - run: node ../../.agents/skills/youtube-direct/scripts/youtube.mjs --help
-      - run: test -x ../../.agents/skills/youtube-watch/scripts/watch.mjs
-      - run: node ../../.agents/skills/youtube-watch/scripts/watch.mjs --help
+      - run: test -x ../../.agents/skills/youtube-ctx/scripts/youtube.mjs
+      - run: node ../../.agents/skills/youtube-ctx/scripts/youtube.mjs --help
+      - run: test -x ../../.agents/skills/youtube-ctx/scripts/watch.mjs
+      - run: node ../../.agents/skills/youtube-ctx/scripts/watch.mjs --help
       - run: npm pack --dry-run
 
   platform:

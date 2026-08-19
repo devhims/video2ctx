@@ -1,0 +1,4 @@
+interface:
+  display_name: "video2ctx Platform"
+  short_description: "Managed data, account access, and monitoring"
+  default_prompt: "Use $video2ctx-platform for this managed video2ctx data, account, or monitoring request while preserving platform metadata."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube Context"
+  short_description: "Search, read, and inspect YouTube context"
+  default_prompt: "Use $youtube-ctx to search or inspect public YouTube context directly from this machine, escalating to exact frames only when needed."

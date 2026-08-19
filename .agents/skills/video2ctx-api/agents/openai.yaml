@@ -1,4 +1,0 @@
-interface:
-  display_name: "video2ctx Hosted API"
-  short_description: "Managed YouTube data, account, and usage"
-  default_prompt: "Use $video2ctx-api for this managed hosted API request or direct-route fallback, preserving credit and request metadata."

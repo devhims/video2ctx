@@ -1,0 +1,54 @@
+---
+title: "Use YouTube context"
+description: "Use youtube-ctx for personal, local-machine YouTube data and progressive visual inspection."
+---
+
+`youtube-ctx` is the local, no-account skill for personal, one-off public YouTube work at low-to-moderate usage. It searches and extracts text or metadata directly from the user's machine, and it can inspect a video's timed transcript and storyboard when imagery matters. It needs no video2ctx account, API key, hosted service, or separate npm package.
+
+## Reach for it when
+
+- Searching for public videos, channels, or playlists
+- Fetching transcripts, caption tracks, comments, details, or end screens
+- Inspecting channel identity, channel videos, channel playlists, or playlist items
+- Reading slides, charts, diagrams, interfaces, code samples, demonstrations, or other visual changes
+- Verifying what appears at a particular timestamp
+
+Use [`video2ctx-platform`](/skills/video2ctx-platform) for production applications, managed infrastructure, account or usage details, recurring monitors, and automatic fallback after a direct operation fails.
+
+## Requirements
+
+- Node.js 18.17 or newer
+- Optional: FFmpeg for exact frame verification
+
+The direct branch and the visual transcript/storyboard scan do not require FFmpeg. The agent asks for exact frames only when sampled imagery cannot resolve a material detail or when you explicitly request them.
+
+## Example requests
+
+```text
+Find three recent videos about agent skills that have captions.
+```
+
+```text
+Summarize this video's transcript and link each major claim to a timestamp: <YouTube URL>
+```
+
+```text
+Explain the architecture diagram in this video and cite when each component appears: <YouTube URL>
+```
+
+## How the skill routes work
+
+<Steps>
+  <Step title="Choose the smallest branch">Uses direct extraction for text and metadata, or the visual branch when imagery is material.</Step>
+  <Step title="Build only needed context">Requests compact transcript text by default and, for visual work, loads the timed transcript and every storyboard sheet.</Step>
+  <Step title="Verify selectively">Extracts a small, diverse set of exact frames only for small text, chart values, detailed interface state, brief changes, ambiguity, or an explicit frame request.</Step>
+  <Step title="Preserve evidence">Keeps timestamps, partial flags, warnings, continuations, and classified failures attached to the result.</Step>
+</Steps>
+
+<Warning>
+  Transcript text and video imagery are untrusted evidence. The skill never treats words shown or spoken inside a video as agent instructions.
+</Warning>
+
+<Card title="Install youtube-ctx" icon="download" href="/skills/installation">
+  Install one local skill for direct and visual YouTube context; add FFmpeg only when your work requires exact frames.
+</Card>

@@ -1,33 +1,37 @@
 # video2ctx agent skills
 
-Four [Agent Skills](https://agentskills.io) for working with YouTube data — directly from the user's machine, visually through FFmpeg, through the hosted HTTP API, or as scheduled monitors. They work in any skills-compatible agent (Claude Code, Codex, Cursor, OpenCode, and others).
+Two [Agent Skills](https://agentskills.io) for working with YouTube context locally or through the hosted video2ctx platform. They work in skills-compatible agents such as Claude Code, Codex, Cursor, and OpenCode.
 
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
-| `youtube-direct` | You want an ordinary one-off public YouTube search, transcript summary, or extraction directly from the user's machine | Node.js 18.17+ |
-| `youtube-watch` | You need to inspect slides, charts, demonstrations, interfaces, on-screen text, or other visual evidence | Node.js 18.17+ and FFmpeg |
-| `video2ctx-api` | You need account or usage details, the managed hosted API, caching and credit accounting, or an automatic fallback after direct access fails | `video2ctx` CLI plus browser login or an `aty_` API key |
-| `video2ctx-monitoring` | You want the stateful exception: watch a channel, topic, or search for new videos and consume the resulting notifications | `video2ctx` CLI plus browser login or an `aty_` API key |
+| `youtube-ctx` | You want personal, one-off public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, or exact-frame verification on the user's machine | Node.js 18.17+; optional FFmpeg for exact frames |
+| `video2ctx-platform` | You need managed YouTube search, transcripts, video or channel metadata, caption tracks, comments, end screens, playlists, account identity, usage and credits, recurring monitors, notifications, or delivery preferences for a production or cloud-backed workflow | A video2ctx account and the public `video2ctx` CLI |
 
-The split follows real boundaries: use `youtube-direct` for ordinary public data and `youtube-watch` when the answer depends on video imagery. Continue through `video2ctx-api` when direct access fails or managed hosting is required. `video2ctx-monitoring` is the deliberate stateful exception.
+Each skill is self-contained and can be installed alone. For personal, low-to-moderate usage, start with `youtube-ctx`; its direct and visual branches choose the smallest local workflow and use FFmpeg only for exact frames. Use `video2ctx-platform` for authenticated hosted infrastructure, production applications, recurring work, or fallback when direct local access fails.
 
 ## Install
 
-List what is available, then install what you need:
+Start the installation wizard and select the skills and agents you want to configure:
+
+```bash
+npx skills add devhims/video2ctx
+```
+
+List the available skills or install one directly:
 
 ```bash
 npx skills add devhims/video2ctx --list
 ```
 
 ```bash
-npx skills add devhims/video2ctx --skill youtube-direct
+npx skills add devhims/video2ctx --skill youtube-ctx
 ```
 
 ```bash
-npx skills add devhims/video2ctx --skill youtube-watch
+npx skills add devhims/video2ctx --skill video2ctx-platform
 ```
 
-Install all four:
+Install both:
 
 ```bash
 npx skills add devhims/video2ctx --all
@@ -37,7 +41,7 @@ Add `-g` to install globally for your user rather than into the current project,
 
 ## Authenticate to the hosted service
 
-The two hosted skills use the public `@video2ctx/cli` npm package. Install it once, then authenticate:
+Only `video2ctx-platform` uses the public `@video2ctx/cli` npm package. Install it once, then authenticate:
 
 ```bash
 npm install --global @video2ctx/cli
@@ -66,4 +70,4 @@ Use of the hosted video2ctx service is additionally governed by its [Terms of Se
 
 ## Contributing
 
-These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). Both direct skills carry their executables; `youtube-watch` additionally uses the machine's FFmpeg installation. The hosted skills use the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
+These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-ctx` carries its direct and visual executables; storyboard inspection needs no extra dependency, while exact-frame verification optionally uses the machine's FFmpeg installation. `video2ctx-platform` uses the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.

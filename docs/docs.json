@@ -43,10 +43,8 @@
         "pages": [
           "agents",
           "skills/installation",
-          "skills/youtube-direct",
-          "skills/youtube-watch",
-          "skills/video2ctx-api",
-          "skills/video2ctx-monitoring"
+          "skills/youtube-ctx",
+          "skills/video2ctx-platform"
         ]
       },
       {
@@ -102,6 +100,28 @@
       ]
     }
   },
+  "redirects": [
+    {
+      "source": "/skills/youtube-direct",
+      "destination": "/skills/youtube-ctx",
+      "permanent": true
+    },
+    {
+      "source": "/skills/youtube-watch",
+      "destination": "/skills/youtube-ctx",
+      "permanent": true
+    },
+    {
+      "source": "/skills/video2ctx-api",
+      "destination": "/skills/video2ctx-platform",
+      "permanent": true
+    },
+    {
+      "source": "/skills/video2ctx-monitoring",
+      "destination": "/skills/video2ctx-platform",
+      "permanent": true
+    }
+  ],
   "navbar": {
     "links": [
       {

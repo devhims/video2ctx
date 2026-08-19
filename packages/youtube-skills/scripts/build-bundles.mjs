@@ -10,11 +10,11 @@ const repositoryRoot = resolve(skillRoot, '../..');
 const bundles = [
   {
     entryPoint: resolve(skillRoot, 'src/direct/entry.ts'),
-    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-direct/scripts/youtube.mjs'),
+    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-ctx/scripts/youtube.mjs'),
   },
   {
     entryPoint: resolve(skillRoot, 'src/watch/entry.ts'),
-    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-watch/scripts/watch.mjs'),
+    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-ctx/scripts/watch.mjs'),
   },
 ];
 
@@ -76,7 +76,7 @@ async function check() {
         readFile(definition.committedBundle).catch(() => undefined),
       ]);
       if (!expected || !actual.equals(expected)) {
-        console.error(`The ${definition.committedBundle.split('/').at(-3)} skill bundle is stale.`);
+        console.error(`The ${definition.committedBundle.split('/').at(-1)} bundle is stale.`);
         console.error(`Generated: ${digest(actual)}`);
         console.error(`Committed: ${expected ? digest(expected) : 'missing'}`);
         console.error('Run: npm --prefix packages/youtube-skills run bundle');

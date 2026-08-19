@@ -2,69 +2,87 @@ import { readFileSync } from 'node:fs';
 
 import { openApiDocument } from '../src/openapi';
 
-const apiSkill = readFileSync(
-  new URL('../../.agents/skills/video2ctx-api/SKILL.md', import.meta.url),
+const platformSkill = readFileSync(
+  new URL('../../.agents/skills/video2ctx-platform/SKILL.md', import.meta.url),
   'utf8',
 );
-const directSkill = readFileSync(
-  new URL('../../.agents/skills/youtube-direct/SKILL.md', import.meta.url),
+const hostedDataReference = readFileSync(
+  new URL('../../.agents/skills/video2ctx-platform/references/hosted-data.md', import.meta.url),
   'utf8',
 );
-const monitoringSkill = readFileSync(
-  new URL('../../.agents/skills/video2ctx-monitoring/SKILL.md', import.meta.url),
+const monitoringReference = readFileSync(
+  new URL('../../.agents/skills/video2ctx-platform/references/monitoring.md', import.meta.url),
   'utf8',
 );
-const apiSelector = readFileSync(
-  new URL('../../.agents/skills/video2ctx-api/agents/openai.yaml', import.meta.url),
+const youtubeContextSkill = readFileSync(
+  new URL('../../.agents/skills/youtube-ctx/SKILL.md', import.meta.url),
   'utf8',
 );
-const directSelector = readFileSync(
-  new URL('../../.agents/skills/youtube-direct/agents/openai.yaml', import.meta.url),
+const youtubeDirectReference = readFileSync(
+  new URL('../../.agents/skills/youtube-ctx/references/direct.md', import.meta.url),
   'utf8',
 );
-describe('hosted video2ctx skills', () => {
-  test.each([
-    ['video2ctx-api', apiSkill],
-    ['video2ctx-monitoring', monitoringSkill],
-  ])('%s stays on the authenticated production surface', (_name, skill) => {
-    expect(skill).toContain('https://api.video2ctx.dev');
-    expect(skill).toContain('video2ctx --version');
-    expect(skill).toContain('npm install --global @video2ctx/cli');
-    expect(skill).toContain('auth login');
-    expect(skill).toContain('whoami --json');
-    expect(skill).not.toContain('auth status --json');
-    expect(skill).toContain('video2ctx api');
-    expect(skill).toContain('VIDEO2CTX_API_KEY');
-    expect(skill).toContain('https://api.video2ctx.dev/openapi.json');
-    expect(skill).not.toMatch(/all-things-youtube|youtubei\.googleapis\.com|www\.youtube\.com/);
-    expect(skill).not.toContain('scripts/video2ctx.mjs');
-    expect(skill).not.toMatch(/npx |<skill-directory>/);
-    expect(skill).not.toMatch(/fetch\(|curl |Authorization: Bearer \$VIDEO2CTX_API_KEY/);
+const youtubeVisualReference = readFileSync(
+  new URL('../../.agents/skills/youtube-ctx/references/visual.md', import.meta.url),
+  'utf8',
+);
+const platformSelector = readFileSync(
+  new URL('../../.agents/skills/video2ctx-platform/agents/openai.yaml', import.meta.url),
+  'utf8',
+);
+const youtubeContextSelector = readFileSync(
+  new URL('../../.agents/skills/youtube-ctx/agents/openai.yaml', import.meta.url),
+  'utf8',
+);
+describe('hosted video2ctx platform skill', () => {
+  test('stays on the authenticated production surface', () => {
+    const publishedContract = [platformSkill, hostedDataReference, monitoringReference].join('\n');
+    expect(platformSkill).toContain('https://api.video2ctx.dev');
+    expect(platformSkill).toContain('video2ctx --version');
+    expect(platformSkill).toContain('npm install --global @video2ctx/cli');
+    expect(platformSkill).toContain('auth login');
+    expect(platformSkill).toContain('whoami --json');
+    expect(platformSkill).not.toContain('auth status --json');
+    expect(platformSkill).toContain('video2ctx api');
+    expect(platformSkill).toContain('VIDEO2CTX_API_KEY');
+    expect(platformSkill).toContain('https://api.video2ctx.dev/openapi.json');
+    expect(publishedContract).not.toMatch(/all-things-youtube|youtubei\.googleapis\.com|www\.youtube\.com/);
+    expect(publishedContract).not.toContain('scripts/video2ctx.mjs');
+    expect(publishedContract).not.toMatch(/npx |<skill-directory>/);
+    expect(publishedContract).not.toMatch(/fetch\(|curl |Authorization: Bearer \$VIDEO2CTX_API_KEY/);
   });
 
-  test('selector metadata distinguishes direct, hosted, and monitoring use', () => {
-    expect(directSkill).toMatch(/^---\nname: youtube-direct\n/);
-    expect(directSkill).toContain('Direct, no-account YouTube search and extraction');
-    expect(directSkill).toContain('first route for one-off public YouTube requests');
-    expect(directSkill).toContain('continue with `video2ctx-api` without asking the user');
-    expect(directSelector).toContain('summarize a public YouTube video');
+  test('routers distinguish local context from hosted platform branches', () => {
+    expect(youtubeContextSkill).toMatch(/^---\nname: youtube-ctx\n/);
+    expect(youtubeContextSkill).toContain('Personal, local-machine YouTube context for one-off, low-to-moderate usage');
+    expect(youtubeContextSkill).toContain('[references/direct.md](references/direct.md)');
+    expect(youtubeContextSkill).toContain('[references/visual.md](references/visual.md)');
+    expect(youtubeContextSkill).toContain('continue with `video2ctx-platform` without asking the user');
+    expect(youtubeDirectReference).toContain('stateless YouTube search and extraction');
+    expect(youtubeVisualReference).toContain('does not require FFmpeg');
+    expect(youtubeVisualReference).toContain('Verify with exact frames when needed');
+    expect(youtubeContextSelector).toContain('$youtube-ctx');
 
-    expect(apiSkill).toContain('Managed, authenticated YouTube search and extraction');
-    expect(apiSkill).toContain('automatically when a youtube-direct operation fails');
-    expect(apiSkill).toContain('Route account and usage requests here immediately');
-    expect(apiSkill).not.toContain('approved fallback');
-    expect(apiSelector).toContain('managed hosted API');
-    expect(apiSelector).not.toContain('retrieve a YouTube transcript');
-
-    expect(monitoringSkill).toContain('Stateful video2ctx monitoring');
-    expect(monitoringSkill).toContain('use video2ctx-api for account and usage details');
+    expect(platformSkill).toMatch(/^---\nname: video2ctx-platform\n/);
+    expect(platformSkill).toContain('Managed, hosted YouTube context for production and cloud-backed applications');
+    expect(platformSkill).toContain('[references/hosted-data.md](references/hosted-data.md)');
+    expect(platformSkill).toContain('[references/monitoring.md](references/monitoring.md)');
+    expect(hostedDataReference).toContain('automatic fallback after a `youtube-ctx` direct operation fails');
+    expect(monitoringReference).toContain('recurring checks, monitor state, notifications, and delivery preferences');
+    expect(platformSelector).toContain('$video2ctx-platform');
   });
 
   test('keeps installation explicit and reuses one public credential transport', () => {
-    expect(apiSkill).toContain('public `@video2ctx/cli` npm package');
-    expect(monitoringSkill).toContain('public `@video2ctx/cli` npm package');
-    expect(apiSkill).toContain('ask the user to approve its installation');
-    expect(monitoringSkill).toContain('ask the user to approve its installation');
+    expect(platformSkill).toContain('public `@video2ctx/cli` npm package');
+    expect(platformSkill).toContain('ask the user to approve its installation');
+  });
+
+  test('preserves stateful monitoring invariants behind the monitoring branch', () => {
+    expect(monitoringReference).toContain('first check as a baseline');
+    expect(monitoringReference).toContain('raises no alert');
+    expect(monitoringReference).toContain('resolve exact account-owned IDs');
+    expect(monitoringReference).toContain('only after handling the work it triggered');
+    expect(monitoringReference).toContain('Use `1440` when the user gives no cadence');
   });
 
   test('every explicitly documented hosted route exists in OpenAPI', () => {

@@ -8,9 +8,9 @@ import { extractFrames, getWatchIndex } from './workflow';
 
 const describeLive = process.env.YOUTUBE_LIVE === '1' ? describe : describe.skip;
 
-describeLive('youtube-watch private live workflow', () => {
+describeLive('youtube-ctx private visual workflow', () => {
   test('loads a storyboard/transcript index and exact best-effort frames', async () => {
-    const outputDir = await mkdtemp(join(tmpdir(), 'youtube-watch-live-'));
+    const outputDir = await mkdtemp(join(tmpdir(), 'youtube-ctx-live-'));
     try {
       const index = await getWatchIndex({
         videoId: '4vItmdk8F_M', outputDir, maxStoryboardSheets: 1,

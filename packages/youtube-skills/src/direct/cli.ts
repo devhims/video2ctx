@@ -13,7 +13,7 @@ import {
   search,
 } from 'all-things-youtube';
 
-const HELP = `youtube-direct
+const HELP = `youtube-ctx direct
 
 Call YouTube's internal HTTP endpoints from this machine and print JSON.
 

@@ -69,7 +69,7 @@ const storyboard = {
   meta: { source: 'allthingsyoutube', fetchedAt: 'now', partial: false, warnings: [] },
 };
 
-describe('youtube-watch workflow', () => {
+describe('youtube-ctx visual workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDetails.mockResolvedValue(video);

@@ -13,9 +13,9 @@ import type {
 } from './types';
 import { createRequestFetch, type FetchResource } from '../direct/cli';
 
-const HELP = `youtube-watch
+const HELP = `youtube-ctx visual
 
-Inspect a YouTube storyboard and transcript, then extract exact timestamped frames.
+Inspect a YouTube storyboard and transcript, then optionally extract exact timestamped frames.
 
 Usage:
   watch.mjs index --video-id <id> [options]
@@ -38,16 +38,16 @@ Frame options:
   --ffmpeg-path <path>           FFmpeg executable; defaults to FFMPEG_PATH or ffmpeg
 `;
 
-const MARKER_FILE = '.youtube-watch-workspace.json';
+const MARKER_FILE = '.youtube-ctx-workspace.json';
 const INDEX_FILE = 'index.json';
-const WORKSPACE_PREFIX = 'youtube-watch-';
+const WORKSPACE_PREFIX = 'youtube-ctx-';
 
 type Operation = 'index' | 'frames' | 'cleanup';
 type FlagValue = string | boolean;
 type Flags = Record<string, FlagValue>;
 
 interface WorkspaceMarker {
-  schema: 'youtube-watch-workspace';
+  schema: 'youtube-ctx-workspace';
   version: 1;
   videoId: string;
   createdAt: string;
@@ -150,7 +150,7 @@ async function validateWorkspace(value: string): Promise<{ path: string; marker:
   if (!pathFromTemporaryRoot || pathFromTemporaryRoot.startsWith(`..${sep}`)
     || pathFromTemporaryRoot === '..' || isAbsolute(pathFromTemporaryRoot)
     || !basename(workspace).startsWith(WORKSPACE_PREFIX)) {
-    throw new WatchCliInputError('The workspace is not a youtube-watch temporary directory.');
+    throw new WatchCliInputError('The workspace is not a youtube-ctx visual temporary directory.');
   }
   let marker: unknown;
   try {
@@ -162,7 +162,7 @@ async function validateWorkspace(value: string): Promise<{ path: string; marker:
     throw new WatchCliInputError('The workspace marker is invalid.');
   }
   const record = marker as Record<string, unknown>;
-  if (record.schema !== 'youtube-watch-workspace' || record.version !== 1
+  if (record.schema !== 'youtube-ctx-workspace' || record.version !== 1
     || typeof record.videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(record.videoId)) {
     throw new WatchCliInputError('The workspace marker is invalid.');
   }
@@ -183,7 +183,7 @@ function errorPayload(error: unknown): { error: Record<string, unknown> } {
   }
   return { error: {
     code: 'INTERNAL_ERROR',
-    message: error instanceof Error ? error.message : 'Unexpected youtube-watch failure.',
+    message: error instanceof Error ? error.message : 'Unexpected youtube-ctx visual failure.',
     retryable: false,
   } };
 }
@@ -220,7 +220,7 @@ export async function runWatchCli(
       const workspace = await (dependencies.createWorkspace ?? createWorkspace)();
       uncommittedWorkspace = workspace;
       const marker: WorkspaceMarker = {
-        schema: 'youtube-watch-workspace', version: 1, videoId, createdAt: new Date().toISOString(),
+        schema: 'youtube-ctx-workspace', version: 1, videoId, createdAt: new Date().toISOString(),
       };
       await writeFile(join(workspace, MARKER_FILE), JSON.stringify(marker));
       const result = await (dependencies.getWatchIndex ?? getWatchIndex)({

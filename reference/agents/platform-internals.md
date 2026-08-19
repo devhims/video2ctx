@@ -11,7 +11,7 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 - `platform/` owns authentication, authorization, credit metering, cache policy, and the public HTTP contract.
 - `platform/youtube-processor/` owns every outbound YouTube call. Reach YouTube through the processor rather than calling it from the Worker.
 - `packages/all-things-youtube/` is the extraction library. The processor image installs the pinned, published version — local library source is not copied into the production image, so publish and pin a library release before deploying platform behavior that depends on library changes.
-- `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both hosted skills, and verify the npm tarball before releasing it.
+- `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both `video2ctx-platform` branches, and verify the npm tarball before releasing it.
 
 ## Configuration
 
@@ -21,7 +21,7 @@ Use the fully local path by default. Preview and production migrations and Cloud
 
 ## Monitors
 
-`platform/src/lib/monitor-check.ts` holds the check and alert path; `platform/src/lib/monitor-scheduler.ts` holds the per-monitor Durable Object schedule. Read both before changing monitor behavior, and preserve the invariants documented in the `video2ctx-monitoring` skill — baseline without alerting, queue delivery before advancing the cursor, idempotent delivery, and rescheduling from the previous due time.
+`platform/src/lib/monitor-check.ts` holds the check and alert path; `platform/src/lib/monitor-scheduler.ts` holds the per-monitor Durable Object schedule. Read both before changing monitor behavior. Preserve the public baseline behavior documented in the `video2ctx-platform` monitoring branch, plus the internal invariants: queue delivery before advancing the cursor, idempotent delivery, and rescheduling from the previous due time.
 
 ## After changes
 

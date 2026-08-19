@@ -31,18 +31,18 @@ function fetchDependency(): Pick<WatchCliDependencies, 'createFetch'> & { close:
 }
 
 async function markedWorkspace(videoId = 'abcdefghijk'): Promise<string> {
-  const workspace = await mkdtemp(join(tmpdir(), 'youtube-watch-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
   directories.push(workspace);
-  await writeFile(join(workspace, '.youtube-watch-workspace.json'), JSON.stringify({
-    schema: 'youtube-watch-workspace', version: 1, videoId, createdAt: new Date().toISOString(),
+  await writeFile(join(workspace, '.youtube-ctx-workspace.json'), JSON.stringify({
+    schema: 'youtube-ctx-workspace', version: 1, videoId, createdAt: new Date().toISOString(),
   }));
   return workspace;
 }
 
-describe('youtube-watch CLI', () => {
+describe('youtube-ctx visual CLI', () => {
   test('creates a marked index workspace and persists only normalized index data', async () => {
     const io = capture();
-    const workspace = await mkdtemp(join(tmpdir(), 'youtube-watch-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
     directories.push(workspace);
     const getWatchIndex = vi.fn(async () => ({
       videoId: 'abcdefghijk',
@@ -67,8 +67,8 @@ describe('youtube-watch CLI', () => {
     }));
     const result = JSON.parse(io.output[0]!);
     expect(result.workspace).toBe(workspace);
-    const marker = JSON.parse(await readFile(join(workspace, '.youtube-watch-workspace.json'), 'utf8'));
-    expect(marker).toMatchObject({ schema: 'youtube-watch-workspace', version: 1, videoId: 'abcdefghijk' });
+    const marker = JSON.parse(await readFile(join(workspace, '.youtube-ctx-workspace.json'), 'utf8'));
+    expect(marker).toMatchObject({ schema: 'youtube-ctx-workspace', version: 1, videoId: 'abcdefghijk' });
     const persisted = await readFile(join(workspace, 'index.json'), 'utf8');
     expect(persisted).not.toContain('googlevideo');
     expect(fetchResource.close).toHaveBeenCalledOnce();
@@ -140,5 +140,15 @@ describe('youtube-watch CLI', () => {
 
     expect(code).toBe(2);
     expect(extractFrames).not.toHaveBeenCalled();
+  });
+
+  test('prints youtube-ctx visual help without constructing a client', async () => {
+    const io = capture();
+    const createFetch = vi.fn();
+
+    expect(await runWatchCli(['--help'], io, {}, { createFetch })).toBe(0);
+    expect(io.output.join('')).toContain('youtube-ctx visual');
+    expect(io.output.join('')).toContain('watch.mjs index');
+    expect(createFetch).not.toHaveBeenCalled();
   });
 });

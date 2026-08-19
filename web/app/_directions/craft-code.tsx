@@ -12,12 +12,12 @@ type Sample = 'skills' | 'cli-skill' | 'curl' | 'node';
 const SAMPLES: Record<Sample, { label: string; code: string; note: string }> = {
   skills: {
     label: 'Agent Skills',
-    note: 'Choose any or all three skills. YouTube Direct works immediately without an account or hosted service.',
+    note: 'Choose either or both skills. youtube-ctx works immediately without an account or hosted service.',
     code: 'npx skills add devhims/video2ctx',
   },
   'cli-skill': {
     label: 'CLI + Skill',
-    note: 'The CLI handles authenticated hosted commands. The companion skills teach agents when and how to use them.',
+    note: 'The CLI handles authenticated hosted commands. The companion platform skill teaches agents when and how to use them.',
     code: `npm install --global @video2ctx/cli
 video2ctx auth login
 npx skills add devhims/video2ctx`,

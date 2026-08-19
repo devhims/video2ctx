@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function executable(name = 'ffmpeg'): Promise<{ directory: string; path: string }> {
-  const directory = await mkdtemp(join(tmpdir(), 'youtube-watch-ffmpeg-'));
+  const directory = await mkdtemp(join(tmpdir(), 'youtube-ctx-ffmpeg-'));
   directories.push(directory);
   const path = join(directory, name);
   await writeFile(path, '#!/bin/sh\nexit 0\n');
@@ -27,7 +27,7 @@ async function executable(name = 'ffmpeg'): Promise<{ directory: string; path: s
   return { directory, path };
 }
 
-describe('youtube-watch private FFmpeg executable resolution', () => {
+describe('youtube-ctx private FFmpeg executable resolution', () => {
   test('resolves a bare executable name from PATH without launching it', async () => {
     const fake = await executable();
 
@@ -44,7 +44,7 @@ describe('youtube-watch private FFmpeg executable resolution', () => {
   });
 
   test('classifies an executable absent from PATH as a missing dependency', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'youtube-watch-empty-path-'));
+    const directory = await mkdtemp(join(tmpdir(), 'youtube-ctx-empty-path-'));
     directories.push(directory);
 
     await expect(resolveFfmpegExecutable('ffmpeg', { PATH: directory })).rejects.toMatchObject({
