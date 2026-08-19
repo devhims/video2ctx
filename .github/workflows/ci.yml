@@ -40,7 +40,7 @@ jobs:
       - run: npm pack --dry-run
 
   platform:
-    name: Platform
+    name: Platform + Auth E2E
     runs-on: ubuntu-latest
     defaults:
       run:
