@@ -27,7 +27,7 @@ const PARTS = [
 ];
 
 /* Each route has a distinct boundary. Skills hold agent guidance, the CLI and
- * hosted skills form one complementary setup, and the npm package is the
+ * hosted platform skill form one complementary setup, and the npm package is the
  * direct TypeScript library. */
 const WAYS = [
   {

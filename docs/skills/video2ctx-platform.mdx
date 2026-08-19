@@ -1,0 +1,64 @@
+---
+title: "Use the hosted platform"
+description: "Use video2ctx-platform for managed YouTube data, account access, and recurring workflows in production or cloud-backed applications."
+---
+
+`video2ctx-platform` is the authenticated skill for production and cloud-backed work through the hosted video2ctx service and its public `video2ctx` CLI. It provides managed YouTube search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, caching, credit accounting, account access, recurring monitoring, and notification delivery while keeping credentials out of the prompt.
+
+## Reach for it when
+
+- You are building a production application or explicitly want managed infrastructure
+- You need hosted search, transcripts, video or channel metadata, caption tracks, comments, end screens, playlists, account identity, usage, or credit balance
+- A [`youtube-ctx`](/skills/youtube-ctx) direct operation fails
+- You want to create, change, pause, or remove a recurring channel, topic, or search monitor
+- You need monitor notifications or in-app and email delivery preferences
+
+## Authentication
+
+Install the CLI and authorize the machine once:
+
+```bash
+npm i -g @video2ctx/cli
+video2ctx auth login
+video2ctx whoami --json
+```
+
+The browser flow stores a revocable session in private local configuration. For non-interactive environments, configure `VIDEO2CTX_API_KEY` without placing the key in a conversation, log, screenshot, or source file.
+
+<Card title="Authentication details" icon="key" href="/api/authentication">
+  Learn how CLI sessions, personal API keys, permissions, and revocation work.
+</Card>
+
+## Hosted data branch
+
+The data branch supports stateless YouTube search, browse, transcripts, caption tracks, comments, video details, end screens, channels, playlists, account identity, and usage. It requests the smallest response, keeps continuations tied to their queries, and preserves partial flags, warnings, credit metadata, request IDs, and classified errors.
+
+## Monitoring branch
+
+The monitoring branch creates and manages recurring checks, consumes notifications, and updates delivery preferences. It preserves the stateful contract:
+
+<Steps>
+  <Step title="Create the exact monitor">Resolves a functional target, applies the requested cadence, and keeps notification context in the label.</Step>
+  <Step title="Establish a baseline">The first check records the current leading video without raising an alert.</Step>
+  <Step title="Detect a change">A later leading-video change creates a notification according to the account's delivery preferences.</Step>
+  <Step title="Handle safely">Mutations target an exact account-owned monitor, and notifications are marked read only after their work is handled.</Step>
+</Steps>
+
+<Note>
+  Monitor creation confirms scheduling, not an immediate notification. The first baseline check normally runs about a minute later.
+</Note>
+
+## Scope
+
+Projects, trends, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration remain outside the skill.
+
+Storyboard inspection and exact-frame verification remain local `youtube-ctx` capabilities; the hosted platform skill currently returns structured YouTube data rather than managed visual artifacts.
+
+<CardGroup cols={2}>
+  <Card title="Response conventions" icon="code" href="/api/conventions">Understand pagination, warnings, credits, retries, and errors.</Card>
+  <Card title="Monitoring API" icon="radar" href="/api/monitoring">Review monitor resources, schedules, and notification behavior.</Card>
+</CardGroup>
+
+<Card title="Install video2ctx-platform" icon="download" href="/skills/installation">
+  Install one hosted skill for managed YouTube data, account access, and recurring production or cloud-backed workflows.
+</Card>

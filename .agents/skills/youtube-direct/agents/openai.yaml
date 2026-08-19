@@ -1,4 +1,0 @@
-interface:
-  display_name: "YouTube Direct — No Account"
-  short_description: "Search and extract directly from YouTube"
-  default_prompt: "Use $youtube-direct to fetch and summarize a public YouTube video directly from this machine without an account or hosted API."

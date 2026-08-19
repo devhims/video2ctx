@@ -14,12 +14,10 @@ This repository uses a single product context, with platform and web as implemen
 
 ### video2ctx integrations
 
-Four published skills live under `.agents/skills/`. They describe consuming video2ctx and carry no repository paths, so they apply here and after `npx skills add` equally.
+Two published skills live under `.agents/skills/`. They describe consuming video2ctx and carry no repository paths, so they apply here and after `npx skills add` equally.
 
-- `youtube-direct` — self-contained stateless search and extraction directly from the user's machine
-- `youtube-watch` — two-pass visual inspection through storyboards, transcripts, and exact FFmpeg frames
-- `video2ctx-api` — stateless hosted provider reads, account and usage details, and fallback when direct access fails
-- `video2ctx-monitoring` — the stateful exception for monitors, notifications, and scheduling invariants
+- `youtube-ctx` — self-contained stateless search, extraction, and progressive visual inspection directly from the user's machine; FFmpeg is optional for exact frames
+- `video2ctx-platform` — authenticated hosted provider reads, account and usage details, direct-access fallback, monitors, notifications, and scheduling invariants
 
 ### Platform internals
 

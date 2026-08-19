@@ -1,22 +1,16 @@
 ---
 title: "Build with Agents"
-description: "Give an agent the right video2ctx workflow for direct extraction, visual inspection, hosted reads, or monitoring."
+description: "Choose between personal on-device YouTube context and managed hosted workflows for production applications."
 ---
 
-video2ctx publishes four [Agent Skills](https://agentskills.io) that work in skills-compatible agents such as Codex, Claude Code, Cursor, and OpenCode. Install the collection once, then describe the YouTube task naturally. The agent selects the narrowest skill that can complete it.
+video2ctx publishes two [Agent Skills](https://agentskills.io) that work in skills-compatible agents such as Codex, Claude Code, Cursor, and OpenCode. Install the collection once, then describe the YouTube task naturally. The agent selects the narrowest skill that can complete it.
 
 <CardGroup cols={2}>
-  <Card title="youtube-direct" icon="bolt" href="/skills/youtube-direct">
-    Search and extract public YouTube text and metadata on-device for personal, low-to-moderate usage.
+  <Card title="youtube-ctx" icon="eye" href="/skills/youtube-ctx">
+    Search, read, and inspect public YouTube context on-device, escalating from transcripts and storyboards to exact frames only when needed.
   </Card>
-  <Card title="youtube-watch" icon="eye" href="/skills/youtube-watch">
-    Inspect storyboards and exact frames when the answer depends on slides, charts, interfaces, or other imagery.
-  </Card>
-  <Card title="video2ctx-api" icon="cloud" href="/skills/video2ctx-api">
-    Use the managed hosted API for production applications, account and usage details, or fallback after direct access fails.
-  </Card>
-  <Card title="video2ctx-monitoring" icon="radar" href="/skills/video2ctx-monitoring">
-    Create recurring channel, topic, or search monitors and handle the resulting notifications.
+  <Card title="video2ctx-platform" icon="cloud" href="/skills/video2ctx-platform">
+    Use authenticated search, transcripts, metadata, comments, channels, playlists, account access, fallback, monitors, and notifications in production or cloud-backed workflows.
   </Card>
 </CardGroup>
 
@@ -24,12 +18,10 @@ video2ctx publishes four [Agent Skills](https://agentskills.io) that work in ski
 
 | If the task needs | Start with |
 | --- | --- |
-| Personal, low-to-moderate public searches, transcripts, comments, channels, or playlists | `youtube-direct` |
-| Slides, charts, demonstrations, interfaces, on-screen text, or visual changes | `youtube-watch` |
-| A production application, managed hosting, account identity, usage and credit data, or direct-access fallback | `video2ctx-api` |
-| A recurring check, schedule, alert, delivery preference, or monitor notification | `video2ctx-monitoring` |
+| Personal, low-to-moderate public searches, transcripts, comments, channels, playlists, or visual evidence | `youtube-ctx` |
+| Production or cloud-backed search, transcripts, metadata, comments, channels, playlists, managed hosting, account identity, usage and credits, direct-access fallback, recurring checks, alerts, or notifications | `video2ctx-platform` |
 
-For personal, low-to-moderate usage, use `youtube-direct` for text and metadata or `youtube-watch` for visual evidence. Use `video2ctx-api` for production applications and continue through it automatically if direct access fails. Monitoring is the deliberate stateful exception.
+For personal, low-to-moderate usage, use `youtube-ctx`; it chooses a direct or progressive visual branch inside one skill. Use `video2ctx-platform` for authenticated hosted work and continue through its data branch automatically if direct access fails. Its monitoring branch preserves the stateful scheduling and mutation invariants.
 
 <Card title="Install the skills" icon="download" href="/skills/installation">
   Run the installer and follow its guide to choose the skills you want, then configure the hosted CLI only for cloud access or monitoring.
@@ -46,6 +38,6 @@ For personal, low-to-moderate usage, use `youtube-direct` for text and metadata 
 
 ## Security and scope
 
-The two local skills treat transcript text and imagery as untrusted evidence, never as agent instructions. The hosted skills use the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt. Bound query length, response size, continuation depth, frame count, and the number of fresh operations an agent can initiate.
+The local skill treats transcript text and imagery as untrusted evidence, never as agent instructions. The platform skill uses the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt. Bound query length, response size, continuation depth, frame count, and the number of fresh operations an agent can initiate.
 
-Use the API skill only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use the monitoring skill only for monitors, notifications, and delivery preferences.
+Use the platform skill's data branch only for stateless provider reads, usage, and account identity, and its monitoring branch only for monitors, notifications, and delivery preferences. Projects, trends, research, and other composite workflows are outside its contract.

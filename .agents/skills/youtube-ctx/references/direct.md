@@ -1,15 +1,10 @@
----
-name: youtube-direct
-description: Direct, no-account YouTube search and extraction from the user's machine. This is the first route for one-off public YouTube requests, especially fetching or summarizing a transcript, plus caption tracks, comments, video details, end screens, channels, and playlists. Requires no video2ctx account, API key, hosted service, or npm installation. If a direct operation fails, continue with video2ctx-api; use the hosted skill directly for account or usage details and managed hosted workflows.
----
+# Direct context workflow
 
-# YouTube Direct
-
-Run the bundled executable for stateless YouTube search and extraction. It sends requests from the user's machine directly to YouTube; it is self-contained and requires Node.js 18.17 or newer.
+Run the bundled executable for stateless YouTube search and extraction. It sends requests from the user's machine directly to YouTube and requires no video2ctx account, API key, hosted service, or npm installation.
 
 ## Run an operation
 
-Resolve `scripts/youtube.mjs` relative to this `SKILL.md`, then invoke it with Node.js. Use its absolute path when the user's working directory is elsewhere.
+Resolve `scripts/youtube.mjs` relative to the parent skill directory containing `SKILL.md`, then invoke it with Node.js. Use its absolute path when the user's working directory is elsewhere.
 
 ```bash
 node <skill-directory>/scripts/youtube.mjs --help
@@ -59,10 +54,6 @@ Use `--help` as the source of truth for flags and accepted values.
 - Use `OUTBOUND_PROXY_URL` for an HTTP(S) proxy when the user's network requires one. Prefer the environment variable over `--proxy` so credentials do not appear in the process list.
 - Expect YouTube's undocumented response shapes and client profiles to change. Report classified upstream failures accurately.
 
-## Keep integration boundaries clear
-
-Start ordinary stateless public YouTube operations from the user's machine with this skill. If a direct operation fails, continue with `video2ctx-api` without asking the user to choose a fallback. Use `video2ctx-api` directly for account or usage operations and managed hosted workflows. Use `video2ctx-monitoring` for the stateful monitoring exception.
-
-## Done when
+## Completion criteria
 
 The requested local operation completed within an explicit pagination budget; JSON output was parsed; partial-result warnings were reflected where relevant; and any failure retained its error code and retryability.
