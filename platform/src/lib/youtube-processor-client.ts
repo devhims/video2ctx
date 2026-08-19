@@ -148,6 +148,22 @@ function failureFrom(payload: unknown): ProcessorFailure['error'] | undefined {
   return payload.error;
 }
 
+function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boolean {
+  if (operation.kind !== 'caption-tracks' || !isRecord(result)) return false;
+  const metadata = result.meta;
+  return Array.isArray(result.tracks)
+    && result.tracks.length === 0
+    && isRecord(metadata)
+    && metadata.partial === true;
+}
+
+function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
+  // A transcript NOT_FOUND can mean that one YouTube response omitted its
+  // caption catalog. Try an independent processor slot before treating it as
+  // a genuine captionless video.
+  return operation.kind === 'transcript' && error.code === 'NOT_FOUND';
+}
+
 async function resultFrom<T>(response: Response): Promise<T> {
   let payload: unknown;
   try {
@@ -194,6 +210,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   for (let index = 0; index < slots.length; index += 1) {
     const slot = slots[index]!;
     const startedAt = Date.now();
+    const hasFallback = index < slots.length - 1;
     try {
       const response = await processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
         method: 'POST',
@@ -202,7 +219,6 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
         signal: AbortSignal.timeout(processorTimeoutMs(env)),
       }));
 
-      const hasFallback = index < slots.length - 1;
       if (hasFallback && RETRYABLE_CONTAINER_STATUSES.has(response.status)) {
         logProcessorAttempt(operation.kind, slot, index, response.status, 'fallback', startedAt);
         if (response.body) await response.body.cancel().catch(() => undefined);
@@ -211,10 +227,20 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       }
 
       const result = await resultFrom<YouTubeOperationResult<T>>(response);
+      if (hasFallback && shouldFallbackResult(operation, result)) {
+        logProcessorAttempt(operation.kind, slot, index, response.status, 'fallback', startedAt);
+        await waitBeforeFallback(env, index);
+        continue;
+      }
       logProcessorAttempt(operation.kind, slot, index, response.status, 'success', startedAt);
       return result;
     } catch (error) {
       if (error instanceof YouTubeProcessorError) {
+        if (hasFallback && shouldFallbackError(operation, error)) {
+          logProcessorAttempt(operation.kind, slot, index, error.status, 'fallback', startedAt);
+          await waitBeforeFallback(env, index);
+          continue;
+        }
         logProcessorAttempt(operation.kind, slot, index, error.status, 'processor-error', startedAt);
         throw error;
       }
