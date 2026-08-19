@@ -19,7 +19,13 @@ type ManagedApiKey = {
 
 export default function DeveloperSettingsClient() {
   const router = useRouter();
-  const { user, signOut } = useDashboardSession();
+  const { user, demoEnabled, signOut } = useDashboardSession();
+  const localPreview = !user && demoEnabled;
+  const displayUser = user ?? (demoEnabled ? {
+    id: 'local-preview',
+    name: 'Local preview',
+    email: 'local@video2ctx.dev',
+  } : null);
   const [keys, setKeys] = useState<ManagedApiKey[]>([]);
   const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [credits, setCredits] = useState<number>();
@@ -48,9 +54,12 @@ export default function DeveloperSettingsClient() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    void Promise.all([refresh(), refreshSidebar()]).catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
-  }, [refresh, refreshSidebar, user]);
+    if (user) {
+      void Promise.all([refresh(), refreshSidebar()]).catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
+      return;
+    }
+    if (demoEnabled) void refreshSidebar().catch(() => undefined);
+  }, [demoEnabled, refresh, refreshSidebar, user]);
 
   const navigateToDashboard = (section: DashboardSection) => {
     router.push(`/dashboard?section=${section}`);
@@ -58,6 +67,7 @@ export default function DeveloperSettingsClient() {
 
   const createKey = async (event: FormEvent) => {
     event.preventDefault();
+    if (localPreview) return;
     const keyName = name.trim();
     if (!keyName) return;
     setLoading(true); setError(''); setCreatedSecret('');
@@ -75,6 +85,7 @@ export default function DeveloperSettingsClient() {
   };
 
   const revoke = async (key: ManagedApiKey) => {
+    if (localPreview) return;
     if (!window.confirm(`Revoke “${key.name ?? key.start ?? 'API key'}”? Requests using it will stop immediately.`)) return;
     setLoading(true); setError('');
     try {
@@ -92,7 +103,7 @@ export default function DeveloperSettingsClient() {
     await navigator.clipboard.writeText(createdSecret);
   };
 
-  if (!user) {
+  if (!displayUser) {
     return <main className='developer-page developer-gate'>
       <Link href='/dashboard'>← Dashboard</Link>
       <p className='panel-label'>Developer access</p>
@@ -110,56 +121,69 @@ export default function DeveloperSettingsClient() {
       onNewProject={() => navigateToDashboard('projects')}
       onOpenProject={() => navigateToDashboard('projects')}
       onSignIn={() => router.push('/dashboard')}
-      accountName={user.name ?? user.email}
+      accountName={displayUser.name ?? displayUser.email}
       credits={credits}
       onSignOut={() => void signOut()}
     />
     <div className='workspace-main'>
       <header className='topbar'>
         <div><span className='topbar-context'>Research workspace</span><h1>API keys</h1></div>
-        <div className='topbar-actions'>{credits !== undefined && <span className='credit-balance'>{credits} credits</span>}<Link className='signin-button' href='/dashboard'><span>Dashboard</span><b aria-hidden='true'>←</b></Link></div>
+        <div className='topbar-actions'>{localPreview && <span className='developer-preview-badge'>Local preview</span>}{credits !== undefined && <span className='credit-balance'>{credits} credits</span>}</div>
       </header>
 
-      <section className='developer-page developer-page-embedded'>
+      <section className='developer-page developer-page-embedded' aria-labelledby='developer-title'>
         <header className='developer-header'>
-          <div><p className='panel-label'>Developer access</p><h1>Personal API keys</h1><p>Use permanent keys for your own scripts and integrations. They act as you for product data and workspace operations, and metered requests spend credits from {user.email}.</p></div>
-          <a href='/api/platform/docs' target='_blank' rel='noreferrer'>Open API reference ↗</a>
+          <div>
+            <p className='panel-label'>Developer access</p>
+            <h1 id='developer-title'>Connect your own tools.</h1>
+            <p>Create permanent API keys for scripts and integrations. Requests use the plan and credit balance attached to {displayUser.email}.</p>
+          </div>
+          <a href='/api/platform/docs' target='_blank' rel='noreferrer'>API reference <span aria-hidden='true'>↗</span></a>
         </header>
 
-        <section className='developer-warning' role='note'>
-          <strong>Permanent until revoked</strong>
-          <p>Store keys in a secret manager, never in browser code or source control. The full value is shown only once. Keys cannot manage billing, connections, other keys, or your account.</p>
+        <section className='developer-workbench' aria-labelledby='create-key-title'>
+          <div className='developer-create'>
+            <p className='developer-section-label'>Create a key</p>
+            <h2 id='create-key-title'>Name this integration</h2>
+            <p>A descriptive name makes it easier to identify and revoke the right credential later.</p>
+            <form onSubmit={createKey} className='developer-key-form' aria-describedby={localPreview ? 'developer-preview-note' : undefined}>
+              <label htmlFor='api-key-name'>Key name</label>
+              <div><input id='api-key-name' maxLength={32} required value={name} onChange={(event) => setName(event.target.value)} placeholder='Production integration' /><button disabled={localPreview || loading || !name.trim()} title={localPreview ? 'Sign in to create a real API key' : undefined}>{loading ? 'Creating…' : 'Create key'}</button></div>
+            </form>
+            {localPreview && <p className='developer-preview-note' id='developer-preview-note'>Preview mode shows the complete layout without creating credentials. Sign in to manage real keys.</p>}
+            {createdSecret && <div className='developer-secret' role='status'>
+              <strong>Copy this key now</strong>
+              <p>The full value will not be shown again.</p>
+              <code>{createdSecret}</code>
+              <button onClick={() => void copySecret()}>Copy key</button>
+            </div>}
+            {error && <p className='alert error' role='alert'>{error}</p>}
+          </div>
+
+          <aside className='developer-guide' aria-labelledby='use-key-title'>
+            <p className='developer-section-label'>Authentication</p>
+            <h2 id='use-key-title'>Use it as a Bearer token</h2>
+            <p>Send the key in the authorization header. <code>X-API-Key</code> remains supported for existing integrations.</p>
+            <code className='developer-code-sample'>Authorization: Bearer aty_…</code>
+            <div className='developer-warning' role='note'>
+              <strong>Permanent until revoked</strong>
+              <p>Store keys in a secret manager, never in browser code or source control. Keys cannot manage billing, connections, other keys, or your account.</p>
+            </div>
+          </aside>
         </section>
 
-        <section className='developer-card'>
-          <h2>Use a key</h2>
-          <p>Send it as a Bearer token. The older <code>X-API-Key</code> header remains supported for existing integrations.</p>
-          <code>Authorization: Bearer aty_…</code>
-        </section>
-
-        <section className='developer-card'>
-          <h2>Create a key</h2>
-          <form onSubmit={createKey} className='developer-key-form'>
-            <label htmlFor='api-key-name'>Key name</label>
-            <div><input id='api-key-name' maxLength={32} required value={name} onChange={(event) => setName(event.target.value)} placeholder='Production integration' /><button disabled={loading || !name.trim()}>Create key</button></div>
-          </form>
-          {createdSecret && <div className='developer-secret' role='status'>
-            <strong>Copy this key now</strong>
-            <code>{createdSecret}</code>
-            <button onClick={() => void copySecret()}>Copy key</button>
-          </div>}
-          {error && <p className='alert error' role='alert'>{error}</p>}
-        </section>
-
-        <section className='developer-card'>
-          <h2>Active keys</h2>
+        <section className='developer-keys' aria-labelledby='active-keys-title'>
+          <header>
+            <div><p className='panel-label'>Credentials</p><h2 id='active-keys-title'>Active keys</h2></div>
+            <span>{keys.length} {keys.length === 1 ? 'key' : 'keys'}</span>
+          </header>
           <div className='developer-key-list'>
             {keys.map((key) => <article key={key.id}>
               <div><strong>{key.name ?? 'Unnamed key'}</strong><code>{key.start ?? key.prefix ?? 'aty_…'}</code></div>
               <dl><div><dt>Created</dt><dd>{formatDate(key.createdAt)}</dd></div><div><dt>Last used</dt><dd>{key.lastRequest ? formatDate(key.lastRequest) : 'Never'}</dd></div><div><dt>Expiry</dt><dd>Never</dd></div></dl>
               <button disabled={loading} onClick={() => void revoke(key)}>Revoke</button>
             </article>)}
-            {!keys.length && <p className='developer-empty'>No API keys yet.</p>}
+            {!keys.length && <div className='developer-empty'><strong>{localPreview ? 'No keys shown in preview' : 'No API keys yet'}</strong><p>{localPreview ? 'A signed-in session will show its active credentials here.' : 'Create your first key above when you are ready to connect an integration.'}</p></div>}
           </div>
         </section>
       </section>

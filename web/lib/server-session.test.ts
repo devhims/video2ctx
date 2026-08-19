@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { fetchServerSession, isLocalDashboardRequest } from './server-session.ts';
+import { fetchServerSession, isLocalDashboardDemoEnabled } from './server-session.ts';
 
 describe('server dashboard session', () => {
   test('skips the platform request when there is no session cookie', async () => {
@@ -39,9 +39,11 @@ describe('server dashboard session', () => {
     assert.equal(session?.user.email, 'user@example.com');
   });
 
-  test('recognizes only the existing localhost demo hosts', () => {
-    assert.equal(isLocalDashboardRequest(new Headers({ host: 'localhost:3000' })), true);
-    assert.equal(isLocalDashboardRequest(new Headers({ host: '127.0.0.1:3000' })), true);
-    assert.equal(isLocalDashboardRequest(new Headers({ host: 'app.video2ctx.dev' })), false);
+  test('enables demo access only for localhost outside production', () => {
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3000' }), 'development'), true);
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: '127.0.0.1:3000' }), 'development'), true);
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'app.video2ctx.dev' }), 'development'), false);
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3000' }), 'production'), false);
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ 'x-forwarded-host': 'localhost:3000' }), 'production'), false);
   });
 });
