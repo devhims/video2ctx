@@ -189,8 +189,12 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
   }
   if (video.durationSeconds !== undefined) {
     const durationMs = video.durationSeconds * 1_000;
-    if (timestamps.some((timestamp) => timestamp >= durationMs)) {
-      throw new YouTubeClientError('INVALID_INPUT', 'Every timestamp must be within the video duration.');
+    const invalidTimestamp = timestamps.find((timestamp) => timestamp >= durationMs);
+    if (invalidTimestamp !== undefined) {
+      throw new YouTubeClientError(
+        'INVALID_INPUT',
+        `Timestamp ${invalidTimestamp}ms must be less than the video duration of ${durationMs}ms.`,
+      );
     }
   }
   const outputDir = resolve(options.outputDir);
