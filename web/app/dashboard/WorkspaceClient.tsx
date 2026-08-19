@@ -21,7 +21,7 @@ import { useDashboardSession } from './DashboardSessionProvider';
 
 type ProviderId = 'youtube';
 type Section = DashboardSection;
-type SourceState = 'idle' | 'live' | 'degraded';
+type PlatformHealthState = 'checking' | 'healthy' | 'unavailable';
 type EntityType = 'video' | 'channel' | 'playlist';
 type SourceDataOption = 'transcript' | 'comments' | 'channel';
 type Thumbnail = { url: string; width?: number; height?: number };
@@ -120,6 +120,8 @@ type AiTrendPlan = {
 type Usage = DashboardUsage;
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const PLATFORM_HEALTH_TIMEOUT_MS = 5_000;
+const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
   transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
@@ -200,7 +202,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [showSignIn, setShowSignIn] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
-  const [sourceState, setSourceState] = useState<SourceState>('idle');
+  const [platformHealth, setPlatformHealth] = useState<PlatformHealthState>('checking');
   const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
@@ -301,6 +303,37 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    let checking = false;
+    let controller: AbortController | undefined;
+    const checkPlatformHealth = async () => {
+      if (checking) return;
+      checking = true;
+      controller = new AbortController();
+      try {
+        const health = await api<{ status?: string }>('/health', { cache: 'no-store', signal: controller.signal }, PLATFORM_HEALTH_TIMEOUT_MS);
+        if (!cancelled) setPlatformHealth(health.status === 'ok' ? 'healthy' : 'unavailable');
+      } catch (cause) {
+        if (!cancelled && !isAbortError(cause)) setPlatformHealth('unavailable');
+      } finally {
+        checking = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void checkPlatformHealth();
+    };
+    void checkPlatformHealth();
+    const interval = window.setInterval(() => void checkPlatformHealth(), PLATFORM_HEALTH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     const legacy = monitors.filter((monitor) =>
       isYouTubeChannelId(monitor.target) &&
       !monitorQueryMetadata(monitor).label &&
@@ -350,9 +383,8 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       const params = new URLSearchParams({ q: resolved.query ?? query, type: 'video' });
       const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
       setItems(data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' })));
-      setSourceState('live');
     } catch (cause) {
-      if (!isAbortError(cause)) { setError(cause instanceof Error ? cause.message : 'Search failed.'); setSourceState('degraded'); }
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Search failed.');
     } finally { finishOperation(controller); }
   };
 
@@ -386,8 +418,8 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
           }
         }));
       }
-      setInspector(next); setSourceState('live');
-    } catch (cause) { if (!isAbortError(cause)) { setError(cause instanceof Error ? cause.message : 'Could not open this source.'); setSourceState('degraded'); } }
+      setInspector(next);
+    } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
     finally { finishOperation(controller); }
   };
 
@@ -530,7 +562,8 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
         <header className='topbar'>
           <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}</h1></div>
           <div className='topbar-actions'>
-            <span className={`sync-state ${sourceState}`} role='status' aria-live='polite'><i />{sourceState === 'live' ? 'Sources live' : sourceState === 'idle' ? 'Ready to search' : 'Sources limited'}</span>
+            <span className={`sync-state ${platformHealth}`} role='status' aria-live='polite'><i />{platformHealth === 'healthy' ? 'Platform online' : platformHealth === 'checking' ? 'Checking platform' : 'Platform unavailable'}</span>
+            {usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}
             <NotificationMenu
               notifications={notifications}
               enabled={notificationPreferences.inApp}
@@ -538,8 +571,6 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
               onMarkAll={() => void markAllNotificationsRead()}
               onSettings={() => navigateTo('settings')}
             />
-            {usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}
-            <Link className='signin-button' href='/dashboard/developer'>API keys</Link>
           </div>
         </header>
 
