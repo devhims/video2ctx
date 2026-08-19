@@ -1,10 +1,10 @@
 import { headers } from 'next/headers';
 import { DashboardSessionProvider } from './DashboardSessionProvider';
-import { fetchServerSession, isLocalDashboardRequest } from '../../lib/server-session';
+import { fetchServerSession, isLocalDashboardDemoEnabled } from '../../lib/server-session';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const requestHeaders = await headers();
-  const demoEnabled = isLocalDashboardRequest(requestHeaders);
+  const demoEnabled = isLocalDashboardDemoEnabled(requestHeaders);
   let session = null;
 
   try {
