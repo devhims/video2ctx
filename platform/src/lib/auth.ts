@@ -1,10 +1,18 @@
 import { APIError, betterAuth } from 'better-auth';
 import type { BetterAuthOptions } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
+import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
 import { bearer, deviceAuthorization, magicLink } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
+import {
+  applyPaidOrder,
+  applyRefundedOrder,
+  polarClient,
+  syncCustomerState,
+  syncRevokedSubscription,
+} from './billing';
 
 export const DEVICE_AUTH_CLIENT_ID = 'video2ctx-cli';
 export const DEVICE_AUTH_SCOPE = 'data:read account:access';
@@ -85,6 +93,26 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
           };
           await env.EMAIL_TASKS.send(message, { contentType: 'json' });
         },
+      }),
+      polar({
+        client: polarClient(env),
+        createCustomerOnSignUp: false,
+        use: [
+          checkout({
+            products: [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }],
+            successUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=success`,
+            returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=cancelled`,
+            authenticatedUsersOnly: true,
+          }),
+          portal({ returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings` }),
+          webhooks({
+            secret: env.POLAR_WEBHOOK_SECRET,
+            onOrderPaid: (payload) => applyPaidOrder(env, payload),
+            onOrderRefunded: (payload) => applyRefundedOrder(env, payload),
+            onCustomerStateChanged: (payload) => syncCustomerState(env, payload),
+            onSubscriptionRevoked: (payload) => syncRevokedSubscription(env, payload),
+          }),
+        ],
       }),
     ],
     advanced: {

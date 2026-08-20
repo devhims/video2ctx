@@ -4,28 +4,41 @@ import { ApiError, now } from './http';
 export interface Entitlements {
   plan: Plan;
   includedCredits: number;
-  creditGrant: 'onboarding' | 'monthly';
+  creditGrant: 'onboarding' | 'billing-cycle';
   projectLimit: number;
   monitorLimit: number;
   dailyImportLimit: number;
 }
 
-export async function entitlements(env: Env, userId: string): Promise<Entitlements> {
-  const row = await env.DB.prepare('SELECT plan FROM plans WHERE user_id = ?').bind(userId).first<{ plan: Plan }>();
-  const plan = row?.plan === 'pro' ? 'pro' : 'free';
+export interface CreditEnv {
+  DB: D1Database;
+  STARTER_ONBOARDING_CREDITS: string;
+  BUILDER_MONTHLY_CREDITS: string;
+  STARTER_PROJECT_LIMIT: string;
+  STARTER_MONITOR_LIMIT: string;
+  STARTER_DAILY_IMPORTS: string;
+  BUILDER_PROJECT_LIMIT: string;
+  BUILDER_MONITOR_LIMIT: string;
+  BUILDER_DAILY_IMPORTS: string;
+}
+
+export async function entitlements(env: CreditEnv, userId: string): Promise<Entitlements> {
+  const row = await env.DB.prepare('SELECT plan FROM billing_accounts WHERE user_id = ?')
+    .bind(userId).first<{ plan: Plan }>();
+  const plan = row?.plan === 'builder' ? 'builder' : 'starter';
   return {
     plan,
-    includedCredits: Number(plan === 'pro' ? env.PRO_MONTHLY_CREDITS : env.FREE_ONBOARDING_CREDITS),
-    creditGrant: plan === 'pro' ? 'monthly' : 'onboarding',
-    projectLimit: Number(plan === 'pro' ? env.PRO_PROJECT_LIMIT : env.FREE_PROJECT_LIMIT),
-    monitorLimit: Number(plan === 'pro' ? env.PRO_MONITOR_LIMIT : env.FREE_MONITOR_LIMIT),
-    dailyImportLimit: Number(plan === 'pro' ? env.PRO_DAILY_IMPORTS : env.FREE_DAILY_IMPORTS),
+    includedCredits: Number(plan === 'builder' ? env.BUILDER_MONTHLY_CREDITS : env.STARTER_ONBOARDING_CREDITS),
+    creditGrant: plan === 'builder' ? 'billing-cycle' : 'onboarding',
+    projectLimit: Number(plan === 'builder' ? env.BUILDER_PROJECT_LIMIT : env.STARTER_PROJECT_LIMIT),
+    monitorLimit: Number(plan === 'builder' ? env.BUILDER_MONITOR_LIMIT : env.STARTER_MONITOR_LIMIT),
+    dailyImportLimit: Number(plan === 'builder' ? env.BUILDER_DAILY_IMPORTS : env.STARTER_DAILY_IMPORTS),
   };
 }
 
 export async function enforceImportLimit(env: Env, userId: string, limits: Entitlements, deep = false): Promise<void> {
-  if (deep && limits.plan !== 'pro') {
-    throw new ApiError(403, 'PRO_REQUIRED', 'Deep comment fetch is available on Pro.');
+  if (deep && limits.plan !== 'builder') {
+    throw new ApiError(403, 'BUILDER_REQUIRED', 'Deep comment fetch is available on Builder.');
   }
   const row = await env.DB.prepare(
     'SELECT COUNT(*) AS count FROM jobs WHERE user_id=? AND created_at>=?'
@@ -49,7 +62,7 @@ export async function enforceCount(
   }
 }
 
-export async function creditBalance(env: Env, userId: string): Promise<number> {
+export async function creditBalance(env: CreditEnv, userId: string): Promise<number> {
   await ensureCreditGrant(env, userId);
   const row = await env.DB.prepare('SELECT COALESCE(SUM(credits), 0) AS balance FROM credit_ledger WHERE user_id = ?')
     .bind(userId)
@@ -57,25 +70,12 @@ export async function creditBalance(env: Env, userId: string): Promise<number> {
   return Number(row?.balance ?? 0);
 }
 
-export async function ensureCreditGrant(env: Env, userId: string): Promise<void> {
+export async function ensureCreditGrant(env: CreditEnv, userId: string): Promise<void> {
   const limits = await entitlements(env, userId);
-  if (limits.creditGrant === 'onboarding') {
-    await ensureOnboardingGrant(env, userId, limits);
-    return;
-  }
-
-  const month = new Date().toISOString().slice(0, 7);
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO credit_ledger
-     (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
-     VALUES (?, ?, ?, 'grant', ?, ?, ?)`
-  ).bind(
-    crypto.randomUUID(), userId, `monthly:${month}`, limits.includedCredits,
-    JSON.stringify({ plan: limits.plan, month }), now()
-  ).run();
+  if (limits.creditGrant === 'onboarding') await ensureOnboardingGrant(env, userId, limits);
 }
 
-async function ensureOnboardingGrant(env: Env, userId: string, limits: Entitlements): Promise<void> {
+async function ensureOnboardingGrant(env: CreditEnv, userId: string, limits: Entitlements): Promise<void> {
   await env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
@@ -94,7 +94,7 @@ async function ensureOnboardingGrant(env: Env, userId: string, limits: Entitleme
 }
 
 export async function reserveCredits(
-  env: Env,
+  env: CreditEnv,
   userId: string,
   operationId: string,
   amount: number,
@@ -119,7 +119,7 @@ export async function reserveCredits(
 }
 
 export async function settleCredits(
-  env: Env,
+  env: CreditEnv,
   userId: string,
   operationId: string,
   reserved: number,
@@ -139,7 +139,7 @@ export async function settleCredits(
 }
 
 export async function releaseCredits(
-  env: Env,
+  env: CreditEnv,
   userId: string,
   operationId: string,
   reserved: number,

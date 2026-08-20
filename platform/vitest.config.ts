@@ -5,7 +5,11 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['test/**/*.test.ts'],
-    exclude: ['test/auth-worker.integration.test.ts'],
+    exclude: [
+      'test/auth-worker.integration.test.ts',
+      'test/billing.integration.test.ts',
+      'test/credits.integration.test.ts',
+    ],
     setupFiles: ['./test/setup.ts'],
   },
 });

@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import type { App } from '../../types';
-import { processStripeWebhook } from '../../lib/billing';
 import { unsubscribe } from '../../lib/digests';
 import { youtubeOAuthCallback } from '../../lib/oauth';
 import { ApiError, body, escapeHtml, text } from '../../lib/http';
@@ -77,11 +76,6 @@ publicRoutes.post('/scale-inquiries', async (c) => {
   const payload = await body<ScaleInquiryInput>(c.req.raw);
   const result = await submitScaleInquiry(c.env, c.req.raw, payload);
   return c.json(result, 202);
-});
-
-publicRoutes.post('/billing/webhook', async (c) => {
-  await processStripeWebhook(c.env, c.req.raw);
-  return c.json({ received: true });
 });
 
 publicRoutes.get('/email/unsubscribe', (c) => {

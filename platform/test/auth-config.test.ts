@@ -3,6 +3,10 @@ const captured = vi.hoisted(() => ({
   auth: undefined as Record<string, any> | undefined,
   bearer: undefined as Record<string, any> | undefined,
   deviceAuthorization: undefined as Record<string, any> | undefined,
+  checkout: undefined as Record<string, any> | undefined,
+  portal: undefined as Record<string, any> | undefined,
+  webhooks: undefined as Record<string, any> | undefined,
+  polar: undefined as Record<string, any> | undefined,
 }));
 
 vi.mock('@better-auth/api-key', () => ({
@@ -32,6 +36,29 @@ vi.mock('better-auth/plugins', () => ({
   }),
   magicLink: vi.fn(() => ({ id: 'magic-link' })),
 }));
+vi.mock('@polar-sh/sdk', () => ({
+  Polar: vi.fn(class {
+    customers = { deleteExternal: vi.fn() };
+  }),
+}));
+vi.mock('@polar-sh/better-auth', () => ({
+  checkout: vi.fn((options: Record<string, any>) => {
+    captured.checkout = options;
+    return () => ({ id: 'polar-checkout' });
+  }),
+  portal: vi.fn((options: Record<string, any>) => {
+    captured.portal = options;
+    return () => ({ id: 'polar-portal' });
+  }),
+  webhooks: vi.fn((options: Record<string, any>) => {
+    captured.webhooks = options;
+    return () => ({ id: 'polar-webhooks' });
+  }),
+  polar: vi.fn((options: Record<string, any>) => {
+    captured.polar = options;
+    return { id: 'polar' };
+  }),
+}));
 
 import { createAuth } from '../src/lib/auth';
 
@@ -43,6 +70,10 @@ describe('Better Auth API-key configuration', () => {
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
+      POLAR_ACCESS_TOKEN: 'polar-token',
+      POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
+      POLAR_BUILDER_PRODUCT_ID: 'builder-product',
+      POLAR_ENVIRONMENT: 'sandbox',
     } as unknown as Env, { waitUntil: vi.fn() });
 
     expect(captured.apiKey).toMatchObject({
@@ -72,6 +103,10 @@ describe('Better Auth API-key configuration', () => {
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
+      POLAR_ACCESS_TOKEN: 'polar-token',
+      POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
+      POLAR_BUILDER_PRODUCT_ID: 'builder-product',
+      POLAR_ENVIRONMENT: 'sandbox',
     } as unknown as Env, { waitUntil: vi.fn() });
 
     expect(captured.deviceAuthorization).toMatchObject({
@@ -98,6 +133,35 @@ describe('Better Auth API-key configuration', () => {
       { id: 'bearer' },
       { id: 'device-authorization' },
       { id: 'magic-link' },
+      { id: 'polar' },
     ]));
+  });
+
+  test('uses Polar for authenticated checkout, customer self-service, and signed lifecycle webhooks', () => {
+    createAuth({
+      AUTH_BASE_URL: 'http://localhost:3000',
+      APP_ORIGIN: 'http://localhost:3000',
+      BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+      GOOGLE_CLIENT_ID: 'google-client',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      POLAR_ACCESS_TOKEN: 'polar-token',
+      POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
+      POLAR_BUILDER_PRODUCT_ID: 'builder-product',
+      POLAR_ENVIRONMENT: 'sandbox',
+    } as unknown as Env, { waitUntil: vi.fn() });
+
+    expect(captured.polar).toMatchObject({ createCustomerOnSignUp: false });
+    expect(captured.checkout).toEqual({
+      products: [{ productId: 'builder-product', slug: 'builder' }],
+      successUrl: 'http://localhost:3000/dashboard?section=settings&checkout=success',
+      returnUrl: 'http://localhost:3000/dashboard?section=settings&checkout=cancelled',
+      authenticatedUsersOnly: true,
+    });
+    expect(captured.portal).toEqual({ returnUrl: 'http://localhost:3000/dashboard?section=settings' });
+    expect(captured.webhooks).toMatchObject({ secret: 'polar-webhook-secret' });
+    expect(captured.webhooks?.onOrderPaid).toEqual(expect.any(Function));
+    expect(captured.webhooks?.onOrderRefunded).toEqual(expect.any(Function));
+    expect(captured.webhooks?.onCustomerStateChanged).toEqual(expect.any(Function));
+    expect(captured.webhooks?.onSubscriptionRevoked).toEqual(expect.any(Function));
   });
 });

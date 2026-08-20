@@ -1,7 +1,7 @@
 import type { createAuth } from './lib/auth';
 import type { ProviderId } from './providers/contract';
 
-export type Plan = 'free' | 'pro';
+export type Plan = 'starter' | 'builder';
 
 export interface AppUser {
   id: string;

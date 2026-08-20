@@ -145,7 +145,7 @@ describe('OpenAPI and Scalar documentation', () => {
       expect(operation.responses['402']).toEqual({ $ref: '#/components/responses/InsufficientCredits' });
     }
     expect(paths['/v1/projects']!.get.security).toContainEqual({ bearerApiKey: [] });
-    expect(paths['/v1/billing/checkout']!.post.security).not.toContainEqual({ bearerApiKey: [] });
+    expect(paths['/v1/billing']!.get.security).not.toContainEqual({ bearerApiKey: [] });
     expect(paths['/v1/account']!.delete.security).not.toContainEqual({ bearerApiKey: [] });
     expect(paths['/v1/account']!.delete.security).not.toContainEqual({ cliSession: [] });
     expect(paths['/v1/account']!.get.security).toContainEqual({ cliSession: [] });

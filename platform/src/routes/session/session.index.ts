@@ -10,7 +10,7 @@ import { ApiError, asId, body, now, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
 import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
-import { createCheckout } from '../../lib/billing';
+import { closeBillingAccount, getBillingSummary } from '../../lib/billing';
 import { deleteProjectAssets, deleteR2Prefix, userSearchInstanceId } from '../../lib/research-storage';
 import { getProvider } from '../../providers';
 import {
@@ -42,7 +42,7 @@ export const ACCOUNT_ROUTE_PATTERNS = [
 export const SESSION_ONLY_ROUTE_PATTERNS = [
   '/oauth/youtube/connect',
   '/oauth/youtube',
-  '/billing/checkout',
+  '/billing',
   '/admin/*',
 ] as const;
 
@@ -355,8 +355,8 @@ sessionRoutes.delete('/oauth/youtube', async (c) => {
   return c.body(null, 204);
 });
 
-sessionRoutes.post('/billing/checkout', async (c) => {
-  return c.json({ url: await createCheckout(c.env, requireUser(c)) });
+sessionRoutes.get('/billing', async (c) => {
+  return c.json(await getBillingSummary(c.env, requireUser(c).id));
 });
 
 sessionRoutes.get('/admin/jobs', async (c) => {
@@ -370,6 +370,7 @@ sessionRoutes.get('/admin/jobs', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
+  await closeBillingAccount(c.env, user.id);
   await disconnectYoutube(c.env, user.id);
   await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
   const instanceId = userSearchInstanceId(user.id);

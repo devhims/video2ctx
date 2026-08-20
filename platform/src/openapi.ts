@@ -295,7 +295,7 @@ export const openApiDocument = {
     { name: 'Exports', description: 'Project export creation and download.' },
     { name: 'Monitoring', description: 'Monitors, notifications, and digest preferences.' },
     { name: 'YouTube OAuth', description: 'Connect or disconnect the user’s YouTube account.' },
-    { name: 'Billing', description: 'Checkout, usage, and Stripe webhook handling.' },
+    { name: 'Billing', description: 'Plan, credit, and subscription status.' },
     { name: 'Administration', description: 'Restricted operational APIs.' },
     { name: 'Account', description: 'Account lifecycle operations.' },
   ],
@@ -1283,37 +1283,15 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/billing/checkout': {
-      post: {
+    '/v1/billing': {
+      get: {
         tags: ['Billing'],
-        operationId: 'createBillingCheckout',
-        summary: 'Create a Stripe Checkout session',
-        security: privateSecurity,
+        operationId: 'getBilling',
+        summary: 'Get the signed-in account billing status',
+        security: browserSessionSecurity,
         responses: {
-          '200': jsonResponse('Checkout URL.', {
-            type: 'object', required: ['url'], properties: { url: { type: 'string', format: 'uri' } },
-          }),
+          '200': jsonResponse('Current billing status.', schemaRef('BillingSummary')),
           '401': responseRef('Unauthorized'),
-          '500': responseRef('ServerError'),
-        },
-      },
-    },
-    '/v1/billing/webhook': {
-      post: {
-        tags: ['Billing'],
-        operationId: 'handleStripeWebhook',
-        summary: 'Handle a Stripe webhook',
-        description: 'Intended for Stripe delivery. Scalar cannot generate a valid signature for an edited payload.',
-        security: [{ stripeSignature: [] }],
-        requestBody: {
-          required: true,
-          content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
-        },
-        responses: {
-          '200': jsonResponse('Event processed.', {
-            type: 'object', required: ['received'], properties: { received: { const: true } },
-          }),
-          '400': responseRef('BadRequest'),
           '500': responseRef('ServerError'),
         },
       },
@@ -1428,12 +1406,6 @@ export const openApiDocument = {
         in: 'header',
         name: 'X-Demo-User',
         description: 'Local development only. Any stable value selects an isolated demo account. Rejected in production.',
-      },
-      stripeSignature: {
-        type: 'apiKey',
-        in: 'header',
-        name: 'stripe-signature',
-        description: 'Stripe-generated signature over the exact raw request body.',
       },
     },
     headers: {
@@ -2000,10 +1972,24 @@ export const openApiDocument = {
         type: 'object',
         additionalProperties: true,
         properties: {
-          plan: { type: 'string', enum: ['free', 'pro'] },
+          plan: { type: 'string', enum: ['starter', 'builder'] },
           includedCredits: { type: 'integer' },
-          creditGrant: { type: 'string', enum: ['onboarding', 'monthly'] },
+          creditGrant: { type: 'string', enum: ['onboarding', 'billing-cycle'] },
           creditBalance: { type: 'integer' },
+        },
+      },
+      BillingSummary: {
+        type: 'object',
+        required: ['plan', 'status', 'creditBalance', 'includedCredits', 'cancelAtPeriodEnd', 'currentPeriodStart', 'currentPeriodEnd', 'canManageBilling'],
+        properties: {
+          plan: { type: 'string', enum: ['starter', 'builder'] },
+          status: { type: 'string' },
+          creditBalance: { type: 'integer' },
+          includedCredits: { type: 'integer' },
+          cancelAtPeriodEnd: { type: 'boolean' },
+          currentPeriodStart: { type: ['integer', 'null'] },
+          currentPeriodEnd: { type: ['integer', 'null'] },
+          canManageBilling: { type: 'boolean' },
         },
       },
     },

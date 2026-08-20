@@ -12,10 +12,12 @@ import {
   loadDashboardAccountData,
   pathWithoutEmailConsent,
   publishCreditBalance,
+  type DashboardBilling,
   type DashboardUsage,
   type DashboardNotification,
   type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
+import { authClient } from '../../lib/auth-client';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 
@@ -207,6 +209,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [billing, setBilling] = useState<DashboardBilling | null>(null);
   const [monitorSavingId, setMonitorSavingId] = useState<string>();
   const operationController = useRef<AbortController | null>(null);
   const projectController = useRef<AbortController | null>(null);
@@ -252,6 +255,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     setProjects(data.projects);
     setMonitors(data.monitors);
     setUsage(data.usage);
+    setBilling(data.billing);
     setNotifications(data.notifications);
     setNotificationPreferences(data.notificationPreferences);
   }, [authenticated]);
@@ -269,6 +273,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     const updateCreditBalance = (event: Event) => {
       const balance = (event as CustomEvent<number>).detail;
       setUsage((current) => current ? { ...current, creditBalance: balance } : current);
+      setBilling((current) => current ? { ...current, creditBalance: balance } : current);
     };
     window.addEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
     return () => window.removeEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
@@ -622,7 +627,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
         </div>
         <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
         <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} /></div>
-        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
+        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
       {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
@@ -658,11 +663,13 @@ function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSetting
   </div>;
 }
 
-function SettingsView({ email, emailConsent, accountDataReady, isDemo, preferences, onPreferencesChange }: {
+function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, onBillingChange, preferences, onPreferencesChange }: {
   email?: string;
   emailConsent?: string;
   accountDataReady: boolean;
   isDemo: boolean;
+  billing: DashboardBilling | null;
+  onBillingChange: (billing: DashboardBilling) => void;
   preferences: DashboardNotificationPreferences;
   onPreferencesChange: (preferences: DashboardNotificationPreferences) => void;
 }) {
@@ -673,8 +680,67 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, preferenc
   const [preferenceMessage, setPreferenceMessage] = useState('');
   const [confirmationState, setConfirmationState] = useState<'idle' | 'confirming' | 'success' | 'error'>('idle');
   const [confirmationMessage, setConfirmationMessage] = useState('');
+  const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
+  const [billingMessage, setBillingMessage] = useState('');
   const attemptedEmailConsent = useRef<string | undefined>(undefined);
   const confirmed = canDeleteAccount(confirmation);
+
+  const startCheckout = async () => {
+    if (billingAction || isDemo) return;
+    setBillingAction('checkout');
+    setBillingMessage('');
+    try {
+      const result = await authClient.checkout({ slug: 'builder' });
+      if (result.error) throw new Error(result.error.message ?? 'Could not start checkout.');
+    } catch (cause) {
+      setBillingMessage(cause instanceof Error ? cause.message : 'Could not start checkout.');
+      setBillingAction(undefined);
+    }
+  };
+
+  const openBillingPortal = async () => {
+    if (billingAction || isDemo) return;
+    setBillingAction('portal');
+    setBillingMessage('');
+    try {
+      const result = await authClient.customer.portal();
+      if (result.error) throw new Error(result.error.message ?? 'Could not open billing management.');
+    } catch (cause) {
+      setBillingMessage(cause instanceof Error ? cause.message : 'Could not open billing management.');
+      setBillingAction(undefined);
+    }
+  };
+
+  useEffect(() => {
+    const checkout = new URLSearchParams(window.location.search).get('checkout');
+    if (checkout === 'cancelled') {
+      setBillingMessage('Checkout was cancelled. Your current plan has not changed.');
+      return;
+    }
+    if (checkout !== 'success') return;
+
+    let cancelled = false;
+    let attempts = 0;
+    setBillingMessage('Payment received. Confirming your Builder plan and credits...');
+    const reconcile = async () => {
+      attempts += 1;
+      try {
+        const next = await api<DashboardBilling>('/v1/billing', { cache: 'no-store' });
+        if (cancelled) return;
+        onBillingChange(next);
+        if (next.plan === 'builder') {
+          setBillingMessage('Builder is active and your credit balance is ready.');
+          return;
+        }
+      } catch {
+        // Polar may still be delivering the signed webhook. Retry briefly.
+      }
+      if (!cancelled && attempts < 8) window.setTimeout(() => void reconcile(), 1_500);
+      else if (!cancelled) setBillingMessage('Payment is still syncing. Refresh in a moment if Builder does not appear.');
+    };
+    void reconcile();
+    return () => { cancelled = true; };
+  }, [onBillingChange]);
 
   const savePreference = async (key: 'inApp' | 'emailAlerts', value: boolean) => {
     const previous = preferences;
@@ -751,8 +817,27 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, preferenc
 
   return <section className='content-section standalone max-w-6xl'>
     <div className='section-heading'>
-      <div><h2>Settings</h2><p>Choose how monitor updates reach you and manage your account.</p></div>
+      <div><h2>Settings</h2><p>Manage billing, monitor updates, and your account.</p></div>
     </div>
+    <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
+      <div>
+        <span className='panel-label'>Billing</span>
+        <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
+        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
+          ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
+          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 20,000 credit monthly allowance and higher workspace limits.'}</p>
+        {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
+          ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
+          : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}
+        {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
+      </div>
+      <div className='grid gap-2'>
+        {billing?.plan === 'builder' || billing?.canManageBilling
+          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction) || isDemo} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
+          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
+      </div>
+    </article>
     <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
       <div className='settings-notification-intro'>
         <span className='panel-label'>Monitor updates</span>
@@ -1279,6 +1364,7 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
 
 function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;}
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
+function formatBillingDate(timestamp:number){return new Date(timestamp).toLocaleDateString([],{dateStyle:'medium'});}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}
 function relativeNotificationTime(timestamp:number){
   const elapsed = Math.max(0, Date.now() - timestamp);

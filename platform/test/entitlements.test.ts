@@ -4,7 +4,7 @@ class CreditDatabase {
   balance: number;
   readonly operations = new Set<string>();
 
-  constructor(balance = 0, readonly plan: 'free' | 'pro' = 'free') {
+  constructor(balance = 0, readonly plan: 'starter' | 'builder' = 'starter') {
     this.balance = balance;
   }
 
@@ -12,7 +12,7 @@ class CreditDatabase {
     return {
       bind: (...values: unknown[]) => ({
         first: async () => {
-          if (sql.includes('SELECT plan FROM plans')) return this.plan === 'pro' ? { plan: 'pro' } : null;
+          if (sql.includes('SELECT plan FROM billing_accounts')) return this.plan === 'builder' ? { plan: 'builder' } : null;
           if (sql.includes('SUM(credits)')) return { balance: this.balance };
           return null;
         },
@@ -25,8 +25,6 @@ class CreditDatabase {
           if (operationId === 'onboarding:v1') {
             const allowance = Number(values[3]);
             this.balance += Math.max(0, allowance - this.balance);
-          } else {
-            this.balance += Number(values[3]);
           }
           return { meta: { changes: 1 } };
         },
@@ -38,35 +36,35 @@ class CreditDatabase {
 function environment(database: CreditDatabase): Env {
   return {
     DB: database,
-    FREE_ONBOARDING_CREDITS: '1000',
-    PRO_MONTHLY_CREDITS: '20000',
-    FREE_PROJECT_LIMIT: '3',
-    FREE_MONITOR_LIMIT: '1',
-    FREE_DAILY_IMPORTS: '10',
-    PRO_PROJECT_LIMIT: '100',
-    PRO_MONITOR_LIMIT: '50',
-    PRO_DAILY_IMPORTS: '200',
+    STARTER_ONBOARDING_CREDITS: '1000',
+    BUILDER_MONTHLY_CREDITS: '20000',
+    STARTER_PROJECT_LIMIT: '3',
+    STARTER_MONITOR_LIMIT: '1',
+    STARTER_DAILY_IMPORTS: '10',
+    BUILDER_PROJECT_LIMIT: '100',
+    BUILDER_MONITOR_LIMIT: '50',
+    BUILDER_DAILY_IMPORTS: '200',
   } as unknown as Env;
 }
 
 describe('credit entitlements', () => {
-  test('describes the free credit allocation as a one-time onboarding grant', async () => {
+  test('describes the Starter credit allocation as a one-time onboarding grant', async () => {
     await expect(entitlements(environment(new CreditDatabase()), 'user-1')).resolves.toMatchObject({
-      plan: 'free',
+      plan: 'starter',
       includedCredits: 1000,
       creditGrant: 'onboarding',
     });
   });
 
   test('describes the paid allocation as 20,000 recurring monthly credits', async () => {
-    await expect(entitlements(environment(new CreditDatabase(0, 'pro')), 'user-1')).resolves.toMatchObject({
-      plan: 'pro',
+    await expect(entitlements(environment(new CreditDatabase(0, 'builder')), 'user-1')).resolves.toMatchObject({
+      plan: 'builder',
       includedCredits: 20000,
-      creditGrant: 'monthly',
+      creditGrant: 'billing-cycle',
     });
   });
 
-  test('grants a new free account exactly 1,000 credits once', async () => {
+  test('grants a new Starter account exactly 1,000 credits once', async () => {
     const database = new CreditDatabase();
     const env = environment(database);
 
@@ -80,5 +78,12 @@ describe('credit entitlements', () => {
 
     await expect(creditBalance(environment(database), 'user-1')).resolves.toBe(1000);
     expect([...database.operations]).toEqual(['onboarding:v1']);
+  });
+
+  test('does not grant Builder credits on a calendar timer', async () => {
+    const database = new CreditDatabase(400, 'builder');
+
+    await expect(creditBalance(environment(database), 'user-1')).resolves.toBe(400);
+    expect([...database.operations]).toEqual([]);
   });
 });
