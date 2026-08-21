@@ -64,7 +64,9 @@ Important routes:
 | Jobs | `POST /v1/imports`, `GET /v1/jobs/:id` |
 | Exports | `POST /v1/projects/:id/exports`, `GET /v1/exports/:id/download` |
 | Automation | `/v1/monitors`, `/v1/notifications`, `/v1/notification-preferences` |
-| Account | `/v1/oauth/youtube`, `/v1/billing/checkout`, `/v1/usage`, `DELETE /v1/account` |
+| Account | `/v1/oauth/youtube`, `GET /v1/billing`, `/v1/usage`, `DELETE /v1/account` |
+
+Polar checkout, customer portal, and the signed `/api/auth/polar/webhooks` callback are mounted by the Better Auth Polar plugin. The application projects verified Polar events into `billing_accounts`, while `credit_ledger` remains authoritative for spendable credits. Wrangler applies the versioned SQL files in `platform/migrations`. A paid order tops the balance up to the Builder allowance using the Polar order ID as an idempotency key. A refunded order downgrades the account and adjusts its balance to the Starter default. Credit changes and their billing projection are submitted in one D1 batch, and stale payment events cannot change credits after a newer refund. Calendar time and checkout return URLs never grant credits.
 
 Long-running imports return `202` with a stable job ID. Reusing an idempotency key returns the existing job. Jobs expose `queued`, `running`, `partial`, `succeeded`, `failed`, or `cancelled`, plus progress, partial result, retry time, and permanent failure information.
 
@@ -140,10 +142,10 @@ X-Demo-User: postman
 The `platform/wrangler.jsonc` file binds separate preview and production D1 databases and Workers KV namespaces. Wrangler development uses the preview IDs; deployment uses the production IDs. Before production deployment:
 
 1. Enable Email Sending for the domain in `EMAIL_FROM` and update that address.
-2. Set `APP_ORIGIN`, `AUTH_BASE_URL`, `ENVIRONMENT=production`, Stripe price ID, admin emails, and plan limits per environment.
-3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, and Stripe credentials. If direct YouTube egress is unreliable, also run `wrangler secret put OUTBOUND_PROXY_URL` and enter the proxy URL interactively.
+2. Set `APP_ORIGIN`, `AUTH_BASE_URL`, `ENVIRONMENT=production`, `POLAR_ENVIRONMENT`, `POLAR_BUILDER_PRODUCT_ID`, admin emails, and plan limits per environment.
+3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, `POLAR_ACCESS_TOKEN`, and `POLAR_WEBHOOK_SECRET`. If direct YouTube egress is unreliable, also run `wrangler secret put OUTBOUND_PROXY_URL` and enter the proxy URL interactively.
 4. Connect the platform to Cloudflare Builds and the web application to Vercel, using the repository settings in `reference/engineering/DEPLOYMENT.md`.
-5. Apply D1 migrations remotely and configure Google/Stripe callback URLs.
+5. Apply D1 migrations remotely. In Polar, create the monthly Builder product and a webhook endpoint targeting `/api/auth/polar/webhooks` with `order.paid`, `order.refunded`, `customer.state_changed`, and `subscription.revoked` enabled.
 
 Never commit `.dev.vars`. The web Worker does not receive provider secrets; it reaches the platform through `PLATFORM`.
 
@@ -152,9 +154,9 @@ Never commit `.dev.vars`. The web Worker does not receive provider secrets; it r
 - Public YouTube responses are cached in Workers KV and a retained stale value is returned when an upstream YouTube section fails.
 - Private documents use one AI Search instance per user and project metadata filters; D1/R2 remain authoritative.
 - Public transcript imports grow the shared hybrid corpus. Channel and playlist workflows eagerly fan out recent videos, with lazy access still supported.
-- Queue tasks and Stripe webhooks have deterministic replay records. Credit reservation is a single conditional D1 mutation, followed by settlement or release.
+- Queue tasks and Polar payment events have deterministic replay records. Credit reservation is a single conditional D1 mutation, followed by settlement or release.
 - Prompt evidence is delimited as untrusted content; synthesis without aligned citations returns `INSUFFICIENT_EVIDENCE`.
-- Account deletion revokes YouTube OAuth, removes private R2 objects and D1 rows, and queues private AI Search instance removal.
+- Account deletion cancels and anonymizes the Polar customer, revokes YouTube OAuth, removes private R2 objects and D1 rows, and queues private AI Search instance removal.
 
 ## Verification
 

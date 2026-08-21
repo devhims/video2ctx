@@ -17,7 +17,7 @@ describe('documentation audience', () => {
   });
 
   test('keeps callbacks, administration, and account deletion out of the consumer playground', () => {
-    expect(OPENAPI_OPERATION_AUDIENCE.handleStripeWebhook).toBe('callback');
+    expect(OPENAPI_OPERATION_AUDIENCE.getBilling).toBe('first-party');
     expect(OPENAPI_OPERATION_AUDIENCE.completeYouTubeOAuth).toBe('callback');
     expect(OPENAPI_OPERATION_AUDIENCE.listAdminJobs).toBe('operator');
     expect(OPENAPI_OPERATION_AUDIENCE.deleteAccount).toBe('first-party');

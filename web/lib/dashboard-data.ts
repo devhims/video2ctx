@@ -1,8 +1,19 @@
 export interface DashboardUsage {
-  plan: 'free' | 'pro';
+  plan: 'starter' | 'builder';
   includedCredits: number;
-  creditGrant: 'onboarding' | 'monthly';
+  creditGrant: 'onboarding' | 'billing-cycle';
   creditBalance: number;
+}
+
+export interface DashboardBilling {
+  plan: 'starter' | 'builder';
+  status: string;
+  creditBalance: number;
+  includedCredits: number;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodStart: number | null;
+  currentPeriodEnd: number | null;
+  canManageBilling: boolean;
 }
 
 export interface DashboardProject {
@@ -52,6 +63,7 @@ export interface DashboardAccountData {
   projects: DashboardProject[];
   monitors: DashboardMonitor[];
   usage: DashboardUsage | null;
+  billing: DashboardBilling | null;
   notifications: DashboardNotification[];
   notificationPreferences: DashboardNotificationPreferences;
 }
@@ -63,10 +75,11 @@ type DashboardPreferenceMutation = (
 ) => Promise<DashboardNotificationPreferences>;
 
 export async function loadDashboardAccountData(request: DashboardRequest): Promise<DashboardAccountData> {
-  const [projectData, monitorData, usage, notificationData, notificationPreferences] = await Promise.all([
+  const [projectData, monitorData, usage, billing, notificationData, notificationPreferences] = await Promise.all([
     request('/v1/projects').catch(() => ({ projects: [] })) as Promise<{ projects: DashboardProject[] }>,
     request('/v1/monitors').catch(() => ({ monitors: [] })) as Promise<{ monitors: DashboardMonitor[] }>,
     request('/v1/usage').catch(() => null) as Promise<DashboardUsage | null>,
+    request('/v1/billing').catch(() => null) as Promise<DashboardBilling | null>,
     request('/v1/notifications').catch(() => ({ notifications: [] })) as Promise<{ notifications: DashboardNotification[] }>,
     request('/v1/notification-preferences').catch(() => DEFAULT_NOTIFICATION_PREFERENCES) as Promise<DashboardNotificationPreferences>,
   ]);
@@ -75,6 +88,7 @@ export async function loadDashboardAccountData(request: DashboardRequest): Promi
     projects: projectData.projects,
     monitors: monitorData.monitors,
     usage,
+    billing,
     notifications: notificationData.notifications,
     notificationPreferences,
   };

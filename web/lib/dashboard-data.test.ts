@@ -16,7 +16,8 @@ describe('dashboard account bootstrap', () => {
       paths.push(path);
       if (path === '/v1/projects') return { projects: [] };
       if (path === '/v1/monitors') return { monitors: [] };
-      if (path === '/v1/usage') return { plan: 'free', includedCredits: 1000, creditGrant: 'onboarding', creditBalance: 1000 };
+      if (path === '/v1/usage') return { plan: 'starter', includedCredits: 1000, creditGrant: 'onboarding', creditBalance: 1000 };
+      if (path === '/v1/billing') return { plan: 'starter', status: 'inactive', creditBalance: 1000, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false };
       if (path === '/v1/notifications') return { notifications: [] };
       if (path === '/v1/notification-preferences') return { inApp: true, emailAlerts: false, emailAlertsPending: false, emailDigest: 'off' };
       throw new Error(`Unexpected request: ${path}`);
@@ -26,12 +27,14 @@ describe('dashboard account bootstrap', () => {
     assert.deepEqual(data.projects, []);
     assert.deepEqual(data.monitors, []);
     assert.equal(data.usage?.creditBalance, 1000);
+    assert.equal(data.billing?.plan, 'starter');
     assert.deepEqual(data.notifications, []);
     assert.equal(data.notificationPreferences.emailAlerts, false);
     assert.deepEqual(paths, [
       '/v1/projects',
       '/v1/monitors',
       '/v1/usage',
+      '/v1/billing',
       '/v1/notifications',
       '/v1/notification-preferences',
     ]);

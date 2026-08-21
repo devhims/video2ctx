@@ -43,7 +43,7 @@ const PLANS: PricingPlan[] = [
       'Standard support',
     ],
     cta: 'Start building',
-    href: '/dashboard',
+    href: '/dashboard?section=settings',
     recommended: true,
   },
   {

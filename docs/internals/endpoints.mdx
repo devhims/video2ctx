@@ -26,7 +26,7 @@ Called by the video2ctx web application or an explicit signed-in account action.
 | `POST` | `/api/auth/sign-in/social` | `signInWithSocialProvider` | Start Google sign-in | Public or protocol-signed | Starts an interactive browser sign-in; do not call it with API-key credentials. |
 | `POST` | `/api/auth/sign-out` | `signOut` | Revoke the current browser or CLI session | `sessionCookie` or `cliSession` | Revokes the presented session; invoke it only for an explicit logout action and clear the matching local credential after success. |
 | `DELETE` | `/v1/account` | `deleteAccount` | Permanently delete the current account | `sessionCookie` or `demoUser` | Destructive account operation; require deliberate confirmation and never automate it for a user. |
-| `POST` | `/v1/billing/checkout` | `createBillingCheckout` | Create a Stripe Checkout session | `sessionCookie` or `demoUser` | Starts an external checkout session; the user must review and complete payment with Stripe. |
+| `GET` | `/v1/billing` | `getBilling` | Get the signed-in account billing status | `sessionCookie` | Returns subscription state for the current browser account; do not expose another customer’s provider identifiers. |
 | `POST` | `/v1/demo/youtube/inspect` | `inspectLandingYouTubeVideo` | Inspect a YouTube video from the landing page | Public or protocol-signed | Public, rate-limited demo route; do not use it as a credentialed bulk-data API. |
 | `POST` | `/v1/notification-preferences/confirm-email` | `confirmNotificationEmail` | Confirm monitor email alerts from the signed-in dashboard | `sessionCookie` or `cliSession` or `bearerApiKey` or `apiKey` or `demoUser` | Enables email delivery only for the signed-in account after validating the confirmation token. |
 | `DELETE` | `/v1/oauth/youtube` | `disconnectYouTube` | Disconnect the YouTube account | `sessionCookie` or `demoUser` | Mutates the account connection state; require an explicit user action. |
@@ -40,7 +40,6 @@ Called by an external provider or through a signed link with protocol-specific s
 
 | Method | Path | Operation ID | Summary | Declared access | Safety notes |
 | --- | --- | --- | --- | --- | --- |
-| `POST` | `/v1/billing/webhook` | `handleStripeWebhook` | Handle a Stripe webhook | `stripeSignature` | Accept only Stripe-signed requests and preserve idempotent event handling. |
 | `GET` | `/v1/email/unsubscribe` | `unsubscribeEmail` | Unsubscribe from email digests | Public or protocol-signed | A signed link changes email preferences; do not expose or reuse its token. |
 | `POST` | `/v1/email/unsubscribe` | `unsubscribeEmailPost` | Unsubscribe from email digests | Public or protocol-signed | Changes email preferences; validate the signed request and avoid logging its token. |
 | `GET` | `/v1/oauth/youtube/callback` | `completeYouTubeOAuth` | Complete YouTube OAuth | Public or protocol-signed | OAuth callback; validate state and consume authorization codes only once. |

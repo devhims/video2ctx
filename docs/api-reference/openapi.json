@@ -63,7 +63,7 @@
     },
     {
       "name": "Billing",
-      "description": "Checkout, usage, and Stripe webhook handling."
+      "description": "Plan, credit, and subscription status."
     },
     {
       "name": "Account",
@@ -3418,12 +3418,6 @@
         "in": "header",
         "name": "X-Demo-User",
         "description": "Local development only. Any stable value selects an isolated demo account. Rejected in production."
-      },
-      "stripeSignature": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "stripe-signature",
-        "description": "Stripe-generated signature over the exact raw request body."
       }
     },
     "headers": {
@@ -6172,8 +6166,8 @@
           "plan": {
             "type": "string",
             "enum": [
-              "free",
-              "pro"
+              "starter",
+              "builder"
             ]
           },
           "includedCredits": {
@@ -6183,11 +6177,60 @@
             "type": "string",
             "enum": [
               "onboarding",
-              "monthly"
+              "billing-cycle"
             ]
           },
           "creditBalance": {
             "type": "integer"
+          }
+        }
+      },
+      "BillingSummary": {
+        "type": "object",
+        "required": [
+          "plan",
+          "status",
+          "creditBalance",
+          "includedCredits",
+          "cancelAtPeriodEnd",
+          "currentPeriodStart",
+          "currentPeriodEnd",
+          "canManageBilling"
+        ],
+        "properties": {
+          "plan": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "builder"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "creditBalance": {
+            "type": "integer"
+          },
+          "includedCredits": {
+            "type": "integer"
+          },
+          "cancelAtPeriodEnd": {
+            "type": "boolean"
+          },
+          "currentPeriodStart": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "currentPeriodEnd": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "canManageBilling": {
+            "type": "boolean"
           }
         }
       }
