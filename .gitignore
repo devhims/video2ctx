@@ -7,6 +7,7 @@ dist/
 *.cpuprofile
 *.tgz
 .DS_Store
+.claude/
 .env*
 !.env.example
 .dev.vars*

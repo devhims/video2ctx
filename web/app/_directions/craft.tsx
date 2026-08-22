@@ -142,7 +142,7 @@ export function CraftDirection() {
         </h1>
         <p className='craft-sub'>
           Everything your agent needs to understand videos.
-          <span className='craft-open-source'>100% open source.</span>
+          <span className='craft-open-source'>100% open source</span>
         </p>
         <CraftDemo />
       </section>
