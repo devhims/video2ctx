@@ -34,9 +34,6 @@ export function CraftNav() {
             width='36'
             height='36'
           />
-          <span className='craft-nav-wordmark'>
-            video2<span>ctx</span>
-          </span>
         </a>
 
         <nav

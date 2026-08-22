@@ -124,7 +124,14 @@ export function CraftDirection() {
           </span>
         </a>
         <h1>
-          <span className='craft-hero-brand'>video2ctx</span>
+          <span className='craft-hero-brand' aria-label='video2ctx'>
+            <span className='craft-hero-brand-video' aria-hidden='true'>
+              video2
+            </span>
+            <span className='craft-hero-brand-ctx' aria-hidden='true'>
+              ctx
+            </span>
+          </span>
           <span className='craft-hero-claim'>
             Video in.{' '}
             <FlickeringPixelText className='craft-context-word'>
@@ -135,8 +142,7 @@ export function CraftDirection() {
         </h1>
         <p className='craft-sub'>
           Everything your agent needs to understand videos.
-          <br />
-          100% open source.
+          <span className='craft-open-source'>100% open source</span>
         </p>
         <CraftDemo />
       </section>
