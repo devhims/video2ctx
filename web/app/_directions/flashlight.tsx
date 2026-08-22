@@ -64,6 +64,8 @@ function chooseScene(): Scene {
 export function Flashlight() {
   const lensRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const iconsRef = useRef<HTMLDivElement>(null);
+  const glowRef = useRef<HTMLDivElement>(null);
   const [scene, setScene] = useState<Scene>('none');
 
   useEffect(() => {
@@ -90,9 +92,22 @@ export function Flashlight() {
     // Read from the element rather than a constant, so the size lives in CSS
     // only and the two can never drift apart.
     let lensSize = 0;
+    let glowSize = 0;
 
     const measure = () => {
       lensSize = lens.offsetWidth;
+      // Re-read lazily in paint: the glow mounts a render later than this
+      // effect runs, so it may not exist yet the first time through.
+      glowSize = 0;
+    };
+
+    /* The symbols warm with the lens rather than on their own clock, so both
+     * states are driven from the same pointer and can never disagree. */
+    const setLive = (on: boolean) => {
+      const flag = on ? 'true' : 'false';
+      lens.dataset.live = flag;
+      const icons = iconsRef.current;
+      if (icons) icons.dataset.live = flag;
     };
 
     const paint = () => {
@@ -104,6 +119,17 @@ export function Flashlight() {
 
       const half = lensSize / 2;
       lens.style.transform = `translate3d(${x - half}px, ${y - half}px, 0)`;
+
+      /* The glow trails the same eased position. Keeping it a transform on a
+       * leaf element means the symbol mask above it is never re-rasterised —
+       * animating the gradient's position instead would repaint the whole
+       * masked layer on every frame. */
+      const glow = glowRef.current;
+      if (glow) {
+        if (!glowSize) glowSize = glow.offsetWidth;
+        const gh = glowSize / 2;
+        glow.style.transform = `translate3d(${x - gh}px, ${y - gh}px, 0)`;
+      }
 
       // Keep going only while it is still catching up; a resting lens costs
       // nothing.
@@ -127,7 +153,7 @@ export function Flashlight() {
         live = true;
         x = targetX;
         y = targetY;
-        lens.dataset.live = 'true';
+        setLive(true);
       }
 
       schedule();
@@ -141,13 +167,13 @@ export function Flashlight() {
       // wherever it was last left.
       x = targetX = event.clientX - box.left;
       y = targetY = event.clientY - box.top;
-      lens.dataset.live = 'true';
+      setLive(true);
       schedule();
     };
 
     const onLeave = () => {
       live = false;
-      lens.dataset.live = 'false';
+      setLive(false);
     };
 
     const host = field.parentElement ?? field;
@@ -206,7 +232,7 @@ export function Flashlight() {
             poster={
               scene === 'portrait'
                 ? '/scene/fold-scene-portrait-poster.webp'
-                : '/scene/fold-scene-poster.webp'
+                : '/scene/fold-scene-symbols-poster.webp'
             }
             aria-hidden='true'
           >
@@ -217,8 +243,11 @@ export function Flashlight() {
               </>
             ) : (
               <>
-                <source src='/scene/fold-scene.webm' type='video/webm' />
-                <source src='/scene/fold-scene.mp4' type='video/mp4' />
+                {/* AV1 first. The H.264 sibling is not redundant: Safari gates
+                  * AV1 on M3 / A17 Pro hardware, so Intel, M1, M2 and older
+                  * iPhones fall through to it. Only one is ever fetched. */}
+                <source src='/scene/fold-scene-symbols.webm' type='video/webm' />
+                <source src='/scene/fold-scene-symbols.mp4' type='video/mp4' />
               </>
             )}
           </video>
@@ -226,6 +255,18 @@ export function Flashlight() {
         </>
       ) : null}
       <div className='voxel-lens' ref={lensRef} data-live='false' aria-hidden='true' />
+      {/* Above the lens, not below it. The lens is a `backdrop-filter`, so
+        * anything behind it gets multiplied by brightness(3) — and the glow is
+        * brightest exactly where the lens is, which is where that multiplication
+        * would blow it to white. In front, it adds a known quantity of light.
+        *
+        * Landscape only: this is lit by the pointer, and the other scenes are
+        * the ones chosen precisely because there is no pointer to light them. */}
+      {scene === 'landscape' ? (
+        <div className='voxel-icons' ref={iconsRef} data-live='false' aria-hidden='true'>
+          <div className='voxel-icons__glow' ref={glowRef} />
+        </div>
+      ) : null}
     </>
   );
 }

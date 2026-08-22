@@ -4,6 +4,7 @@ import { LegalPage } from '../_components/legal-page';
 export const metadata: Metadata = {
   title: 'Terms of Service · video2ctx',
   description: 'The terms governing access to and use of video2ctx.',
+  alternates: { canonical: '/terms' },
 };
 
 export default function TermsPage() {

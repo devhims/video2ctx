@@ -5,6 +5,7 @@ import styles from '../legal-page.module.css';
 export const metadata: Metadata = {
   title: 'Privacy Policy · video2ctx',
   description: 'How video2ctx collects, uses, protects, and deletes personal information and Google user data.',
+  alternates: { canonical: '/privacy' },
 };
 
 export default function PrivacyPage() {

@@ -1,6 +1,6 @@
 # Product design system
 
-Covers the live marketing surface (`/` and `/explore`) and the product workspace
+Covers the live marketing surface (`/`) and the product workspace
 (`/dashboard`). The dashboard keeps dedicated `--color-dashboard-*` roles in
 `tokens.css` because dense application surfaces need their own contrast tuning,
 but those roles now resolve to Craft's warm dark paper, off-white ink, and
@@ -216,8 +216,8 @@ reduced motion **0 bytes of video**.
 - **No invented metrics.** No adoption counts, no speed multiples, no
   testimonials that were not said. Every number on the page is one the platform
   actually produces.
-- **Name the cost, not just the benefit.** `/explore` lists each direction's bet
-  *and* what it gives up.
+- **Name the cost, not just the benefit.** Each access path should say what it
+  gives up as well as what it provides.
 - Plain language over jargon: "What was said" beats "Transcript"; header names
   and response shapes belong in the API reference, not the landing page.
 
@@ -247,11 +247,8 @@ Recorded because it is real, not aspirational. Verified 2026-08-12.
    8-state component discipline is not met.
 3. **`--exit` is declared and never used.** The "exits faster than entrances"
    rule is documented but enforced nowhere. Either apply it to the lens fade-out
-   and the beat crossfade, or drop the token.
-4. **`--color-stage-*` in `tokens.css` is consumed only by `lens-home.css` and
-   `cinematic.css`** — both Decomposition-only. If that direction is ever
-   deleted, those tokens go with it.
-5. **The fold scene is 720p** upscaled ~1.16x at common desktop widths. Sharpness
+   or drop the token.
+4. **The fold scene is 720p** upscaled ~1.16x at common desktop widths. Sharpness
    is currently fine because contrast, not resolution, was the real constraint —
    but a wider display will expose it.
 
@@ -265,8 +262,6 @@ Resolved 2026-08-12: the stale `tokens.css` stamp, the missing
 - Keep the resting-scene dimming and the `Flashlight` mount conditions **in
   step**. The scene is only darkened where a light exists to recover it; dim it
   anywhere the component does not mount and the fold is simply dark.
-- Promoting a different landing direction is one line: `DEFAULT_DIRECTION` in
-  `_directions/registry.tsx`.
 - Regenerating the fold scene: prompts, settings and encode commands are in
   `reference/design/CINEMATIC_ASSETS.md` and `web/public/scene/README.md`. The reusable
   method — model choice, prompting failures, the measurement harness — is in

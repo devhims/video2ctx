@@ -298,6 +298,71 @@ html:has(.craft) body {
   }
 }
 
+/* The carved symbols taking heat from the light.
+ *
+ * The symbols are in the footage; this only warms them. That distinction is
+ * what makes all five work. An earlier version of this layer lit two, because
+ * it was trying to *reveal* symbols that were not in the video, and additive
+ * light needs dark stone to do that — the three on the left sit on stone at
+ * 62-68 luminance against 33-39 on the right, so they washed out. Brightening
+ * something already visible has no such floor, so the mask now covers all five
+ * and none of them is a special case.
+ *
+ * The mask shares the video's aspect ratio and its `cover` geometry, so both
+ * resolve to the same box at every viewport and cannot drift apart. It is
+ * derived from the difference between the scene still with symbols and the one
+ * without, which is why it lands exactly on the carvings. Replace the footage
+ * at a different aspect, or re-render the scene, and this silently
+ * misregisters — regenerate it from the same pair of stills.
+ *
+ * `plus-lighter` is load-bearing rather than decorative. It only ever adds
+ * light, so the drifting fog and embers underneath stay visible through a warm
+ * symbol. An opaque plate would freeze them, and the busiest symbol sits over
+ * the busiest region of the frame. */
+.voxel-icons {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: url('/scene/voxel-icon-glow-mask.webp');
+  mask-size: cover;
+  mask-position: 50% 100%;
+  mask-repeat: no-repeat;
+  mix-blend-mode: plus-lighter;
+  opacity: 0;
+  transition: opacity 420ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.voxel-icons[data-live='true'] {
+  opacity: 1;
+}
+
+/* The travelling heat. Masked down to the symbols by the parent, so the only
+ * per-frame write is one transform on one element and nothing repaints.
+ *
+ * Wider than the lens on purpose. A symbol that warms exactly as the light
+ * arrives reads as a switch being thrown; one that begins to warm slightly
+ * before it reads as stone taking heat, which is the whole idea.
+ *
+ * Mixed from `--accent`, the same token as the lens core, so the light is one
+ * colour rather than two. */
+.voxel-icons__glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 560px;
+  height: 560px;
+  will-change: transform;
+  background: radial-gradient(
+    circle closest-side at center,
+    color-mix(in oklab, var(--accent) 92%, transparent) 0%,
+    color-mix(in oklab, var(--accent) 70%, transparent) 24%,
+    color-mix(in oklab, var(--accent) 36%, transparent) 46%,
+    color-mix(in oklab, var(--accent) 13%, transparent) 68%,
+    transparent 86%
+  );
+}
+
 /* The flashlight. `backdrop-filter` brightens whatever is painted behind it, so
  * one scene serves both states and there is no second copy to keep registered —
  * which is what makes a moving scene possible at all. The feathered mask belongs
@@ -312,7 +377,11 @@ html:has(.craft) body {
   overflow: hidden;
   opacity: 0;
   will-change: transform;
-  backdrop-filter: brightness(3) saturate(1.28);
+  /* Saturation is pulled up with the brightness rather than left behind it.
+   * `brightness(3)` alone walks the lit terrain toward white, which is what
+   * made the pool read as pale rather than as a warm light — the tint below
+   * was fighting a backdrop that had already lost its colour. */
+  backdrop-filter: brightness(3) saturate(1.6);
   transition: opacity 300ms cubic-bezier(0.23, 1, 0.32, 1);
   /* A long, gaussian-ish falloff that reaches zero exactly at the element edge.
    * A radial-gradient with few stops hitting transparent well inside the box
@@ -346,16 +415,21 @@ html:has(.craft) body {
 }
 
 /* A warm core, so it reads as a light source rather than as a brightness patch.
- * Static relative to the lens, so it costs nothing while the lens moves. */
+ * Static relative to the lens, so it costs nothing while the lens moves.
+ *
+ * Mixed from `--accent` rather than from a hand-picked oklch near it. The light
+ * and the primary button are the only two saturated things on this screen, so
+ * they should be the same colour by construction — if the brand hue is ever
+ * retuned, this follows it instead of drifting a few degrees away from it. */
 .voxel-lens::after {
   content: '';
   position: absolute;
   inset: 0;
   background: radial-gradient(
     circle closest-side at center,
-    oklch(70% 0.16 33 / 0.18),
-    oklch(68% 0.17 32 / 0.1) 30%,
-    oklch(66% 0.18 31 / 0.04) 56%,
+    color-mix(in oklab, var(--accent) 34%, transparent),
+    color-mix(in oklab, var(--accent) 21%, transparent) 30%,
+    color-mix(in oklab, var(--accent) 9%, transparent) 56%,
     transparent 82%
   );
   mix-blend-mode: plus-lighter;
@@ -371,12 +445,11 @@ html:has(.craft) body {
     inset: 20% 0 -3%;
   }
 
-  .voxel-field img {
-    object-position: 50% 88%;
-  }
-
-  /* The portrait clip is cropped to almost exactly this box's aspect, so it
-   * needs no further anchoring — centring keeps the whole composed frame. */
+  /* Still and clip are the same frame now — the still IS the clip's frame 0 —
+   * so they share an anchor. This was 88% when the still was separate 3:4
+   * artwork that needed pulling down to find its horizon; a poster cropped to
+   * this box's aspect only needs centring. */
+  .voxel-field img,
   .voxel-video {
     object-position: 50% 50%;
   }
@@ -516,6 +589,21 @@ html:has(.craft) body {
   line-height: 0.98;
   overflow-wrap: anywhere;
   text-wrap: balance;
+}
+
+.craft-hero-brand {
+  margin-bottom: var(--space-md);
+  display: block;
+  color: var(--accent);
+  font-family: var(--font-home-pixel);
+  font-size: clamp(0.78rem, 1.6vw, 0.95rem);
+  font-weight: 500;
+  letter-spacing: 0.045em;
+  line-height: 1;
+}
+
+.craft-hero-claim {
+  display: block;
 }
 
 .craft-context-word {
