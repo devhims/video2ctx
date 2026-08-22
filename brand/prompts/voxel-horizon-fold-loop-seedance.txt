@@ -1,0 +1,76 @@
+Fold loop: animate the voxel horizon still.
+2026-08-12. Higgsfield, seedance_2_0.
+
+SUPERSEDED. Nothing this produced still ships. Kept as the record of how the
+scene was originally animated, and because its four failures still apply to any
+future render of this landscape.
+
+  Its output is brand/generated/fold-scene.{webm,mp4,-poster.webp}, replaced on
+  desktop by fold-scene-symbols.* and, since 2026-08-22, in portrait too — the
+  portrait loop is a crop of whichever landscape loop is current:
+
+      crop=416:720:432:0,scale=440:762
+
+      (a native 9:16 render was tried and rejected — the same prompt invented
+       fires across the terraces and drifted the camera, loop gap 6.20 vs 1.63)
+
+Input
+  start image  brand/source/voxel-horizon.webp, decoded to PNG for upload:
+               dwebp voxel-horizon.webp -o voxel-horizon-source.png
+  end image    deliberately NOT set — see below
+
+Command
+  higgsfield generate create seedance_2_0 \
+    --prompt "$(cat prompt.txt)" \
+    --start-image voxel-horizon-source.png \
+    --duration 8 --resolution 720p --mode std --aspect_ratio 16:9 \
+    --generate_audio false --wait --wait-timeout 25m --json
+
+---- prompt ----
+
+Thick pale mist lies over the valley floor and between the stone terraces of this dark isometric voxel landscape. The mist rises upward, swells, and sinks back down again in a slow continuous cycle, clearly visible throughout the whole shot — always moving, never still. It is already present and thick in the very first frame.
+
+Embers rise from many separate places at once: from the ruined terraces at the far left edge, from the foreground ruins along the bottom centre, from the valley floor in the middle, and from the dark slopes at the far right edge. They lift slowly, glowing warm orange, and fade out into the black air. The right side of the frame has just as many embers as the left side. They are spread evenly across the entire width of the frame and never pour out of a single spot.
+
+New mist and new embers appear continuously, so the whole landscape is alive with slow movement at every moment, from the very first frame to the very last.
+
+The camera is completely locked on a tripod. It does not move, pan, tilt, drift or zoom at any point. The voxel terrain is solid rock and stays perfectly still.
+
+Night, deep charcoal shadows, volumetric light, cinematic.
+
+No text, no logos, no people.
+
+---- end prompt ----
+
+Four failures this prompt is shaped around. Full write-up in
+reference/design/HIGGSFIELD_ASSET_GUIDE.md §4.
+
+  Never pin the end frame equal to the start frame. Two identical endpoints
+  make "change nothing" a valid and cheap solution; the first attempt came back
+  completely static.
+
+  Do not qualify the motion. An earlier version asked for movement that was
+  "extremely slow", "weightless", "almost imperceptible", and got exactly that.
+
+  Anchor motion to named places. "Embers rise from all across the landscape"
+  put them all in one spot left of centre, 6x more motion in one quarter than
+  another. Naming four anchors and stating that the right side has as many as
+  the left is what fixed it.
+
+  Give the mist a cycle, not a state. Trying to stop it flooding the valley by
+  saying it "stays the same thickness throughout" froze it completely, valley
+  motion 0.062. Rise / swell / sink moves without transforming, and a particle
+  system in equilibrium loops by itself — raw loop gap 1.5 against 16.6 for the
+  flooding version.
+
+Post, all local. Trim, crossfade and encode in ONE ffmpeg pass straight from the
+download; an accidental intermediate re-encode cost 60% of the bitrate before
+the browser ever saw it.
+
+  TRIM=1.0  X=0.8   tail crossfaded back over the head
+  AV1  libsvtav1 crf 36 preset 4 -g 48
+  H264 libx264  crf 21 preset veryslow -g 48
+  poster from the shipped encode's own first frame
+
+Cost: 5th of 6 renders, ~166 credits for the session. Two of six shipped
+anything. Budget for that ratio.

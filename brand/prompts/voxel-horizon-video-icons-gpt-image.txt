@@ -1,0 +1,11 @@
+Use case: precise-object-edit
+Asset type: cinematic website hero background and source frame for later video generation
+Input image: voxel-horizon.webp is the edit target.
+
+Primary request: Make one surgical edit to the supplied image. Embed exactly five unique video-application motifs into existing stone terrace faces as ancient architectural carvings made from the same voxel masonry. Add exactly one of each: (1) a triangular play symbol inside a simple rectangular frame on an upper-left terrace face, (2) a horizontal video timeline with one circular scrubber on a middle-left terrace face, (3) a speaker with two sound-wave arcs on a lower-left terrace face, (4) four crop-corner brackets on an upper-right terrace face, and (5) a simple audio waveform on a lower-right terrace face.
+
+Integration: Each motif must be physically carved or built into a different existing stone wall, following that wall's perspective, voxel grid, depth, erosion, scale, occlusion, amber rim lighting, and charcoal shadows. They should feel like subtle archaeological reliefs discovered in the terrain, not modern UI overlays. Use restrained dim amber illumination only inside a few recessed grooves. No bright neon.
+
+Composition invariants: Preserve the original image's exact camera, centered composition, horizon, terrain silhouette, central valley, fog quality and density, black upper negative space, lighting direction, warm amber and charcoal palette, voxel scale, materials, texture, and all existing structures. Keep the central valley and upper-center copy area clear. Change only the local stone surfaces required to embed the five motifs.
+
+Constraints: Exactly five motifs total, exactly one instance of each specified motif. Every motif must remain clearly distinguishable. No duplicates, no extra symbols, no floating icons, no panels, no screens, no labels, no text, no letters, no numbers, no logo, no people, no torches, no visible flames, no watermark. Do not redesign, crop, reframe, brighten, or restyle the original image.

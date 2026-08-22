@@ -3,13 +3,14 @@ import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
 import { GeistPixelGrid } from 'geist/font/pixel';
 import { Analytics } from '@vercel/analytics/next';
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '../lib/site';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'video2ctx',
-  description:
-    'Paste a YouTube URL and get back the transcript, channel, comments, playlist and search context around it — normalised, with every moment still linked to its source.',
-  applicationName: 'video2ctx',
+  metadataBase: new URL(SITE_URL),
+  title: SITE_NAME,
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
 };
 
 export default function RootLayout({

@@ -1,0 +1,59 @@
+Video edit: add the carved symbols to the existing fold loop.
+2026-08-22. Higgsfield job hf_20260822_143125_5e972ca2-931e-40c5-8f2f-27ff5469eaa5.
+
+The raw render is deliberately not kept in the repo — only the graded loop that
+ships, web/public/scene/fold-scene-symbols.{webm,mp4}. Re-run this prompt if the
+grade, trim, crossfade or codec ever needs changing.
+
+Inputs
+  video     web/public/scene/fold-scene.mp4        (the previous fold loop, no symbols)
+  reference brand/source/voxel-horizon-video-icons-gpt.webp
+            (the scene still with five symbols carved in, made with GPT Image 2 —
+             prompt in voxel-horizon-video-icons-gpt-image.txt)
+
+Four lines below are scar tissue, not decoration. Earlier renders in this scene
+duplicated a symbol, rendered the glow bright pink, and scattered torch flames
+across the terraces unprompted. Keep the prohibitions that name those.
+
+---- prompt ----
+
+The reference image is this exact scene with stone symbols already carved into it.
+The video is the same landscape, same camera, same lighting. Add those carved
+symbols to the video and change nothing else.
+
+Carve five symbols into the terrain, exactly one of each, matching the reference
+image's placement, scale, perspective and weathering:
+- a play triangle inside a rectangular relief panel, on the upper-left terrace
+- a horizontal timeline with a round scrubber, on the long wall below it
+- a speaker with three sound arcs, on the lower-left terrace face
+- four crop-frame corner brackets, on the upper-right slope
+- a row of waveform bars, on the right slope below the crop marks
+
+Every symbol is solid stone in the same voxel masonry as the terrain around it:
+weathered, partially eroded, physically part of the wall. They are lit only by
+the scene's existing warm light, exactly as in the reference image. They hold
+perfectly still and keep identical shape and position in every frame.
+
+Preserve the rest of the shot completely: the locked tripod camera, the terrain
+geometry, the pale fog drifting through the central valley, the rising amber
+embers, the deep charcoal palette, the exposure, and the dark empty upper centre.
+The fog and embers must keep moving exactly as they already do.
+
+The symbols never illuminate, pulse, glow, flicker, duplicate, morph, drift or
+detach. No new light sources, no torches, no fire, no pink or magenta anywhere.
+No text, letters, numbers, logos, screens, interface panels, people or watermarks.
+
+---- end prompt ----
+
+What came back, measured against the previous loop
+
+  all five symbols present, one each, correct placement, stable across the clip
+  camera locked — tested for both translation and zoom, 0px / 1.000 scale win
+  black point lifted   4.0 -> 9.1     graded back
+  saturation dropped   8.9 -> 7.5     graded back
+  an AAC audio track                  dropped with -an
+  fog motion          0.263 -> 0.177  NOT recovered; see below
+
+The fog is the one real regression and it is not an encoding artefact. AV1 at
+crf 30 only reaches 0.194 for an extra 231 KB, so it was not worth the bytes.
+The delivered loop is calmer in the valley than its predecessor.

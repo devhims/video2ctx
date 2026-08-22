@@ -1,7 +1,7 @@
 /* Shared tokens. Two systems draw on this file:
  *
  *   dashboard  --color-dashboard-*  warm dark paper, the application shell
- *   landing    --color-home-*       light paper, used by /explore contenders
+ *   landing    --color-home-*       light paper, used by shared marketing components
  *
  * The live landing direction (Craft) declares its own dark palette locally in
  * app/craft.css and is stamped there. Its tokens are NOT here — see debt 1 in

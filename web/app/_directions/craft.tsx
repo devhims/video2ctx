@@ -83,6 +83,9 @@ const TRUST = [
 ];
 
 export function CraftDirection() {
+  const scenePoster = '/scene/fold-scene-symbols-poster.webp';
+  const staticScene = '/scene/voxel-horizon-symbols.webp';
+
   return (
     <main className='craft'>
       <CraftNav />
@@ -100,23 +103,17 @@ export function CraftDirection() {
           <picture className='voxel-base'>
             <source
               media='(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)'
-              srcSet='/scene/fold-scene-poster.webp'
+              srcSet={scenePoster}
             />
             <source
               media='(orientation: portrait) and (max-width: 900px)'
-              srcSet='/scene/voxel-horizon-portrait.webp'
+              srcSet='/scene/fold-scene-portrait-poster.webp'
             />
             <source
               media='(max-width: 1100px)'
-              srcSet='/scene/voxel-horizon-900.webp'
+              srcSet='/scene/voxel-horizon-symbols-900.webp'
             />
-            <img
-              src='/scene/voxel-horizon.webp'
-              alt=''
-              width={1672}
-              height={941}
-              decoding='async'
-            />
+            <img src={staticScene} alt='' width={1672} height={941} decoding='async' />
           </picture>
           <Flashlight />
         </div>
@@ -127,11 +124,14 @@ export function CraftDirection() {
           </span>
         </a>
         <h1>
-          Video in.{' '}
-          <FlickeringPixelText className='craft-context-word'>
-            Context
-          </FlickeringPixelText>{' '}
-          Out.
+          <span className='craft-hero-brand'>video2ctx</span>
+          <span className='craft-hero-claim'>
+            Video in.{' '}
+            <FlickeringPixelText className='craft-context-word'>
+              Context
+            </FlickeringPixelText>{' '}
+            out.
+          </span>
         </h1>
         <p className='craft-sub'>
           Everything your agent needs to understand videos.
