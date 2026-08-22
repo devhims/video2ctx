@@ -75,18 +75,19 @@ html:has(.craft) body {
 
 .craft-nav-inner {
   min-height: 3.25rem;
-  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
   border: 1px solid var(--rule);
   border-radius: var(--radius-home-pill);
   background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
   backdrop-filter: blur(0.75rem);
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: clamp(var(--space-md), 3vw, var(--space-2xl));
 }
 
 .craft-nav-brand {
+  justify-self: start;
   color: var(--ink);
   display: inline-flex;
   align-items: center;
@@ -97,20 +98,6 @@ html:has(.craft) body {
 
 .craft-nav-brand img {
   display: block;
-}
-
-.craft-nav-wordmark {
-  font-size: 0.9rem;
-  font-weight: 670;
-  letter-spacing: -0.035em;
-}
-
-.craft-nav-wordmark > span {
-  margin-left: 0.08em;
-  font-family: var(--font-home-pixel);
-  font-size: 1.04em;
-  font-weight: 500;
-  letter-spacing: 0;
 }
 
 .craft-nav-links {
@@ -146,6 +133,7 @@ html:has(.craft) body {
 }
 
 .craft-nav-actions {
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: var(--space-xs);
@@ -592,14 +580,24 @@ html:has(.craft) body {
 }
 
 .craft-hero-brand {
-  margin-bottom: var(--space-md);
-  display: block;
-  color: var(--accent);
-  font-family: var(--font-home-pixel);
-  font-size: clamp(0.78rem, 1.6vw, 0.95rem);
-  font-weight: 500;
-  letter-spacing: 0.045em;
+  width: fit-content;
+  margin: 0 auto clamp(var(--space-lg), 3vh, var(--space-xl));
+  display: flex;
+  align-items: baseline;
+  color: var(--ink);
+  font-family: var(--font-home-body);
+  font-size: clamp(1.15rem, 2.2vw, 1.45rem);
+  font-weight: 670;
+  letter-spacing: -0.04em;
   line-height: 1;
+}
+
+.craft-hero-brand-ctx {
+  margin-left: 0.08em;
+  font-family: var(--font-home-pixel);
+  font-size: 1.04em;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 .craft-hero-claim {
@@ -642,6 +640,18 @@ html:has(.craft) body {
   font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
   line-height: 1.55;
   text-wrap: balance;
+}
+
+.craft-open-source {
+  margin-top: var(--space-xs);
+  color: var(--ink-muted);
+  display: block;
+  font-family: var(--font-home-mono);
+  font-size: 0.72rem;
+  font-weight: 540;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
 }
 
 /* ------------------------------------------------------------------ form */
