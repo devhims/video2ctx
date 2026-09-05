@@ -16,6 +16,7 @@
     "verify": "npm ci --prefix youtube-processor && npm run build && npm test && npm run test:auth:integration",
     "test:auth": "vitest run test/auth-config.test.ts test/authentication.test.ts test/cli-auth-boundary.test.ts test/account-route.test.ts",
     "test:container": "npm --prefix youtube-processor test",
+    "test:agent:live": "tsc --noEmit -p tsconfig.agent-live.json && tsx scripts/test-youtube-agent-live.ts",
     "test:user-account": "vitest run --config vitest.user-account.config.ts",
     "types": "wrangler types",
     "docs:generate": "tsx scripts/generate-docs.ts",
@@ -24,7 +25,8 @@
     "deploy:production": "npm run db:migrate:production && npm run deploy",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
-    "db:migrate:production": "wrangler d1 migrations apply DB --remote"
+    "db:migrate:production": "wrangler d1 migrations apply DB --remote",
+    "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",

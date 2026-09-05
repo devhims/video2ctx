@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent live test architecture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f7f4ec;
+      --ink: #1e1f1c;
+      --muted: #5f625c;
+      --line: #4f514d;
+      --coral: #e24d3d;
+      --coral-soft: #f5d5cf;
+      --panel: #fffdf7;
+      --store: #e9e5d9;
+      --outside: #efece3;
+      --white: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #191a18;
+        --ink: #f4f1e8;
+        --muted: #b9bbb5;
+        --line: #c2c4bd;
+        --coral: #ff7666;
+        --coral-soft: #542d28;
+        --panel: #242521;
+        --store: #30312d;
+        --outside: #292a27;
+        --white: #191a18;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    svg { display: block; width: 100%; height: auto; }
+    .title { font-size: 28px; font-weight: 760; letter-spacing: -0.6px; fill: var(--ink); }
+    .subtitle { font-size: 14px; fill: var(--muted); }
+    .zone { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 7 7; }
+    .zone-label { font-size: 12px; font-weight: 750; letter-spacing: 1.2px; fill: var(--muted); }
+    .node { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; rx: 10; }
+    .node-focal { fill: var(--ink); stroke: var(--coral); stroke-width: 2.5; rx: 10; }
+    .node-store { fill: var(--store); stroke: var(--ink); stroke-width: 1.5; rx: 10; }
+    .node-external { fill: var(--outside); stroke: var(--line); stroke-width: 1.5; rx: 10; }
+    .node-title { font-size: 15px; font-weight: 750; fill: var(--ink); }
+    .node-title-inverse { font-size: 15px; font-weight: 750; fill: var(--white); }
+    .node-copy { font-size: 12px; fill: var(--muted); }
+    .node-copy-inverse { font-size: 12px; fill: var(--white); opacity: 0.85; }
+    .result { fill: var(--coral-soft); stroke: var(--coral); stroke-width: 1.5; rx: 10; }
+    .result-label { font-size: 12px; font-weight: 800; letter-spacing: 1px; fill: var(--coral); }
+    .result-value { font-size: 17px; font-weight: 800; fill: var(--ink); }
+    .arrow { fill: none; stroke: var(--line); stroke-width: 1.7; marker-end: url(#arrow); }
+    .arrow-coral { fill: none; stroke: var(--coral); stroke-width: 2; marker-end: url(#arrow-coral); }
+    .edge-label { font-size: 11px; font-weight: 750; letter-spacing: 0.5px; fill: var(--muted); }
+    .label-mask { fill: var(--paper); }
+    .not-covered { fill: none; stroke: var(--coral); stroke-width: 1.4; stroke-dasharray: 5 5; rx: 9; }
+    .not-covered-label { font-size: 12px; font-weight: 750; fill: var(--coral); }
+    .not-covered-copy { font-size: 12px; fill: var(--muted); }
+    footer { margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+  </style>
+</head>
+<body>
+<p style="padding:1rem;border:2px solid currentColor">Historical diagram: the current smoke test calls the local Worker HTTP API and uses the production GLM model factory, transcript analyst and storyboard analyst. See <a href="youtube-agent-architecture.md#current-live-smoke-test">current test instructions</a>.</p>
+  <main>
+    <svg viewBox="0 0 1280 720" role="img" aria-labelledby="diagram-title diagram-desc">
+      <title id="diagram-title">YouTube Agent live test architecture</title>
+      <desc id="diagram-desc">The live smoke test starts directly inside the topic research branch, injects Anthropic into Agent Core and the single-call TranscriptAnalyst, and replaces capability classification and Durable Object state with fixed and in-memory test inputs.</desc>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)"></path>
+        </marker>
+        <marker id="arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--coral)"></path>
+        </marker>
+      </defs>
+
+      <text x="40" y="48" class="title">Live test seam</text>
+      <text x="40" y="74" class="subtitle">What the Anthropic smoke test proves, and what remains outside its boundary</text>
+
+      <rect x="40" y="104" width="1200" height="72" class="result"></rect>
+      <text x="64" y="132" class="result-label">SMOKE TEST COVERAGE</text>
+      <text x="64" y="158" class="result-value">main model loop</text>
+      <text x="300" y="158" class="result-value">single-call analyst</text>
+      <text x="566" y="158" class="result-value">live provider reads</text>
+      <text x="836" y="158" class="result-value">citation finalization</text>
+
+      <rect x="40" y="216" width="792" height="388" class="zone"></rect>
+      <text x="60" y="240" class="zone-label">LOCAL SMOKE-TEST PROCESS</text>
+
+      <rect x="856" y="216" width="384" height="388" class="zone"></rect>
+      <text x="876" y="240" class="zone-label">EXTERNAL SERVICES</text>
+
+      <rect x="64" y="280" width="200" height="96" class="node"></rect>
+      <text x="84" y="310" class="node-title">Live test CLI</text>
+      <text x="84" y="334" class="node-copy">Fixed research prompt</text>
+      <text x="84" y="353" class="node-copy">Injected model and context</text>
+
+      <rect x="320" y="264" width="224" height="112" class="node-focal"></rect>
+      <text x="340" y="296" class="node-title-inverse">Agent Core</text>
+      <text x="340" y="321" class="node-copy-inverse">Same loop configuration</text>
+      <text x="340" y="341" class="node-copy-inverse">8 steps, 90 second limit</text>
+      <text x="340" y="361" class="node-copy-inverse">Dynamic tool decisions</text>
+
+      <rect x="320" y="440" width="224" height="120" class="node-store"></rect>
+      <text x="340" y="472" class="node-title">In-memory run context</text>
+      <text x="340" y="496" class="node-copy">Tool-call idempotency</text>
+      <text x="340" y="516" class="node-copy">Evidence and usage packets</text>
+      <text x="340" y="536" class="node-copy">Citation finalization</text>
+
+      <rect x="592" y="424" width="216" height="136" class="node"></rect>
+      <text x="612" y="456" class="node-title">Reusable tool code</text>
+      <text x="612" y="480" class="node-copy">8 provider tools + finalizer</text>
+      <text x="612" y="500" class="node-copy">search · video · transcript</text>
+      <text x="612" y="520" class="node-copy">comments · channel · playlist</text>
+      <text x="612" y="540" class="node-copy">analyst packet · finalizer</text>
+
+      <rect x="880" y="264" width="328" height="112" class="node-external"></rect>
+      <text x="904" y="296" class="node-title">Anthropic API</text>
+      <text x="904" y="321" class="node-copy">Main research decisions</text>
+      <text x="904" y="341" class="node-copy">One isolated analyst call / transcript</text>
+      <text x="904" y="361" class="node-copy">Injected only by the live test</text>
+
+      <rect x="880" y="424" width="328" height="72" class="node-external"></rect>
+      <text x="904" y="454" class="node-title">Direct provider adapter</text>
+      <text x="904" y="477" class="node-copy">direct reads · no browse or trends</text>
+
+      <rect x="880" y="520" width="328" height="64" class="node-external"></rect>
+      <text x="904" y="549" class="node-title">Public YouTube</text>
+      <text x="904" y="571" class="node-copy">Live YouTube library reads</text>
+
+      <path d="M 264 328 H 320" class="arrow-coral"></path>
+      <rect x="270" y="304" width="42" height="17" class="label-mask"></rect>
+      <text x="275" y="316" class="edge-label">START</text>
+
+      <path d="M 544 304 H 880" class="arrow"></path>
+      <rect x="671" y="280" width="86" height="17" class="label-mask"></rect>
+      <text x="678" y="292" class="edge-label">MODEL STEPS</text>
+
+      <path d="M 432 376 V 440" class="arrow"></path>
+      <rect x="444" y="401" width="62" height="17" class="label-mask"></rect>
+      <text x="449" y="413" class="edge-label">EXECUTE</text>
+
+      <path d="M 544 500 H 592" class="arrow-coral"></path>
+      <rect x="548" y="476" width="40" height="17" class="label-mask"></rect>
+      <text x="552" y="488" class="edge-label">TOOLS</text>
+
+      <path d="M 808 460 H 880" class="arrow"></path>
+      <rect x="818" y="436" width="52" height="17" class="label-mask"></rect>
+      <text x="824" y="448" class="edge-label">DIRECT</text>
+
+      <path d="M 1044 496 V 520" class="arrow"></path>
+
+      <rect x="40" y="632" width="1200" height="56" class="not-covered"></rect>
+      <text x="64" y="665" class="not-covered-label">NOT COVERED</text>
+      <text x="190" y="665" class="not-covered-copy">Capability classification, route persistence, Durable Object fibers and recovery, production provider stack, Workers AI</text>
+    </svg>
+    <footer>
+      This smoke test starts with a fixed topic_research decision. It confirms the main model can plan, the isolated TranscriptAnalyst can reduce complete transcripts to exact evidence, and the tool path can finalize cited output. It does not test classification or the Cloudflare deployment path.
+    </footer>
+  </main>
+</body>
+</html>

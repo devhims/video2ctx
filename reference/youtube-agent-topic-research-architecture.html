@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent topic research sequence</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f7f6f2; --raised: #ffffff; --wash: #efeee9; --ink: #1d1d1b;
+      --muted: #70716c; --soft: #85857f; --rule: #e2e0da; --rule-strong: #9b9992;
+      --accent: #e64b3c; --accent-ink: #a83227; --accent-wash: #f8e7e3; --link: #2e5aa8;
+      --fragment: rgba(29,29,27,.025); --sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --serif: Georgia, "Times New Roman", serif; --mono: "SFMono-Regular", Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #1d1d1b; --raised: #262624; --wash: #32322f; --ink: #f5f3ec;
+        --muted: #b1b0aa; --soft: #92918b; --rule: #44433f; --rule-strong: #77756f;
+        --accent: #ef5b4c; --accent-ink: #ff8b7f; --accent-wash: #3d2420; --link: #8eb4ff;
+        --fragment: rgba(245,243,236,.04);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--paper); color: var(--ink); }
+    body { display: grid; place-items: center; padding: 24px; font-family: var(--sans); }
+    main { width: min(100%, 1280px); overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 960px; height: auto; background: var(--paper); }
+    text { fill: var(--ink); }
+    .title { font-family: var(--serif); font-size: 32px; }
+    .subtitle { font-size: 12px; fill: var(--muted); }
+    .eyebrow, .actor-sub, .message, .fragment-label, .guard, .step, .legend { font-family: var(--mono); }
+    .eyebrow, .legend { font-size: 8px; font-weight: 600; letter-spacing: .12em; fill: var(--muted); }
+    .actor { fill: var(--raised); stroke: var(--rule-strong); stroke-width: 1; }
+    .actor-focal { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.2; }
+    .actor-name { font-size: 12px; font-weight: 600; text-anchor: middle; }
+    .actor-sub { font-size: 8px; fill: var(--muted); text-anchor: middle; }
+    .lifeline { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; }
+    .activation { fill: var(--wash); stroke: var(--muted); stroke-width: .8; }
+    .call { stroke: var(--rule-strong); stroke-width: 1.2; marker-end: url(#sequence-arrow); }
+    .external { stroke: var(--link); stroke-width: 1.2; marker-end: url(#sequence-arrow-link); }
+    .return { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 5 4; marker-end: url(#sequence-arrow); }
+    .success { stroke: var(--accent); stroke-width: 2; marker-end: url(#sequence-arrow-accent); }
+    .call, .external, .return, .success { fill: none; }
+    .mask { fill: var(--paper); }
+    .message { font-size: 8px; text-anchor: middle; }
+    .message-link { fill: var(--link); }
+    .message-accent { fill: var(--accent-ink); font-weight: 600; }
+    .fragment { fill: var(--fragment); stroke: var(--rule-strong); stroke-width: 1; }
+    .fragment-tab { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .fragment-label, .guard { font-size: 8px; fill: var(--muted); }
+    .fragment-label { text-anchor: middle; font-weight: 600; letter-spacing: .12em; }
+    .number { fill: var(--ink); }
+    .number-accent { fill: var(--accent); }
+    .step { fill: var(--paper); font-size: 8px; font-weight: 600; text-anchor: middle; }
+    .hairline { stroke: var(--rule); stroke-width: 1; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="880" viewBox="0 0 1280 880" role="img" aria-labelledby="topic-sequence-title topic-sequence-desc">
+      <title id="topic-sequence-title">YouTube Agent topic research sequence</title>
+      <desc id="topic-sequence-desc">Current topic research execution after the capability route has been persisted. AgentRuntimeDO starts Agent Core with ten provider tools and a finalizer. Each evidence tool call performs one durable provider operation. Transcript calls additionally send the complete segment catalog to one isolated TranscriptAnalyst model call. Evidence is persisted before deterministic citation validation and final result storage.</desc>
+      <defs>
+        <marker id="sequence-arrow" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--rule-strong)"></polygon></marker>
+        <marker id="sequence-arrow-accent" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--accent)"></polygon></marker>
+        <marker id="sequence-arrow-link" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--link)"></polygon></marker>
+      </defs>
+
+      <rect width="1280" height="800" fill="var(--paper)"></rect>
+      <text class="eyebrow" x="40" y="28">CURRENT TOPIC_RESEARCH FLOW</text>
+      <text class="title" x="40" y="64">Agent Core chooses research tools dynamically</text>
+      <text class="subtitle" x="40" y="88">Scope begins after topic_research is persisted. Public admission, classification, and polling are covered by the preceding diagrams.</text>
+
+      <line class="lifeline" x1="128" y1="152" x2="128" y2="808"></line>
+      <line class="lifeline" x1="368" y1="152" x2="368" y2="808"></line>
+      <line class="lifeline" x1="608" y1="152" x2="608" y2="808"></line>
+      <line class="lifeline" x1="848" y1="152" x2="848" y2="808"></line>
+      <line class="lifeline" x1="1088" y1="152" x2="1088" y2="808"></line>
+
+      <rect class="fragment" x="88" y="268" width="1032" height="370" rx="4"></rect>
+      <rect class="fragment-tab" x="112" y="268" width="48" height="16" rx="2"></rect>
+      <text class="fragment-label" x="136" y="280">LOOP</text>
+      <text class="guard" x="172" y="284">[repeat one registered evidence tool; analyst messages occur only for get_video_transcript]</text>
+
+      <rect class="activation" x="124" y="184" width="8" height="572"></rect>
+      <rect class="activation" x="364" y="184" width="8" height="572"></rect>
+      <rect class="activation" x="604" y="232" width="8" height="488"></rect>
+      <rect class="activation" x="844" y="488" width="8" height="60"></rect>
+      <rect class="activation" x="1084" y="392" width="8" height="60"></rect>
+
+      <g aria-label="Autonumbered current topic research sequence">
+        <circle class="number" cx="28" cy="184" r="8"></circle><text class="step" x="28" y="188">01</text>
+        <line class="call" x1="128" y1="184" x2="368" y2="184"></line>
+        <rect class="mask" x="156" y="164" width="184" height="12" rx="2"></rect>
+        <text class="message" x="248" y="173">Start topic configuration</text>
+
+        <circle class="number" cx="28" cy="232" r="8"></circle><text class="step" x="28" y="236">02</text>
+        <line class="external" x1="368" y1="232" x2="608" y2="232"></line>
+        <rect class="mask" x="396" y="212" width="184" height="12" rx="2"></rect>
+        <text class="message message-link" x="488" y="221">Prompt + 10 provider tools + finalizer</text>
+
+        <circle class="number" cx="28" cy="304" r="8"></circle><text class="step" x="28" y="308">03</text>
+        <line class="return" x1="608" y1="304" x2="368" y2="304"></line>
+        <rect class="mask" x="412" y="284" width="152" height="12" rx="2"></rect>
+        <text class="message" x="488" y="293">Choose one evidence tool call</text>
+
+        <circle class="number" cx="28" cy="348" r="8"></circle><text class="step" x="28" y="352">04</text>
+        <line class="call" x1="368" y1="348" x2="128" y2="348"></line>
+        <rect class="mask" x="172" y="328" width="152" height="12" rx="2"></rect>
+        <text class="message" x="248" y="337">Idempotent durable execution</text>
+
+        <circle class="number" cx="28" cy="392" r="8"></circle><text class="step" x="28" y="396">05</text>
+        <line class="external" x1="128" y1="392" x2="1088" y2="392"></line>
+        <rect class="mask" x="516" y="372" width="184" height="12" rx="2"></rect>
+        <text class="message message-link" x="608" y="381">Exactly one provider operation</text>
+
+        <circle class="number" cx="28" cy="436" r="8"></circle><text class="step" x="28" y="440">06</text>
+        <line class="return" x1="1088" y1="436" x2="128" y2="436"></line>
+        <rect class="mask" x="544" y="416" width="128" height="12" rx="2"></rect>
+        <text class="message" x="608" y="425">Complete result + cache cost</text>
+
+        <circle class="number" cx="28" cy="488" r="8"></circle><text class="step" x="28" y="492">07</text>
+        <line class="external" x1="128" y1="488" x2="848" y2="488"></line>
+        <rect class="mask" x="388" y="468" width="200" height="12" rx="2"></rect>
+        <text class="message message-link" x="488" y="477">[transcript] complete segments + focus</text>
+
+        <circle class="number" cx="28" cy="532" r="8"></circle><text class="step" x="28" y="536">08</text>
+        <line class="return" x1="848" y1="532" x2="128" y2="532"></line>
+        <rect class="mask" x="384" y="512" width="208" height="12" rx="2"></rect>
+        <text class="message" x="488" y="521">[transcript] summary + exact segment IDs</text>
+
+        <circle class="number" cx="28" cy="576" r="8"></circle><text class="step" x="28" y="580">09</text>
+        <line class="return" x1="128" y1="576" x2="368" y2="576"></line>
+        <rect class="mask" x="160" y="556" width="176" height="12" rx="2"></rect>
+        <text class="message" x="248" y="565">Persist or reuse evidence packet</text>
+
+        <circle class="number" cx="28" cy="620" r="8"></circle><text class="step" x="28" y="624">10</text>
+        <line class="external" x1="368" y1="620" x2="608" y2="620"></line>
+        <rect class="mask" x="408" y="600" width="160" height="12" rx="2"></rect>
+        <text class="message message-link" x="488" y="609">Packet → repeat or finish</text>
+
+        <circle class="number" cx="28" cy="688" r="8"></circle><text class="step" x="28" y="692">11</text>
+        <line class="return" x1="608" y1="688" x2="368" y2="688"></line>
+        <rect class="mask" x="424" y="668" width="128" height="12" rx="2"></rect>
+        <text class="message" x="488" y="677">Call finalize_answer</text>
+
+        <circle class="number-accent" cx="28" cy="744" r="8"></circle><text class="step" x="28" y="748">12</text>
+        <line class="success" x1="368" y1="744" x2="128" y2="744"></line>
+        <rect class="mask" x="160" y="724" width="176" height="12" rx="2"></rect>
+        <text class="message message-accent" x="248" y="733">Validate citations + store result</text>
+      </g>
+
+      <g aria-label="Sequence participants">
+        <rect class="actor-focal" x="52" y="104" width="152" height="48" rx="8"></rect>
+        <text class="actor-name" x="128" y="128">AgentRuntimeDO</text>
+        <text class="actor-sub" x="128" y="144">durable context + SQLite</text>
+
+        <rect class="actor" x="292" y="104" width="152" height="48" rx="8"></rect>
+        <text class="actor-name" x="368" y="128">Agent Core</text>
+        <text class="actor-sub" x="368" y="144">selected instructions + tools</text>
+
+        <rect class="actor" x="532" y="104" width="152" height="48" rx="8"></rect>
+        <text class="actor-name" x="608" y="128">Main model</text>
+        <text class="actor-sub" x="608" y="144">research and final answer</text>
+
+        <rect class="actor" x="772" y="104" width="152" height="48" rx="8"></rect>
+        <text class="actor-name" x="848" y="128">TranscriptAnalyst</text>
+        <text class="actor-sub" x="848" y="144">one isolated model call</text>
+
+        <rect class="actor" x="1012" y="104" width="152" height="48" rx="8"></rect>
+        <text class="actor-name" x="1088" y="128">YouTube provider</text>
+        <text class="actor-sub" x="1088" y="144">cached application services</text>
+      </g>
+
+      <line class="hairline" x1="40" y1="848" x2="1240" y2="848"></line>
+      <text class="legend" x="40" y="868">TranscriptAnalyst is one model call, not an Agent or Durable Object · finalization ends Agent Core without another model call</text>
+    </svg>
+  </main>
+</body>
+</html>

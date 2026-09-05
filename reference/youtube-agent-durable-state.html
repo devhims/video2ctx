@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent durable state model</title>
+  <style>
+    :root {
+      color-scheme:light dark;
+      --paper:#f7f6f2; --raised:#fff; --wash:#efeee9; --ink:#1d1d1b; --muted:#70716c;
+      --soft:#85857f; --rule:#e2e0da; --rule-strong:#9b9992; --accent:#e64b3c;
+      --accent-ink:#a83227; --accent-wash:#f8e7e3; --sans:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;
+      --serif:Georgia,"Times New Roman",serif; --mono:"SFMono-Regular",Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark) {
+      :root { --paper:#1d1d1b; --raised:#262624; --wash:#32322f; --ink:#f5f3ec; --muted:#b1b0aa;
+        --soft:#92918b; --rule:#44433f; --rule-strong:#77756f; --accent:#ef5b4c;
+        --accent-ink:#ff8b7f; --accent-wash:#3d2420; }
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--paper); color:var(--ink); }
+    body { display:grid; place-items:center; padding:24px; font-family:var(--sans); }
+    main { width:min(100%,1280px); overflow-x:auto; }
+    svg { display:block; width:100%; min-width:960px; height:auto; background:var(--paper); }
+    text { fill:var(--ink); }
+    .title { font-family:var(--serif); font-size:32px; }
+    .subtitle { font-size:12px; fill:var(--muted); }
+    .eyebrow,.tag,.field,.relation-label,.cardinality,.legend { font-family:var(--mono); }
+    .eyebrow,.tag,.legend { font-size:8px; font-weight:600; letter-spacing:.12em; fill:var(--muted); }
+    .entity { fill:var(--raised); stroke:var(--rule-strong); stroke-width:1; }
+    .entity-root { fill:var(--raised); stroke:var(--accent); stroke-width:1.2; }
+    .entity-sdk { fill:var(--wash); stroke:var(--rule-strong); stroke-width:1; stroke-dasharray:4 4; }
+    .header { fill:var(--wash); }
+    .header-root { fill:var(--accent-wash); }
+    .entity-name { font-size:12px; font-weight:600; }
+    .field { font-size:8px; fill:var(--muted); }
+    .field-key { fill:var(--ink); font-weight:600; }
+    .divider { stroke:var(--rule); stroke-width:1; }
+    .relation { fill:none; stroke:var(--rule-strong); stroke-width:1.2; stroke-linecap:round; stroke-linejoin:round; }
+    .relation-sdk { fill:none; stroke:var(--rule-strong); stroke-width:1; stroke-dasharray:4 4; stroke-linecap:round; stroke-linejoin:round; }
+    .mask { fill:var(--paper); }
+    .relation-label,.cardinality { font-size:8px; fill:var(--soft); text-anchor:middle; }
+    .note { fill:var(--wash); stroke:var(--rule); stroke-width:1; }
+    .note-text { font-size:8px; fill:var(--muted); }
+    .hairline { stroke:var(--rule); stroke-width:1; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="durable-state-title durable-state-desc">
+      <title id="durable-state-title">YouTube Agent durable state model</title>
+      <desc id="durable-state-desc">Logical data model for one AgentRuntimeDO SQLite database. Application tables store the agent run, its persisted capability route, tool calls, evidence packets, and product events. The Agents SDK stores retained managed-fiber status in cf_agents_fibers and an active execution row in cf_agents_runs while the callback is running.</desc>
+      <defs>
+        <marker id="state-arrow" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--rule-strong)"></polygon></marker>
+        <marker id="state-arrow-accent" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--accent)"></polygon></marker>
+        <marker id="state-arrow-link" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"></polygon></marker>
+      </defs>
+
+      <rect width="1280" height="760" fill="var(--paper)"></rect>
+      <text class="eyebrow" x="40" y="28">DURABLE OBJECT SQLITE</text>
+      <text class="title" x="40" y="64">What survives hibernation and restart</text>
+      <text class="subtitle" x="40" y="88">Application tables keep product state. The Agents SDK keeps retained and active fiber records in the same Durable Object.</text>
+
+      <path class="relation-sdk" d="M360 236 H416 Q424 236 424 244 V276 Q424 284 432 284 H464"></path>
+      <path class="relation" d="M360 480 H416 Q424 480 424 472 V432 Q424 424 432 424 H464"></path>
+      <path class="relation" d="M744 304 H800 Q808 304 808 296 V256 Q808 248 816 248 H864"></path>
+      <path class="relation" d="M744 416 H800 Q808 416 808 424 V496 Q808 504 816 504 H864"></path>
+      <line class="relation" x1="1024" y1="368" x2="1024" y2="424"></line>
+      <line class="relation" x1="604" y1="464" x2="604" y2="496"></line>
+
+      <rect class="mask" x="372" y="208" width="48" height="12" rx="2"></rect><text class="relation-label" x="396" y="217">RECOVERS</text>
+      <rect class="mask" x="372" y="452" width="40" height="12" rx="2"></rect><text class="relation-label" x="392" y="461">EMITS</text>
+      <rect class="mask" x="756" y="276" width="48" height="12" rx="2"></rect><text class="relation-label" x="780" y="285">EXECUTES</text>
+      <rect class="mask" x="756" y="388" width="48" height="12" rx="2"></rect><text class="relation-label" x="780" y="397">COLLECTS</text>
+      <rect class="mask" x="1036" y="388" width="48" height="12" rx="2"></rect><text class="relation-label" x="1060" y="397">RETURNS</text>
+      <rect class="mask" x="616" y="472" width="40" height="12" rx="2"></rect><text class="relation-label" x="636" y="481">ROUTES</text>
+
+      <text class="cardinality" x="448" y="276">1</text><text class="cardinality" x="376" y="228">0..1</text>
+      <text class="cardinality" x="448" y="416">1</text><text class="cardinality" x="376" y="472">N</text>
+      <text class="cardinality" x="760" y="296">1</text><text class="cardinality" x="848" y="240">N</text>
+      <text class="cardinality" x="760" y="408">1</text><text class="cardinality" x="848" y="496">N</text>
+      <text class="cardinality" x="1012" y="384">1</text><text class="cardinality" x="1012" y="416">0..1</text>
+      <text class="cardinality" x="592" y="480">1</text><text class="cardinality" x="592" y="492">0..1</text>
+
+      <g aria-label="Agents SDK fiber ledger">
+        <rect class="entity-sdk" x="80" y="144" width="280" height="184" rx="8"></rect>
+        <rect class="header" x="80" y="144" width="280" height="48" rx="8"></rect>
+        <rect x="80" y="184" width="280" height="8" fill="var(--wash)"></rect>
+        <text class="tag" x="100" y="164">SDK-owned fiber storage</text>
+        <text class="entity-name" x="100" y="184">cf_agents_fibers</text>
+        <line class="divider" x1="80" y1="192" x2="360" y2="192"></line>
+        <text class="field field-key" x="100" y="216"># fiber_id · idempotency_key [UQ]</text>
+        <text class="field" x="100" y="236">name · status</text>
+        <text class="field" x="100" y="256">snapshot · metadata_json</text>
+        <text class="field" x="100" y="276">error_message</text>
+        <text class="field" x="100" y="296">created_at · started_at · completed_at</text>
+        <text class="field" x="100" y="316">cf_agents_runs: transient active row</text>
+      </g>
+
+      <g aria-label="Persisted capability route">
+        <rect class="entity" x="464" y="496" width="280" height="104" rx="8"></rect>
+        <rect class="header" x="464" y="496" width="280" height="48" rx="8"></rect>
+        <rect x="464" y="536" width="280" height="8" fill="var(--wash)"></rect>
+        <text class="tag" x="484" y="516">One decision per run</text>
+        <text class="entity-name" x="484" y="536">agent_routes</text>
+        <line class="divider" x1="464" y1="544" x2="744" y2="544"></line>
+        <text class="field field-key" x="484" y="568"># run_id</text>
+        <text class="field" x="484" y="588">decision_json · created_at</text>
+      </g>
+
+      <g aria-label="Agent run aggregate root">
+        <rect class="entity-root" x="464" y="216" width="280" height="248" rx="8"></rect>
+        <rect class="header-root" x="464" y="216" width="280" height="48" rx="8"></rect>
+        <rect x="464" y="256" width="280" height="8" fill="var(--accent-wash)"></rect>
+        <text class="tag" x="484" y="236" fill="var(--accent-ink)">Aggregate root</text>
+        <text class="entity-name" x="484" y="256">agent_runs</text>
+        <line class="divider" x1="464" y1="264" x2="744" y2="264"></line>
+        <text class="field field-key" x="484" y="288"># id · idempotency_key [UQ]</text>
+        <text class="field" x="484" y="312">user_id · conversation_id</text>
+        <text class="field" x="484" y="336">parent_message_id</text>
+        <text class="field" x="484" y="360">user_message_id · assistant_message_id</text>
+        <text class="field" x="484" y="384">message · status · phase</text>
+        <text class="field" x="484" y="408">result_json · error</text>
+        <text class="field" x="484" y="432">credits_remaining_at_admission</text>
+        <text class="field" x="484" y="452">created_at · updated_at</text>
+      </g>
+
+      <g aria-label="Agent tool calls">
+        <rect class="entity" x="864" y="144" width="320" height="224" rx="8"></rect>
+        <rect class="header" x="864" y="144" width="320" height="48" rx="8"></rect>
+        <rect x="864" y="184" width="320" height="8" fill="var(--wash)"></rect>
+        <text class="tag" x="884" y="164">Logical child</text>
+        <text class="entity-name" x="884" y="184">agent_tool_calls</text>
+        <line class="divider" x1="864" y1="192" x2="1184" y2="192"></line>
+        <text class="field field-key" x="884" y="216"># run_id + tool_call_id</text>
+        <text class="field" x="884" y="240">semantic_key · tool_name</text>
+        <text class="field" x="884" y="264">operation · status</text>
+        <text class="field" x="884" y="288">result_json · error</text>
+        <text class="field" x="884" y="312">credits</text>
+        <text class="field" x="884" y="336">created_at · updated_at</text>
+        <text class="field" x="884" y="356">index: run + semantic key + status</text>
+      </g>
+
+      <g aria-label="Evidence packets">
+        <rect class="entity" x="864" y="424" width="320" height="184" rx="8"></rect>
+        <rect class="header" x="864" y="424" width="320" height="48" rx="8"></rect>
+        <rect x="864" y="464" width="320" height="8" fill="var(--wash)"></rect>
+        <text class="tag" x="884" y="444">Logical child</text>
+        <text class="entity-name" x="884" y="464">agent_evidence_packets</text>
+        <line class="divider" x1="864" y1="472" x2="1184" y2="472"></line>
+        <text class="field field-key" x="884" y="496"># packet_id</text>
+        <text class="field" x="884" y="520">→ run_id · → tool_call_id</text>
+        <text class="field" x="884" y="544">packet_json</text>
+        <text class="field" x="884" y="568">created_at</text>
+        <text class="field" x="884" y="592">index: run + created_at</text>
+      </g>
+
+      <g aria-label="Agent product events">
+        <rect class="entity" x="80" y="408" width="280" height="152" rx="8"></rect>
+        <rect class="header" x="80" y="408" width="280" height="48" rx="8"></rect>
+        <rect x="80" y="448" width="280" height="8" fill="var(--wash)"></rect>
+        <text class="tag" x="100" y="428">Append-only events</text>
+        <text class="entity-name" x="100" y="448">agent_events</text>
+        <line class="divider" x1="80" y1="456" x2="360" y2="456"></line>
+        <text class="field field-key" x="100" y="480"># id · → run_id</text>
+        <text class="field" x="100" y="504">type · payload_json</text>
+        <text class="field" x="100" y="528">created_at</text>
+        <text class="field" x="100" y="548">index: run + id</text>
+      </g>
+
+      <rect class="note" x="80" y="624" width="1104" height="56" rx="8"></rect>
+      <text class="tag" x="104" y="648">Implementation note</text>
+      <text class="note-text" x="104" y="668">run_id and tool_call_id are logical references only. The current DDL does not declare SQLite FOREIGN KEY constraints.</text>
+
+      <line class="hairline" x1="40" y1="708" x2="1240" y2="708"></line>
+      <rect class="entity-root" x="60" y="728" width="24" height="16" rx="4"></rect><text class="legend" x="96" y="740">Aggregate root</text>
+      <rect class="entity" x="244" y="728" width="24" height="16" rx="4"></rect><text class="legend" x="280" y="740">Application table</text>
+      <rect class="entity-sdk" x="452" y="728" width="24" height="16" rx="4"></rect><text class="legend" x="488" y="740">Agents SDK storage</text>
+      <text class="legend" x="1220" y="740" text-anchor="end">All rows live inside one AgentRuntimeDO instance</text>
+    </svg>
+  </main>
+</body>
+</html>
