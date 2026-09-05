@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { renderStructuredAnswer, structuredAnswerSchema } from '../src/agents/structured-answer';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -17,6 +18,12 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('exposes answer fields directly in the model tool schema', () => {
+    const schema = z.toJSONSchema(structuredAnswerSchema);
+    expect(schema.type).toBe('object');
+    expect(schema.properties).toHaveProperty('blocks');
+    expect(schema.properties).toHaveProperty('intent');
+  });
   it('renders a marker-free model answer with exact persisted text and timestamps', () => {
     const result = finalize(['e1', 'e1']);
     expect(result.answer).toBe('Supported finding without manually written citations. [cite:e1]');

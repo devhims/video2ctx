@@ -6,15 +6,36 @@ const findingsSchema = z.object({ findings: z.array(z.object({
 })) });
 const safeText = (text: string) => text.replace(/\[cite:/g, '(source marker:').replace(/\s+/g, ' ').slice(0, 600);
 
+const contentKinds = new Set(['youtube_transcript', 'youtube_storyboard', 'youtube_comments']);
+
+export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean {
+  return packets.some(packet => contentKinds.has(packet.kind)
+    && packet.excerpts.some(excerpt => excerpt.text.trim() && packet.sources.some(source => source.id === excerpt.sourceId)));
+}
+
 /** Preserve supported findings without pretending to complete a cross-source synthesis. */
 export function evidenceFallback(
   packets: readonly EvidencePacket[],
   intent: 'topic_research' | 'inspect_video',
 ): FinalizeAnswerInput | null {
   const blocks: string[] = [];
-  // Give both transcript and visual analysis space before discovery evidence.
-  const ordered = [...packets.filter(p => p.kind === 'youtube_transcript' || p.kind === 'youtube_storyboard'),
-    ...packets.filter(p => p.kind !== 'youtube_transcript' && p.kind !== 'youtube_storyboard')];
+  if (!hasContentEvidence(packets)) {
+    const links = packets.flatMap(packet => packet.sources.flatMap(source => {
+      const excerpt = packet.excerpts.find(e => e.sourceId === source.id && /^[A-Za-z0-9:_-]+$/.test(e.id));
+      return excerpt ? [`- ${safeText(source.title ?? 'Video source')} [cite:${excerpt.id}]`] : [];
+    })).slice(0, 3);
+    if (!links.length) return null;
+    return {
+      intent, confidence: 'low', citations: [], artifacts: [],
+      answer: `I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.\n\nSources to explore, not verified recommendations:\n${links.join('\n')}`,
+      warnings: [
+        { code: 'PARTIAL_EVIDENCE', message: 'Video content analysis did not complete; the requested answer is unavailable.' },
+        { code: 'NO_CONTENT_EVIDENCE', message: 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.' },
+      ],
+    };
+  }
+  // Once content is available, promotional discovery snippets add no useful findings.
+  const ordered = packets.filter(packet => contentKinds.has(packet.kind));
   for (const packet of ordered) {
     const usable = new Map(packet.excerpts.filter(e => /^[A-Za-z0-9:_-]+$/.test(e.id)
       && packet.sources.some(s => s.id === e.sourceId)).map(e => [e.id, e]));

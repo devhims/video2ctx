@@ -7,16 +7,22 @@ const block = z.object({
   text: z.string().trim().min(1).max(2_000),
   evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(12),
 });
-export const structuredAnswerSchema = z.discriminatedUnion('intent', [
-  fields.extend({
-    intent: z.enum(['topic_research', 'inspect_video']),
-    blocks: z.array(block).min(1).max(8),
-  }),
-  fields.extend({
-    intent: z.literal('clarification'),
-    blocks: z.array(block.extend({ evidenceIds: z.array(z.string()).max(0) })).min(1).max(1),
-  }),
-]);
+// Keep tool parameters as a top-level object so models can see the actual fields.
+// Conditional citation rules are still enforced before an answer can be persisted.
+export const structuredAnswerSchema = fields.extend({
+  intent: z.enum(['topic_research', 'inspect_video', 'clarification']),
+  blocks: z.array(block.extend({ evidenceIds: z.array(block.shape.evidenceIds.element).max(12) })).min(1).max(8),
+}).superRefine((input, ctx) => {
+  if (input.intent === 'clarification' && input.blocks.length !== 1) {
+    ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Clarification requires exactly one block.' });
+  }
+  input.blocks.forEach((value, index) => {
+    if (input.intent === 'clarification' ? value.evidenceIds.length !== 0 : value.evidenceIds.length === 0) {
+      ctx.addIssue({ code: 'custom', path: ['blocks', index, 'evidenceIds'],
+        message: input.intent === 'clarification' ? 'Clarification must not cite evidence.' : 'Every answer block requires supporting evidenceIds.' });
+    }
+  });
+});
 
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema>): FinalizeAnswerInput {
   const input = structuredAnswerSchema.parse(value);
