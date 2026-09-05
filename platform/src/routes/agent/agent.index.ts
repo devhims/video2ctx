@@ -1,6 +1,7 @@
 import { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 export { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 import { Hono, type Context } from 'hono';
+import { agentResponseOptionsSchema, compactAgentRun } from '../../agents/response';
 import { z } from 'zod';
 import {
   agentRunReceiptSchema,
@@ -150,6 +151,7 @@ agentRoutes.get('/agent/sessions/:conversationId', async (c) => {
 
 agentRoutes.post('/agent', async (c) => {
   const principal = requireUser(c);
+  const responseOptions = parseResponseOptions(c);
   const idempotencyKey = requireIdempotencyKey(c.req.header('idempotency-key'));
   const parsedRequest = parseAgentRequest(await body<unknown>(c.req.raw));
   const conversationId = parsedRequest.conversationId
@@ -190,7 +192,8 @@ agentRoutes.post('/agent', async (c) => {
         'The run was admitted, but its session catalog entry could not be recorded. Retry with the same Idempotency-Key.',
       );
     }
-    return c.json(agentRunReceiptSchema.parse(receipt), 202);
+    return c.json(responseOptions.responseFormat === 'compact'
+      ? compactAgentRun(receipt, responseOptions.include) : agentRunReceiptSchema.parse(receipt), 202);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
@@ -199,6 +202,7 @@ agentRoutes.post('/agent', async (c) => {
 
 agentRoutes.get('/agent/:conversationId/runs/:runId', async (c) => {
   const principal = requireUser(c);
+  const responseOptions = parseResponseOptions(c);
   const path = runPathSchema.safeParse({
     conversationId: c.req.param('conversationId'),
     runId: c.req.param('runId'),
@@ -216,7 +220,7 @@ agentRoutes.get('/agent/:conversationId/runs/:runId', async (c) => {
     throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
   }
   if (!run) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
-  return c.json(run);
+  return c.json(responseOptions.responseFormat === 'compact' ? compactAgentRun(run, responseOptions.include) : run);
 });
 
 async function requireAgentAccess(c: Context<App>): Promise<void> {
@@ -279,3 +283,8 @@ async function userAccountForUser(env: Env, userId: string) {
   return env.USER_ACCOUNT.getByName(instanceName);
 }
 
+function parseResponseOptions(c: Context<App>) {
+  const parsed = agentResponseOptionsSchema.safeParse({ responseFormat: c.req.query('responseFormat'), include: c.req.query('include') });
+  if (!parsed.success) throw new ApiError(422, 'INVALID_AGENT_RESPONSE_OPTIONS', 'The agent response options are invalid.', parsed.error.flatten());
+  return parsed.data;
+}
