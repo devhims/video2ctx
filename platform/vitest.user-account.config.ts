@@ -1,0 +1,14 @@
+import { resolve } from 'node:path';
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  plugins: [cloudflareTest(async () => ({
+    wrangler: { configPath: './test/user-account.wrangler.jsonc' },
+    miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'migrations')) } },
+  }))],
+  test: {
+    include: ['test/user-account-do.integration.test.ts', 'test/agent-runtime-do.integration.test.ts'],
+    setupFiles: ['./test/apply-auth-migrations.ts'],
+  },
+});

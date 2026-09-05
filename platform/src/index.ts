@@ -9,6 +9,8 @@ export { ContainerProxy } from '@cloudflare/containers';
 export { YouTubeProcessorContainer } from './youtube-processor-container';
 export { YouTubeRequestCoordinator } from './durable-objects/youtube-cache-coordinator';
 export { MonitorScheduler } from './durable-objects/monitor-scheduler';
+export { UserAccountDO } from './durable-objects/user-account';
+export { AgentRuntimeDO } from './agents/agent-runtime-do';
 
 export default {
   fetch: app.fetch,

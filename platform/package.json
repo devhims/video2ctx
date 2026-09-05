@@ -5,15 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
     "dev:local": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev:local:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
     "build": "tsc --noEmit",
-    "test": "vitest run && npm --prefix youtube-processor test",
+    "test": "vitest run && npm run test:user-account && npm --prefix youtube-processor test",
     "test:auth:integration": "vitest run --config vitest.auth.config.ts",
     "test:payments:integration": "vitest run --config vitest.auth.config.ts test/billing.integration.test.ts test/credits.integration.test.ts",
     "test:auth:e2e": "playwright test --config playwright.auth.config.ts",
     "verify": "npm ci --prefix youtube-processor && npm run build && npm test && npm run test:auth:integration",
     "test:auth": "vitest run test/auth-config.test.ts test/authentication.test.ts test/cli-auth-boundary.test.ts test/account-route.test.ts",
     "test:container": "npm --prefix youtube-processor test",
+    "test:user-account": "vitest run --config vitest.user-account.config.ts",
     "types": "wrangler types",
     "docs:generate": "tsx scripts/generate-docs.ts",
     "docs:check": "tsx scripts/generate-docs.ts --check",
@@ -24,12 +27,15 @@
     "db:migrate:production": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.41",
     "@better-auth/api-key": "1.6.26",
     "@cloudflare/containers": "0.3.7",
     "@polar-sh/better-auth": "1.8.4",
     "@polar-sh/sdk": "0.47.1",
     "@scalar/hono-api-reference": "^0.11.12",
     "@upstash/redis": "^1.38.2",
+    "agents": "0.21.0",
+    "ai": "7.0.77",
     "all-things-youtube": "0.2.2",
     "better-auth": "1.6.26",
     "better-call": "1.3.7",
@@ -38,6 +44,7 @@
     "react": "19.2.8",
     "react-email": "6.9.2",
     "striptags": "^3.2.0",
+    "workers-ai-provider": "4.0.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
