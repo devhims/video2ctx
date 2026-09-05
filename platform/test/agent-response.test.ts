@@ -96,9 +96,11 @@ describe('compact agent response', () => {
     expect(() => compactAgentRun(run)).toThrow('missing evidence');
   });
 
-  it('defaults to legacy and rejects invalid options', () => {
-    expect(agentResponseOptionsSchema.parse({})).toEqual({ responseFormat: 'legacy', include: [] });
-    for (const input of [{ responseFormat: 'other' }, { include: 'artifacts' }, { responseFormat: 'compact', include: 'unknown' }]) {
+  it('defaults to compact and rejects invalid options', () => {
+    expect(agentResponseOptionsSchema.parse({})).toEqual({ responseFormat: 'compact', include: [] });
+    expect(agentResponseOptionsSchema.parse({ include: 'artifacts' })).toEqual({ responseFormat: 'compact', include: ['artifacts'] });
+    expect(agentResponseOptionsSchema.parse({ responseFormat: 'legacy' })).toEqual({ responseFormat: 'legacy', include: [] });
+    for (const input of [{ responseFormat: 'other' }, { responseFormat: 'legacy', include: 'artifacts' }, { responseFormat: 'compact', include: 'unknown' }]) {
       expect(agentResponseOptionsSchema.safeParse(input).success).toBe(false);
     }
   });

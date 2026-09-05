@@ -148,9 +148,9 @@ describe('agent routes', () => {
     expect(receipt).not.toHaveProperty('turnOrdinal');
   });
 
-  test('returns compact admission identities without changing the run request', async () => {
+  test('defaults to compact admission identities without changing the run request', async () => {
     const harness = agentHarness();
-    const response = await app.request('/v1/agent?responseFormat=compact', {
+    const response = await app.request('/v1/agent', {
       method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'compact-admission' },
       body: JSON.stringify({ message: 'Research design' }),
     }, harness.env, executionContext);
@@ -167,7 +167,7 @@ describe('agent routes', () => {
       status: 'running', conversationTurn: 1, modelStepCount: 2, toolCallCount: 3 };
     harness.getRun.mockResolvedValue(stored);
     const path = `/v1/agent/${stored.conversationId}/runs/${stored.runId}`;
-    const legacy = await app.request(path, {}, harness.env, executionContext);
+    const legacy = await app.request(`${path}?responseFormat=legacy`, {}, harness.env, executionContext);
     expect(await legacy.json()).toEqual(stored);
     const compact = await app.request(`${path}?responseFormat=compact&include=diagnostics`, {}, harness.env, executionContext);
     expect(compact.status).toBe(200);
@@ -177,7 +177,7 @@ describe('agent routes', () => {
     expect(creditBalance).not.toHaveBeenCalled();
   });
 
-  test.each(['responseFormat=bad', 'include=artifacts', 'responseFormat=compact&include=bad'])('rejects invalid response options before admission: %s', async query => {
+  test.each(['responseFormat=bad', 'responseFormat=legacy&include=artifacts', 'responseFormat=compact&include=bad'])('rejects invalid response options before admission: %s', async query => {
     const harness = agentHarness();
     const response = await app.request(`/v1/agent?${query}`, { method: 'POST' }, harness.env, executionContext);
     expect(response.status).toBe(422);
@@ -464,6 +464,7 @@ describe('agent routes', () => {
     harness.getRun.mockResolvedValueOnce({
       runId,
       conversationId,
+      assistantMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
       conversationTurn: 1,
       modelStepCount: 3,
       toolCallCount: 6,
@@ -478,12 +479,10 @@ describe('agent routes', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    await expect(response.json()).resolves.toEqual({
       runId,
       conversationId,
-      conversationTurn: 1,
-      modelStepCount: 3,
-      toolCallCount: 6,
+      assistantMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
       status: 'running',
     });
     expect(harness.getRun).toHaveBeenCalledWith(runId);
@@ -506,7 +505,7 @@ describe('agent routes', () => {
 });
 
 function postAgent(env: Env, idempotencyKey: string, input: Record<string, unknown>) {
-  return app.request('/v1/agent', {
+  return app.request('/v1/agent?responseFormat=legacy', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

@@ -57,7 +57,7 @@ In another terminal:
 npm --prefix platform run test:agent:live
 ```
 
-The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. For the default recommendation query, it requires comparative routing and completed transcript analyses for four distinct videos. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
+The smoke test explicitly requests the legacy format to inspect detailed evidence, and calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. For the default recommendation query, it requires comparative routing and completed transcript analyses for four distinct videos. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
 
 For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, run the local Worker in `AGENT_ACCESS_MODE:admins`, configure its local `ADMIN_EMAILS_SECRET`, and also provide `AGENT_TEST_NON_ADMIN_TOKEN`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
 
@@ -84,7 +84,7 @@ For custom queries, the smoke test checks completion and citations; review the a
 
 ## Compact agent responses
 
-Add `?responseFormat=compact` to both the admission and polling URLs to use the compact response. The format is a per-request presentation option, so selecting it at admission does not change later polling responses. Omitting it retains the existing response contract. Both formats read the same stored run; changing formats does not rerun or charge for analysis.
+Compact responses are the default for admission and polling. Existing clients that parse the previous detailed contract must add `?responseFormat=legacy` to both URLs. The format is a per-request presentation option; selecting legacy at admission does not change later polling responses. Both formats read the same stored run; changing formats does not rerun or charge for analysis.
 
 In Postman:
 
@@ -112,4 +112,13 @@ For additional details, append `&include=evidence,artifacts,diagnostics`. Reques
 - `artifacts` adds `result.artifacts` with stored tool output artifacts.
 - `diagnostics` adds top-level routing, user message ID, conversation turn, model step count, and tool call count. Classifier and isolated analyst calls are excluded from the existing model step counter.
 
-Invalid formats or include values return `422`. `include` requires `responseFormat=compact`. Session restoration retains its existing format. The compact response is a serialization change; transcript analysis and exact internal citation validation remain in place.
+Invalid formats or include values return `422`. `include` works with the default compact format and is rejected with `responseFormat=legacy`. Session restoration retains its existing format. The compact response is a serialization change; transcript analysis and exact internal citation validation remain in place.
+
+
+## Adaptive answer scope
+
+Both research and inspect honor the requested number of points and level of detail. Without an explicit count, the model chooses a useful number from the evidence. Recommendation count is separate from the two- or four-video research target.
+
+Normal and recovery synthesis share this guidance. Answer blocks allow up to 20 sections, with a 1,200-word prompt ceiling and the existing 20,000-character validation limit. Large lists may group related items into sections. Transcript analysts can return up to 20 relevant findings within their existing 4,000-token budget; they should not fill that allowance unnecessarily. Recovery allows up to 3,200 output tokens within the unchanged 20-second reserve and 60-second overall deadline.
+
+These limits bound resource usage rather than guarantee any requested count. If evidence or the response budget prevents fulfilling the request, the model is instructed to explain the shortfall using `ANSWER_SCOPE_SHORTFALL`, which the application maps to `PARTIAL_EVIDENCE`. Source caveats use `SOURCE_CAVEAT` and do not by themselves make the outcome partial. Runtime timeout and coverage warnings remain application-owned. Recommendations should have distinct categories, practical examples, and contextualized quantitative claims. Not analyzing every search result is not itself a coverage gap; actual coverage shortfalls and material source limitations remain visible.

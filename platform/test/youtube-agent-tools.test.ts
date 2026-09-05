@@ -218,7 +218,7 @@ describe('TranscriptAnalyst', () => {
 
     expect(model.doGenerateCalls).toHaveLength(1);
     expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(4_000);
-    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('at most 5 distinct findings');
+    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('at most 20 distinct findings');
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('The complete transcript starts here.');
     expect(prompt).toContain('This middle segment adds context.');
@@ -235,6 +235,18 @@ describe('TranscriptAnalyst', () => {
       startMs: 0,
       endMs: 73_000,
     });
+  });
+
+  it('retains ten supported findings for a larger inspect request', async () => {
+    const findings = Array.from({ length: 10 }, (_, i) => ({ claim: `Finding ${i + 1}`, windowIndexes: [i] }));
+    const result = await analyzeTranscriptWithModel({
+      model: transcriptAnalysisModel({ summary: 'Ten relevant points.', findings, warnings: [] }),
+      videoId: 'abcdefghijk', researchQuestion: 'List ten lessons from this video', focus: 'Ten distinct lessons',
+      segments: findings.map((_, i) => ({ startMs: i * 65_000, durationMs: 1000, endMs: i * 65_000 + 1000, text: `Evidence ${i + 1}` })),
+      signal: new AbortController().signal,
+    });
+    expect(result.findings).toHaveLength(10);
+    expect(result.excerpts).toHaveLength(10);
   });
 
   it('repairs an out-of-range window reference once before resolving evidence', async () => {

@@ -8,7 +8,7 @@ import type { AgentRunView } from './agent-runtime-do';
 
 const detailSchema = z.enum(['artifacts', 'evidence', 'diagnostics']);
 export const agentResponseOptionsSchema = z.object({
-  responseFormat: z.enum(['legacy', 'compact']).default('legacy'),
+  responseFormat: z.enum(['legacy', 'compact']).default('compact'),
   include: z.string().max(100).optional().transform(value => value === undefined ? [] : value.split(',').map(item => item.trim()))
     .pipe(z.array(detailSchema).max(3)),
 }).superRefine((value, ctx) => {
