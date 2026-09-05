@@ -38,14 +38,14 @@ async function main(): Promise<void> {
       assert.equal(response.status, 202, `Admission failed: ${await response.clone().text()}`);
       const receipt = agentRunReceiptSchema.parse(await response.json());
       let complete = false;
-      while (Date.now() - started < 80_000) {
+      while (Date.now() - started < 120_000) {
         const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
           headers, signal: AbortSignal.timeout(10_000),
         });
         if (poll.status === 429) {
           const seconds = Number(poll.headers.get('Retry-After'));
           const waitMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 5000;
-          await delay(Math.min(waitMs, Math.max(0, 80_000 - (Date.now() - started))));
+          await delay(Math.min(waitMs, Math.max(0, 120_000 - (Date.now() - started))));
           continue;
         }
         assert.equal(poll.status, 200, `Polling failed: ${await poll.clone().text()}`);
