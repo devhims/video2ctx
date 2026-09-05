@@ -1,0 +1,8 @@
+{
+  "name": "storyboard-model-local-test",
+  "main": "./storyboard-model-worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": { "binding": "AI", "remote": true },
+  "vars": { "AI_GATEWAY_ID": "" }
+}

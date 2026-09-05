@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent current system architecture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f7f6f2; --raised: #ffffff; --wash: #efeee9; --ink: #1d1d1b;
+      --muted: #70716c; --soft: #85857f; --rule: #e2e0da; --rule-strong: #9b9992;
+      --accent: #e64b3c; --accent-ink: #a83227; --accent-wash: #f8e7e3; --link: #2e5aa8;
+      --zone: rgba(255,255,255,.52); --sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --serif: Georgia, "Times New Roman", serif; --mono: "SFMono-Regular", Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #1d1d1b; --raised: #262624; --wash: #32322f; --ink: #f5f3ec;
+        --muted: #b1b0aa; --soft: #92918b; --rule: #44433f; --rule-strong: #77756f;
+        --accent: #ef5b4c; --accent-ink: #ff8b7f; --accent-wash: #3d2420; --link: #8eb4ff;
+        --zone: rgba(38,38,36,.56);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--paper); color: var(--ink); }
+    body { display: grid; place-items: center; padding: 24px; font-family: var(--sans); }
+    main { width: min(100%, 1280px); overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 960px; height: auto; background: var(--paper); }
+    text { fill: var(--ink); }
+    .title { font-family: var(--serif); font-size: 32px; }
+    .subtitle { font-size: 12px; fill: var(--muted); }
+    .eyebrow, .tag, .tech, .legend, .edge { font-family: var(--mono); }
+    .eyebrow, .tag, .legend, .edge { font-size: 8px; font-weight: 600; letter-spacing: .12em; }
+    .eyebrow, .tag, .legend { fill: var(--muted); }
+    .node-title { font-size: 12px; font-weight: 600; }
+    .copy { font-size: 8px; fill: var(--muted); }
+    .tech { font-size: 8px; fill: var(--soft); }
+    .zone { fill: var(--zone); stroke: var(--rule); stroke-width: 1; }
+    .node { fill: var(--raised); stroke: var(--rule-strong); stroke-width: 1; }
+    .focal { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.2; }
+    .store { fill: var(--wash); stroke: var(--rule-strong); stroke-width: 1; }
+    .planned { fill: var(--wash); stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; }
+    .connector { fill: none; stroke: var(--rule-strong); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#system-arrow); }
+    .external { fill: none; stroke: var(--link); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#system-arrow-link); }
+    .future-path { fill: none; stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#system-arrow); }
+    .label-bg { fill: var(--paper); }
+    .edge { fill: var(--soft); text-anchor: middle; }
+    .link-text { fill: var(--link); }
+    .accent-text { fill: var(--accent-ink); }
+    .hairline { stroke: var(--rule); stroke-width: 1; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="youtube-system-title youtube-system-desc">
+      <title id="youtube-system-title">YouTube Agent current system architecture</title>
+      <desc id="youtube-system-desc">Current implementation showing one UserAccountDO per authenticated user cataloging sessions and one AgentRuntimeDO per conversation owning agent execution and memory. A structured classifier persists one of three route outcomes, then the same durable executor loads either the topic research or inspect video subset.</desc>
+      <defs>
+        <marker id="system-arrow" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--rule-strong)"></polygon></marker>
+        <marker id="system-arrow-accent" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--accent)"></polygon></marker>
+        <marker id="system-arrow-link" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--link)"></polygon></marker>
+      </defs>
+
+      <rect width="1280" height="760" fill="var(--paper)"></rect>
+      <text class="eyebrow accent-text" x="40" y="32">VIDEO2CTX / CURRENT IMPLEMENTATION</text>
+      <text class="title" x="40" y="68">YouTube Agent system architecture</text>
+      <text class="subtitle" x="40" y="92">One user object catalogs sessions; one conversation object classifies and executes each durable agent run.</text>
+
+      <rect x="40" y="112" width="1200" height="64" rx="8" fill="var(--wash)" stroke="var(--rule)" stroke-width="1"></rect>
+      <text class="tag" x="64" y="140">Deployment status</text>
+      <text class="node-title" x="64" y="160">Public admission and polling are implemented; AGENT_RUNTIME_ENABLED remains false by default.</text>
+      <text class="tech" x="1216" y="152" text-anchor="end">wrangler migration v5</text>
+
+      <rect class="zone" x="40" y="200" width="784" height="472" rx="8"></rect>
+      <rect class="zone" x="832" y="200" width="408" height="472" rx="8"></rect>
+      <text class="tag" x="60" y="224">Application code</text>
+      <text class="tag" x="852" y="224">External execution and data</text>
+
+      <path class="connector" d="M264 292 H304 Q312 292 312 300 V316 Q312 324 320 324 H336"></path>
+      <line class="connector" x1="164" y1="336" x2="164" y2="408"></line>
+      <line class="external" x1="800" y1="296" x2="848" y2="296"></line>
+      <line class="connector" x1="700" y1="444" x2="700" y2="468"></line>
+      <line class="connector" x1="448" y1="444" x2="448" y2="536"></line>
+      <line class="external" x1="800" y1="500" x2="848" y2="500"></line>
+      <line class="external" x1="1028" y1="560" x2="1028" y2="600"></line>
+
+      <rect class="label-bg" x="804" y="268" width="40" height="12" rx="2"></rect>
+      <text class="edge link-text" x="824" y="277">MODEL</text>
+      <rect class="label-bg" x="176" y="360" width="56" height="12" rx="2"></rect>
+      <text class="edge" x="204" y="369">CATALOG</text>
+      <rect class="label-bg" x="460" y="460" width="64" height="12" rx="2"></rect>
+      <text class="edge" x="492" y="469">PERSIST</text>
+      <rect class="label-bg" x="804" y="472" width="40" height="12" rx="2"></rect>
+      <text class="edge link-text" x="824" y="481">READ</text>
+
+      <g aria-label="Public agent API">
+        <rect class="node" x="64" y="248" width="200" height="88" rx="8"></rect>
+        <text class="tag" x="84" y="272">Admission · polling · sessions</text>
+        <text class="node-title tech" x="84" y="300">/v1/agent</text>
+        <text class="copy" x="84" y="320">Auth · idempotency · child routing</text>
+      </g>
+
+      <g aria-label="UserAccountDO session catalog">
+        <rect class="node" x="64" y="408" width="200" height="96" rx="8"></rect>
+        <text class="tag" x="84" y="432">Per-user DO · SQLite FTS5</text>
+        <text class="node-title" x="84" y="460">UserAccountDO</text>
+        <text class="copy" x="84" y="480">Session titles · prompt search · cursors</text>
+        <text class="tech" x="84" y="496">catalogs conversation child IDs</text>
+      </g>
+
+      <g aria-label="AgentRuntimeDO containing durable execution infrastructure, capability classification, Agent Core, and optional transcript analysis calls">
+        <rect class="focal" x="336" y="248" width="464" height="196" rx="8"></rect>
+        <text class="tag accent-text" x="356" y="272">Cloudflare Agents SDK · Durable Object</text>
+        <text class="node-title" x="356" y="304">AgentRuntimeDO</text>
+        <text class="copy" x="356" y="328">Durable acceptance, fibers, recovery</text>
+        <text class="copy" x="356" y="348">Budgets, idempotency, persistence</text>
+        <text class="tech" x="356" y="376">11 evidence calls + 1 finalization</text>
+        <text class="tech" x="356" y="396">4 concurrent provider requests</text>
+
+        <rect class="node" x="568" y="264" width="208" height="48" rx="8"></rect>
+        <text class="tag" x="588" y="282">First semantic step · 20s</text>
+        <text class="node-title" x="588" y="302">Capability classifier</text>
+
+        <rect class="node" x="568" y="320" width="208" height="48" rx="8"></rect>
+        <text class="tag" x="588" y="338">Selected branch</text>
+        <text class="node-title" x="588" y="358">Agent Core</text>
+
+        <rect class="node" x="568" y="376" width="208" height="48" rx="8"></rect>
+        <text class="tag" x="588" y="394">Topic transcripts only</text>
+        <text class="node-title" x="588" y="414">TranscriptAnalyst</text>
+      </g>
+
+      <g aria-label="Reusable provider tool library and capability subsets">
+        <rect class="node" x="600" y="468" width="200" height="152" rx="8"></rect>
+        <text class="tag" x="620" y="492">Provider tool library</text>
+        <text class="node-title" x="620" y="520">12 reusable wrappers</text>
+        <text class="copy" x="620" y="544">topic_research: 10 + finalizer</text>
+        <text class="copy" x="620" y="568">inspect_video: 5 + finalizer</text>
+        <text class="tech" x="620" y="596">one wrapper / provider operation</text>
+        <text class="tech" x="620" y="610">explicit capability tool lists</text>
+      </g>
+
+      <g aria-label="Durable Object SQLite state">
+        <rect class="store" x="336" y="536" width="224" height="112" rx="8"></rect>
+        <text class="tag" x="356" y="560">Durable Object SQLite</text>
+        <text class="node-title" x="356" y="592">Run state and evidence</text>
+        <text class="copy" x="356" y="616">Runs · routes · tool calls · packets · events</text>
+        <text class="tech" x="356" y="636">plus Agents SDK fiber ledger</text>
+      </g>
+
+      <g aria-label="Workers AI production model">
+        <rect class="node" x="848" y="248" width="360" height="96" rx="8"></rect>
+        <text class="tag" x="868" y="272">Production model</text>
+        <text class="node-title" x="868" y="304">Workers AI through AI Gateway</text>
+        <text class="tech" x="868" y="328">@cf/zai-org/glm-5.3-flash</text>
+      </g>
+
+      <g aria-label="YouTube provider and cache stack">
+        <rect class="node" x="848" y="432" width="360" height="128" rx="8"></rect>
+        <text class="tag" x="868" y="456">In-process provider stack</text>
+        <text class="node-title" x="868" y="484">YouTube provider adapter</text>
+        <text class="copy" x="868" y="508">Cache coordinator and processor container</text>
+        <line class="hairline" x1="868" y1="524" x2="1188" y2="524"></line>
+        <text class="tech" x="868" y="548">search cache 5m · transcript cache 7d</text>
+      </g>
+
+      <g aria-label="Public YouTube source">
+        <rect class="node" x="848" y="600" width="360" height="56" rx="8"></rect>
+        <text class="tag" x="868" y="624">Evidence source</text>
+        <text class="node-title" x="868" y="644">Public YouTube</text>
+      </g>
+
+      <line class="hairline" x1="40" y1="704" x2="1240" y2="704"></line>
+      <line x1="60" y1="728" x2="92" y2="728" stroke="var(--rule-strong)" stroke-width="1.2" marker-end="url(#system-arrow)"></line>
+      <text class="legend" x="104" y="732">Current application path</text>
+      <line x1="268" y1="728" x2="300" y2="728" stroke="var(--link)" stroke-width="1.2" marker-end="url(#system-arrow-link)"></line>
+      <text class="legend" x="312" y="732">External call</text>
+      <text class="legend" x="1220" y="732" text-anchor="end">Session search is lexical over user prompts · no semantic memory · no Workflow continuation</text>
+    </svg>
+  </main>
+</body>
+</html>

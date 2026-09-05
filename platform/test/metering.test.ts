@@ -88,6 +88,7 @@ describe('credit metering', () => {
       tracks: { cached: 1, fresh: 1 },
       transcript: { cached: 1, fresh: 1 },
       comments: { cached: 1, fresh: 2 },
+      storyboard: { cached: 1, fresh: 1 },
       endscreen: { cached: 1, fresh: 1 },
       channel: { cached: 1, fresh: 1 },
       channelVideos: { cached: 1, fresh: 1 },

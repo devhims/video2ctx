@@ -9,6 +9,8 @@ export default defineConfig({
       'test/auth-worker.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',
+      'test/user-account-do.integration.test.ts',
+      'test/agent-runtime-do.integration.test.ts',
     ],
     setupFiles: ['./test/setup.ts'],
   },

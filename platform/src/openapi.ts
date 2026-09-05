@@ -292,6 +292,7 @@ export const openApiDocument = {
     { name: 'Playlists', description: 'Playlist inspection.' },
     { name: 'Projects', description: 'Private research projects and saved material.' },
     { name: 'Research', description: 'Imports, jobs, cited answers, comparisons, and reports.' },
+    { name: 'Agents', description: 'Durable agent runs and results. Feature-flagged; access is restricted to verified admin accounts during the initial rollout.' },
     { name: 'Exports', description: 'Project export creation and download.' },
     { name: 'Monitoring', description: 'Monitors, notifications, and digest preferences.' },
     { name: 'YouTube OAuth', description: 'Connect or disconnect the user’s YouTube account.' },
@@ -594,6 +595,83 @@ export const openApiDocument = {
           '429': responseRef('RateLimited'),
           '500': responseRef('ServerError'),
           '503': responseRef('ServiceUnavailable'),
+        },
+      },
+    },
+    '/v1/agent': {
+      post: {
+        tags: ['Agents'],
+        operationId: 'startAgentRun',
+        summary: 'Start a durable agent run',
+        description: 'Starts a new conversation when conversationId is omitted. Follow-up requests reuse the Durable Object selected by the supplied conversationId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.',
+        security: dataSecurity,
+        parameters: [{
+          name: 'Idempotency-Key',
+          in: 'header',
+          required: true,
+          description: 'Stable key for retrying this admission without creating another run.',
+          schema: { type: 'string', minLength: 8, maxLength: 200 },
+        }],
+        requestBody: jsonBody(schemaRef('AgentRequest')),
+        responses: {
+          '202': meteredJsonResponse('Agent run admitted.', schemaRef('AgentRunReceipt')),
+          '409': responseRef('Conflict'),
+          ...dataErrors,
+        },
+      },
+    },
+    '/v1/agent/sessions': {
+      get: {
+        tags: ['Agents'],
+        operationId: 'listAgentSessions',
+        summary: 'List or search agent sessions',
+        description: 'Lists the authenticated user’s conversation sessions by recent activity. The optional query performs lexical full-text search over the user prompts recorded for each session. It does not use embeddings or model memory.',
+        security: dataSecurity,
+        parameters: [
+          queryParameter('q', 'Optional lexical search query.', { type: 'string', maxLength: 200, example: 'Durable Objects' }),
+          queryParameter('limit', 'Maximum sessions to return.', { type: 'integer', minimum: 1, maximum: 100, default: 20 }),
+          queryParameter('cursor', 'Opaque cursor returned by the previous page.', { type: 'string', maxLength: 500 }),
+        ],
+        responses: {
+          '200': jsonResponse('The user’s agent sessions.', schemaRef('AgentSessionPage')),
+          ...standardErrors,
+        },
+      },
+    },
+    '/v1/agent/sessions/{conversationId}': {
+      get: {
+        tags: ['Agents'],
+        operationId: 'getAgentSession',
+        summary: 'Restore an agent conversation',
+        description: 'Returns the authenticated user’s session metadata and a chronological page of user and assistant messages. The first page contains the newest turns, ordered oldest to newest within the page. Use nextCursor to load older turns. Tool calls, evidence packets, and internal events are not included.',
+        security: dataSecurity,
+        parameters: [
+          pathParameter('conversationId', 'Conversation UUID returned by agent admission.'),
+          queryParameter('limit', 'Maximum turns to return. Each turn produces one user message and one assistant message.', { type: 'integer', minimum: 1, maximum: 100, default: 50 }),
+          queryParameter('cursor', 'Opaque cursor for loading turns older than the current page.', { type: 'string', maxLength: 500 }),
+        ],
+        responses: {
+          '200': jsonResponse('The restored agent conversation.', schemaRef('AgentSessionDetail')),
+          ...standardErrors,
+          '404': responseRef('NotFound'),
+        },
+      },
+    },
+    '/v1/agent/{conversationId}/runs/{runId}': {
+      get: {
+        tags: ['Agents'],
+        operationId: 'getAgentRun',
+        summary: 'Get a durable agent run',
+        description: 'Reads the current status and, once complete, the persisted result from the conversation-scoped Durable Object.',
+        security: dataSecurity,
+        parameters: [
+          pathParameter('conversationId', 'Conversation UUID returned by agent admission.'),
+          pathParameter('runId', 'Agent run UUID returned by agent admission.'),
+        ],
+        responses: {
+          '200': jsonResponse('Current agent run state.', schemaRef('AgentRun')),
+          ...standardErrors,
+          '404': responseRef('NotFound'),
         },
       },
     },
@@ -1424,6 +1502,7 @@ export const openApiDocument = {
       Forbidden: jsonResponse('The caller is not allowed to perform this operation.', schemaRef('Error')),
       InsufficientCredits: meteredJsonResponse('The user account does not have enough credits. Error code: INSUFFICIENT_CREDITS.', schemaRef('Error')),
       NotFound: jsonResponse('The requested resource was not found.', schemaRef('Error')),
+      Conflict: jsonResponse('The request conflicts with the current state of the conversation.', schemaRef('Error')),
       ValidationError: jsonResponse('The request failed validation.', schemaRef('Error')),
       RateLimited: jsonResponse('The public rate limit was exceeded.', schemaRef('Error')),
       ServerError: jsonResponse('An unexpected server error occurred.', schemaRef('Error')),
@@ -1911,6 +1990,125 @@ export const openApiDocument = {
       },
       JobAccepted: { type: 'object', required: ['id', 'status', 'progress'], properties: { id: { type: 'string' }, status: { type: 'string' }, progress: { type: 'integer', minimum: 0, maximum: 100 } } },
       Job: { allOf: [storedRecord, { properties: { id: { type: 'string' }, status: { type: 'string', enum: ['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled'] }, progress: { type: 'integer', minimum: 0, maximum: 100 } } }] },
+      AgentRequest: {
+        type: 'object',
+        required: ['message'],
+        properties: {
+          message: { type: 'string', minLength: 1, maxLength: 10000 },
+          conversationId: { type: 'string', format: 'uuid', description: 'Reuse this conversation and its Durable Object.' },
+          parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
+        },
+      },
+      AgentRunReceipt: {
+        type: 'object',
+        required: ['runId', 'conversationId', 'userMessageId', 'assistantMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
+        properties: {
+          runId: { type: 'string', format: 'uuid' },
+          conversationId: { type: 'string', format: 'uuid' },
+          userMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier assigned to the admitted user message.' },
+          assistantMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier reserved for the assistant response.' },
+          conversationTurn: { type: 'integer', minimum: 1, description: 'One-based position of this user and assistant turn within the conversation.' },
+          modelStepCount: { type: 'integer', minimum: 0, description: 'Completed model steps in the main Agent Core loop. Classifier, transcript analyst, repair, and timeout-finalizer calls are excluded.' },
+          toolCallCount: { type: 'integer', minimum: 0, description: 'Persisted tool calls for this run, including completed, failed, and finalization calls.' },
+          status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'cancelled'] },
+        },
+      },
+      AgentSession: {
+        type: 'object',
+        required: ['conversationId', 'title', 'latestMessagePreview', 'lastRunId', 'runCount', 'createdAt', 'updatedAt'],
+        properties: {
+          conversationId: { type: 'string', format: 'uuid' },
+          title: { type: 'string', maxLength: 80 },
+          latestMessagePreview: { type: 'string', maxLength: 240 },
+          lastRunId: { type: 'string', format: 'uuid' },
+          runCount: { type: 'integer', minimum: 1 },
+          createdAt: { type: 'integer', minimum: 0, description: 'Unix timestamp in milliseconds.' },
+          updatedAt: { type: 'integer', minimum: 0, description: 'Unix timestamp in milliseconds.' },
+        },
+      },
+      AgentSessionPage: {
+        type: 'object',
+        required: ['sessions', 'nextCursor'],
+        properties: {
+          sessions: { type: 'array', items: schemaRef('AgentSession') },
+          nextCursor: { type: ['string', 'null'] },
+        },
+      },
+      AgentConversationMessage: {
+        type: 'object',
+        required: ['messageId', 'runId', 'conversationTurn', 'parentMessageId', 'role', 'status', 'content', 'createdAt', 'updatedAt'],
+        properties: {
+          messageId: { type: 'string', format: 'uuid' },
+          runId: { type: 'string', format: 'uuid' },
+          conversationTurn: { type: 'integer', minimum: 1 },
+          parentMessageId: { type: ['string', 'null'], format: 'uuid', description: 'The preceding message in this conversation branch.' },
+          role: { type: 'string', enum: ['user', 'assistant'] },
+          status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'cancelled'] },
+          content: { type: 'string', description: 'Empty for an assistant message whose run has not produced an answer.' },
+          createdAt: { type: 'integer', minimum: 0, description: 'Unix timestamp in milliseconds.' },
+          updatedAt: { type: 'integer', minimum: 0, description: 'Unix timestamp in milliseconds.' },
+        },
+      },
+      AgentSessionDetail: {
+        allOf: [schemaRef('AgentSession'), {
+          type: 'object',
+          required: ['messages', 'nextCursor'],
+          properties: {
+            messages: { type: 'array', maxItems: 200, items: schemaRef('AgentConversationMessage') },
+            nextCursor: { type: ['string', 'null'] },
+          },
+        }],
+      },
+      AgentRouteDecision: {
+        oneOf: [
+          {
+            type: 'object', required: ['route'], properties: {
+              route: { const: 'topic_research' },
+            },
+          },
+          {
+            type: 'object', required: ['route', 'videoId'], properties: {
+              route: { const: 'inspect_video' }, videoId: { type: 'string' },
+            },
+          },
+          {
+            type: 'object', required: ['route', 'question'], properties: {
+              route: { const: 'clarification' }, question: { type: 'string' },
+            },
+          },
+        ],
+      },
+      AgentCitation: {
+        type: 'object',
+        required: ['id', 'sourceId', 'provider', 'excerpt'],
+        properties: {
+          id: { type: 'string' }, sourceId: { type: 'string' }, provider: { type: 'string' },
+          videoId: { type: 'string' }, channelId: { type: 'string' }, playlistId: { type: 'string' },
+          title: { type: 'string' }, url: { type: 'string', format: 'uri' }, excerpt: { type: 'string' },
+          startMs: { type: 'integer', minimum: 0 }, endMs: { type: 'integer', minimum: 0 },
+        },
+      },
+      AgentTurnResult: {
+        type: 'object',
+        required: ['runId', 'conversationId', 'userMessageId', 'assistantMessageId', 'answer', 'intent', 'confidence', 'citations', 'artifacts', 'warnings', 'billing'],
+        properties: {
+          runId: { type: 'string', format: 'uuid' }, conversationId: { type: 'string', format: 'uuid' },
+          userMessageId: { type: 'string', format: 'uuid' }, assistantMessageId: { type: 'string', format: 'uuid' },
+          answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification'] },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          citations: { type: 'array', items: schemaRef('AgentCitation') },
+          artifacts: { type: 'array', items: { type: 'object', required: ['type', 'data'], properties: { type: { type: 'string' }, title: { type: 'string' }, data: { type: 'object', additionalProperties: true } } } },
+          warnings: { type: 'array', items: { type: 'object', required: ['code', 'message'], properties: { code: { type: 'string' }, message: { type: 'string' } } } },
+          billing: { type: 'object', required: ['creditsCharged', 'creditsRemaining'], properties: { creditsCharged: { type: 'integer', minimum: 0 }, creditsRemaining: { type: 'integer', minimum: 0 } } },
+        },
+      },
+      AgentRun: {
+        allOf: [schemaRef('AgentRunReceipt'), {
+          type: 'object', properties: {
+            route: schemaRef('AgentRouteDecision'), result: schemaRef('AgentTurnResult'), error: { type: 'string' },
+          },
+        }],
+      },
       Evidence: {
         type: 'object', required: ['id', 'score', 'text'], properties: {
           id: { type: 'string' }, score: { type: 'number' }, text: { type: 'string' }, provider: schemaRef('ProviderId'), entityId: { type: 'string' },

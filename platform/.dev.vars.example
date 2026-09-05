@@ -1,4 +1,8 @@
 # Copy to .dev.vars. Never commit real values.
+# Optional local-only bypass. Prefer `npm run dev:local:no-auth` when testing private routes without credentials.
+LOCAL_AUTH_BYPASS_ENABLED=false
+# Agent rollout defaults to admins. Use all only for deliberate broader access/local demo testing.
+AGENT_ACCESS_MODE=admins
 BETTER_AUTH_SECRET=replace-with-32-plus-random-characters
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -15,3 +19,6 @@ UPSTASH_REDIS_REST_TOKEN=
 LANDING_RATE_LIMIT_SALT=replace-with-a-private-random-value
 # Optional. Use an HTTP(S) proxy when YouTube blocks shared datacenter egress.
 OUTBOUND_PROXY_URL=
+
+# Private comma-separated admin allowlist. Production: wrangler secret put ADMIN_EMAILS_SECRET
+ADMIN_EMAILS_SECRET=

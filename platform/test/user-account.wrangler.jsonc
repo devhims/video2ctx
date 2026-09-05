@@ -1,0 +1,41 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-user-account-test",
+  "main": "./user-account-worker.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_ACCOUNT",
+        "class_name": "UserAccountDO"
+      },
+      {
+        "name": "AGENT_RUNTIME",
+        "class_name": "AgentRuntimeDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "UserAccountDO",
+        "AgentRuntimeDO"
+      ]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-test",
+      "database_id": "00000000-0000-0000-0000-000000000001"
+    }
+  ],
+  "vars": {
+    "STARTER_ONBOARDING_CREDITS": "1000",
+    "BUILDER_MONTHLY_CREDITS": "20000"
+  }
+}

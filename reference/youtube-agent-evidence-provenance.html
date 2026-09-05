@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent evidence provenance</title>
+  <style>
+    :root {
+      color-scheme:light dark;
+      --paper:#f7f6f2; --raised:#fff; --wash:#efeee9; --ink:#1d1d1b; --muted:#70716c;
+      --soft:#85857f; --rule:#e2e0da; --rule-strong:#9b9992; --accent:#e64b3c;
+      --accent-ink:#a83227; --accent-wash:#f8e7e3; --link:#2e5aa8;
+      --wb:#6e6479; --tb:#b8915a; --fl:#9c6b50;
+      --sans:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;
+      --serif:Georgia,"Times New Roman",serif; --mono:"SFMono-Regular",Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark) {
+      :root { --paper:#1d1d1b; --raised:#262624; --wash:#32322f; --ink:#f5f3ec; --muted:#b1b0aa;
+        --soft:#92918b; --rule:#44433f; --rule-strong:#77756f; --accent:#ef5b4c;
+        --accent-ink:#ff8b7f; --accent-wash:#3d2420; --link:#8eb4ff; }
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--paper); color:var(--ink); }
+    body { padding:24px; font-family:var(--sans); }
+    main { width:min(100%,1040px); margin:0 auto; }
+    header { margin:0 0 16px; }
+    .eyebrow { font:600 8px var(--mono); letter-spacing:.12em; color:var(--muted); }
+    h1 { margin:8px 0 6px; font:400 32px/1.1 var(--serif); }
+    header p,footer { margin:0; font-size:12px; color:var(--muted); }
+    svg { display:block; width:100%; min-width:840px; height:auto; background:var(--paper); }
+    text { fill:var(--ink); }
+    .lane-label,.step-label,.legend-label,.legend-copy,.role-chip,.data-chip { font-family:var(--mono); }
+    .lane-label { font-size:8px; font-weight:600; letter-spacing:.12em; fill:var(--muted); text-anchor:middle; }
+    .step-number { font:600 8px var(--mono); fill:var(--ink); text-anchor:middle; }
+    .step-number-focal,.step-label-focal { fill:var(--accent-ink); }
+    .step-label { font-size:7px; font-weight:600; letter-spacing:.08em; fill:var(--muted); text-anchor:middle; }
+    .divider { stroke:var(--rule); stroke-width:.8; }
+    .node { fill:var(--raised); stroke:var(--rule-strong); stroke-width:1; }
+    .node-focal { fill:var(--accent-wash); stroke:var(--accent); stroke-width:1.2; }
+    .node-title { font-size:9px; font-weight:600; text-anchor:middle; }
+    .node-sub { font:400 6.5px var(--mono); fill:var(--muted); text-anchor:middle; }
+    .node-tool { font:400 6.5px var(--mono); fill:var(--soft); text-anchor:middle; }
+    .role-chip { font-size:6px; font-weight:600; fill:var(--muted); text-anchor:middle; }
+    .role-chip-focal { fill:var(--accent-ink); }
+    .data-chip { font-size:5px; font-weight:700; fill:#fff; text-anchor:middle; }
+    .flow { fill:none; stroke:var(--rule-strong); stroke-width:1; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#evidence-arrow); }
+    .flow-accent { fill:none; stroke:var(--accent); stroke-width:1.2; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#evidence-arrow-accent); }
+    .mask { fill:var(--paper); }
+    .flow-label { font:600 8px var(--mono); letter-spacing:.06em; fill:var(--accent-ink); text-anchor:middle; }
+    .legend-label { font-size:7px; font-weight:600; letter-spacing:.12em; fill:var(--muted); }
+    .legend-copy { font-size:7px; fill:var(--muted); }
+    .legend-focal { fill:var(--accent-ink); }
+    footer { margin-top:12px; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">EVIDENCE PROVENANCE</div>
+      <h1>Untrusted YouTube data becomes a citation-checked result</h1>
+      <p>Each wrapper converts one provider operation into the same evidence contract. Topic transcripts add one analyst selection step.</p>
+    </header>
+
+    <svg xmlns="http://www.w3.org/2000/svg" width="840" height="432" viewBox="0 0 840 432" role="img" aria-labelledby="evidence-provenance-title evidence-provenance-desc">
+      <title id="evidence-provenance-title">YouTube Agent evidence provenance</title>
+      <desc id="evidence-provenance-desc">Data flow showing search, discovery, metadata, transcript, comment, channel, and playlist provider values becoming typed evidence packets. Each wrapper performs one provider operation. Topic transcripts use one isolated analyst call to select exact segment IDs before persistence and citation validation.</desc>
+      <defs>
+        <pattern id="evidence-dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="11" cy="11" r=".8" fill="var(--ink)" opacity=".10"></circle></pattern>
+        <marker id="evidence-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="var(--rule-strong)"></path></marker>
+        <marker id="evidence-arrow-accent" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="var(--accent)"></path></marker>
+        <marker id="evidence-arrow-link" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="var(--link)"></path></marker>
+      </defs>
+
+      <rect width="840" height="432" fill="var(--paper)"></rect>
+      <rect width="840" height="432" fill="url(#evidence-dots)"></rect>
+      <rect x="0" y="36" width="840" height="80" fill="var(--wash)" opacity=".48"></rect>
+      <rect x="0" y="196" width="840" height="80" fill="var(--wash)" opacity=".48"></rect>
+
+      <line class="divider" x1="0" y1="36" x2="840" y2="36"></line>
+      <line class="divider" x1="0" y1="116" x2="840" y2="116"></line>
+      <line class="divider" x1="0" y1="196" x2="840" y2="196"></line>
+      <line class="divider" x1="0" y1="276" x2="840" y2="276"></line>
+      <line class="divider" x1="0" y1="356" x2="840" y2="356"></line>
+      <line class="divider" x1="140" y1="36" x2="140" y2="356"></line>
+
+      <g>
+        <rect x="180" y="6" width="32" height="16" rx="8" fill="var(--ink)" opacity=".12"></rect>
+        <text class="step-number" x="196" y="18">01</text><text class="step-label" x="196" y="31">FETCH</text>
+        <rect x="292" y="6" width="32" height="16" rx="8" fill="var(--ink)" opacity=".12"></rect>
+        <text class="step-number" x="308" y="18">02</text><text class="step-label" x="308" y="31">SELECT</text>
+        <rect x="404" y="6" width="32" height="16" rx="8" fill="var(--accent)" opacity=".20"></rect>
+        <text class="step-number step-number-focal" x="420" y="18">03</text><text class="step-label step-label-focal" x="420" y="31">PACKETIZE</text>
+        <rect x="516" y="6" width="32" height="16" rx="8" fill="var(--ink)" opacity=".12"></rect>
+        <text class="step-number" x="532" y="18">04</text><text class="step-label" x="532" y="31">DRAFT</text>
+        <rect x="628" y="6" width="32" height="16" rx="8" fill="var(--ink)" opacity=".12"></rect>
+        <text class="step-number" x="644" y="18">05</text><text class="step-label" x="644" y="31">VALIDATE</text>
+        <rect x="740" y="6" width="32" height="16" rx="8" fill="var(--ink)" opacity=".12"></rect>
+        <text class="step-number" x="756" y="18">06</text><text class="step-label" x="756" y="31">RETURN</text>
+      </g>
+
+      <text class="lane-label" x="70" y="72">PUBLIC</text><text class="lane-label" x="70" y="84">YOUTUBE</text>
+      <text class="lane-label" x="70" y="152">EVIDENCE</text><text class="lane-label" x="70" y="164">TOOLS</text>
+      <text class="lane-label" x="70" y="232">DURABLE</text><text class="lane-label" x="70" y="244">AGENT</text>
+      <text class="lane-label" x="70" y="312">MODEL</text><text class="lane-label" x="70" y="324">OUTPUT</text>
+
+      <path class="flow" d="M246 76 H300 Q308 76 308 84 V124"></path>
+      <path class="flow-accent" d="M358 156 H412 Q420 156 420 164 V204"></path>
+      <path class="flow" d="M470 236 H524 Q532 236 532 244 V284"></path>
+      <path class="flow" d="M582 316 H636 Q644 316 644 308 V268"></path>
+      <line class="flow" x1="694" y1="236" x2="706" y2="236"></line>
+
+      <rect class="mask" x="372" y="136" width="72" height="12" rx="2"></rect>
+      <text class="flow-label" x="408" y="145">BOUNDED DATA</text>
+
+      <g>
+        <rect class="node" x="146" y="44" width="100" height="64" rx="6"></rect>
+        <rect x="150" y="48" width="18" height="10" rx="3" fill="var(--ink)" opacity=".10"></rect><text class="role-chip" x="159" y="56">SRC</text>
+        <text class="node-title" x="196" y="67">Provider values</text>
+        <text class="node-sub" x="196" y="79">metadata · catalogs · text</text>
+        <text class="node-tool" x="196" y="91">provider adapter</text>
+        <rect x="226" y="98" width="16" height="8" rx="3" fill="var(--wb)"></rect><text class="data-chip" x="234" y="104">WB</text>
+      </g>
+
+      <g>
+        <rect class="node" x="258" y="124" width="100" height="64" rx="6"></rect>
+        <rect x="262" y="128" width="18" height="10" rx="3" fill="var(--ink)" opacity=".10"></rect><text class="role-chip" x="271" y="136">TOL</text>
+        <text class="node-title" x="308" y="147">Bound evidence</text>
+        <text class="node-sub" x="308" y="159">operation-specific excerpts</text>
+        <text class="node-tool" x="308" y="171">transcript → analyst IDs</text>
+        <rect x="262" y="178" width="16" height="8" rx="3" fill="var(--wb)"></rect><text class="data-chip" x="270" y="184">WB</text>
+        <rect x="338" y="178" width="16" height="8" rx="3" fill="var(--tb)"></rect><text class="data-chip" x="346" y="184">TB</text>
+      </g>
+
+      <g>
+        <rect class="node-focal" x="370" y="204" width="100" height="64" rx="6"></rect>
+        <rect x="374" y="208" width="18" height="10" rx="3" fill="var(--accent)" opacity=".20"></rect><text class="role-chip role-chip-focal" x="383" y="216">AGT</text>
+        <text class="node-title" x="420" y="227">Evidence packet</text>
+        <text class="node-sub" x="420" y="239">IDs · usage · warnings</text>
+        <text class="node-tool" x="420" y="251">Durable Object SQLite</text>
+        <rect x="374" y="258" width="16" height="8" rx="3" fill="var(--tb)"></rect><text class="data-chip" x="382" y="264">TB</text>
+        <rect x="450" y="258" width="16" height="8" rx="3" fill="var(--tb)"></rect><text class="data-chip" x="458" y="264">TB</text>
+      </g>
+
+      <g>
+        <rect class="node" x="482" y="284" width="100" height="64" rx="6"></rect>
+        <rect x="486" y="288" width="18" height="10" rx="3" fill="var(--ink)" opacity=".10"></rect><text class="role-chip" x="495" y="296">MOD</text>
+        <text class="node-title" x="532" y="307">Answer + refs</text>
+        <text class="node-sub" x="532" y="319">inline markers · exact IDs</text>
+        <text class="node-tool" x="532" y="331">finalize_answer input</text>
+        <rect x="486" y="338" width="16" height="8" rx="3" fill="var(--tb)"></rect><text class="data-chip" x="494" y="344">TB</text>
+        <rect x="562" y="338" width="16" height="8" rx="3" fill="var(--fl)"></rect><text class="data-chip" x="570" y="344">FL</text>
+      </g>
+
+      <g>
+        <rect class="node" x="594" y="204" width="100" height="64" rx="6"></rect>
+        <rect x="598" y="208" width="18" height="10" rx="3" fill="var(--ink)" opacity=".10"></rect><text class="role-chip" x="607" y="216">AGT</text>
+        <text class="node-title" x="644" y="227">Citation validator</text>
+        <text class="node-sub" x="644" y="239">resolve persisted excerpts</text>
+        <text class="node-tool" x="644" y="251">buildAgentTurnResult</text>
+        <rect x="598" y="258" width="16" height="8" rx="3" fill="var(--fl)"></rect><text class="data-chip" x="606" y="264">FL</text>
+        <rect x="674" y="258" width="16" height="8" rx="3" fill="var(--fl)"></rect><text class="data-chip" x="682" y="264">FL</text>
+      </g>
+
+      <g>
+        <rect class="node" x="706" y="204" width="100" height="64" rx="6"></rect>
+        <rect x="710" y="208" width="18" height="10" rx="3" fill="var(--ink)" opacity=".10"></rect><text class="role-chip" x="719" y="216">AGT</text>
+        <text class="node-title" x="756" y="227">AgentTurnResult</text>
+        <text class="node-sub" x="756" y="239">citations · warnings · billing</text>
+        <text class="node-tool" x="756" y="251">result_json</text>
+        <rect x="710" y="258" width="16" height="8" rx="3" fill="var(--fl)"></rect><text class="data-chip" x="718" y="264">FL</text>
+      </g>
+
+      <text class="legend-label" x="8" y="372">STEPS</text>
+      <text class="legend-copy" x="72" y="372">01 FETCH · 02 SELECT ·</text><text class="legend-copy legend-focal" x="216" y="372">03 PACKETIZE</text><text class="legend-copy" x="308" y="372">· 04 DRAFT · 05 VALIDATE · 06 RETURN</text>
+      <text class="legend-label" x="8" y="396">DATA TYPE</text>
+      <rect x="88" y="388" width="16" height="8" rx="3" fill="var(--wb)"></rect><text class="legend-copy" x="112" y="396">WB public</text>
+      <rect x="184" y="388" width="16" height="8" rx="3" fill="var(--tb)"></rect><text class="legend-copy" x="208" y="396">TB bounded</text>
+      <rect x="292" y="388" width="16" height="8" rx="3" fill="var(--fl)"></rect><text class="legend-copy" x="316" y="396">FL result</text>
+      <text class="legend-copy" x="432" y="396">left chip = input · right chip = output</text>
+      <text class="legend-label" x="8" y="420">FLOW</text>
+      <line x1="64" y1="416" x2="96" y2="416" stroke="var(--rule-strong)" marker-end="url(#evidence-arrow)"></line><text class="legend-copy" x="108" y="420">standard handoff</text>
+      <line x1="244" y1="416" x2="276" y2="416" stroke="var(--accent)" stroke-width="1.2" marker-end="url(#evidence-arrow-accent)"></line><text class="legend-copy" x="288" y="420">persisted provenance boundary</text>
+    </svg>
+
+    <footer>The finalizer rejects invented packet, source, or excerpt identifiers. It also rejects declared citations that do not appear as inline markers.</footer>
+  </main>
+</body>
+</html>

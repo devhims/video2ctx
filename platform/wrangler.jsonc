@@ -15,7 +15,6 @@
     "EMAIL_REPLY_TO": "support@video2ctx.dev",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
-    "ADMIN_EMAILS": "",
     "STARTER_ONBOARDING_CREDITS": "1000",
     "BUILDER_MONTHLY_CREDITS": "20000",
     "STARTER_PROJECT_LIMIT": "3",
@@ -32,7 +31,11 @@
     "YOUTUBE_PROCESSOR_MAX_ATTEMPTS": "2",
     "YOUTUBE_PROCESSOR_TIMEOUT_MS": "120000",
     "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "25",
-    "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4"
+    "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
+    "AGENT_RUNTIME_ENABLED": "true",
+    // Rollout: admins by default; all permits every authenticated user with data access.
+    "AGENT_ACCESS_MODE": "admins",
+    "LOCAL_AUTH_BYPASS_ENABLED": "false",
   },
   "containers": [
     {
@@ -41,38 +44,54 @@
       "image": "./youtube-processor/Dockerfile",
       "image_build_context": "./youtube-processor",
       "instance_type": "lite",
-      "max_instances": 4
-    }
+      "max_instances": 4,
+    },
   ],
   "durable_objects": {
     "bindings": [
       {
         "name": "YOUTUBE_PROCESSOR",
-        "class_name": "YouTubeProcessorContainer"
+        "class_name": "YouTubeProcessorContainer",
       },
       {
         "name": "YOUTUBE_REQUEST_COORDINATOR",
-        "class_name": "YouTubeRequestCoordinator"
+        "class_name": "YouTubeRequestCoordinator",
       },
       {
         "name": "MONITOR_SCHEDULER",
-        "class_name": "MonitorScheduler"
-      }
-    ]
+        "class_name": "MonitorScheduler",
+      },
+      {
+        "name": "AGENT_RUNTIME",
+        "class_name": "AgentRuntimeDO",
+      },
+      {
+        "name": "USER_ACCOUNT",
+        "class_name": "UserAccountDO",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["YouTubeProcessorContainer"]
+      "new_sqlite_classes": ["YouTubeProcessorContainer"],
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": ["YouTubeRequestCoordinator"]
+      "new_sqlite_classes": ["YouTubeRequestCoordinator"],
     },
     {
       "tag": "v3",
-      "new_sqlite_classes": ["MonitorScheduler"]
-    }
+      "new_sqlite_classes": ["MonitorScheduler"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["AgentRuntimeDO"],
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["UserAccountDO"],
+    },
   ],
   "d1_databases": [
     {
@@ -81,47 +100,47 @@
       "database_id": "4f173c2a-8c42-49ef-b36d-07a91533f029",
       "preview_database_id": "633b783e-9fd9-402b-923a-2c8cb052bc69",
       "migrations_dir": "migrations",
-      "remote": true
-    }
+      "remote": true,
+    },
   ],
   "kv_namespaces": [
     {
       "binding": "YOUTUBE_CACHE",
       "id": "a7f3dabd47684ce8ada36680fb6fa527",
       "preview_id": "08ae98076be441388d077d5087cc7c2f",
-      "remote": true
-    }
+      "remote": true,
+    },
   ],
   "r2_buckets": [
     {
       "binding": "RESEARCH",
-      "bucket_name": "all-things-youtube-private"
-    }
+      "bucket_name": "all-things-youtube-private",
+    },
   ],
-  "ai": { "binding": "AI" },
+  "ai": { "binding": "AI", "remote": true },
   "ratelimits": [
     {
       "name": "PUBLIC_RATE_LIMITER",
       "namespace_id": "1001",
-      "simple": { "limit": 60, "period": 60 }
+      "simple": { "limit": 60, "period": 60 },
     },
     {
       "name": "INQUIRY_RATE_LIMITER",
       "namespace_id": "1002",
-      "simple": { "limit": 5, "period": 60 }
-    }
+      "simple": { "limit": 5, "period": 60 },
+    },
   ],
   "ai_search_namespaces": [
     {
       "binding": "AI_SEARCH",
       "namespace": "default",
-      "remote": true
-    }
+      "remote": true,
+    },
   ],
   "queues": {
     "producers": [
       { "binding": "TASKS", "queue": "all-things-youtube-tasks" },
-      { "binding": "EMAIL_TASKS", "queue": "all-things-youtube-email" }
+      { "binding": "EMAIL_TASKS", "queue": "all-things-youtube-email" },
     ],
     "consumers": [
       {
@@ -129,41 +148,41 @@
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "dead_letter_queue": "all-things-youtube-tasks-dlq",
-        "max_retries": 5
+        "max_retries": 5,
       },
       {
         "queue": "all-things-youtube-email",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "dead_letter_queue": "all-things-youtube-email-dlq",
-        "max_retries": 5
-      }
-    ]
+        "max_retries": 5,
+      },
+    ],
   },
   "workflows": [
     {
       "binding": "IMPORT_WORKFLOW",
       "name": "youtube-import-workflow",
-      "class_name": "ImportWorkflow"
+      "class_name": "ImportWorkflow",
     },
     {
       "binding": "MONITOR_WORKFLOW",
       "name": "youtube-monitor-workflow",
-      "class_name": "MonitorWorkflow"
-    }
+      "class_name": "MonitorWorkflow",
+    },
   ],
   "send_email": [
     {
       "name": "EMAIL",
       "remote": true,
-      "allowed_sender_addresses": ["noreply@notify.video2ctx.dev"]
-    }
+      "allowed_sender_addresses": ["noreply@notify.video2ctx.dev"],
+    },
   ],
   "triggers": {
-    "crons": ["0 * * * *", "0 8 * * *", "0 8 * * 1"]
+    "crons": ["0 * * * *", "0 8 * * *", "0 8 * * 1"],
   },
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
-  }
+    "head_sampling_rate": 1,
+  },
 }

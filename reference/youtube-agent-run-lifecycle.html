@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent run lifecycle</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper:#f7f6f2; --raised:#fff; --wash:#efeee9; --ink:#1d1d1b; --muted:#70716c;
+      --soft:#85857f; --rule:#e2e0da; --rule-strong:#9b9992; --accent:#e64b3c;
+      --accent-ink:#a83227; --accent-wash:#f8e7e3; --sans:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;
+      --serif:Georgia,"Times New Roman",serif; --mono:"SFMono-Regular",Consolas,monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --paper:#1d1d1b; --raised:#262624; --wash:#32322f; --ink:#f5f3ec; --muted:#b1b0aa;
+        --soft:#92918b; --rule:#44433f; --rule-strong:#77756f; --accent:#ef5b4c;
+        --accent-ink:#ff8b7f; --accent-wash:#3d2420; }
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--paper); color:var(--ink); }
+    body { display:grid; place-items:center; padding:24px; font-family:var(--sans); }
+    main { width:min(100%,1280px); overflow-x:auto; }
+    svg { display:block; width:100%; min-width:960px; height:auto; background:var(--paper); }
+    text { fill:var(--ink); }
+    .title { font-family:var(--serif); font-size:32px; }
+    .subtitle { font-size:12px; fill:var(--muted); }
+    .eyebrow,.tag,.tech,.edge,.legend { font-family:var(--mono); }
+    .eyebrow,.tag,.legend { font-size:8px; font-weight:600; letter-spacing:.12em; fill:var(--muted); }
+    .state { fill:var(--raised); stroke:var(--rule-strong); stroke-width:1; }
+    .running-group { fill:var(--wash); stroke:var(--rule-strong); stroke-width:1; stroke-dasharray:5 5; }
+    .framework { fill:var(--wash); stroke:var(--rule-strong); stroke-width:1; stroke-dasharray:4 4; }
+    .terminal { fill:var(--accent-wash); stroke:var(--accent); stroke-width:1.2; }
+    .state-name { font-size:12px; font-weight:600; text-anchor:middle; }
+    .tech { font-size:8px; fill:var(--soft); text-anchor:middle; }
+    .connector { fill:none; stroke:var(--rule-strong); stroke-width:1.2; stroke-linecap:round; marker-end:url(#lifecycle-arrow); }
+    .recovery { fill:none; stroke:var(--rule-strong); stroke-width:1; stroke-dasharray:4 4; stroke-linecap:round; marker-end:url(#lifecycle-arrow); }
+    .success { fill:none; stroke:var(--accent); stroke-width:2; marker-end:url(#lifecycle-arrow-accent); }
+    .mask { fill:var(--paper); }
+    .edge { font-size:8px; fill:var(--soft); text-anchor:middle; }
+    .edge-accent { fill:var(--accent-ink); }
+    .note { fill:var(--wash); stroke:var(--rule); stroke-width:1; }
+    .note-title { font-size:12px; font-weight:600; }
+    .copy { font-size:8px; fill:var(--muted); }
+    .hairline { stroke:var(--rule); stroke-width:1; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="680" viewBox="0 0 1280 680" role="img" aria-labelledby="run-lifecycle-title run-lifecycle-desc">
+      <title id="run-lifecycle-title">YouTube Agent run lifecycle</title>
+      <desc id="run-lifecycle-desc">State machine showing pending, running, completed, failed, and cancelled statuses. The running status contains routing, executing, and finalizing phases. An Agents SDK fiber interruption can recover through routing while reusing the persisted capability route and durable evidence.</desc>
+      <defs>
+        <marker id="lifecycle-arrow" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--rule-strong)"></polygon></marker>
+        <marker id="lifecycle-arrow-accent" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--accent)"></polygon></marker>
+        <marker id="lifecycle-arrow-link" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"></polygon></marker>
+      </defs>
+
+      <rect width="1280" height="680" fill="var(--paper)"></rect>
+      <text class="eyebrow" x="40" y="28">DURABLE EXECUTION</text>
+      <text class="title" x="40" y="64">Run state, checkpoints, and recovery</text>
+      <text class="subtitle" x="40" y="88">Run status lives in application tables. Fiber interruption belongs to the Agents SDK ledger.</text>
+
+      <rect class="running-group" x="272" y="220" width="624" height="168" rx="10"></rect>
+      <text class="tag" x="296" y="244">STATUS: RUNNING</text>
+
+      <line class="connector" x1="56" y1="308" x2="80" y2="308"></line>
+      <line class="connector" x1="224" y1="308" x2="304" y2="308"></line>
+      <line class="connector" x1="456" y1="308" x2="504" y2="308"></line>
+      <line class="connector" x1="664" y1="308" x2="712" y2="308"></line>
+      <line class="success" x1="864" y1="308" x2="944" y2="308"></line>
+      <path class="connector" d="M 376 388 V 464"></path>
+      <path class="connector" d="M 592 388 V 464"></path>
+      <path class="recovery" d="M 552 272 V 176"></path>
+      <path class="recovery" d="M 616 176 V 200 H 380 V 272"></path>
+
+      <rect class="mask" x="236" y="280" width="56" height="12" rx="2"></rect><text class="edge" x="264" y="289">START FIBER</text>
+      <rect class="mask" x="460" y="280" width="40" height="12" rx="2"></rect><text class="edge" x="480" y="289">PHASE</text>
+      <rect class="mask" x="668" y="280" width="40" height="12" rx="2"></rect><text class="edge" x="688" y="289">PHASE</text>
+      <rect class="mask" x="876" y="280" width="56" height="12" rx="2"></rect><text class="edge edge-accent" x="904" y="289">VALID RESULT</text>
+      <rect class="mask" x="600" y="414" width="48" height="12" rx="2"></rect><text class="edge" x="624" y="423">ERROR</text>
+      <rect class="mask" x="384" y="414" width="48" height="12" rx="2"></rect><text class="edge" x="408" y="423">CANCEL</text>
+      <rect class="mask" x="488" y="204" width="56" height="12" rx="2"></rect><text class="edge" x="516" y="213">EVICTION</text>
+      <rect class="mask" x="624" y="188" width="64" height="12" rx="2"></rect><text class="edge" x="656" y="197">RECOVER</text>
+
+      <circle cx="48" cy="308" r="6" fill="var(--ink)"></circle>
+
+      <g aria-label="Pending run">
+        <rect class="state" x="80" y="276" width="144" height="64" rx="8"></rect>
+        <text class="state-name" x="152" y="304">Pending</text>
+        <text class="tech" x="152" y="324">phase: admitted</text>
+      </g>
+      <g aria-label="Running run with routing, executing, and finalizing phases">
+        <rect class="state" x="304" y="272" width="152" height="72" rx="8"></rect>
+        <text class="state-name" x="380" y="302">Routing</text>
+        <text class="tech" x="380" y="324">classify or reuse route</text>
+        <rect class="state" x="504" y="272" width="160" height="72" rx="8"></rect>
+        <text class="state-name" x="584" y="302">Executing</text>
+        <text class="tech" x="584" y="324">Agent Core · selected config</text>
+        <rect class="state" x="712" y="272" width="152" height="72" rx="8"></rect>
+        <text class="state-name" x="788" y="302">Finalizing</text>
+        <text class="tech" x="788" y="324">citation validation</text>
+      </g>
+      <g aria-label="Completed run">
+        <rect class="terminal" x="944" y="276" width="160" height="64" rx="8"></rect>
+        <text class="state-name" x="1024" y="304">Completed</text>
+        <text class="tech" x="1024" y="324">result_json stored</text>
+      </g>
+
+      <g aria-label="Interrupted framework fiber">
+        <rect class="framework" x="504" y="112" width="160" height="64" rx="8"></rect>
+        <text class="state-name" x="584" y="140">Fiber interrupted</text>
+        <text class="tech" x="584" y="160">framework event</text>
+      </g>
+      <g aria-label="Cancelled run">
+        <rect class="state" x="296" y="464" width="160" height="64" rx="8"></rect>
+        <text class="state-name" x="376" y="492">Cancelled</text>
+        <text class="tech" x="376" y="512">cancelFiber(runId)</text>
+      </g>
+      <g aria-label="Failed run">
+        <rect class="state" x="512" y="464" width="160" height="64" rx="8"></rect>
+        <text class="state-name" x="592" y="492">Failed</text>
+        <text class="tech" x="592" y="512">error persisted</text>
+      </g>
+
+      <rect class="note" x="736" y="444" width="472" height="112" rx="8"></rect>
+      <text class="tag" x="760" y="472">Checkpoint rules</text>
+      <text class="note-title" x="760" y="500">Fiber snapshots carry runId and phase</text>
+      <text class="copy" x="760" y="524">The code stashes routing, executing, and finalizing.</text>
+      <text class="copy" x="760" y="544">Recovery reuses the stored route, packets, and semantic tool results.</text>
+
+      <line class="hairline" x1="40" y1="600" x2="1240" y2="600"></line>
+      <rect class="state" x="60" y="624" width="24" height="16" rx="4"></rect><text class="legend" x="96" y="636">Run status</text>
+      <rect class="framework" x="220" y="624" width="24" height="16" rx="4"></rect><text class="legend" x="256" y="636">Framework event</text>
+      <rect class="terminal" x="428" y="624" width="24" height="16" rx="4"></rect><text class="legend" x="464" y="636">Validated terminal result</text>
+      <text class="legend" x="1220" y="636" text-anchor="end">Any nonterminal run may be cancelled; active phases may fail</text>
+    </svg>
+  </main>
+</body>
+</html>

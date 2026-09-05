@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Agent control boundaries</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper:#f7f6f2; --raised:#fff; --wash:#efeee9; --ink:#1d1d1b; --muted:#70716c;
+      --soft:#85857f; --rule:#e2e0da; --rule-strong:#9b9992; --accent:#e64b3c;
+      --accent-ink:#a83227; --accent-wash:#f8e7e3; --link:#2e5aa8;
+      --sans:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;
+      --serif:Georgia,"Times New Roman",serif; --mono:"SFMono-Regular",Consolas,monospace;
+    }
+    @media (prefers-color-scheme:dark) {
+      :root { --paper:#1d1d1b; --raised:#262624; --wash:#32322f; --ink:#f5f3ec; --muted:#b1b0aa;
+        --soft:#92918b; --rule:#44433f; --rule-strong:#77756f; --accent:#ef5b4c;
+        --accent-ink:#ff8b7f; --accent-wash:#3d2420; --link:#8eb4ff; }
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--paper); color:var(--ink); }
+    body { padding:24px; font-family:var(--sans); }
+    main { width:min(100%,1040px); margin:0 auto; }
+    header { margin:0 0 16px; }
+    .eyebrow,.tag,.tech,.legend { font-family:var(--mono); }
+    .eyebrow,.tag,.legend { font-size:8px; font-weight:600; letter-spacing:.12em; color:var(--muted); }
+    h1 { margin:8px 0 6px; font:400 32px/1.1 var(--serif); }
+    header p,footer { margin:0; font-size:12px; color:var(--muted); }
+    svg { display:block; width:100%; min-width:880px; height:auto; background:var(--paper); }
+    text { fill:var(--ink); }
+    .layer { fill:var(--raised); stroke:var(--rule); stroke-width:1; }
+    .layer-alt { fill:var(--wash); stroke:var(--rule); stroke-width:1; }
+    .layer-focal { fill:var(--accent-wash); stroke:var(--accent); stroke-width:1.2; }
+    .index { font:600 8px var(--mono); letter-spacing:.12em; fill:var(--soft); }
+    .index-focal { fill:var(--accent-ink); }
+    .layer-name { font-size:16px; font-weight:600; }
+    .layer-note { font:400 8px var(--mono); fill:var(--muted); text-anchor:end; }
+    .owner { font:600 8px var(--mono); letter-spacing:.08em; fill:var(--soft); }
+    .owner-focal { fill:var(--accent-ink); }
+    .direction { fill:none; stroke:var(--rule-strong); stroke-width:1.2; marker-end:url(#control-arrow); }
+    .direction-link { fill:none; stroke:var(--link); stroke-width:1.2; marker-end:url(#control-arrow-link); }
+    .direction-label { font:600 8px var(--mono); letter-spacing:.12em; fill:var(--soft); text-anchor:middle; }
+    .direction-label-link { fill:var(--link); }
+    .hairline { stroke:var(--rule); stroke-width:1; }
+    footer { margin-top:12px; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">CURRENT CONTROL MODEL</div>
+      <h1>The model chooses. The application constrains.</h1>
+      <p>Each layer owns a different decision. Tool calls move down; bounded evidence moves back up.</p>
+    </header>
+
+    <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" role="img" aria-labelledby="control-boundaries-title control-boundaries-desc">
+      <title id="control-boundaries-title">YouTube Agent control boundaries</title>
+      <desc id="control-boundaries-desc">Layer stack separating model choices from application-enforced tool limits, durable execution, evidence validation, provider behavior, and untrusted YouTube data.</desc>
+      <defs>
+        <marker id="control-arrow" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--rule-strong)"></polygon></marker>
+        <marker id="control-arrow-accent" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--accent)"></polygon></marker>
+        <marker id="control-arrow-link" viewBox="0 0 8 6" refX="7" refY="3" markerWidth="8" markerHeight="6" orient="auto"><polygon points="0 0,8 3,0 6" fill="var(--link)"></polygon></marker>
+      </defs>
+
+      <rect width="1000" height="560" fill="var(--paper)"></rect>
+
+      <line class="direction" x1="80" y1="80" x2="80" y2="424"></line>
+      <text class="direction-label" x="80" y="60">TOOL CALLS</text>
+      <line class="direction-link" x1="112" y1="432" x2="112" y2="88"></line>
+      <text class="direction-label direction-label-link" x="112" y="460">EVIDENCE</text>
+
+      <g>
+        <rect class="layer" x="160" y="40" width="800" height="72" rx="8"></rect>
+        <text class="index" x="184" y="68">L1</text>
+        <text class="layer-name" x="240" y="72">Workers AI model calls</text>
+        <text class="owner" x="240" y="92">OWNER: MODEL</text>
+        <text class="layer-note" x="936" y="84">research choices · per-video transcript extraction · answer draft</text>
+      </g>
+
+      <g>
+        <rect class="layer-alt" x="160" y="112" width="800" height="72"></rect>
+        <text class="index" x="184" y="140">L2</text>
+        <text class="layer-name" x="240" y="144">AI SDK routing and capability orchestration</text>
+        <text class="owner" x="240" y="164">OWNER: APPLICATION</text>
+        <text class="layer-note" x="936" y="148">structured classification · 12 one-operation wrappers</text>
+        <text class="layer-note" x="936" y="164">topic: 10 + finalizer · inspect: 5 + finalizer</text>
+      </g>
+
+      <g>
+        <rect class="layer-focal" x="160" y="184" width="800" height="72"></rect>
+        <text class="index index-focal" x="184" y="212">L3</text>
+        <text class="layer-name" x="240" y="216">AgentRuntimeDO durable executor</text>
+        <text class="owner owner-focal" x="240" y="236">OWNER: APPLICATION</text>
+        <text class="layer-note" x="936" y="208">Agent Core: 8 model steps · 90 seconds · stop on finalization</text>
+        <text class="layer-note" x="936" y="224">11 evidence calls + 1 finalization · 4 concurrent provider requests</text>
+        <text class="layer-note" x="936" y="240">persisted route · pinned video · interrupted-run recovery</text>
+      </g>
+
+      <g>
+        <rect class="layer-alt" x="160" y="256" width="800" height="72"></rect>
+        <text class="index" x="184" y="284">L4</text>
+        <text class="layer-name" x="240" y="288">Evidence contracts and finalizer</text>
+        <text class="owner" x="240" y="308">OWNER: APPLICATION</text>
+        <text class="layer-note" x="936" y="300">validated segment IDs · exact excerpts · citation markers · canonical usage</text>
+      </g>
+
+      <g>
+        <rect class="layer" x="160" y="328" width="800" height="72"></rect>
+        <text class="index" x="184" y="356">L5</text>
+        <text class="layer-name" x="240" y="360">Provider and cache stack</text>
+        <text class="owner" x="240" y="380">OWNER: PLATFORM</text>
+        <text class="layer-note" x="936" y="372">one provider operation · cache · coordinator · processor</text>
+      </g>
+
+      <g>
+        <rect class="layer-alt" x="160" y="400" width="800" height="72" rx="8"></rect>
+        <text class="index" x="184" y="428">L6</text>
+        <text class="layer-name" x="240" y="432">Public YouTube</text>
+        <text class="owner" x="240" y="452">OWNER: EXTERNAL SERVICE</text>
+        <text class="layer-note" x="936" y="444">titles · descriptions · transcripts are untrusted input</text>
+      </g>
+
+      <line class="hairline" x1="40" y1="512" x2="960" y2="512"></line>
+      <rect x="56" y="532" width="24" height="12" rx="4" fill="var(--raised)" stroke="var(--rule-strong)"></rect>
+      <text class="legend" x="92" y="542">MODEL OR EXTERNAL RESPONSIBILITY</text>
+      <rect x="360" y="532" width="24" height="12" rx="4" fill="var(--wash)" stroke="var(--rule-strong)"></rect>
+      <text class="legend" x="396" y="542">APPLICATION ENFORCEMENT</text>
+      <rect x="668" y="532" width="24" height="12" rx="4" fill="var(--accent-wash)" stroke="var(--accent)"></rect>
+      <text class="legend" x="704" y="542">DURABLE EXECUTION BOUNDARY</text>
+    </svg>
+
+    <footer>The classifier selects the capability configuration loaded into Agent Core. Both branches use one isolated TranscriptAnalyst call per selected transcript; inspect video also pins every provider call to the classified video. Full transcript text stays in durable evidence while Agent Core receives bounded findings. Models cannot add tools or change budgets, persistence, or citation checks.</footer>
+  </main>
+</body>
+</html>

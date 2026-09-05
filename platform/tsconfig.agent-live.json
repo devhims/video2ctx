@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["scripts/test-youtube-agent-live.ts", "src/secrets.d.ts", "worker-configuration.d.ts"]
+}
