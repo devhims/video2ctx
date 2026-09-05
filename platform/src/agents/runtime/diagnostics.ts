@@ -10,8 +10,9 @@ export function failureDetails(error: unknown, signal?: AbortSignal) {
     cancellationReason: !signal?.aborted ? undefined
       : message === 'Research phase timeout.' ? 'research_deadline'
       : message === 'Finalization phase timeout.' ? 'finalization_deadline'
-      : message === 'Agent exceeded its 60-second deadline.' ? 'run_deadline'
+      : message === 'Agent processing deadline exceeded.' ? 'run_deadline'
       : reason instanceof Error && reason.name === 'TimeoutError' ? 'sdk_timeout'
+      : message === 'Persistence phase timeout.' ? 'persistence_deadline'
       : 'other_abort',
     statusCode: typeof value?.statusCode === 'number' ? value.statusCode : undefined,
     retryable: typeof value?.isRetryable === 'boolean' ? value.isRetryable : undefined,

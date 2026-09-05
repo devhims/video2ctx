@@ -50,6 +50,7 @@ export async function runAgentCoreWithModel(options: {
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
   hardBudgetMs?: number;
+  manageTimeoutExternally?: boolean;
   /** Allows a caller to hand off before synthesis starts under the research deadline. */
   onFinalizationRequested?: () => never;
   onModelStepComplete?: (stepNumber: number) => void;
@@ -154,7 +155,7 @@ export async function runAgentCoreWithModel(options: {
   const result = await loop.generate({
     messages: options.messages,
     abortSignal: options.context.signal,
-    timeout: { totalMs: hardBudgetMs },
+    timeout: options.manageTimeoutExternally ? undefined : { totalMs: hardBudgetMs },
   });
   return { finishReason: result.finishReason, stepCount: result.steps.length };
 }

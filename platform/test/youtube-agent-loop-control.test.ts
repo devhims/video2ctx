@@ -140,7 +140,7 @@ describe('YouTube AgentCore loop control', () => {
         recoveredEvidence: [transcriptAnalysisPacket()],
       });
       const check = expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      await vi.advanceTimersByTimeAsync(59_000);
+      await vi.advanceTimersByTimeAsync(80_001);
       await check;
       expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
         answer: expect.stringContaining('[cite:transcript:abcdefghijk:window:0:0]'),
@@ -150,7 +150,7 @@ describe('YouTube AgentCore loop control', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('ends the entire loop including a stalled recovery finalizer within 60 seconds', async () => {
+  it('ends the entire loop including a stalled recovery finalizer within its 40-second phase', async () => {
     vi.useFakeTimers();
     try {
       const model = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } });
@@ -684,7 +684,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
   });
 
-  it.each([12_000, 25_000])('hands off synthesis once and bounds its own phase (duration=%s)', async (duration) => {
+  it.each([12_000, 45_000])('hands off synthesis once and bounds its own phase (duration=%s)', async (duration) => {
     vi.useFakeTimers();
     try {
       const context = transcriptResearchContext();
@@ -702,15 +702,42 @@ describe('YouTube AgentCore loop control', () => {
         finalizationModel: new MockLanguageModelV4({ doGenerate: synthesis }),
         message: 'Research workflows', decision: { route: 'topic_research' },
         toolNames: ['get_video_transcript', 'finalize_answer'], context });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(85_000);
       await run;
       expect(synthesis).toHaveBeenCalledTimes(1);
       expect(context.finalize).toHaveBeenCalledTimes(1);
-      if (duration > 20_000) {
+      if (duration > 40_000) {
         expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
           warnings: expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE' })]),
         }));
       }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('allows saving a valid answer after both model phase windows', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = inspectContext();
+      const save = context.finalize;
+      context.finalize = vi.fn(async (id, input) => {
+        await new Promise(resolve => setTimeout(resolve, 20_000));
+        return save(id, input);
+      });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async () => {
+        await new Promise(resolve => setTimeout(resolve, 35_000));
+        return finalizerModelResult({ blocks: [{ text: 'Supported answer.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+          intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
+      } });
+      const run = runResearchAgentWithModel({
+        model: new MockLanguageModelV4({ doGenerate: () => new Promise(() => {}) }), finalizationModel: finalizer,
+        context, message: 'Research workflows', decision: { route: 'topic_research' },
+        recoveredEvidence: [transcriptAnalysisPacket()],
+      });
+      await vi.advanceTimersByTimeAsync(95_001);
+      await expect(run).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
+      expect(finalizer.doGenerateCalls).toHaveLength(1);
+      expect(context.finalize).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
 
@@ -883,7 +910,7 @@ describe('YouTube AgentCore loop control', () => {
         context, recoveredEvidence: [transcriptAnalysisPacket()],
       });
       const check = expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      await vi.advanceTimersByTimeAsync(20_001);
+      await vi.advanceTimersByTimeAsync(40_001);
       await check;
       expect(attempts).toBe(2);
     } finally { vi.useRealTimers(); }

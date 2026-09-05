@@ -3,7 +3,7 @@ import { ApiError } from '../../lib/http';
 import { renderStructuredAnswer, structuredAnswerSchema } from '../structured-answer';
 import { executeSearchYouTube } from '../providers/youtube/tools/search-youtube';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
-import { AGENT_RUN_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
+import { AGENT_RUN_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 import { generateText, tool, type LanguageModel } from 'ai';
 import { ZodError } from 'zod';
 import { runAgentCoreWithModel } from '../agent-core';
@@ -53,9 +53,8 @@ import {
 type ExecutableRoute = Exclude<CapabilityRouteDecision, { route: 'clarification' }>;
 const MAX_CONCURRENT_EVIDENCE_REQUESTS = 4;
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
-const FINALIZATION_RESERVE_MS = 20_000;
-const TIMEOUT_FINALIZER_WAIT_MS = 20_000;
-const PERSISTENCE_RESERVE_MS = 1_500;
+const FINALIZATION_RESERVE_MS = AGENT_FINALIZATION_TIMEOUT_MS;
+const TIMEOUT_FINALIZER_WAIT_MS = AGENT_FINALIZATION_TIMEOUT_MS;
 const TIMEOUT_FINALIZER_MAX_OUTPUT_TOKENS = 3_200;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
 export const MAX_TOPIC_RESEARCH_TRANSCRIPT_ANALYSES = 4;
@@ -82,8 +81,7 @@ export function agentCoreReasoningEffort(
 
 export async function executeResearchRun(options: Parameters<typeof executeResearchRunWithinDeadline>[0]): Promise<void> {
   const deadlineAt = options.deadlineAt ?? Date.now() + AGENT_RUN_TIMEOUT_MS;
-  return withRunDeadline(deadlineAt, options.signal, (signal) =>
-    executeResearchRunWithinDeadline({ ...options, signal, deadlineAt }));
+  return executeResearchRunWithinDeadline({ ...options, deadlineAt });
 }
 
 async function executeResearchRunWithinDeadline(options: {
@@ -107,7 +105,7 @@ async function executeResearchRunWithinDeadline(options: {
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
 }): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
-  const decision = await resolveCapabilityRoute({
+  const decision = await withRunDeadline((options.deadlineAt ?? Date.now() + AGENT_RUN_TIMEOUT_MS) - FINALIZATION_RESERVE_MS, options.signal, (signal) => resolveCapabilityRoute({
     persisted: options.persistedRoute,
     classify: () => classifyCapabilityWithModel({
       message: options.message,
@@ -116,23 +114,23 @@ async function executeResearchRunWithinDeadline(options: {
         ...modelMetadata,
         model_role: 'classifier',
       }),
-      signal: options.signal,
+      signal,
       modelBudget: options.modelBudget,
       modelCallId: `${options.modelCallPrefix}:classifier`,
     }),
     persist: options.persistRoute,
-  });
+  }), 'Research phase timeout.');
 
   if (decision.route === 'clarification') {
     await options.onFinalizing();
-    await options.finalize(`route:${options.runId}:clarification`, {
+    await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, options.signal, () => options.finalize(`route:${options.runId}:clarification`, {
       answer: decision.question,
       intent: 'clarification',
       confidence: 'low',
       citations: [],
       artifacts: [],
       warnings: [],
-    });
+    }), 'Persistence phase timeout.');
     return;
   }
 
@@ -238,14 +236,13 @@ export async function runResearchAgentWithModel(
   options: Omit<Parameters<typeof runResearchAgentWithModelWithinDeadline>[0], 'deadlineAt'> & { deadlineAt?: number },
 ): Promise<{ finishReason: string; stepCount: number }> {
   const deadlineAt = options.deadlineAt ?? Date.now() + AGENT_RUN_TIMEOUT_MS;
-  return withRunDeadline(deadlineAt, options.context.signal, (signal) => runResearchAgentWithModelWithinDeadline({
+  return runResearchAgentWithModelWithinDeadline({
     ...options, deadlineAt,
-    context: { ...options.context, signal, finalize: (id, input) => {
-      signal.throwIfAborted();
-      if (Date.now() >= deadlineAt) throw new Error('Agent exceeded its 60-second deadline.');
-      return options.context.finalize(id, input);
-    } },
-  }));
+    context: { ...options.context, finalize: (id, input) => withRunDeadline(
+      Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, options.context.signal,
+      () => options.context.finalize(id, input), 'Persistence phase timeout.',
+    ) },
+  });
 }
 
 async function runResearchAgentWithModelWithinDeadline(options: {
@@ -346,7 +343,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const finalizationHandoff = new Error('Research complete: hand off to finalization.');
 
   try {
-    const result = await withRunDeadline(options.deadlineAt - FINALIZATION_RESERVE_MS, options.context.signal, async (signal) => {
+    const result = await withRunDeadline(options.deadlineAt - FINALIZATION_RESERVE_MS, options.context.signal, async (signal, persist) => {
       const phaseContext: AgentToolContext = {
         ...trackedContext, signal,
         executeEvidenceTool: (execution) => {
@@ -358,7 +355,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             return packet;
           } });
         },
-        finalize: (id, input) => { signal.throwIfAborted(); return trackedContext.finalize(id, input); },
+        finalize: (id, input) => { signal.throwIfAborted(); return persist(() => trackedContext.finalize(id, input)); },
       };
       if (options.decision.route === 'topic_research' && options.decision.searchQuery && !searchUsed) {
         try {
@@ -399,6 +396,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         context: phaseContext,
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
+        manageTimeoutExternally: true,
         hardBudgetMs: Math.max(1, options.deadlineAt - Date.now() - FINALIZATION_RESERVE_MS),
         onFinalizationRequested: () => {
           console.log(JSON.stringify({ event: 'agent_finalization_handoff', runId: options.context.runId,
@@ -413,6 +411,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {
+    if (errorMessage(error) === 'Persistence phase timeout.') throw error;
     if (options.context.signal.aborted || (error !== finalizationHandoff && !isAgentCoreTimeout(error) && evidence.size === 0)) throw error;
 
     if (!hasContentEvidence([...evidence.values()])
@@ -426,13 +425,13 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
 
     try {
-      await withRunDeadline(Math.min(options.deadlineAt - PERSISTENCE_RESERVE_MS, Date.now() + TIMEOUT_FINALIZER_WAIT_MS), options.context.signal, (signal) => finalizeAfterAgentCoreTimeout({
+      await withRunDeadline(Date.now() + TIMEOUT_FINALIZER_WAIT_MS, options.context.signal, (signal, persist) => finalizeAfterAgentCoreTimeout({
         model: options.finalizationModel ?? options.model,
         message: options.message,
         decision: options.decision,
         context: { ...trackedContext, signal, finalize: (id, input) => {
           signal.throwIfAborted();
-          return trackedContext.finalize(id, input);
+          return persist(() => trackedContext.finalize(id, input));
         } },
         evidence: [...evidence.values()],
         toolFailures: [...toolFailures.values()],
@@ -446,10 +445,12 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     } catch (finalizationError) {
       console.warn(
         JSON.stringify({ event: 'agent_finalization_failed', runId: options.context.runId,
-          code: finalizationError instanceof ApiError ? finalizationError.code
+          code: errorMessage(finalizationError) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
+            : finalizationError instanceof ApiError ? finalizationError.code
             : isAgentCoreTimeout(finalizationError) ? 'FINALIZATION_TIMEOUT' : 'FINALIZATION_FAILED',
           remainingMs: Math.max(0, options.deadlineAt - Date.now()) }),
       );
+      if (errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const partial = evidenceFallback([...evidence.values()], options.decision.route);
       if (partial) {
@@ -558,7 +559,8 @@ async function finalizeAfterAgentCoreTimeout(options: {
       console.warn(JSON.stringify({ event: 'agent_finalization_attempt_failed', runId: options.context.runId,
         attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt,
         schemaIssues: error instanceof ZodError ? error.issues.map(issue => ({ path: issue.path, code: issue.code })) : undefined,
-        code: error instanceof ApiError ? error.code
+        code: errorMessage(error) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
+          : error instanceof ApiError ? error.code
           : error instanceof ZodError ? 'INVALID_ANSWER_STRUCTURE'
           : options.context.signal.aborted ? 'FINALIZATION_ABORTED' : 'MODEL_GENERATION_FAILED' }));
       const referenceError = error instanceof ApiError

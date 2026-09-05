@@ -12,7 +12,7 @@ describe('admission deadline', () => {
         signal = s;
         return new Promise(() => {});
       });
-      const check = expect(run).rejects.toThrow('60-second deadline');
+      const check = expect(run).rejects.toThrow('processing deadline');
       await vi.advanceTimersByTimeAsync(10_000);
       await check;
       expect(signal.aborted).toBe(true);
@@ -21,8 +21,28 @@ describe('admission deadline', () => {
 
   it('does not restart work after the admission deadline has expired', async () => {
     const work = vi.fn();
-    await expect(withRunDeadline(Date.now() - 1, new AbortController().signal, work)).rejects.toThrow('60-second deadline');
+    await expect(withRunDeadline(Date.now() - 1, new AbortController().signal, work)).rejects.toThrow('processing deadline');
     expect(work).not.toHaveBeenCalled();
+  });
+
+  it('bounds persistence separately and restores the original phase deadline after validation failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      const run = withRunDeadline(start + 40_000, new AbortController().signal, async (signal, persist) => {
+        await new Promise(resolve => setTimeout(resolve, 39_000));
+        await persist(async () => { throw new Error('Invalid citation'); }).catch(() => {});
+        return new Promise(() => {});
+      });
+      const check = expect(run).rejects.toThrow('processing deadline');
+      await vi.advanceTimersByTimeAsync(40_001);
+      await check;
+      const saving = withRunDeadline(Date.now() + 30_000, new AbortController().signal,
+        async () => new Promise(() => {}), 'Persistence phase timeout.');
+      const timedOut = expect(saving).rejects.toThrow('Persistence phase timeout');
+      await vi.advanceTimersByTimeAsync(30_001);
+      await timedOut;
+    } finally { vi.useRealTimers(); }
   });
 
   it('preserves cancellation and aborts outstanding calls when work completes', async () => {
