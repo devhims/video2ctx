@@ -3,7 +3,7 @@ import { generateText, Output, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../../runtime/model-budget';
 
-const MAX_FINDINGS = 20;
+const MAX_FINDINGS = 5;
 const MAX_WINDOWS_PER_FINDING = 3;
 const MAX_ANALYST_OUTPUT_TOKENS = 4_000;
 const ANALYSIS_WINDOW_DURATION_MS = 60_000;

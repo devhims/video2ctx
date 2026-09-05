@@ -50,6 +50,8 @@ export async function runAgentCoreWithModel(options: {
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
   hardBudgetMs?: number;
+  /** Allows a caller to hand off before synthesis starts under the research deadline. */
+  onFinalizationRequested?: () => never;
   onModelStepComplete?: (stepNumber: number) => void;
 }): Promise<{ finishReason: string; stepCount: number }> {
   const startedAt = Date.now();
@@ -102,6 +104,7 @@ export async function runAgentCoreWithModel(options: {
         console.warn(
           `[agent-core] retrying ${finalizationToolName} after an unexecuted terminal tool call: runId=${options.context.runId} step=${stepNumber}`,
         );
+        options.onFinalizationRequested?.();
         return forceFinalization(options.finalizationModel ?? options.model, finalizationToolName);
       }
 
@@ -126,6 +129,7 @@ export async function runAgentCoreWithModel(options: {
       console.warn(
         `[agent-core] forcing ${finalizationToolName}: runId=${options.context.runId} reason=${reason} step=${stepNumber} maxSteps=${MAX_MODEL_STEPS}`,
       );
+      options.onFinalizationRequested?.();
       return forceFinalization(options.finalizationModel ?? options.model, finalizationToolName);
     },
     onStepEnd: ({ stepNumber, content, usage }) => {
