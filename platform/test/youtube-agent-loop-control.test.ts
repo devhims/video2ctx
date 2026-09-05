@@ -620,7 +620,7 @@ describe('YouTube AgentCore loop control', () => {
       return finalizerModelResult({
         blocks: [{ text: 'Use the supported workflow.', evidenceIds:
           failure === 'exhausted' || (attempts === 1 && failure === 'unknown') ? ['invented'] :
-            attempts === 1 ? [] : [packet.excerpts[0]!.id] }],
+            attempts === 1 ? [] : ['ref_1'] }],
         intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
       });
     } });
