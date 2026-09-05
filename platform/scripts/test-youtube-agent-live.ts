@@ -42,12 +42,19 @@ async function main(): Promise<void> {
         const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}`, base), {
           headers, signal: AbortSignal.timeout(10_000),
         });
+        if (poll.status === 429) {
+          const seconds = Number(poll.headers.get('Retry-After'));
+          const waitMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 5000;
+          await delay(Math.min(waitMs, Math.max(0, 80_000 - (Date.now() - started))));
+          continue;
+        }
         assert.equal(poll.status, 200, `Polling failed: ${await poll.clone().text()}`);
         const run = await poll.json() as { status: string; route?: { route: string }; result?: unknown; error?: string };
         assert(!['failed', 'cancelled'].includes(run.status), `${route} run ${receipt.runId} failed: ${run.error ?? run.status}`);
         if (run.status === 'completed') {
           assert.equal(run.route?.route, route);
           const result = agentTurnResultSchema.parse(run.result);
+          assert(!result.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE'), 'Expected a full answer, received partial evidence');
           assert(result.citations.length > 0, 'An answer must contain citations');
           assert(result.billing.creditsCharged > 0, 'Evidence usage must be charged');
           if (route === 'inspect_video') {
@@ -60,7 +67,7 @@ async function main(): Promise<void> {
           complete = true;
           break;
         }
-        await delay(1000);
+        await delay(3000);
       }
       assert(complete, `${route} did not complete within the smoke test polling window`);
     } catch (error) {
