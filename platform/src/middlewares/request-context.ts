@@ -4,6 +4,10 @@ import type { App, AuthPrincipal } from '../types';
 /** Establishes safe request metadata and emits the final structured access log. */
 export const requestContext: MiddlewareHandler<App> = async (c, next) => {
   const startedAt = Date.now();
+  if (c.req.method === 'POST' && c.req.path === '/v1/agent') {
+    c.set('requestStartedAt', startedAt);
+    c.set('agentAdmissionTimings', []);
+  }
   const requestId = c.req.header('cf-ray') ?? crypto.randomUUID();
   c.set('requestId', requestId);
   c.header('X-Request-Id', requestId);
@@ -18,6 +22,10 @@ export const requestContext: MiddlewareHandler<App> = async (c, next) => {
   try {
     await next();
   } finally {
+    const admissionTimings = c.get('agentAdmissionTimings');
+    if (admissionTimings?.length) {
+      c.header('Server-Timing', admissionTimings.map(({ stage, durationMs }) => `${stage};dur=${durationMs}`).join(', '));
+    }
     const principal = c.get('principal') as AuthPrincipal | null | undefined;
     console.log({
       event: 'http_request',
@@ -26,6 +34,7 @@ export const requestContext: MiddlewareHandler<App> = async (c, next) => {
       route: c.req.path,
       status: c.res.status,
       durationMs: Date.now() - startedAt,
+      ...(admissionTimings ? { admissionTimings } : {}),
       authMethod: principal?.method ?? 'anonymous',
       apiKeyId: principal?.apiKeyId,
     });

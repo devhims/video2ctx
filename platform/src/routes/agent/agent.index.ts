@@ -1,3 +1,4 @@
+import { timeAgentAdmission } from '../../lib/agent-admission-timing';
 import { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 export { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 import { Hono, type Context } from 'hono';
@@ -151,13 +152,15 @@ agentRoutes.get('/agent/sessions/:conversationId', async (c) => {
 
 agentRoutes.post('/agent', async (c) => {
   const principal = requireUser(c);
+  const startedAt = c.get('requestStartedAt');
+  if (startedAt !== undefined) c.get('agentAdmissionTimings')?.push({ stage: 'preflight', durationMs: Date.now() - startedAt });
   const responseOptions = parseResponseOptions(c);
   const idempotencyKey = requireIdempotencyKey(c.req.header('idempotency-key'));
   const parsedRequest = parseAgentRequest(await body<unknown>(c.req.raw));
   const conversationId = parsedRequest.conversationId
     ?? await deterministicConversationId(principal.id, idempotencyKey);
   const request: AgentRequest = { ...parsedRequest, conversationId };
-  const creditsRemaining = await creditBalance(c.env, principal.id);
+  const creditsRemaining = await timeAgentAdmission(c, 'credits', () => creditBalance(c.env, principal.id));
 
   c.header('Cache-Control', 'no-store');
   c.header('X-Credits-Charged', '0');
@@ -169,22 +172,22 @@ agentRoutes.post('/agent', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, conversationId);
   try {
     const account = await userAccountForUser(c.env, principal.id);
-    await account.registerConversation(conversationId);
-    const receipt = await agent.startRun(request, {
+    await timeAgentAdmission(c, 'register', () => account.registerConversation(conversationId));
+    const receipt = await timeAgentAdmission(c, 'start_run', async () => await agent.startRun(request, {
       userId: principal.id,
       idempotencyKey,
       creditsRemaining,
-    });
+    }));
     if ('rejected' in receipt) {
       throw new ApiError(receipt.status, receipt.code, receipt.message);
     }
     try {
-      await account.recordSession({
+      await timeAgentAdmission(c, 'session', () => account.recordSession({
         conversationId: receipt.conversationId,
         runId: receipt.runId,
         message: request.message,
         updatedAt: Date.now(),
-      });
+      }));
     } catch {
       throw new ApiError(
         503,
@@ -238,8 +241,8 @@ async function requireAgentAccess(c: Context<App>): Promise<void> {
   // This also covers API keys: requireUser resolves their authenticated account owner.
   let user;
   try {
-    user = await c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
-      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>();
+    user = await timeAgentAdmission(c, 'admin_check', () => c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
+      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>());
   } catch {
     throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Admin access could not be verified.');
   }

@@ -1,3 +1,4 @@
+import { timeAgentAdmission } from '../lib/agent-admission-timing';
 import type { Context, MiddlewareHandler } from 'hono';
 import type { App, AppUser, AuthPrincipal } from '../types';
 import { createAuth } from '../lib/auth';
@@ -31,9 +32,9 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
       const auth = createAuth(c.env, c.executionCtx);
       c.set('auth', auth);
       if (credential.value.length > 256) throw new ApiError(401, 'INVALID_API_KEY', 'The API key is invalid.');
-      const verification = await auth.api.verifyApiKey({
+      const verification = await timeAgentAdmission(c, 'api_key', () => auth.api.verifyApiKey({
         body: { key: credential.value },
-      });
+      }));
       if (!verification.valid || !verification.key) {
         const code = verification.error?.code ?? 'INVALID_API_KEY';
         if (code === 'RATE_LIMITED' || code === 'USAGE_EXCEEDED') {
@@ -45,7 +46,7 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
         throw new ApiError(401, 'INVALID_API_KEY', 'The API key is invalid or has been revoked.');
       }
 
-      const user = await findUser(c, verification.key.referenceId);
+      const user = await timeAgentAdmission(c, 'user_lookup', () => findUser(c, verification.key!.referenceId));
       if (!user) throw new ApiError(401, 'INVALID_API_KEY', 'The API key owner no longer exists.');
       setPrincipal(c, {
         user,

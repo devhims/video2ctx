@@ -146,6 +146,9 @@ describe('agent routes', () => {
       status: 'pending',
     });
     expect(receipt).not.toHaveProperty('turnOrdinal');
+    const timing = response.headers.get('Server-Timing');
+    for (const stage of ['preflight', 'credits', 'register', 'start_run', 'session']) expect(timing).toContain(`${stage};dur=`);
+    expect(timing).not.toContain('stable-turn-identities');
   });
 
   test('returns compact admission identities without changing the run request', async () => {

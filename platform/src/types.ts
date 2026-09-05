@@ -23,6 +23,8 @@ export interface AppVariables {
   principal: AuthPrincipal | null;
   user: AppUser | null;
   requestId: string;
+  requestStartedAt?: number;
+  agentAdmissionTimings?: Array<{ stage: string; durationMs: number }>;
 }
 
 export type App = { Bindings: Env; Variables: AppVariables };
