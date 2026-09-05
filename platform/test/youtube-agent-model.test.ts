@@ -1,5 +1,6 @@
+import { generateText, APICallError } from 'ai';
 const workersAI = vi.hoisted(() => {
-  const selectedModel = { specificationVersion: 'v3' };
+  const selectedModel = { specificationVersion: 'v4', provider: 'test', modelId: 'glm', supportedUrls: {}, doGenerate: vi.fn(), doStream: vi.fn() };
   const select = vi.fn(() => selectedModel);
   const create = vi.fn(() => select);
   return { create, select, selectedModel };
@@ -36,7 +37,7 @@ describe('YouTube agent model', () => {
       'low',
     );
 
-    expect(model).toBe(workersAI.selectedModel);
+    expect(model.modelId).toBe('glm');
     expect(workersAI.create).toHaveBeenCalledWith({ binding });
     expect(workersAI.select).toHaveBeenCalledWith(AGENT_MODEL_ID, {
       sessionAffinity: 'conversation-1',
@@ -61,3 +62,21 @@ describe('YouTube agent model', () => {
     });
   });
 });
+
+ test('logs each SDK retry with run and video correlation', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    workersAI.selectedModel.doGenerate
+      .mockRejectedValueOnce(new APICallError({ message: 'private body', url: 'https://private', requestBodyValues: {}, statusCode: 503, isRetryable: true }))
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: 'stop' },
+        usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } }, warnings: [] });
+    try {
+      const model = createAgentModel({ AI: {}, AI_GATEWAY_ID: '' } as unknown as Env, 'session', 'low', { agent_run_id: 'run', model_role: 'transcript_analyst' });
+      await generateText({ model, prompt: 'private prompt', maxRetries: 1,
+        providerOptions: { agentDiagnostics: { videoId: 'video', modelCallId: 'call', analysisAttempt: 1 } } });
+      const records = log.mock.calls.map(([entry]) => JSON.parse(entry));
+      expect(records.map(record => record.outcome)).toEqual(['started', 'failed', 'started', 'succeeded']);
+      expect(records[1]).toMatchObject({ statusCode: 503, retryable: true, runId: 'run', videoId: 'video', modelCallId: 'call' });
+      expect(records[0].attemptId).not.toBe(records[2].attemptId);
+      expect(JSON.stringify(records)).not.toContain('private');
+    } finally { log.mockRestore(); }
+ });

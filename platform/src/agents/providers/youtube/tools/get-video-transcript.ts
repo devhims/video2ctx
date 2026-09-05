@@ -1,3 +1,4 @@
+import { observeAgentOperation } from '../../../runtime/diagnostics';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -109,7 +110,7 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       let response;
       try {
-        response = await context.provider.transcript(parsed.videoId, parsed.language);
+        response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language));
       } catch (error) {
         if (context.signal.aborted) throw error;
         throw new TranscriptToolStageError('TRANSCRIPT_FETCH_FAILED', error);
@@ -117,7 +118,7 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = context.transcriptPolicy.mode === 'contextual_analysis'
-        ? await analystEvidence(parsed, context, response.value.segments, sourceId, toolCallId, semanticKey)
+        ? await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_analysis' }, context.signal, () => analystEvidence(parsed, context, response.value.segments, sourceId, toolCallId, semanticKey))
         : completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       context.signal.throwIfAborted();
 
