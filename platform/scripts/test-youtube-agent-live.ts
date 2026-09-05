@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   ] as const) {
     try {
       const started = Date.now();
-      const response = await fetch(new URL('/v1/agent', base), {
+      const response = await fetch(new URL('/v1/agent?responseFormat=legacy', base), {
         method: 'POST', headers: { ...headers, 'Idempotency-Key': `smoke-${crypto.randomUUID()}` },
         body: JSON.stringify({ message }), signal: AbortSignal.timeout(15_000),
       });
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
       const receipt = agentRunReceiptSchema.parse(await response.json());
       let complete = false;
       while (Date.now() - started < 80_000) {
-        const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}`, base), {
+        const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
           headers, signal: AbortSignal.timeout(10_000),
         });
         if (poll.status === 429) {

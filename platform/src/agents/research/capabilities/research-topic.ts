@@ -39,7 +39,7 @@ Use get_video_storyboard only when visible slides, interfaces, charts, or demons
 
 ${RESEARCH_ANSWER_GUIDANCE}
 
-Do not answer outside finalize_answer. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. The application renders citations; do not write inline citation markers. Keep your answer under 180 words. Copy identifiers from tool results. Never invent identifiers.
+Do not answer outside finalize_answer. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. The application renders citations; do not write inline citation markers. Copy identifiers from tool results. Never invent identifiers.
 `.trim();
 
 export function createResearchTopicTools(context: AgentToolContext) {

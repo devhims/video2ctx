@@ -363,14 +363,14 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
             "schema": {
               "type": "string",
               "enum": [
                 "legacy",
                 "compact"
               ],
-              "default": "legacy"
+              "default": "compact"
             }
           },
           {
@@ -692,14 +692,14 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
             "schema": {
               "type": "string",
               "enum": [
                 "legacy",
                 "compact"
               ],
-              "default": "legacy"
+              "default": "compact"
             }
           },
           {
@@ -2681,14 +2681,14 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
             "schema": {
               "type": "string",
               "enum": [
                 "legacy",
                 "compact"
               ],
-              "default": "legacy"
+              "default": "compact"
             }
           },
           {
