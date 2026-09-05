@@ -1,7 +1,7 @@
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
-import { AGENT_RUN_TIMEOUT_MS } from './runtime/deadline';
+import { AGENT_RUN_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
 import {
   Agent,
   type FiberContext,
@@ -499,8 +499,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The total agent tool budget is exhausted.');
     }
 
-    if (Date.now() >= run.created_at + AGENT_RUN_TIMEOUT_MS || run.status === 'failed' || run.status === 'cancelled') {
-      throw new Error('Agent exceeded its 60-second deadline or is no longer active.');
+    if (run.status === 'failed' || run.status === 'cancelled') {
+      throw new Error('Agent run is no longer active.');
     }
     const parsedInput = finalizeAnswerInputSchema.parse(input);
     const decision = this.readRoute(runId);
@@ -571,7 +571,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       SELECT COALESCE(SUM(credits), 0) AS credits FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'completed'
     `[0]?.credits ?? 0;
-    const remaining = await settleAgentCredits(this.env, run.user_id, runId, actual, this.modelCostMicros(runId));
+    const remaining = await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
+      () => settleAgentCredits(this.env, run.user_id, runId, actual, this.modelCostMicros(runId)), 'Persistence phase timeout.');
     const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
     if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining };
     this.sql`UPDATE agent_runs SET billing_settled = 1,

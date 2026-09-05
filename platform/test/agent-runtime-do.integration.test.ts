@@ -102,7 +102,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
 test('queued admissions retain their IDs and original deadline without starting late inference', async () => {
   const { runtime, userId } = await seed('queued-expired-admission');
   const request = { conversationId: crypto.randomUUID(), message: 'A delayed request' };
-  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() - 61_000 };
+  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() - 81_000 };
   await runInDurableObject(runtime, async instance => {
     const fiber = vi.spyOn(instance, 'startFiber');
     const receipt = await instance.startRun(request, { userId, idempotencyKey: 'expired-queued-request', creditsRemaining: 1000 }, identity);
@@ -125,4 +125,21 @@ test('an interrupted pending admission retries startup without inserting a dupli
     expect(instance.sql`SELECT id FROM agent_runs WHERE conversation_id = ${request.conversationId}`).toEqual([{ id: identity.runId }]);
     fiber.mockRestore();
   });
+});
+
+test('saves a ready answer after the model deadline and settles it idempotently', async () => {
+  const { runtime, runId, userId } = await seed('agent-save-outside-model-window', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const decision = JSON.stringify({ route: 'clarification', question: 'Which topic?' });
+    instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${runId},${decision},0)`;
+    // Exercise the internal saving boundary with a run older than either model window.
+    const saving = instance as unknown as {
+      finalizeRun: (runId: string, toolId: string, input: import('../src/agents/contracts').FinalizeAnswerInput) => Promise<unknown>;
+    };
+    await saving.finalizeRun(runId, 'answer', { answer: 'Which topic?', intent: 'clarification',
+      confidence: 'low', citations: [], artifacts: [], warnings: [] });
+  });
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed' });
+  await runtime.reconcileRun(runId);
+  expect(await creditBalance(env, userId)).toBe(999);
 });
