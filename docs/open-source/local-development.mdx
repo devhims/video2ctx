@@ -25,6 +25,8 @@ platform with the explicit local authentication bypass:
 npm --prefix platform run dev:local:no-auth -- --port 8787
 ```
 
+The platform development scripts use `src/index.local.ts`. This entry point recreates a warm YouTube processor container when the Worker reloads, because reused containers can lose outbound connectivity after a Wrangler reload. Local database and cache storage are preserved. An in-flight provider request may need to be retried after saving code. Production uses `src/index.ts` and keeps its normal container lifecycle.
+
 The bypass is disabled by default. It activates only for loopback requests when
 `ENVIRONMENT` is not `production` and uses one stable local demo account.
 
@@ -55,7 +57,7 @@ In another terminal:
 npm --prefix platform run test:agent:live
 ```
 
-The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. It requires citations, evidence charges, and storyboard analysis in the inspect result. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
+The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
 
 For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, run the local Worker in `AGENT_ACCESS_MODE:admins`, configure its local `ADMIN_EMAILS_SECRET`, and also provide `AGENT_TEST_NON_ADMIN_TOKEN`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
 

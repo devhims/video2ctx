@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
 import {
   evidencePacketForModel,
+  finalizationEvidenceForModel,
   evidencePacketsForModel,
 } from '../src/agents/runtime/model-evidence';
 
@@ -29,6 +30,16 @@ describe('agent model evidence', () => {
         selectedExcerptCount: 1,
       },
     });
+  });
+
+  it('uses short recovery references without changing persisted evidence', () => {
+    const packet = transcriptPacket();
+    const before = JSON.stringify(packet);
+    const { evidence, fullIds } = finalizationEvidenceForModel([packet], 40_000);
+    const id = evidence[0]!.transcriptAnalysis!.findings[0]!.excerptIds[0]!;
+    expect(id).toBe('ref_1');
+    expect(fullIds.get(id)).toBe('transcript:abcdefghijk:window:3:180000');
+    expect(JSON.stringify(packet)).toBe(before);
   });
 
   it('bounds the combined finalizer payload instead of forwarding every packet in full', () => {

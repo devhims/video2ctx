@@ -163,3 +163,28 @@ function boundedText(value: string, maximum: number): string {
 function serializedLength(value: unknown): number {
   return JSON.stringify(value).length;
 }
+
+/** Short references reduce recovery output tokens; full IDs remain persisted. */
+export function finalizationEvidenceForModel(packets: readonly EvidencePacket[], maxCharacters: number) {
+  const fullIds = new Map<string, string>();
+  const aliases = new Map<string, string>();
+  const alias = (id: string) => {
+    let value = aliases.get(id);
+    if (!value) {
+      value = `ref_${aliases.size + 1}`;
+      aliases.set(id, value);
+      fullIds.set(value, id);
+    }
+    return value;
+  };
+  const evidence = evidencePacketsForModel(packets, { maxCharacters }).map(packet => ({
+    ...packet,
+    ...(packet.transcriptAnalysis ? { transcriptAnalysis: { ...packet.transcriptAnalysis,
+      findings: packet.transcriptAnalysis.findings.map(finding => ({ ...finding,
+        excerptIds: finding.excerptIds.map(alias),
+      })),
+    } } : {}),
+    ...(packet.excerpts ? { excerpts: packet.excerpts.map(excerpt => ({ ...excerpt, id: alias(excerpt.id) })) } : {}),
+  }));
+  return { evidence, fullIds };
+}

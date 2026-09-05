@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
-    "dev:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
-    "dev:local": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
-    "dev:local:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
+    "dev": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
+    "dev:local": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
+    "dev:local:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
     "build": "tsc --noEmit",
     "test": "vitest run && npm run test:user-account && npm --prefix youtube-processor test",
     "test:auth:integration": "vitest run --config vitest.auth.config.ts",
@@ -26,7 +26,7 @@
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
     "db:migrate:production": "wrangler d1 migrations apply DB --remote",
-    "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all"
+    "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",
