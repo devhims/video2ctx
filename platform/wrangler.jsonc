@@ -15,7 +15,6 @@
     "EMAIL_REPLY_TO": "support@video2ctx.dev",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
-    "ADMIN_EMAILS": "",
     "STARTER_ONBOARDING_CREDITS": "1000",
     "BUILDER_MONTHLY_CREDITS": "20000",
     "STARTER_PROJECT_LIMIT": "3",
@@ -33,7 +32,7 @@
     "YOUTUBE_PROCESSOR_TIMEOUT_MS": "120000",
     "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "25",
     "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
-    "AGENT_RUNTIME_ENABLED": "false",
+    "AGENT_RUNTIME_ENABLED": "true",
     // Rollout: admins by default; all permits every authenticated user with data access.
     "AGENT_ACCESS_MODE": "admins",
     "LOCAL_AUTH_BYPASS_ENABLED": "false",

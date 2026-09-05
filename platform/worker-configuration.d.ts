@@ -19,7 +19,6 @@ interface __BaseEnv_Env {
 	EMAIL_REPLY_TO: "support@video2ctx.dev";
 	AI_GATEWAY_ID: "all-things-youtube";
 	PUBLIC_SEARCH_INSTANCE: "youtube-public";
-	ADMIN_EMAILS: "";
 	STARTER_ONBOARDING_CREDITS: "1000";
 	BUILDER_MONTHLY_CREDITS: "20000";
 	STARTER_PROJECT_LIMIT: "3";

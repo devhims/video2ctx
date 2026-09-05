@@ -26,7 +26,7 @@ export const AGENT_ROUTE_PATTERNS = ['/agent', '/agent/*'] as const;
 for (const path of AGENT_ROUTE_PATTERNS) {
   agentRoutes.use(path, requireDataPrincipal, async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    if (String(c.env.AGENT_RUNTIME_ENABLED) !== 'true') throw new ApiError(503, 'AGENT_DISABLED', 'The agent endpoint is not enabled.');
+    await requireAgentAccess(c);
     await next();
   });
 }
@@ -217,6 +217,31 @@ agentRoutes.get('/agent/:conversationId/runs/:runId', async (c) => {
   if (!run) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
   return c.json(run);
 });
+
+async function requireAgentAccess(c: Context<App>): Promise<void> {
+  if (String(c.env.AGENT_RUNTIME_ENABLED) !== 'true') {
+    throw new ApiError(503, 'AGENT_DISABLED', 'The agent endpoint is not enabled.');
+  }
+  const accessMode = String(c.env.AGENT_ACCESS_MODE ?? 'admins');
+  if (accessMode === 'all') return; // Authentication and credential scopes still apply.
+  if (accessMode !== 'admins') {
+    throw new ApiError(503, 'AGENT_DISABLED', 'The agent access configuration is invalid.');
+  }
+  const allowed = new Set(String(c.env.ADMIN_EMAILS_SECRET ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean));
+  if (!allowed.size) throw new ApiError(403, 'ADMIN_REQUIRED', 'Agent access is currently restricted to admins.');
+  // Read Better Auth's current user record, not cached session fields or request-supplied email.
+  // This also covers API keys: requireUser resolves their authenticated account owner.
+  let user;
+  try {
+    user = await c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
+      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>();
+  } catch {
+    throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Admin access could not be verified.');
+  }
+  if (!user || user.emailVerified !== 1 || !allowed.has(user.email.trim().toLowerCase())) {
+    throw new ApiError(403, 'ADMIN_REQUIRED', 'Agent access is currently restricted to admins.');
+  }
+}
 
 function requireIdempotencyKey(value: string | undefined): string {
   const key = value?.trim() ?? '';

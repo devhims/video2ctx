@@ -361,7 +361,7 @@ sessionRoutes.get('/billing', async (c) => {
 
 sessionRoutes.get('/admin/jobs', async (c) => {
   const user = requireUser(c);
-  if (!c.env.ADMIN_EMAILS.split(',').map((value) => value.trim()).includes(user.email)) {
+  if (!String(c.env.ADMIN_EMAILS_SECRET ?? '').split(',').map((value) => value.trim()).includes(user.email)) {
     throw new ApiError(403, 'ADMIN_REQUIRED', 'Admin access required.');
   }
   const jobs = await c.env.DB.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 200').all();

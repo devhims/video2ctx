@@ -43,6 +43,7 @@ describe('request middleware', () => {
     await expect(callback.json()).resolves.toMatchObject({ error: { code: 'OAUTH_CALLBACK_INVALID' } });
 
     expect((await app.request('/v1/search?q=test', {}, env)).status).toBe(401);
+    expect((await app.request('/v1/agent', { method: 'POST' }, env)).status).toBe(401);
     expect((await app.request('/v1/projects', {}, env)).status).toBe(401);
     expect((await app.request('/v1/not-a-route', {}, env)).status).toBe(404);
   });

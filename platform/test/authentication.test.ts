@@ -212,6 +212,37 @@ describe('request authentication', () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'DEMO_AUTH_DISABLED' } });
   });
+
+  test('supports an explicit loopback-only local authentication bypass', async () => {
+    const enabled = await request('/data', {}, 'development', 'true');
+    expect(enabled.status).toBe(200);
+    await expect(enabled.json()).resolves.toMatchObject({
+      method: 'demo',
+      user: { name: 'Demo Researcher' },
+    });
+
+    const disabled = await request('/data', {}, 'development', 'false');
+    expect(disabled.status).toBe(401);
+    await expect(disabled.json()).resolves.toMatchObject({ error: { code: 'AUTH_REQUIRED' } });
+
+    const production = await request('/data', {}, 'production', 'true');
+    expect(production.status).toBe(401);
+    await expect(production.json()).resolves.toMatchObject({ error: { code: 'AUTH_REQUIRED' } });
+
+    const nonLoopback = await request('/data', {}, 'development', 'true', 'https://preview.example');
+    expect(nonLoopback.status).toBe(401);
+    await expect(nonLoopback.json()).resolves.toMatchObject({ error: { code: 'AUTH_REQUIRED' } });
+  });
+
+  test('does not let the local authentication bypass rescue an invalid credential', async () => {
+    authState.verifyApiKey.mockResolvedValue({
+      valid: false, key: null, error: { code: 'KEY_NOT_FOUND', message: 'missing' },
+    });
+
+    const response = await request('/data', { authorization: 'Bearer aty_invalid' }, 'development', 'true');
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'INVALID_API_KEY' } });
+  });
 });
 
 describe('API key migration', () => {
@@ -255,9 +286,16 @@ describe('API key migration', () => {
   });
 });
 
-async function request(path: string, headers: Record<string, string>, environment = 'development') {
+async function request(
+  path: string,
+  headers: Record<string, string>,
+  environment = 'development',
+  localAuthBypassEnabled = 'false',
+  origin = 'http://localhost',
+) {
   const env = {
     ENVIRONMENT: environment,
+    LOCAL_AUTH_BYPASS_ENABLED: localAuthBypassEnabled,
     DB: {
       prepare: vi.fn(() => ({
         bind: vi.fn(() => ({
@@ -267,7 +305,7 @@ async function request(path: string, headers: Record<string, string>, environmen
       })),
     },
   } as unknown as Env;
-  return testApp.request(path, { headers }, env, executionContext);
+  return testApp.request(new URL(path, origin), { headers }, env, executionContext);
 }
 
 function validKey() {
