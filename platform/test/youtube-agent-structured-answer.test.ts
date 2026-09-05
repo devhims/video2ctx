@@ -40,6 +40,20 @@ describe('structured answer citations', () => {
       text: 'Comparison', evidenceIds: [...evidenceIds, 'e13'],
     }] }).success).toBe(false);
   });
+  it.each(['topic_research', 'inspect_video'] as const)('renders ten cited points for %s and keeps a bounded block limit', intent => {
+    const blocks = Array.from({ length: 10 }, (_, i) => ({ text: `${i + 1}. Supported point`, evidenceIds: ['e1'] }));
+    const result = renderStructuredAnswer({ ...base, intent, blocks });
+    expect(result.answer.match(/\[cite:e1\]/g)).toHaveLength(10);
+    expect(structuredAnswerSchema.safeParse({ ...base, intent, blocks: Array(21).fill(blocks[0]) }).success).toBe(false);
+  });
+
+  it('distinguishes source caveats from unmet scope and reserves runtime warning codes', () => {
+    const blocks = [{ text: 'Supported finding', evidenceIds: ['e1'] }];
+    expect(renderStructuredAnswer({ ...base, blocks, warnings: [{ code: 'SOURCE_CAVEAT', message: 'Self-reported demo.' }] }).warnings[0]?.code).toBe('SOURCE_CAVEAT');
+    expect(renderStructuredAnswer({ ...base, blocks, warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only six of ten requested examples are supported.' }] }).warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
+    expect(structuredAnswerSchema.safeParse({ ...base, blocks, warnings: [{ code: 'PARTIAL_EVIDENCE', message: 'Other search results were not reviewed.' }] }).success).toBe(false);
+  });
+
   it('requires references on every block, not just somewhere in the answer', () => {
     expect(structuredAnswerSchema.safeParse({ ...base, blocks: [
       { text: 'Supported', evidenceIds: ['e1'] }, { text: 'Unsupported', evidenceIds: [] },
