@@ -13,4 +13,4 @@ export const YOUTUBE_PROVIDER_TOOL_NAMES = [
 ] as const;
 
 export type YouTubeProviderToolName = typeof YOUTUBE_PROVIDER_TOOL_NAMES[number];
-export type YouTubeAgentToolName = YouTubeProviderToolName | 'finalize_answer';
+export type YouTubeAgentToolName = YouTubeProviderToolName | 'analyze_video_transcripts' | 'finalize_answer';

@@ -6,6 +6,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
     route: z.literal('topic_research'),
     researchBreadth: z.enum(['focused', 'comparative']).optional(),
+    searchQuery: z.string().trim().min(1).max(500).optional(),
   }),
   z.object({
     route: z.literal('inspect_video'),

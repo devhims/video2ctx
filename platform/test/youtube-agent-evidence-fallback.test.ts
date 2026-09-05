@@ -39,6 +39,19 @@ describe('partial evidence fallback', () => {
     expect(result.warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
   });
 
+  it('does not present promotional search snippets as an answer when no video content was analyzed', () => {
+    const discovery: EvidencePacket = { ...packet, kind: 'youtube_search',
+      sources: [{ id: 'source:1', provider: 'youtube', kind: 'search', videoId: 'abcdefghijk', title: 'Twenty practical examples' }],
+      excerpts: [{ id: 'excerpt:1', sourceId: 'source:1', text: 'Buy my course and clone yourself! Views: 100000' }],
+    };
+    const result = evidenceFallback([discovery], 'topic_research')!;
+    expect(result.answer).not.toContain('Buy my course');
+    expect(result.answer).toContain('could not analyze');
+    expect(result.answer).toContain('Twenty practical examples');
+    expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(true);
+    expect(result.answer).toContain('[cite:excerpt:1]');
+  });
+
   it('does not fabricate an answer when no usable evidence exists', () => {
     expect(evidenceFallback([], 'topic_research')).toBeNull();
     expect(evidenceFallback([{ ...packet, sources: [] }], 'topic_research')).toBeNull();

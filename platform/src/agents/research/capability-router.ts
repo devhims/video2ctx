@@ -8,11 +8,19 @@ import type { ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 
 // Persisted routes remain backward compatible; new research decisions require breadth.
-const classifierDecisionSchema = z.discriminatedUnion('route', [
-  capabilityRouteDecisionSchema.options[0].required({ researchBreadth: true }),
-  capabilityRouteDecisionSchema.options[1],
-  capabilityRouteDecisionSchema.options[2],
-]);
+const classifierDecisionSchema = z.object({
+  route: z.enum(['topic_research', 'inspect_video', 'clarification']),
+  researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth,
+  searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery,
+  videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
+  question: capabilityRouteDecisionSchema.options[2].shape.question.optional(),
+}).superRefine((input, ctx) => {
+  const required = input.route === 'topic_research' ? ['researchBreadth', 'searchQuery'] as const
+    : input.route === 'inspect_video' ? ['videoId'] as const : ['question'] as const;
+  for (const key of required) {
+    if (!input[key]) ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required for ${input.route}.` });
+  }
+});
 
 const CLASSIFIER_WAIT_MS = 20_000;
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
@@ -43,6 +51,7 @@ export async function classifyCapabilityWithModel(
       'A general topic or recommendation request does not need a supplied video. Do not ask for a video URL for such requests. With no suppliedVideoIds, inspect_video is never valid.',
       'Return topic_research when the request needs discovery, comparisons, multiple sources, or synthesis beyond one video.',
       'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. The application targets two or four videos respectively.',
+      'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name and requested task. The application executes this search immediately; no separate search-planning step is needed.',
       'Return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
       'For inspect_video, copy the selected ID exactly from suppliedVideoIds. Never invent an ID.',
       'Return clarification when the request refers to a video that cannot be resolved or when the intended scope is genuinely ambiguous.',
@@ -78,7 +87,7 @@ export async function classifyCapabilityWithModel(
   });
 
   const decision = classifierDecisionSchema.parse(result.toolCalls.find(call => call.toolName === 'classify_request')?.input);
-  return resolveClassification(decision, videoIds);
+  return resolveClassification(capabilityRouteDecisionSchema.parse(decision), videoIds);
 }
 
 export function extractYouTubeVideoIds(message: string): string[] {

@@ -43,28 +43,38 @@ describe('YouTube agent capability router', () => {
   });
 
   it('routes discovery and comparison requests into topic_research', async () => {
+    const model = classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison' });
     const decision = await classifyCapabilityWithModel({
       message: 'Compare current YouTube advice about audience retention.',
-      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative' }),
+      model,
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison' });
+    expect(model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema).toMatchObject({ type: 'object', properties: expect.objectContaining({ route: expect.any(Object), searchQuery: expect.any(Object) }) });
   });
 
   it.each(['focused', 'comparative'] as const)('persists classifier research breadth %s', async (researchBreadth) => {
     const decision = await classifyCapabilityWithModel({
       message: 'Research the best design skills for frontend developers using Claude Code',
-      model: classifierModel({ route: 'topic_research', researchBreadth }),
+      model: classifierModel({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' });
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
     await expect(classifyCapabilityWithModel({
       message: 'Compare frontend design skills',
       model: classifierModel({ route: 'topic_research' }),
+      signal: new AbortController().signal,
+    })).rejects.toThrow();
+  });
+
+  it('requires a search query in new research classifications', async () => {
+    await expect(classifyCapabilityWithModel({
+      message: 'Suggest use cases',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative' }),
       signal: new AbortController().signal,
     })).rejects.toThrow();
   });

@@ -1,7 +1,8 @@
+import { createAnalyzeVideoTranscriptsTool } from './tools/analyze-video-transcripts';
 import { createGetVideoStoryboardTool } from './tools/get-video-storyboard';
 import type { ToolSet } from 'ai';
 import type { AgentToolContext } from './tool-context';
-import type { YouTubeProviderToolName } from './tool-names';
+import type { YouTubeProviderToolName, YouTubeAgentToolName } from './tool-names';
 import { createBrowseYouTubeTool } from './tools/browse-youtube';
 import { createFinalizeAnswerTool } from './tools/finalize-answer';
 import { createGetChannelPlaylistsTool } from './tools/get-channel-playlists';
@@ -32,12 +33,13 @@ const providerToolFactories = {
 
 export function createCapabilityToolSet(
   context: AgentToolContext,
-  toolNames: readonly (YouTubeProviderToolName | 'finalize_answer')[],
+  toolNames: readonly YouTubeAgentToolName[],
 ): ToolSet {
   const selected: ToolSet = {};
   for (const name of toolNames) {
     selected[name] = name === 'finalize_answer'
       ? createFinalizeAnswerTool(context)
+      : name === 'analyze_video_transcripts' ? createAnalyzeVideoTranscriptsTool(context)
       : providerToolFactories[name](context);
   }
   return selected;

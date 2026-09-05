@@ -1,3 +1,4 @@
+import { analyzeVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { ApiError } from '../src/lib/http';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -28,7 +29,7 @@ describe('YouTube AgentCore loop control', () => {
         toolCallId: id, toolName: 'search_youtube', input: JSON.stringify({ query: id }),
       })));
       expect(call.tools?.map(t => t.name)).not.toContain('search_youtube');
-      expect(call.tools?.map(t => t.name)).toContain('get_video_transcript');
+      expect(call.tools?.map(t => t.name)).toContain('analyze_video_transcripts');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
         blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }], intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
       }) });
@@ -37,21 +38,95 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.provider.search).toHaveBeenCalledTimes(1);
   });
 
+  it('executes the classified search before the first research model step', async () => {
+    const context = inspectContext();
+    context.provider.search = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
+      query: 'model practical use cases', results: [], videos: [], channels: [], playlists: [],
+      meta: { source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }));
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(context.provider.search).toHaveBeenCalledTimes(1);
+      expect(call.tools?.map(tool => tool.name)).not.toContain('search_youtube');
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+        intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+      }) });
+    } });
+    await runResearchAgentWithModel({ model, message: 'Suggest practical use cases',
+      decision: { route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'model practical use cases' }, context });
+  });
+
+  it('does not retry a failed classified search in the model loop', async () => {
+    const context = inspectContext();
+    context.provider.search = vi.fn(async () => { throw new Error('Search unavailable'); });
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(context.provider.search).toHaveBeenCalledTimes(1);
+      expect(call.tools?.map(tool => tool.name)).not.toContain('search_youtube');
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+        intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+      }) });
+    } });
+    await runResearchAgentWithModel({ model, message: 'Suggest use cases',
+      decision: { route: 'topic_research', searchQuery: 'use cases' }, context });
+    expect(context.provider.search).toHaveBeenCalledOnce();
+  });
+
   it('keeps search unavailable when a run resumes after consuming its search', async () => {
     const context = inspectContext();
     context.provider.search = vi.fn();
     const model = new MockLanguageModelV4({ doGenerate: async (call) => {
       expect(call.tools?.map(tool => tool.name)).not.toContain('search_youtube');
-      expect(call.tools?.map(tool => tool.name)).toContain('get_video_transcript');
+      expect(call.tools?.map(tool => tool.name)).toContain('analyze_video_transcripts');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
         blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }], intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
       }) });
     } });
     await runResearchAgentWithModel({
-      model, message: 'Research design', decision: { route: 'topic_research' }, context,
+      model, message: 'Research design', decision: { route: 'topic_research', searchQuery: 'already searched' }, context,
       recoveredSearchUsed: true,
     });
     expect(context.provider.search).not.toHaveBeenCalled();
+  });
+
+  it('does not spend finalization model time on recommendations when every content tool failed', async () => {
+    const context = inspectContext();
+    const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Should not synthesize metadata'); } });
+    const discovery: EvidencePacket = { ...transcriptAnalysisPacket(), kind: 'youtube_search', artifacts: [] };
+    const result = await runResearchAgentWithModel({
+      model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+      finalizationModel, message: 'Suggest the top use cases',
+      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context,
+      recoveredEvidence: [discovery],
+      recoveredToolFailures: [{ toolCallId: 'failed', toolName: 'get_video_transcript', operation: 'transcript', message: 'Research phase timeout.' }],
+    });
+    expect(result.finishReason).toBe('evidence-fallback');
+    expect(finalizationModel.doGenerateCalls).toHaveLength(0);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      warnings: expect.arrayContaining([expect.objectContaining({ code: 'NO_CONTENT_EVIDENCE' })]),
+    }));
+  });
+
+  it('handles a fresh all-transcript timeout without synthesizing discovery metadata', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = transcriptResearchContext();
+      if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+      context.transcriptPolicy.analyze = async ({ signal }) => new Promise<never>((_, reject) =>
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      const model = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+        toolCallId: 'batch-timeout', toolName: 'analyze_video_transcripts',
+        input: JSON.stringify({ videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Use cases' }),
+      }) });
+      const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Do not synthesize metadata'); } });
+      const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Top use cases', context,
+        decision: { route: 'topic_research', researchBreadth: 'comparative' },
+        recoveredEvidence: [{ ...transcriptAnalysisPacket(), kind: 'youtube_search', artifacts: [] }],
+      });
+      await vi.advanceTimersByTimeAsync(40_001);
+      await expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+      expect(finalizationModel.doGenerateCalls).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
   });
 
   it('returns cited partial evidence before the deadline when research and synthesis both stall', async () => {
@@ -539,7 +614,41 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledOnce();
   });
 
-  it('runs two isolated analysts concurrently and queues the remaining comparative videos', async () => {
+  it('collects independent batch results even when one selected transcript fails', async () => {
+    const context = transcriptResearchContext();
+    const original = context.provider.transcript;
+    context.provider.transcript = vi.fn(async (id, language) => {
+      if (id === 'video000004') throw new Error('Captions unavailable');
+      return original(id, language);
+    });
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      if (step++ === 0) return modelResult({ toolCallId: 'batch', toolName: 'analyze_video_transcripts',
+        input: JSON.stringify({ videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Practical tasks' }),
+      });
+      expect(JSON.stringify(call.prompt)).toContain('Captions unavailable');
+      expect(JSON.stringify(call.prompt)).toContain('video000003');
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Supported use case.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) });
+    } });
+    await runResearchAgentWithModel({ model, message: 'Top use cases',
+      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context });
+    expect(context.provider.transcript).toHaveBeenCalledTimes(4);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      warnings: expect.arrayContaining([expect.objectContaining({
+        code: 'RESEARCH_COVERAGE_SHORTFALL', message: expect.stringContaining('3 of 4'),
+      })]),
+    }));
+  });
+
+  it('rejects duplicate or oversized transcript batches before provider calls', () => {
+    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: ['video000001', 'video000001'], focus: 'Tasks' }).success).toBe(false);
+    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: [1, 2, 3, 4, 5].map(n => `video00000${n}`), focus: 'Tasks' }).success).toBe(false);
+  });
+
+  it.each([['focused', 2], ['comparative', 4]] as const)('bounds %s analysts to %i concurrent calls', async (researchBreadth, limit) => {
     const context = transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
     const original = context.transcriptPolicy.analyze;
@@ -566,15 +675,12 @@ describe('YouTube AgentCore loop control', () => {
       }) });
     } });
     const run = runResearchAgentWithModel({ model, message: 'Compare design skills',
-      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context });
-    await vi.waitFor(() => expect(started).toBe(2));
-    expect(active).toBe(2);
-    releases.splice(0).forEach(release => release());
-    await vi.waitFor(() => expect(started).toBe(4));
-    expect(active).toBe(2);
+      decision: { route: 'topic_research', researchBreadth }, toolNames: ['get_video_transcript', 'finalize_answer'], context });
+    await vi.waitFor(() => expect(started).toBe(limit));
+    expect(active).toBe(limit);
     releases.splice(0).forEach(release => release());
     await run;
-    expect(maximum).toBe(2);
+    expect(maximum).toBe(limit);
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
   });
 
@@ -588,14 +694,14 @@ describe('YouTube AgentCore loop control', () => {
       context.transcriptPolicy.analyze = analyze;
       const model = new MockLanguageModelV4({ doGenerate: async () => multiToolModelResult([1, 2, 3, 4].map(n => ({
         toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
-        input: JSON.stringify({ videoId: `video00000${n}`, focus: 'Design skills' }),
+        input: JSON.stringify({ videoId: 'video000001', focus: `Design skills ${n}` }),
       }))) });
       const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
         blocks: [{ text: 'A supported finding.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
-        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
       }) });
       const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Compare design skills',
-        decision: { route: 'topic_research', researchBreadth: 'comparative' }, context,
+        decision: { route: 'inspect_video', videoId: 'video000001' }, toolNames: ['get_video_transcript', 'finalize_answer'], context,
         recoveredEvidence: [transcriptAnalysisPacket()],
       });
       await vi.advanceTimersByTimeAsync(1);
