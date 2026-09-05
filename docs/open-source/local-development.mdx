@@ -80,3 +80,36 @@ AGENT_TEST_MESSAGE='suggest the top use cases of gpt 6 astra' npm --prefix platf
 ```
 
 For custom queries, the smoke test checks completion and citations; review the answer and `RESEARCH_COVERAGE_SHORTFALL` warning separately. The default recommendation query additionally requires four analyzed videos.
+
+
+## Compact agent responses
+
+Add `?responseFormat=compact` to both the admission and polling URLs to use the compact response. The format is a per-request presentation option, so selecting it at admission does not change later polling responses. Omitting it retains the existing response contract. Both formats read the same stored run; changing formats does not rerun or charge for analysis.
+
+In Postman:
+
+1. Send `POST {{baseUrl}}/v1/agent?responseFormat=compact` with your usual authorization, `Idempotency-Key`, and JSON body such as `{"message":"Research the best design skills for frontend developers using Claude Code"}`.
+2. Save `runId` and `conversationId` from the `202` receipt.
+3. Poll `GET {{baseUrl}}/v1/agent/{{conversationId}}/runs/{{runId}}?responseFormat=compact` until the status is terminal.
+4. Read `result.answer` and resolve its `[1]` references using `result.sources`. Billing appears once at the top level. Keep `assistantMessageId` if you want to use that answer as a follow-up's `parentMessageId`.
+
+Research and inspect use the same compact schema. Each cited video appears once in `sources`, numbered by its first reference in the answer. Channel and playlist evidence retains its source identity when a video is not involved. Source URLs come from persisted evidence or the known video ID. Several adjacent excerpts from one video collapse to one source reference. Excerpts and timestamps remain stored internally.
+
+`status` describes execution. A completed run has one of these `result.outcome` values:
+
+| Outcome | Meaning |
+| --- | --- |
+| `answered` | An answer was produced without an explicit partial-evidence or research-coverage warning. It is not a guarantee that source claims are true. |
+| `partial` | Findings are available, but synthesis or the requested research coverage was incomplete. |
+| `insufficient_evidence` | The run explicitly reported `NO_CONTENT_EVIDENCE`; linked discovery sources were not reviewed. |
+| `needs_clarification` | The agent needs more information from the user. |
+
+Warnings remain in `result.warnings`. Provider errors and other caveats remain visible even when they do not change the outcome. Pending, running, failed, and cancelled responses have no result or billing unless a persisted result exists; failed runs retain their error message. Historical runs use their persisted warnings, so older results without `NO_CONTENT_EVIDENCE` cannot always distinguish missing content from other partial results.
+
+For additional details, append `&include=evidence,artifacts,diagnostics`. Request only the groups you need:
+
+- `evidence` adds `result.evidence` with original excerpt IDs, text, and available timestamps. Each entry's `sourceId` points to `result.sources[].id`.
+- `artifacts` adds `result.artifacts` with stored tool output artifacts.
+- `diagnostics` adds top-level routing, user message ID, conversation turn, model step count, and tool call count. Classifier and isolated analyst calls are excluded from the existing model step counter.
+
+Invalid formats or include values return `422`. `include` requires `responseFormat=compact`. Session restoration retains its existing format. The compact response is a serialization change; transcript analysis and exact internal citation validation remain in place.

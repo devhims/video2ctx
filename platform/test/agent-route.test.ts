@@ -148,6 +148,43 @@ describe('agent routes', () => {
     expect(receipt).not.toHaveProperty('turnOrdinal');
   });
 
+  test('returns compact admission identities without changing the run request', async () => {
+    const harness = agentHarness();
+    const response = await app.request('/v1/agent?responseFormat=compact', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'compact-admission' },
+      body: JSON.stringify({ message: 'Research design' }),
+    }, harness.env, executionContext);
+    expect(response.status).toBe(202);
+    const receipt = await response.json<Record<string, unknown>>();
+    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'conversationId', 'runId', 'status']);
+    expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('responseFormat');
+  });
+
+  test('projects the same stored run in either format without starting work', async () => {
+    const harness = agentHarness();
+    const stored = { runId: '102992fd-7e50-47be-bc96-3508a2a5c9e0', conversationId: '5a04cf06-ea91-4b07-b892-ce87f63954de',
+      assistantMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553', userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac',
+      status: 'running', conversationTurn: 1, modelStepCount: 2, toolCallCount: 3 };
+    harness.getRun.mockResolvedValue(stored);
+    const path = `/v1/agent/${stored.conversationId}/runs/${stored.runId}`;
+    const legacy = await app.request(path, {}, harness.env, executionContext);
+    expect(await legacy.json()).toEqual(stored);
+    const compact = await app.request(`${path}?responseFormat=compact&include=diagnostics`, {}, harness.env, executionContext);
+    expect(compact.status).toBe(200);
+    expect(await compact.json()).toMatchObject({ status: 'running', diagnostics: { toolCallCount: 3 } });
+    expect(compact.headers.get('Cache-Control')).toBe('no-store');
+    expect(harness.startRun).not.toHaveBeenCalled();
+    expect(creditBalance).not.toHaveBeenCalled();
+  });
+
+  test.each(['responseFormat=bad', 'include=artifacts', 'responseFormat=compact&include=bad'])('rejects invalid response options before admission: %s', async query => {
+    const harness = agentHarness();
+    const response = await app.request(`/v1/agent?${query}`, { method: 'POST' }, harness.env, executionContext);
+    expect(response.status).toBe(422);
+    expect(harness.startRun).not.toHaveBeenCalled();
+    expect(creditBalance).not.toHaveBeenCalled();
+  });
+
   test('lists and lexically searches sessions from the authenticated user account', async () => {
     const harness = agentHarness();
     const conversationId = '5a04cf06-ea91-4b07-b892-ce87f63954de';

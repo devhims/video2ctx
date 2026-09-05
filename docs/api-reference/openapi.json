@@ -360,6 +360,31 @@
         ],
         "parameters": [
           {
+            "name": "responseFormat",
+            "in": "query",
+            "required": false,
+            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "legacy",
+                "compact"
+              ],
+              "default": "legacy"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "example": "evidence,diagnostics"
+            }
+          },
+          {
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
@@ -383,11 +408,18 @@
         },
         "responses": {
           "202": {
-            "description": "Agent run admitted.",
+            "description": "Agent run admitted. Compact receipts omit execution metadata unless diagnostics is requested.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentRunReceipt"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentRunReceipt"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CompactAgentRun"
+                    }
+                  ]
                 }
               }
             },
@@ -655,15 +687,47 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          {
+            "name": "responseFormat",
+            "in": "query",
+            "required": false,
+            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "legacy",
+                "compact"
+              ],
+              "default": "legacy"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "example": "evidence,diagnostics"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Current agent run state.",
+            "description": "Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, and needs_clarification; completed describes execution, not evidence quality.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentRun"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentRun"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CompactAgentRun"
+                    }
+                  ]
                 }
               }
             }
@@ -2613,6 +2677,31 @@
           }
         ],
         "parameters": [
+          {
+            "name": "responseFormat",
+            "in": "query",
+            "required": false,
+            "description": "Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "legacy",
+                "compact"
+              ],
+              "default": "legacy"
+            }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "example": "evidence,diagnostics"
+            }
+          },
           {
             "name": "Idempotency-Key",
             "in": "header",
@@ -6257,6 +6346,346 @@
             "description": "Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn."
           }
         }
+      },
+      "CompactAgentRun": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "conversationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "assistantMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "partial",
+                  "insufficient_evidence",
+                  "needs_clarification"
+                ],
+                "description": "Answer availability based on clarification intent and persisted evidence warnings. This is not a factual-confidence score."
+              },
+              "answer": {
+                "type": "string"
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Source number used by [1] references in this answer."
+                    },
+                    "videoId": {
+                      "type": "string"
+                    },
+                    "channelId": {
+                      "type": "string"
+                    },
+                    "playlistId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "message": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1000
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "evidence": {
+                "description": "Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300
+                    },
+                    "sourceId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300
+                    },
+                    "provider": {
+                      "type": "string",
+                      "enum": [
+                        "youtube"
+                      ]
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "channelId": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "playlistId": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "title": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "excerpt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    },
+                    "startMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "endMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "sourceId",
+                    "provider",
+                    "excerpt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "outcome",
+              "answer",
+              "sources",
+              "warnings"
+            ],
+            "additionalProperties": false
+          },
+          "billing": {
+            "type": "object",
+            "properties": {
+              "creditsCharged": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "creditsRemaining": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "creditsCharged",
+              "creditsRemaining"
+            ],
+            "additionalProperties": false
+          },
+          "error": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "object",
+            "properties": {
+              "userMessageId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "conversationTurn": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "modelStepCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "toolCallCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "route": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "route": {
+                        "type": "string",
+                        "enum": [
+                          "topic_research"
+                        ]
+                      },
+                      "researchBreadth": {
+                        "type": "string",
+                        "enum": [
+                          "focused",
+                          "comparative"
+                        ]
+                      },
+                      "searchQuery": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "route"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "route": {
+                        "type": "string",
+                        "enum": [
+                          "inspect_video"
+                        ]
+                      },
+                      "videoId": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{11}$"
+                      }
+                    },
+                    "required": [
+                      "route",
+                      "videoId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "route": {
+                        "type": "string",
+                        "enum": [
+                          "clarification"
+                        ]
+                      },
+                      "question": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "route",
+                      "question"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "userMessageId",
+              "conversationTurn",
+              "modelStepCount",
+              "toolCallCount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "runId",
+          "conversationId",
+          "assistantMessageId",
+          "status"
+        ],
+        "additionalProperties": false
       },
       "AgentRunReceipt": {
         "type": "object",

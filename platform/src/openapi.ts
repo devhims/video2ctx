@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { compactAgentRunSchema } from './agents/response';
 import {
   BROWSE_CATEGORIES,
   BROWSE_LANGUAGES,
@@ -6,6 +8,11 @@ import {
 import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
 
 type Schema = Record<string, unknown>;
+
+const agentResponseParameters = [
+  { name: 'responseFormat', in: 'query', required: false, description: 'Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'legacy' } },
+  { name: 'include', in: 'query', required: false, description: 'Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.', schema: { type: 'string', maxLength: 100, example: 'evidence,diagnostics' } },
+];
 
 const schemaRef = (name: string): Schema => ({ $ref: `#/components/schemas/${name}` });
 const responseRef = (name: string) => ({ $ref: `#/components/responses/${name}` });
@@ -605,7 +612,7 @@ export const openApiDocument = {
         summary: 'Start a durable agent run',
         description: 'Starts a new conversation when conversationId is omitted. Follow-up requests reuse the Durable Object selected by the supplied conversationId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.',
         security: dataSecurity,
-        parameters: [{
+        parameters: [...agentResponseParameters, {
           name: 'Idempotency-Key',
           in: 'header',
           required: true,
@@ -614,7 +621,7 @@ export const openApiDocument = {
         }],
         requestBody: jsonBody(schemaRef('AgentRequest')),
         responses: {
-          '202': meteredJsonResponse('Agent run admitted.', schemaRef('AgentRunReceipt')),
+          '202': meteredJsonResponse('Agent run admitted. Compact receipts omit execution metadata unless diagnostics is requested.', { oneOf: [schemaRef('AgentRunReceipt'), schemaRef('CompactAgentRun')] }),
           '409': responseRef('Conflict'),
           ...dataErrors,
         },
@@ -667,9 +674,10 @@ export const openApiDocument = {
         parameters: [
           pathParameter('conversationId', 'Conversation UUID returned by agent admission.'),
           pathParameter('runId', 'Agent run UUID returned by agent admission.'),
+          ...agentResponseParameters,
         ],
         responses: {
-          '200': jsonResponse('Current agent run state.', schemaRef('AgentRun')),
+          '200': jsonResponse('Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, and needs_clarification; completed describes execution, not evidence quality.', { oneOf: [schemaRef('AgentRun'), schemaRef('CompactAgentRun')] }),
           ...standardErrors,
           '404': responseRef('NotFound'),
         },
@@ -1050,7 +1058,7 @@ export const openApiDocument = {
         operationId: 'createImport',
         summary: 'Start a durable import job',
         security: accountSecurity,
-        parameters: [{
+        parameters: [...agentResponseParameters, {
           name: 'Idempotency-Key', in: 'header', required: false,
           description: 'Optional caller-provided idempotency key.', schema: { type: 'string', maxLength: 200 },
         }],
@@ -1999,6 +2007,7 @@ export const openApiDocument = {
           parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
         },
       },
+      CompactAgentRun: z.toJSONSchema(compactAgentRunSchema, { target: 'openapi-3.0' }),
       AgentRunReceipt: {
         type: 'object',
         required: ['runId', 'conversationId', 'userMessageId', 'assistantMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
