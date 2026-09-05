@@ -1,3 +1,4 @@
+import { loadStoryboard } from './storyboard.mjs';
 import { createRequire } from 'node:module';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 
@@ -86,6 +87,8 @@ export function createYouTubeRuntime(environment = process.env) {
               lang: operation.lang,
               granularity: operation.granularity,
             });
+          case 'storyboard':
+            return await loadStoryboard(operation.id, youtube.getStoryboard, options);
           case 'endscreen':
             return youtube.getEndscreen({ ...options, videoId: operation.id });
           default:

@@ -14,6 +14,7 @@ export const OPERATION_KINDS = new Set([
   'caption-tracks',
   'transcript',
   'endscreen',
+  'storyboard',
 ]);
 
 function isRecord(value) {
