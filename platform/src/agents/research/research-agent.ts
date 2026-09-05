@@ -343,6 +343,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     },
   };
   let completedModelSteps = 0;
+  const finalizationHandoff = new Error('Research complete: hand off to finalization.');
 
   try {
     const result = await withRunDeadline(options.deadlineAt - FINALIZATION_RESERVE_MS, options.context.signal, async (signal) => {
@@ -399,6 +400,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
         hardBudgetMs: Math.max(1, options.deadlineAt - Date.now() - FINALIZATION_RESERVE_MS),
+        onFinalizationRequested: () => {
+          console.log(JSON.stringify({ event: 'agent_finalization_handoff', runId: options.context.runId,
+            remainingMs: Math.max(0, options.deadlineAt - Date.now()) }));
+          throw finalizationHandoff;
+        },
         onModelStepComplete: () => {
           completedModelSteps += 1;
         },
@@ -407,7 +413,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {
-    if (options.context.signal.aborted || (!isAgentCoreTimeout(error) && evidence.size === 0)) throw error;
+    if (options.context.signal.aborted || (error !== finalizationHandoff && !isAgentCoreTimeout(error) && evidence.size === 0)) throw error;
 
     if (!hasContentEvidence([...evidence.values()])
       && transcriptRequested) {
@@ -433,7 +439,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
       }), 'Finalization phase timeout.');
-      return { finishReason: 'timeout-finalized', stepCount: completedModelSteps };
+      return {
+        finishReason: error === finalizationHandoff ? 'finalized' : 'timeout-finalized',
+        stepCount: completedModelSteps + (error === finalizationHandoff ? 1 : 0),
+      };
     } catch (finalizationError) {
       console.warn(
         JSON.stringify({ event: 'agent_finalization_failed', runId: options.context.runId,

@@ -684,6 +684,36 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
   });
 
+  it.each([12_000, 25_000])('hands off synthesis once and bounds its own phase (duration=%s)', async (duration) => {
+    vi.useFakeTimers();
+    try {
+      const context = transcriptResearchContext();
+      const research = new MockLanguageModelV4({ doGenerate: async () => {
+        await new Promise(resolve => setTimeout(resolve, 34_000));
+        return modelResult({ toolCallId: 'transcript', toolName: 'get_video_transcript',
+          input: JSON.stringify({ videoId: 'video000001', focus: 'Relevant findings' }) });
+      } });
+      const synthesis = vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, duration));
+        return finalizerModelResult({ blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+          intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
+      });
+      const run = runResearchAgentWithModel({ model: research,
+        finalizationModel: new MockLanguageModelV4({ doGenerate: synthesis }),
+        message: 'Research workflows', decision: { route: 'topic_research' },
+        toolNames: ['get_video_transcript', 'finalize_answer'], context });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await run;
+      expect(synthesis).toHaveBeenCalledTimes(1);
+      expect(context.finalize).toHaveBeenCalledTimes(1);
+      if (duration > 20_000) {
+        expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          warnings: expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE' })]),
+        }));
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
   it('does not start queued analysts after the research deadline and preserves finalization time', async () => {
     vi.useFakeTimers();
     try {
