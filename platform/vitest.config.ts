@@ -5,7 +5,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['test/**/*.test.ts'],
-    exclude: [
+    exclude: ['test/admission-queue.integration.test.ts',
       'test/auth-worker.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',

@@ -1,3 +1,4 @@
+import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
 import { AGENT_RUN_TIMEOUT_MS } from './runtime/deadline';
@@ -137,6 +138,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   async startRun(
     request: AgentRequest,
     admission: AgentAdmission,
+    queuedIdentity?: QueuedRunIdentity,
   ): Promise<AgentRunReceipt | AgentRunRejection> {
     this.ensureAgentRuntimeSchema();
     if (this.#deleted) throw new Error('Account deletion is in progress.');
@@ -145,10 +147,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const existing = this.sql<RunRow>`
       SELECT * FROM agent_runs WHERE idempotency_key = ${parsedAdmission.idempotencyKey} LIMIT 1
     `[0];
-    if (existing) return this.receipt(existing);
+    if (existing) {
+      if (existing.status === 'pending') await this.startPersistedRun(existing);
+      return this.receipt(this.requireRun(existing.id));
+    }
 
-    const timestamp = Date.now();
-    const runId = crypto.randomUUID();
+    const identity = queuedIdentity ? queuedRunIdentitySchema.parse(queuedIdentity) : undefined;
+    const timestamp = identity?.admittedAt ?? Date.now();
+    const runId = identity?.runId ?? crypto.randomUUID();
     const conversationId = parsedRequest.conversationId ?? crypto.randomUUID();
     if (!parsedRequest.parentMessageId && this.hasActiveRun(conversationId, parsedAdmission.userId)) {
       return {
@@ -176,8 +182,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       }
       throw error;
     }
-    const userMessageId = crypto.randomUUID();
-    const assistantMessageId = crypto.randomUUID();
+    const userMessageId = identity?.userMessageId ?? crypto.randomUUID();
+    const assistantMessageId = identity?.assistantMessageId ?? crypto.randomUUID();
     const turnOrdinal = this.nextTurnOrdinal(conversationId, parsedAdmission.userId);
     this.sql`
       INSERT INTO agent_runs (
@@ -193,22 +199,20 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
     this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId });
 
-    await this.schedule(new Date(timestamp + AGENT_RUN_TIMEOUT_MS + 1000), 'reconcileRun', runId, { idempotent: true });
-    if (this.#deleted) throw new Error('Account deletion is in progress.');
-    await this.startFiber(
-      FIBER_NAME,
-      async (fiber) => {
-        await this.executeRun(runId, fiber);
-      },
-      {
-        fiberId: runId,
-        idempotencyKey: parsedAdmission.idempotencyKey,
-        metadata: { runId },
-        waitForCompletion: false,
-      },
-    );
-
+    await this.startPersistedRun(this.requireRun(runId));
     return this.receipt(this.requireRun(runId));
+  }
+
+  private async startPersistedRun(row: RunRow): Promise<void> {
+    if (Date.now() >= row.created_at + AGENT_RUN_TIMEOUT_MS) {
+      await this.reconcileRun(row.id);
+      return;
+    }
+    await this.schedule(new Date(row.created_at + AGENT_RUN_TIMEOUT_MS + 1000), 'reconcileRun', row.id, { idempotent: true });
+    if (this.#deleted) throw new Error('Account deletion is in progress.');
+    await this.startFiber(FIBER_NAME, async fiber => { await this.executeRun(row.id, fiber); }, {
+      fiberId: row.id, idempotencyKey: row.idempotency_key, metadata: { runId: row.id }, waitForCompletion: false,
+    });
   }
 
   async getRun(runId: string): Promise<AgentRunView | null> {

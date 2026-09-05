@@ -1,3 +1,4 @@
+import { timeAgentAdmission } from '../../lib/agent-admission-timing';
 import { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 export { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
 import { Hono, type Context } from 'hono';
@@ -23,7 +24,7 @@ import type { App } from '../../types';
 
 export const agentRoutes = new Hono<App>();
 
-export const AGENT_ROUTE_PATTERNS = ['/agent', '/agent/*'] as const;
+export const AGENT_ROUTE_PATTERNS = ['/agent/*'] as const;
 for (const path of AGENT_ROUTE_PATTERNS) {
   agentRoutes.use(path, requireDataPrincipal, async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -133,6 +134,14 @@ agentRoutes.get('/agent/sessions/:conversationId', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, path.data.conversationId);
   let page;
   try {
+    const pending = await account.pendingAgentRun(path.data.conversationId);
+    if (pending) {
+      const common = { runId: pending.run.runId, conversationTurn: 1, createdAt: pending.admittedAt, updatedAt: pending.admittedAt };
+      return c.json({ ...session, messages: cursor ? [] : [
+        { ...common, messageId: pending.run.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: pending.message },
+        { ...common, messageId: pending.run.assistantMessageId, parentMessageId: pending.run.userMessageId, role: 'assistant', status: pending.run.status, content: '' },
+      ], nextCursor: null });
+    }
     page = await agent.getConversation(path.data.conversationId, principal.id, {
       limit: query.data.limit,
       cursor,
@@ -151,13 +160,15 @@ agentRoutes.get('/agent/sessions/:conversationId', async (c) => {
 
 agentRoutes.post('/agent', async (c) => {
   const principal = requireUser(c);
+  const startedAt = c.get('requestStartedAt');
+  if (startedAt !== undefined) c.get('agentAdmissionTimings')?.push({ stage: 'preflight', durationMs: Date.now() - startedAt });
   const responseOptions = parseResponseOptions(c);
   const idempotencyKey = requireIdempotencyKey(c.req.header('idempotency-key'));
   const parsedRequest = parseAgentRequest(await body<unknown>(c.req.raw));
   const conversationId = parsedRequest.conversationId
     ?? await deterministicConversationId(principal.id, idempotencyKey);
   const request: AgentRequest = { ...parsedRequest, conversationId };
-  const creditsRemaining = await creditBalance(c.env, principal.id);
+  const creditsRemaining = await timeAgentAdmission(c, 'credits', () => creditBalance(c.env, principal.id));
 
   c.header('Cache-Control', 'no-store');
   c.header('X-Credits-Charged', '0');
@@ -169,22 +180,30 @@ agentRoutes.post('/agent', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, conversationId);
   try {
     const account = await userAccountForUser(c.env, principal.id);
-    await account.registerConversation(conversationId);
-    const receipt = await agent.startRun(request, {
+    if (!parsedRequest.conversationId && !parsedRequest.parentMessageId) {
+      const queued = await timeAgentAdmission(c, 'enqueue', async () => await account.enqueueAgentRun(request, { userId: principal.id, idempotencyKey, creditsRemaining }));
+      if (queued.receipt) return c.json(responseOptions.responseFormat === 'compact'
+        ? compactAgentRun(queued.receipt, responseOptions.include) : agentRunReceiptSchema.parse(queued.receipt), 202);
+    }
+    if (await account.pendingAgentRun(conversationId)) {
+      throw new ApiError(409, 'AGENT_CONVERSATION_BUSY', 'The conversation is still starting. Poll the admitted run before sending a follow-up.');
+    }
+    await timeAgentAdmission(c, 'register', () => account.registerConversation(conversationId));
+    const receipt = await timeAgentAdmission(c, 'start_run', async () => await agent.startRun(request, {
       userId: principal.id,
       idempotencyKey,
       creditsRemaining,
-    });
+    }));
     if ('rejected' in receipt) {
       throw new ApiError(receipt.status, receipt.code, receipt.message);
     }
     try {
-      await account.recordSession({
+      await timeAgentAdmission(c, 'session', () => account.recordSession({
         conversationId: receipt.conversationId,
         runId: receipt.runId,
         message: request.message,
         updatedAt: Date.now(),
-      });
+      }));
     } catch {
       throw new ApiError(
         503,
@@ -215,7 +234,9 @@ agentRoutes.get('/agent/:conversationId/runs/:runId', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, path.data.conversationId);
   let run;
   try {
-    run = await agent.getRun(path.data.runId);
+    const account = await userAccountForUser(c.env, principal.id);
+    const pending = await account.pendingAgentRun(path.data.conversationId, path.data.runId);
+    run = pending?.run ?? await agent.getRun(path.data.runId);
   } catch {
     throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
   }
@@ -238,8 +259,8 @@ async function requireAgentAccess(c: Context<App>): Promise<void> {
   // This also covers API keys: requireUser resolves their authenticated account owner.
   let user;
   try {
-    user = await c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
-      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>();
+    user = await timeAgentAdmission(c, 'admin_check', () => c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
+      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>());
   } catch {
     throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Admin access could not be verified.');
   }

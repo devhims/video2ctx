@@ -8,7 +8,7 @@ export default defineConfig({
     miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'migrations')) } },
   }))],
   test: {
-    include: ['test/user-account-do.integration.test.ts', 'test/agent-runtime-do.integration.test.ts'],
+    include: ['test/admission-queue.integration.test.ts', 'test/user-account-do.integration.test.ts', 'test/agent-runtime-do.integration.test.ts'],
     setupFiles: ['./test/apply-auth-migrations.ts'],
   },
 });
