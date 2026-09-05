@@ -57,10 +57,14 @@ In another terminal:
 npm --prefix platform run test:agent:live
 ```
 
-The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
+The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. For the default recommendation query, it requires comparative routing and completed transcript analyses for four distinct videos. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
 
 For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, run the local Worker in `AGENT_ACCESS_MODE:admins`, configure its local `ADMIN_EMAILS_SECRET`, and also provide `AGENT_TEST_NON_ADMIN_TOKEN`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
 
 ```bash
 npm --prefix platform run test:agent:live -- --help
 ```
+
+Research classification selects `focused` for narrow questions and `comparative` for recommendations and comparisons. These target two and four videos respectively. Legacy persisted routes without a breadth retain the two-video limit. Selected transcript calls run together, with at most two transcript or visual analysts active at once. The 60-second deadline and 20-second finalization reserve still apply. If fewer distinct videos provide usable transcript excerpts, the answer includes `RESEARCH_COVERAGE_SHORTFALL`; the target is not a guarantee when providers or models are slow. The research planner uses low reasoning effort to leave more time for evidence collection.
+
+Classification uses a required structured tool call so new research decisions include breadth. Answer blocks accept up to 12 validated evidence references to support comparisons across four videos.

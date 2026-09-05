@@ -57,6 +57,14 @@ async function main(): Promise<void> {
           assert(!result.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE'), 'Expected a full answer, received partial evidence');
           assert(result.citations.length > 0, 'An answer must contain citations');
           assert(result.billing.creditsCharged > 0, 'Evidence usage must be charged');
+          if (route === 'topic_research' && !process.env.AGENT_TEST_MESSAGE) {
+            assert.equal((run.route as { researchBreadth?: string }).researchBreadth, 'comparative', 'Recommendations should select comparative research');
+            const reviewedVideos = new Set(result.artifacts
+              .filter(artifact => artifact.type === 'youtube_transcript_analysis')
+              .map(artifact => artifact.data.videoId));
+            assert.equal(reviewedVideos.size, 4, 'Comparative research should analyze four distinct videos');
+            assert(!result.warnings.some(warning => warning.code === 'RESEARCH_COVERAGE_SHORTFALL'), 'Expected the research coverage target to be met');
+          }
           if (route === 'inspect_video') {
             assert(result.citations.some(citation => citation.sourceId.endsWith(':transcript')), 'Inspect must cite transcript evidence');
             assert(result.citations.some(citation => citation.id.startsWith('storyboard:')), 'Inspect must cite visual evidence');
