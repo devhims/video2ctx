@@ -1,16 +1,17 @@
 import { tool } from 'ai';
-import { agentTurnResultSchema, finalizeAnswerInputSchema } from '../../../contracts';
+import { agentTurnResultSchema } from '../../../contracts';
+import { structuredAnswerSchema, renderStructuredAnswer } from '../../../structured-answer';
 import type { AgentToolContext } from '../tool-context';
 
 export function createFinalizeAnswerTool(context: AgentToolContext) {
   return tool({
     description: [
       'Finalize and terminate the run once the evidence is sufficient.',
-      'Every research claim must use an inline [cite:<excerptId>] marker copied from persisted evidence. The application builds citation declarations.',
+      'Return answer blocks with text and supporting evidenceIds copied from persisted evidence. The application renders citations. Do not write inline citation markers.',
       'Citation references are mechanically validated. Never invent packet, source, or excerpt IDs.',
     ].join(' '),
-    inputSchema: finalizeAnswerInputSchema.omit({ citations: true }),
+    inputSchema: structuredAnswerSchema,
     outputSchema: agentTurnResultSchema,
-    execute: (input, { toolCallId }) => context.finalize(toolCallId, { ...input, citations: [] }),
+    execute: (input, { toolCallId }) => context.finalize(toolCallId, renderStructuredAnswer(input)),
   });
 }

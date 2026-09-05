@@ -187,7 +187,7 @@ function finalizingModel(): MockLanguageModelV4 {
         toolCallId: 'finalize-inspect',
         toolName: 'finalize_answer',
         input: JSON.stringify({
-          answer: 'Please clarify the requested aspect of the video.',
+          blocks: [{ text: 'Please clarify the requested aspect of the video.', evidenceIds: [] }],
           intent: 'clarification',
           confidence: 'low',
           citations: [],

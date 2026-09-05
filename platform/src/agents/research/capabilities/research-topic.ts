@@ -36,7 +36,7 @@ Work in a dynamic evidence loop:
 
 Use get_video_storyboard only when visible slides, interfaces, charts, or demonstrations would help answer the question. It returns sampled visual observations, not a complete video analysis.
 
-Do not answer outside finalize_answer. For a research answer, cite every substantive conclusion with an inline marker exactly formatted as [cite:<excerptId>]. The application builds citation declarations from these markers. Keep your answer under 180 words. Copy identifiers from tool results. Never invent identifiers.
+Do not answer outside finalize_answer. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. The application renders citations; do not write inline citation markers. Keep your answer under 180 words. Copy identifiers from tool results. Never invent identifiers.
 `.trim();
 
 export function createResearchTopicTools(context: AgentToolContext) {

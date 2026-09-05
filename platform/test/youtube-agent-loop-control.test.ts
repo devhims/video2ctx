@@ -1,3 +1,5 @@
+import { buildAgentTurnResult } from '../src/agents/finalizer';
+import { ApiError } from '../src/lib/http';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it, vi } from 'vitest';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
@@ -28,7 +30,7 @@ describe('YouTube AgentCore loop control', () => {
       expect(call.tools?.map(t => t.name)).not.toContain('search_youtube');
       expect(call.tools?.map(t => t.name)).toContain('get_video_transcript');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
-        answer: 'Done', intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+        blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }], intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
       }) });
     } });
     await runResearchAgentWithModel({ model, message: 'Research design', decision: { route: 'topic_research' }, context });
@@ -42,7 +44,7 @@ describe('YouTube AgentCore loop control', () => {
       expect(call.tools?.map(tool => tool.name)).not.toContain('search_youtube');
       expect(call.tools?.map(tool => tool.name)).toContain('get_video_transcript');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
-        answer: 'Done', intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+        blocks: [{ text: 'Done', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }], intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
       }) });
     } });
     await runResearchAgentWithModel({
@@ -185,7 +187,7 @@ describe('YouTube AgentCore loop control', () => {
           toolCallId: 'finalize-1',
           toolName: FINALIZE_ANSWER_TOOL_NAME,
           input: JSON.stringify({
-            answer: 'The available metadata identifies the video.',
+            blocks: [{ text: 'The available metadata identifies the video.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
@@ -221,7 +223,7 @@ describe('YouTube AgentCore loop control', () => {
           toolCallId: 'cost-finalize',
           toolName: FINALIZE_ANSWER_TOOL_NAME,
           input: JSON.stringify({
-            answer: 'The run finalized with the evidence already collected.',
+            blocks: [{ text: 'The run finalized with the evidence already collected.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
@@ -253,7 +255,7 @@ describe('YouTube AgentCore loop control', () => {
         toolCallId: 'invalid-finalize',
         toolName: FINALIZE_ANSWER_TOOL_NAME,
         input: JSON.stringify({
-          answer: 'This first finalization attempt is rejected during execution.',
+          blocks: [{ text: 'This first finalization attempt is rejected during execution.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
           intent: 'inspect_video',
           confidence: 'low',
           citations: [],
@@ -272,7 +274,7 @@ describe('YouTube AgentCore loop control', () => {
           toolCallId: 'repaired-finalize',
           toolName: FINALIZE_ANSWER_TOOL_NAME,
           input: JSON.stringify({
-            answer: 'Please clarify which aspect of the video to inspect.',
+            blocks: [{ text: 'Please clarify which aspect of the video to inspect.', evidenceIds: [] }],
             intent: 'clarification',
             confidence: 'low',
             citations: [],
@@ -287,7 +289,7 @@ describe('YouTube AgentCore loop control', () => {
     let finalizeAttempt = 0;
     context.finalize = vi.fn(async (toolCallId, input) => {
       finalizeAttempt += 1;
-      if (finalizeAttempt === 1) throw new Error('Citation validation rejected the first answer.');
+      if (finalizeAttempt === 1) throw new ApiError(422, 'INVALID_AGENT_CITATION', 'Citation validation rejected the first answer.');
       return successfulFinalize(toolCallId, input);
     });
 
@@ -321,7 +323,7 @@ describe('YouTube AgentCore loop control', () => {
             toolCallId: 'finalize-after-repair',
             toolName: FINALIZE_ANSWER_TOOL_NAME,
             input: JSON.stringify({
-              answer: 'The repaired call retrieved the selected video.',
+              blocks: [{ text: 'The repaired call retrieved the selected video.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
               intent: 'inspect_video',
               confidence: 'low',
               citations: [],
@@ -383,8 +385,8 @@ describe('YouTube AgentCore loop control', () => {
       },
     });
     const finalizationModel = new MockLanguageModelV4({
-      doGenerate: async () => objectModelResult({
-        answer: 'The transcript could not be retrieved, so no transcript-based answer is available.',
+      doGenerate: async () => finalizerModelResult({
+        blocks: [{ text: 'The transcript could not be retrieved, so no transcript-based answer is available.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
         intent: 'inspect_video',
         confidence: 'low',
         citations: [],
@@ -447,8 +449,8 @@ describe('YouTube AgentCore loop control', () => {
         const prompt = JSON.stringify(call.prompt);
         expect(prompt).toContain(analysisSummary);
         expect(prompt).not.toContain(persistedText);
-        return objectModelResult({
-          answer: 'The available analysis recommends TypeScript.',
+        return finalizerModelResult({
+          blocks: [{ text: 'The available analysis recommends TypeScript.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
           intent: 'topic_research',
           confidence: 'medium',
           citations: [],
@@ -505,7 +507,7 @@ describe('YouTube AgentCore loop control', () => {
           toolCallId: 'finalize-after-transcript-budget',
           toolName: FINALIZE_ANSWER_TOOL_NAME,
           input: JSON.stringify({
-            answer: 'Two transcript analyses provide enough evidence.',
+            blocks: [{ text: 'Two transcript analyses provide enough evidence.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'topic_research',
             confidence: 'medium',
             citations: [],
@@ -536,7 +538,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledOnce();
   });
 
-  it('returns saved evidence instead of making another model call to repair citations', async () => {
+  it('repairs rejected references once within the shared finalization budget', async () => {
     const researchModel = new MockLanguageModelV4({
       doGenerate: async () => {
         throw new Error('The operation was aborted due to timeout');
@@ -549,10 +551,10 @@ describe('YouTube AgentCore loop control', () => {
         if (finalizerAttempt === 2) {
           expect(JSON.stringify(call.prompt)).toContain('Citation validation rejected the first answer.');
         }
-        return objectModelResult({
-          answer: finalizerAttempt === 1
+        return finalizerModelResult({
+          blocks: [{ text: finalizerAttempt === 1
             ? 'An invalid first answer.'
-            : 'The repaired answer uses persisted evidence. [cite:transcript:abcdefghijk:window:0:0]',
+            : 'The repaired answer uses persisted evidence.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
           intent: 'topic_research',
           confidence: 'medium',
           citations: finalizerAttempt === 1 ? [] : [{
@@ -569,7 +571,7 @@ describe('YouTube AgentCore loop control', () => {
     let persistAttempt = 0;
     context.finalize = vi.fn(async () => {
       persistAttempt += 1;
-      if (persistAttempt === 1) throw new Error('Citation validation rejected the first answer.');
+      if (persistAttempt === 1) throw new ApiError(422, 'INVALID_AGENT_CITATION', 'Citation validation rejected the first answer.');
       return {
         runId: context.runId,
         conversationId: crypto.randomUUID(),
@@ -598,10 +600,69 @@ describe('YouTube AgentCore loop control', () => {
       modelCallPrefix: 'timeout-citation-repair',
     });
 
-    expect(result.finishReason).toBe('evidence-fallback');
-    expect(finalizationModel.doGenerateCalls).toHaveLength(1);
+    expect(result.finishReason).toBe('timeout-finalized');
+    expect(finalizationModel.doGenerateCalls).toHaveLength(2);
     expect(context.finalize).toHaveBeenCalledTimes(2);
     expect(modelBudget.entries.map((entry) => entry.category)).not.toContain('citation_repair');
+  });
+
+  it.each(['missing', 'unknown', 'exhausted'])('validates recovery against persisted evidence (%s references)', async (failure) => {
+    const packet = transcriptAnalysisPacket();
+    const context = inspectContext();
+    context.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({
+      runId: context.runId, conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(),
+    }, { userId: 'test', idempotencyKey: 'test', creditsRemaining: 100 }, input, [packet], 1));
+    let attempts = 0;
+    const recovery = new MockLanguageModelV4({ doGenerate: async (call) => {
+      attempts += 1;
+      if (attempts === 2) expect(JSON.stringify(call.prompt)).toContain('validationFeedback');
+      return finalizerModelResult({
+        blocks: [{ text: 'Use the supported workflow.', evidenceIds:
+          failure === 'exhausted' || (attempts === 1 && failure === 'unknown') ? ['invented'] :
+            attempts === 1 ? [] : [packet.excerpts[0]!.id] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      });
+    } });
+    const modelBudget = inMemoryModelBudget();
+    const result = await runResearchAgentWithModel({
+      model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+      finalizationModel: recovery, message: 'Research workflows', decision: { route: 'topic_research' },
+      context, recoveredEvidence: [packet], modelBudget,
+    });
+    expect(attempts).toBe(2);
+    expect(modelBudget.entries.filter(e => e.category === 'timeout_finalizer')).toHaveLength(2);
+    expect(result.finishReason).toBe(failure === 'exhausted' ? 'evidence-fallback' : 'timeout-finalized');
+    const lastInput = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+    expect(lastInput.answer).toContain(`[cite:${packet.excerpts[0]!.id}]`);
+    expect(lastInput.answer).not.toContain('[cite:invented]');
+  });
+
+  it('does not restart the finalization deadline when a citation repair stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = inspectContext();
+      const originalFinalize = context.finalize;
+      context.finalize = vi.fn(async (id, input) => {
+        if (id.startsWith('timeout-finalizer:')) throw new ApiError(422, 'INVALID_AGENT_CITATION', 'Unknown reference');
+        return originalFinalize(id, input);
+      });
+      let attempts = 0;
+      const recovery = new MockLanguageModelV4({ doGenerate: async () => {
+        if (++attempts > 1) return new Promise(() => {});
+        return finalizerModelResult({ blocks: [{ text: 'Finding', evidenceIds: ['invented'] }],
+          intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
+      } });
+      const run = runResearchAgentWithModel({
+        model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+        finalizationModel: recovery, message: 'Research workflows', decision: { route: 'topic_research' },
+        context, recoveredEvidence: [transcriptAnalysisPacket()],
+      });
+      const check = expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+      await vi.advanceTimersByTimeAsync(20_001);
+      await check;
+      expect(attempts).toBe(2);
+    } finally { vi.useRealTimers(); }
   });
 
   it('surfaces Workers AI capacity exhaustion instead of misreporting a timeout', async () => {
@@ -699,16 +760,8 @@ function modelResult(toolCall: {
   };
 }
 
-function objectModelResult(output: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(output) }],
-    finishReason: { unified: 'stop' as const, raw: undefined },
-    usage: {
-      inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 20, text: 20, reasoning: undefined },
-    },
-    warnings: [],
-  };
+function finalizerModelResult(output: unknown) {
+  return modelResult({ toolCallId: 'recovery-answer', toolName: 'finalize_answer', input: JSON.stringify(output) });
 }
 
 function multiToolModelResult(toolCalls: Array<{
