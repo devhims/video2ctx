@@ -1,3 +1,4 @@
+import { RESEARCH_ANSWER_GUIDANCE } from '../answer-guidance';
 import type { AgentToolContext } from '../../providers/youtube/tool-context';
 import { createCapabilityToolSet } from '../../providers/youtube/tool-library';
 
@@ -35,6 +36,8 @@ Work in a dynamic evidence loop:
 7. After the target number of unique transcript-analysis requests, or earlier when candidates are unsuitable or the time budget requires it, call finalize_answer. Repeating an identical request reuses its durable result and does not consume another analysis slot.
 
 Use get_video_storyboard only when visible slides, interfaces, charts, or demonstrations would help answer the question. It returns sampled visual observations, not a complete video analysis.
+
+${RESEARCH_ANSWER_GUIDANCE}
 
 Do not answer outside finalize_answer. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. The application renders citations; do not write inline citation markers. Keep your answer under 180 words. Copy identifiers from tool results. Never invent identifiers.
 `.trim();
