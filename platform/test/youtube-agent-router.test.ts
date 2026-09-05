@@ -17,8 +17,8 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
-  it('uses medium reasoning for research and low reasoning for bounded inspection', () => {
-    expect(agentCoreReasoningEffort('topic_research')).toBe('medium');
+  it('uses low reasoning for bounded research planning and inspection', () => {
+    expect(agentCoreReasoningEffort('topic_research')).toBe('low');
     expect(agentCoreReasoningEffort('inspect_video')).toBe('low');
   });
 
@@ -45,11 +45,38 @@ describe('YouTube agent capability router', () => {
   it('routes discovery and comparison requests into topic_research', async () => {
     const decision = await classifyCapabilityWithModel({
       message: 'Compare current YouTube advice about audience retention.',
-      model: classifierModel({ route: 'topic_research' }),
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative' }),
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative' });
+  });
+
+  it.each(['focused', 'comparative'] as const)('persists classifier research breadth %s', async (researchBreadth) => {
+    const decision = await classifyCapabilityWithModel({
+      message: 'Research the best design skills for frontend developers using Claude Code',
+      model: classifierModel({ route: 'topic_research', researchBreadth }),
+      signal: new AbortController().signal,
+    });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth });
+  });
+
+  it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
+    await expect(classifyCapabilityWithModel({
+      message: 'Compare frontend design skills',
+      model: classifierModel({ route: 'topic_research' }),
+      signal: new AbortController().signal,
+    })).rejects.toThrow();
+  });
+
+  it('restores comparative breadth without rerunning the classifier', async () => {
+    const classify = vi.fn(async () => ({ route: 'topic_research' as const }));
+    const decision = await resolveCapabilityRoute({
+      persisted: { route: 'topic_research', researchBreadth: 'comparative' },
+      classify, persist: vi.fn(),
+    });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative' });
+    expect(classify).not.toHaveBeenCalled();
   });
 
   it('does not accept an inspect_video ID invented by the classifier', async () => {
@@ -160,8 +187,8 @@ describe('YouTube agent capability router', () => {
 function classifierModel(output: unknown): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doGenerate: async () => ({
-      content: [{ type: 'text', text: JSON.stringify(output) }],
-      finishReason: { unified: 'stop', raw: undefined },
+      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify(output) }],
+      finishReason: { unified: 'tool-calls', raw: undefined },
       usage: {
         inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
         outputTokens: { total: 10, text: 10, reasoning: undefined },

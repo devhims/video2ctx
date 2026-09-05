@@ -474,7 +474,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(persistedPackets[0]?.excerpts[0]?.text).toBe(persistedText);
   });
 
-  it('caps a parallel research transcript batch at two and then forces finalization', async () => {
+  it.each([['focused', 2], ['comparative', 4]] as const)('caps a parallel %s transcript batch at %i and then forces finalization', async (researchBreadth, target) => {
     let generation = 0;
     const researchModel = new MockLanguageModelV4({
       doGenerate: async (call) => {
@@ -486,6 +486,7 @@ describe('YouTube AgentCore loop control', () => {
             { toolCallId: 'transcript-2', videoId: 'video000002' },
             { toolCallId: 'transcript-3', videoId: 'video000003' },
             { toolCallId: 'transcript-4', videoId: 'video000004' },
+            { toolCallId: 'transcript-5', videoId: 'video000005' },
           ].map(({ toolCallId, videoId }) => ({
             toolCallId,
             toolName: 'get_video_transcript',
@@ -522,20 +523,107 @@ describe('YouTube AgentCore loop control', () => {
     const result = await runResearchAgentWithModel({
       model: researchModel,
       message: 'Suggest the best frontend development skills.',
-      decision: { route: 'topic_research' },
+      decision: { route: 'topic_research', researchBreadth },
       context,
       toolNames: ['get_video_transcript', FINALIZE_ANSWER_TOOL_NAME],
     });
 
     expect(result.stepCount).toBe(2);
-    expect(context.provider.transcript).toHaveBeenCalledTimes(2);
+    expect(context.provider.transcript).toHaveBeenCalledTimes(target);
     expect(context.provider.transcript).toHaveBeenNthCalledWith(1, 'video000001', undefined);
     expect(context.provider.transcript).toHaveBeenNthCalledWith(2, 'video000002', undefined);
     expect(context.transcriptPolicy.mode).toBe('contextual_analysis');
     if (context.transcriptPolicy.mode === 'contextual_analysis') {
-      expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(2);
+      expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(target);
     }
     expect(context.finalize).toHaveBeenCalledOnce();
+  });
+
+  it('runs two isolated analysts concurrently and queues the remaining comparative videos', async () => {
+    const context = transcriptResearchContext();
+    if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+    const original = context.transcriptPolicy.analyze;
+    let active = 0;
+    let maximum = 0;
+    let started = 0;
+    const releases: Array<() => void> = [];
+    context.transcriptPolicy.analyze = async input => {
+      active++;
+      started++;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>(resolve => releases.push(resolve));
+      try { return await original(input); } finally { active--; }
+    };
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (step++ === 0) return multiToolModelResult([1, 2, 3, 4].map(n => ({
+        toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
+        input: JSON.stringify({ videoId: `video00000${n}`, focus: 'Design skills' }),
+      })));
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Compared the sources.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) });
+    } });
+    const run = runResearchAgentWithModel({ model, message: 'Compare design skills',
+      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context });
+    await vi.waitFor(() => expect(started).toBe(2));
+    expect(active).toBe(2);
+    releases.splice(0).forEach(release => release());
+    await vi.waitFor(() => expect(started).toBe(4));
+    expect(active).toBe(2);
+    releases.splice(0).forEach(release => release());
+    await run;
+    expect(maximum).toBe(2);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
+  });
+
+  it('does not start queued analysts after the research deadline and preserves finalization time', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = transcriptResearchContext();
+      if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+      const analyze = vi.fn(async ({ signal }: { signal: AbortSignal }): Promise<never> =>
+        new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
+      context.transcriptPolicy.analyze = analyze;
+      const model = new MockLanguageModelV4({ doGenerate: async () => multiToolModelResult([1, 2, 3, 4].map(n => ({
+        toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
+        input: JSON.stringify({ videoId: `video00000${n}`, focus: 'Design skills' }),
+      }))) });
+      const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
+        blocks: [{ text: 'A supported finding.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) });
+      const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Compare design skills',
+        decision: { route: 'topic_research', researchBreadth: 'comparative' }, context,
+        recoveredEvidence: [transcriptAnalysisPacket()],
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(analyze).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(40_000);
+      await expect(run).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
+      expect(analyze).toHaveBeenCalledTimes(2);
+      expect(context.finalize).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('discloses distinct usable video coverage in recovery answers', async () => {
+    const context = inspectContext();
+    const recovery = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
+      blocks: [{ text: 'A supported finding.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+      intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+    }) });
+    await runResearchAgentWithModel({
+      model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+      finalizationModel: recovery, message: 'Compare design skills',
+      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context,
+      recoveredEvidence: [transcriptAnalysisPacket()],
+    });
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      warnings: expect.arrayContaining([expect.objectContaining({
+        code: 'RESEARCH_COVERAGE_SHORTFALL', message: expect.stringContaining('1 of 4'),
+      })]),
+    }));
   });
 
   it('repairs rejected references once within the shared finalization budget', async () => {

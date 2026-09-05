@@ -80,7 +80,7 @@ export async function executeGetVideoTranscriptForModel(
       sources: [],
       warnings: [{
         code: 'TRANSCRIPT_ANALYSIS_BUDGET_REACHED',
-        message: 'The two-video transcript analysis budget is complete. Finalize with the available evidence.',
+        message: 'The transcript analysis budget for this research breadth is complete. Finalize with the available evidence.',
       }],
     });
   }

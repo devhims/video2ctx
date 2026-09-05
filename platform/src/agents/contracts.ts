@@ -5,6 +5,7 @@ export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_vid
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
     route: z.literal('topic_research'),
+    researchBreadth: z.enum(['focused', 'comparative']).optional(),
   }),
   z.object({
     route: z.literal('inspect_video'),
