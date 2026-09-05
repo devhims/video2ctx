@@ -5,7 +5,7 @@ import { finalizeAnswerInputSchema, type FinalizeAnswerInput } from './contracts
 const fields = finalizeAnswerInputSchema.omit({ answer: true, citations: true, intent: true });
 const block = z.object({
   text: z.string().trim().min(1).max(2_000),
-  evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(5),
+  evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(12),
 });
 export const structuredAnswerSchema = z.discriminatedUnion('intent', [
   fields.extend({

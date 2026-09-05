@@ -23,6 +23,16 @@ describe('structured answer citations', () => {
     expect(result.citations).toHaveLength(1);
     expect(result.citations[0]).toMatchObject({ excerpt: 'Original transcript.', startMs: 1000, endMs: 2000 });
   });
+  it('retains up to twelve supporting references for a multi-video comparison', () => {
+    const evidenceIds = Array.from({ length: 12 }, (_, index) => `e${index + 1}`);
+    const result = renderStructuredAnswer({ ...base, intent: 'topic_research', blocks: [{
+      text: 'The four videos support this comparison.', evidenceIds,
+    }] });
+    expect(result.answer.match(/\[cite:/g)).toHaveLength(12);
+    expect(structuredAnswerSchema.safeParse({ ...base, blocks: [{
+      text: 'Comparison', evidenceIds: [...evidenceIds, 'e13'],
+    }] }).success).toBe(false);
+  });
   it('requires references on every block, not just somewhere in the answer', () => {
     expect(structuredAnswerSchema.safeParse({ ...base, blocks: [
       { text: 'Supported', evidenceIds: ['e1'] }, { text: 'Unsupported', evidenceIds: [] },
