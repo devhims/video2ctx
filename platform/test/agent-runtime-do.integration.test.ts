@@ -79,3 +79,21 @@ test('deadline watchdog settles abandoned runs without restarting inference', as
   expect(await creditBalance(env, userId)).toBe(999);
 });
 
+test('account deletion clears runtime data and rejects delayed admissions', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-delete-runtime', 'running');
+  await runtime.deleteAccountData();
+  expect(await runtime.getRun(runId)).toBeNull();
+  expect(await runtime.getConversation(conversationId, userId)).toBeNull();
+  expect(await creditBalance(env, userId)).toBe(999);
+  await runInDurableObject(runtime, async instance => {
+  await expect(instance.startRun({ message: 'A delayed request', conversationId }, {
+    userId, idempotencyKey: 'delayed-request', creditsRemaining: 999,
+  })).rejects.toThrow('deletion');
+  });
+  await runtime.deleteAccountData();
+  await runInDurableObject(runtime, async (_instance, state) => {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_events', 'cf_agents_fibers']) {
+      expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
+    }
+  });
+});

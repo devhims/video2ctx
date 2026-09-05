@@ -91,6 +91,14 @@ describe('agent routes', () => {
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
+  test('does not start a run when its deletion registry cannot be written', async () => {
+    const harness = agentHarness();
+    harness.registerConversation.mockRejectedValueOnce(new Error('Account deletion is in progress.'));
+    const response = await postAgent(harness.env, 'deleted-account-request', { message: 'Research' });
+    expect(response.status).toBe(503);
+    expect(harness.startRun).not.toHaveBeenCalled();
+  });
+
   test('routes independent admissions to different conversation Durable Objects', async () => {
     const harness = agentHarness();
     const first = await postAgent(harness.env, 'independent-call-1', { message: 'Research topic one' });
@@ -113,6 +121,7 @@ describe('agent routes', () => {
     expect(response.status).toBe(202);
     const receipt = await response.json<{ conversationId: string; runId: string }>();
     expect(harness.accountInstanceNames).toHaveLength(1);
+    expect(harness.registerConversation.mock.invocationCallOrder[0]).toBeLessThan(harness.startRun.mock.invocationCallOrder[0]!);
     expect(harness.recordSession).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: receipt.conversationId,
       runId: receipt.runId,

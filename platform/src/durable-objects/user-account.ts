@@ -67,7 +67,35 @@ export class UserAccountDO extends DurableObject<Env> {
     });
   }
 
+  registerConversation(conversationId: string): void {
+    this.assertActive();
+    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO agent_conversations (conversation_id) VALUES (?)',
+      z.string().uuid().parse(conversationId));
+  }
+
+  beginDeletion(): string[] {
+    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO account_deletion (id) VALUES (1)');
+    return this.ctx.storage.sql.exec<{ conversation_id: string }>(
+      'SELECT conversation_id FROM agent_conversations UNION SELECT conversation_id FROM user_sessions',
+    ).toArray().map(row => row.conversation_id);
+  }
+
+  finishDeletion(): void {
+    this.ctx.storage.sql.exec('DELETE FROM user_sessions_fts');
+    this.ctx.storage.sql.exec('DELETE FROM user_session_runs');
+    this.ctx.storage.sql.exec('DELETE FROM user_sessions');
+    this.ctx.storage.sql.exec('DELETE FROM agent_conversations');
+    // Keep only a tombstone so already-authenticated requests cannot recreate data.
+  }
+
+  private assertActive(): void {
+    if (this.ctx.storage.sql.exec('SELECT id FROM account_deletion LIMIT 1').toArray().length) {
+      throw new Error('Account deletion is in progress.');
+    }
+  }
+
   recordSession(value: RecordSessionInput): UserSessionSummary {
+    this.assertActive();
     const input = recordSessionInputSchema.parse(value);
     const existingRun = this.ctx.storage.sql.exec<SessionRunRow>(
       'SELECT run_id, conversation_id FROM user_session_runs WHERE run_id = ? LIMIT 1',
@@ -227,6 +255,8 @@ export class UserAccountDO extends DurableObject<Env> {
   }
 
   private ensureSchema(): void {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS account_deletion (id INTEGER PRIMARY KEY)');
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_conversations (conversation_id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS _sql_schema_migrations (
         id INTEGER PRIMARY KEY,

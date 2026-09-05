@@ -119,11 +119,14 @@ export interface AgentRunRejection {
 
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   initialState: AgentRuntimeState = { version: 1 };
+  #deleted = false;
+  readonly #activeRuns = new Set<Promise<void>>();
   readonly #inFlightEvidence = new Map<string, Promise<EvidencePacket>>();
 
   async onStart(): Promise<void> {
+    this.#deleted = (await this.ctx.storage.get<boolean>('account-deleted')) ?? false;
     this.ensureAgentRuntimeSchema();
-    {
+    if (!this.#deleted) {
       for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
         await this.schedule(new Date(Math.max(Date.now() + 1000, run.created_at + AGENT_RUN_TIMEOUT_MS + 1000)),
           'reconcileRun', run.id, { idempotent: true });
@@ -136,6 +139,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     admission: AgentAdmission,
   ): Promise<AgentRunReceipt | AgentRunRejection> {
     this.ensureAgentRuntimeSchema();
+    if (this.#deleted) throw new Error('Account deletion is in progress.');
     const parsedRequest = agentRequestSchema.parse(request);
     const parsedAdmission = agentAdmissionSchema.parse(admission);
     const existing = this.sql<RunRow>`
@@ -190,6 +194,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId });
 
     await this.schedule(new Date(timestamp + AGENT_RUN_TIMEOUT_MS + 1000), 'reconcileRun', runId, { idempotent: true });
+    if (this.#deleted) throw new Error('Account deletion is in progress.');
     await this.startFiber(
       FIBER_NAME,
       async (fiber) => {
@@ -302,6 +307,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private async executeRun(runId: string, fiber: FiberContext): Promise<void> {
+    const work = this.performRun(runId, fiber);
+    this.#activeRuns.add(work);
+    try { await work; } finally { this.#activeRuns.delete(work); }
+  }
+
+  private async performRun(runId: string, fiber: FiberContext): Promise<void> {
+    if (this.#deleted) return;
     const row = this.requireRun(runId);
     if (isTerminal(row.status)) { await this.settleRun(runId); return; }
     const modelCallPrefix = crypto.randomUUID();
@@ -318,7 +330,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     try {
       const reserved = await reserveAgentCredits(this.env, row.user_id, runId);
       if (!reserved) return;
-      if (isTerminal(this.requireRun(runId).status)) {
+      if (this.#deleted || isTerminal(this.requireRun(runId).status)) {
         await this.settleRun(runId);
         return;
       }
@@ -367,7 +379,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     } catch (error) {
       const normalizedError = normalizeAgentExecutionError(error);
       const current = this.readRun(runId);
-      if (!current) return;
+      if (!current || this.#deleted) return;
       if (current.status !== 'completed' && current.status !== 'cancelled') {
         const message = errorMessage(normalizedError);
         this.sql`
@@ -458,6 +470,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       });
       return packet;
     } catch (error) {
+      if (this.#deleted) throw error;
       const message = errorMessage(error);
       this.sql`
         UPDATE agent_tool_calls
@@ -542,7 +555,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private assertRunActive(runId: string): void {
-    if (isTerminal(this.requireRun(runId).status)) {
+    if (this.#deleted || isTerminal(this.requireRun(runId).status)) {
       throw new Error('Agent run is no longer active.');
     }
   }
@@ -564,6 +577,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   // A durable watchdog also retries settlement if D1 was unavailable when a
   // fiber ended. It never restarts inference after the admission deadline.
   async reconcileRun(runId: string): Promise<void> {
+    if (this.#deleted) return;
     const run = this.readRun(runId);
     if (!run || run.billing_settled) return;
     try {
@@ -577,6 +591,29 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     } catch {
       await this.schedule(60, 'reconcileRun', runId);
     }
+  }
+
+  async deleteAccountData(): Promise<void> {
+    this.#deleted = true;
+    await this.ctx.storage.put('account-deleted', true);
+    const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;
+    this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', updated_at = ${Date.now()}
+      WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
+    // Cancel every fiber before touching D1, even if settlement is unavailable.
+    await Promise.all(runs.filter(run => !isTerminal(run.status))
+      .map(run => this.cancelFiber(run.id, 'Account deleted.')));
+    await Promise.allSettled([...this.#activeRuns]);
+    for (const run of runs) await this.settleRun(run.id);
+    // Abort propagates to provider and model calls. Drain tool promises before
+    // removing evidence so a late completion cannot recreate private data.
+    await Promise.allSettled([...this.#inFlightEvidence.values()]);
+    for (const table of ['agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
+      'agent_events', 'agent_model_usage', 'agent_runs']) {
+      this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+    }
+    // SDK snapshots contain run identifiers only, but clear those too.
+    this.sql`DELETE FROM cf_agents_fibers`;
+    for (const schedule of this.getSchedules()) await this.cancelSchedule(schedule.id);
   }
 
   private readEvidencePackets(runId: string): EvidencePacket[] {
@@ -702,6 +739,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private persistRoute(runId: string, decision: CapabilityRouteDecision): void {
+    if (this.#deleted) return;
     this.sql`
       INSERT INTO agent_routes (run_id, decision_json, created_at)
       VALUES (${runId}, ${JSON.stringify(decision)}, ${Date.now()})
@@ -774,12 +812,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private updatePhase(runId: string, phase: string): void {
+    if (this.#deleted) return;
     this.sql`
       UPDATE agent_runs SET phase = ${phase}, updated_at = ${Date.now()} WHERE id = ${runId}
     `;
   }
 
   private recordEvent(runId: string, type: string, payload: Record<string, unknown>): void {
+    if (this.#deleted) return;
     this.sql`
       INSERT INTO agent_events (run_id, type, payload_json, created_at)
       VALUES (${runId}, ${type}, ${JSON.stringify(payload)}, ${Date.now()})
@@ -803,7 +843,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private recordModelUsage(runId: string, entry: AgentModelUsageEntry): void {
-    if (!this.readRun(runId) || isTerminal(this.requireRun(runId).status)) return;
+    if (this.#deleted || !this.readRun(runId) || isTerminal(this.requireRun(runId).status)) return;
     const estimatedCostMicros = entry.pricing ? estimateModelCostMicros(entry.usage, entry.pricing) : estimateAgentModelCostMicros(entry.usage);
     const modelId = entry.modelId ?? AGENT_MODEL_ID;
     const inputTokens = entry.usage.inputTokens ?? 0;

@@ -167,6 +167,7 @@ agentRoutes.post('/agent', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, conversationId);
   try {
     const account = await userAccountForUser(c.env, principal.id);
+    await account.registerConversation(conversationId);
     const receipt = await agent.startRun(request, {
       userId: principal.id,
       idempotencyKey,

@@ -6,6 +6,24 @@ const CONVERSATION_B = 'e665d2a1-f9f9-4b7f-8b7c-0bf0a1393c3b';
 const CONVERSATION_C = 'cfb5309a-954f-4e4a-9b0e-2d673c708f20';
 
 describe('UserAccountDO', () => {
+  test('deletion includes admissions without catalog entries and blocks late writes', async () => {
+    const account = env.USER_ACCOUNT.getByName('user:deletion');
+    await account.registerConversation(CONVERSATION_A);
+    await account.recordSession({ conversationId: CONVERSATION_B,
+      runId: '6c5496c8-0efe-450b-b2d7-b5d0d2c105aa', message: 'Private research', updatedAt: 100 });
+    expect(await account.beginDeletion()).toEqual(expect.arrayContaining([CONVERSATION_A, CONVERSATION_B]));
+    await runInDurableObject(account, instance => { expect(() => instance.registerConversation(CONVERSATION_C)).toThrow('deletion'); });
+    await runInDurableObject(account, instance => { expect(() => instance.recordSession({ conversationId: CONVERSATION_C,
+      runId: '540208c8-4d9d-43e0-842e-0bdd331ff4d9', message: 'Late write', updatedAt: 200 })).toThrow('deletion'); });
+    // Until cleanup succeeds, retrying retains every conversation to be deleted.
+    expect(await account.beginDeletion()).toHaveLength(2);
+    await account.finishDeletion();
+    expect((await account.listSessions()).sessions).toEqual([]);
+    expect((await account.listSessions({ query: 'Private' })).sessions).toEqual([]);
+    expect(await account.beginDeletion()).toEqual([]);
+    await runInDurableObject(account, instance => { expect(() => instance.registerConversation(CONVERSATION_A)).toThrow('deletion'); });
+  });
+
   test('records sessions idempotently and preserves the first-message title', async () => {
     const account = env.USER_ACCOUNT.getByName('user:catalog-idempotency');
     await account.recordSession({

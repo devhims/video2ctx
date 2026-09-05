@@ -1,3 +1,4 @@
+import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
 import { Hono } from 'hono';
 import type { App, ImportPayload } from '../../types';
 import {
@@ -370,6 +371,7 @@ sessionRoutes.get('/admin/jobs', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
+  await deleteAgentAccountData(c.env, user.id);
   await closeBillingAccount(c.env, user.id);
   await disconnectYoutube(c.env, user.id);
   await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
