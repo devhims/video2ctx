@@ -100,6 +100,7 @@ export async function analyzeTranscriptWithModel(
     assertModelCostAvailable(input.modelBudget);
     const result = await generateText({
       model: input.model,
+      providerOptions: { agentDiagnostics: { videoId: input.videoId, modelCallId, analysisAttempt: attempt + 1 } },
       instructions: [
         'You are a transcript analyst working for a YouTube research agent.',
         'Read the complete transcript and extract only findings relevant to the research question and requested focus.',

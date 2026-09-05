@@ -303,11 +303,17 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     },
     transcriptPolicy: options.context.transcriptPolicy.mode === 'contextual_analysis'
       ? { ...options.context.transcriptPolicy, budget: transcriptBudget,
-        analyze: (input) => analystLimiter.run(() => {
-          input.signal.throwIfAborted();
-          if (options.context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Transcript analyst unavailable');
-          return options.context.transcriptPolicy.analyze(input);
-        }),
+        analyze: (input) => {
+          const queuedAt = Date.now();
+          return analystLimiter.run(() => {
+            console.log(JSON.stringify({ event: 'agent_analyst_admitted', runId: options.context.runId,
+              videoId: input.videoId, modelCallId: input.modelCallId, queueMs: Date.now() - queuedAt,
+              remainingResearchMs: Math.max(0, options.deadlineAt - FINALIZATION_RESERVE_MS - Date.now()) }));
+            input.signal.throwIfAborted();
+            if (options.context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Transcript analyst unavailable');
+            return options.context.transcriptPolicy.analyze(input);
+          });
+        },
       }
       : options.context.transcriptPolicy,
     analyzeStoryboard: options.context.analyzeStoryboard ? (input) => analystLimiter.run(() => {
