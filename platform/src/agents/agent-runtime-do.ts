@@ -1,3 +1,4 @@
+import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
 import { AGENT_RUN_TIMEOUT_MS } from './runtime/deadline';
 import {
@@ -55,7 +56,7 @@ import {
 
 const FIBER_NAME = 'agent-runtime-run';
 const LEGACY_FIBER_NAMES = ['youtube-agent-run', 'youtube-topic-research'] as const;
-const MAX_TOOL_CALLS = 12;
+const MAX_TOOL_CALLS = AGENT_MAX_TOOL_CALLS;
 
 type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -78,6 +79,7 @@ interface RunRow {
   result_json: string | null;
   error: string | null;
   credits_remaining_at_admission: number;
+  billing_settled: number;
   created_at: number;
   updated_at: number;
 }
@@ -121,6 +123,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   async onStart(): Promise<void> {
     this.ensureAgentRuntimeSchema();
+    {
+      for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
+        await this.schedule(new Date(Math.max(Date.now() + 1000, run.created_at + AGENT_RUN_TIMEOUT_MS + 1000)),
+          'reconcileRun', run.id, { idempotent: true });
+      }
+    }
   }
 
   async startRun(
@@ -181,6 +189,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
     this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId });
 
+    await this.schedule(new Date(timestamp + AGENT_RUN_TIMEOUT_MS + 1000), 'reconcileRun', runId, { idempotent: true });
     await this.startFiber(
       FIBER_NAME,
       async (fiber) => {
@@ -201,6 +210,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.ensureAgentRuntimeSchema();
     let row = this.readRun(runId);
     if (!row) return null;
+    if (isTerminal(row.status)) {
+      await this.settleRun(runId);
+      row = this.requireRun(runId);
+    }
     const route = this.readRoute(runId);
     return {
       ...this.receipt(row),
@@ -258,6 +271,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE id = ${runId} AND status NOT IN ('completed', 'failed', 'cancelled')
     `;
     await this.cancelFiber(runId, 'Cancelled by caller.');
+    await this.settleRun(runId);
     this.recordEvent(runId, 'run.failed', { code: 'RUN_CANCELLED', message: 'Run cancelled by caller.' });
     return true;
   }
@@ -289,7 +303,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async executeRun(runId: string, fiber: FiberContext): Promise<void> {
     const row = this.requireRun(runId);
-    if (isTerminal(row.status)) return;
+    if (isTerminal(row.status)) { await this.settleRun(runId); return; }
     const modelCallPrefix = crypto.randomUUID();
     const modelBudget = this.createModelCostBudget(runId);
     const conversationHistory = this.readConversationHistory(row);
@@ -302,6 +316,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
 
     try {
+      const reserved = await reserveAgentCredits(this.env, row.user_id, runId);
+      if (!reserved) return;
+      if (isTerminal(this.requireRun(runId).status)) {
+        await this.settleRun(runId);
+        return;
+      }
+      fiber.signal.throwIfAborted();
       await executeResearchRun({
         deadlineAt: row.created_at + AGENT_RUN_TIMEOUT_MS,
         env: this.env,
@@ -356,6 +377,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         `;
         this.recordEvent(runId, 'run.failed', { code: errorCode(normalizedError), message });
       }
+      await this.settleRun(runId);
       throw normalizedError;
     }
   }
@@ -416,6 +438,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       const packet = evidencePacketSchema.parse(await execution.execute());
       this.assertRunActive(runId);
       const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
+      if (credits > AGENT_CREDIT_RESERVE / (MAX_TOOL_CALLS - 1)) throw new Error('Evidence tool exceeded its credit allowance.');
       const serialized = JSON.stringify(packet);
       this.sql`
         INSERT INTO agent_evidence_packets (packet_id, run_id, tool_call_id, packet_json, created_at)
@@ -514,12 +537,45 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       creditsCharged: result.billing.creditsCharged,
       citationCount: result.citations.length,
     });
-    return result;
+    await this.settleRun(runId);
+    return agentTurnResultSchema.parse(JSON.parse(this.requireRun(runId).result_json!));
   }
 
   private assertRunActive(runId: string): void {
     if (isTerminal(this.requireRun(runId).status)) {
       throw new Error('Agent run is no longer active.');
+    }
+  }
+
+  private async settleRun(runId: string): Promise<void> {
+    const run = this.readRun(runId);
+    if (!run || !isTerminal(run.status) || run.billing_settled) return;
+    const actual = this.sql<{ credits: number }>`
+      SELECT COALESCE(SUM(credits), 0) AS credits FROM agent_tool_calls
+      WHERE run_id = ${runId} AND status = 'completed'
+    `[0]?.credits ?? 0;
+    const remaining = await settleAgentCredits(this.env, run.user_id, runId, actual, this.modelCostMicros(runId));
+    const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
+    if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining };
+    this.sql`UPDATE agent_runs SET billing_settled = 1,
+      result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId}`;
+  }
+
+  // A durable watchdog also retries settlement if D1 was unavailable when a
+  // fiber ended. It never restarts inference after the admission deadline.
+  async reconcileRun(runId: string): Promise<void> {
+    const run = this.readRun(runId);
+    if (!run || run.billing_settled) return;
+    try {
+      if (!isTerminal(run.status)) {
+        this.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed',
+          error = 'Agent run did not finish before its deadline.', updated_at = ${Date.now()}
+          WHERE id = ${runId}`;
+        await this.cancelFiber(runId, 'Agent deadline reached.');
+      }
+      await this.settleRun(runId);
+    } catch {
+      await this.schedule(60, 'reconcileRun', runId);
     }
   }
 
@@ -797,6 +853,22 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         updated_at INTEGER NOT NULL
       )
     `;
+    const columns = this.sql<{ name: string }>`PRAGMA table_info(agent_runs)`;
+    if (!columns.some(column => column.name === 'billing_settled')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN billing_settled INTEGER NOT NULL DEFAULT 0`;
+      // Pre-billing development runs have no ledger reservation. Do not debit
+      // them retroactively or leave their terminal results stuck retrying.
+      for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE status IN ('completed', 'failed', 'cancelled')`) {
+        const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
+        if (result) {
+          result.billing.creditsCharged = 0;
+          result.billing.creditsRemaining = run.credits_remaining_at_admission;
+          result.warnings.push({ code: 'LEGACY_UNMETERED_RUN', message: 'This development run predates agent billing and was not charged.' });
+        }
+        this.sql`UPDATE agent_runs SET billing_settled = 1,
+          result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${run.id}`;
+      }
+    }
     this.ensureTurnOrdinalColumn();
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_tool_calls (
