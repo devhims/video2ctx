@@ -65,6 +65,18 @@ For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, r
 npm --prefix platform run test:agent:live -- --help
 ```
 
-Research classification selects `focused` for narrow questions and `comparative` for recommendations and comparisons. These target two and four videos respectively. Legacy persisted routes without a breadth retain the two-video limit. Selected transcript calls run together, with at most two transcript or visual analysts active at once. The 60-second deadline and 20-second finalization reserve still apply. If fewer distinct videos provide usable transcript excerpts, the answer includes `RESEARCH_COVERAGE_SHORTFALL`; the target is not a guarantee when providers or models are slow. The research planner uses low reasoning effort to leave more time for evidence collection.
+Research classification selects `focused` for narrow questions and `comparative` for recommendations and comparisons. These target two and four videos respectively. Legacy persisted routes without a breadth retain the two-video limit. Research uses `analyze_video_transcripts` to submit selected videos as one batch. Focused research allows two active analysts, comparative research allows four, and inspection retains two. Each video still has independent persistence and billing. The 60-second deadline and 20-second finalization reserve still apply. If fewer distinct videos provide usable transcript excerpts, the answer includes `RESEARCH_COVERAGE_SHORTFALL`; the target is not a guarantee when providers or models are slow. The research planner uses low reasoning effort to leave more time for evidence collection.
 
 Classification uses a required structured tool call so new research decisions include breadth. Answer blocks accept up to 12 validated evidence references to support comparisons across four videos.
+
+The classifier also supplies a `searchQuery`, which the application executes before the first research model step. Recovery retains the consumed search budget. This removes a separate model call to plan the same search. Classifier and answer tool schemas expose top-level object fields, with conditional routing and citation validation enforced in application code.
+
+If transcript requests fail and only discovery metadata remains, the agent skips unsupported recommendation synthesis and returns an explicit `NO_CONTENT_EVIDENCE` warning with source links. It does not quote promotional descriptions as an answer. Recommendation synthesis prioritizes a short list of practical tasks, examples, and source-attributed claims; successful citations establish traceability, not independent verification of a video's claims.
+
+To repeat a specific research query locally alongside the inspect regression:
+
+```bash
+AGENT_TEST_MESSAGE='suggest the top use cases of gpt 6 astra' npm --prefix platform run test:agent:live
+```
+
+For custom queries, the smoke test checks completion and citations; review the answer and `RESEARCH_COVERAGE_SHORTFALL` warning separately. The default recommendation query additionally requires four analyzed videos.
