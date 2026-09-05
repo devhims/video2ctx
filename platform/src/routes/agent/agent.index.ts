@@ -24,7 +24,7 @@ import type { App } from '../../types';
 
 export const agentRoutes = new Hono<App>();
 
-export const AGENT_ROUTE_PATTERNS = ['/agent', '/agent/*'] as const;
+export const AGENT_ROUTE_PATTERNS = ['/agent/*'] as const;
 for (const path of AGENT_ROUTE_PATTERNS) {
   agentRoutes.use(path, requireDataPrincipal, async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -134,6 +134,14 @@ agentRoutes.get('/agent/sessions/:conversationId', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, path.data.conversationId);
   let page;
   try {
+    const pending = await account.pendingAgentRun(path.data.conversationId);
+    if (pending) {
+      const common = { runId: pending.run.runId, conversationTurn: 1, createdAt: pending.admittedAt, updatedAt: pending.admittedAt };
+      return c.json({ ...session, messages: cursor ? [] : [
+        { ...common, messageId: pending.run.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: pending.message },
+        { ...common, messageId: pending.run.assistantMessageId, parentMessageId: pending.run.userMessageId, role: 'assistant', status: pending.run.status, content: '' },
+      ], nextCursor: null });
+    }
     page = await agent.getConversation(path.data.conversationId, principal.id, {
       limit: query.data.limit,
       cursor,
@@ -172,6 +180,14 @@ agentRoutes.post('/agent', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, conversationId);
   try {
     const account = await userAccountForUser(c.env, principal.id);
+    if (!parsedRequest.conversationId && !parsedRequest.parentMessageId) {
+      const queued = await timeAgentAdmission(c, 'enqueue', async () => await account.enqueueAgentRun(request, { userId: principal.id, idempotencyKey, creditsRemaining }));
+      if (queued.receipt) return c.json(responseOptions.responseFormat === 'compact'
+        ? compactAgentRun(queued.receipt, responseOptions.include) : agentRunReceiptSchema.parse(queued.receipt), 202);
+    }
+    if (await account.pendingAgentRun(conversationId)) {
+      throw new ApiError(409, 'AGENT_CONVERSATION_BUSY', 'The conversation is still starting. Poll the admitted run before sending a follow-up.');
+    }
     await timeAgentAdmission(c, 'register', () => account.registerConversation(conversationId));
     const receipt = await timeAgentAdmission(c, 'start_run', async () => await agent.startRun(request, {
       userId: principal.id,
@@ -218,7 +234,9 @@ agentRoutes.get('/agent/:conversationId/runs/:runId', async (c) => {
   const agent = await agentForConversation(c.env, principal.id, path.data.conversationId);
   let run;
   try {
-    run = await agent.getRun(path.data.runId);
+    const account = await userAccountForUser(c.env, principal.id);
+    const pending = await account.pendingAgentRun(path.data.conversationId, path.data.runId);
+    run = pending?.run ?? await agent.getRun(path.data.runId);
   } catch {
     throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
   }

@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from 'cloudflare:test';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { reserveAgentCredits, settleAgentCredits } from '../src/agents/runtime/billing';
 import { creditBalance } from '../src/lib/entitlements';
 
@@ -95,5 +95,34 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
     for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_events', 'cf_agents_fibers']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
+  });
+});
+
+
+test('queued admissions retain their IDs and original deadline without starting late inference', async () => {
+  const { runtime, userId } = await seed('queued-expired-admission');
+  const request = { conversationId: crypto.randomUUID(), message: 'A delayed request' };
+  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() - 61_000 };
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber');
+    const receipt = await instance.startRun(request, { userId, idempotencyKey: 'expired-queued-request', creditsRemaining: 1000 }, identity);
+    expect(receipt).toMatchObject({ runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'failed' });
+    expect(fiber).not.toHaveBeenCalled();
+    fiber.mockRestore();
+  });
+});
+
+test('an interrupted pending admission retries startup without inserting a duplicate run', async () => {
+  const { runtime, userId } = await seed('queued-interrupted-admission');
+  const request = { conversationId: crypto.randomUUID(), message: 'An interrupted request' };
+  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() };
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockRejectedValue(new Error('startup interrupted'));
+    const admission = { userId, idempotencyKey: 'interrupted-queued-request', creditsRemaining: 1000 };
+    await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
+    await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
+    expect(fiber).toHaveBeenCalledTimes(2);
+    expect(instance.sql`SELECT id FROM agent_runs WHERE conversation_id = ${request.conversationId}`).toEqual([{ id: identity.runId }]);
+    fiber.mockRestore();
   });
 });

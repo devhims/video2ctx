@@ -460,6 +460,25 @@ describe('agent routes', () => {
     expect(enabled.getByName).not.toHaveBeenCalled();
   });
 
+  test('returns and polls a durable receipt without waiting on runtime startup', async () => {
+    const harness = agentHarness();
+    const receipt = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), conversationTurn: 1, modelStepCount: 0, toolCallCount: 0, status: 'pending' };
+    harness.enqueueAgentRun.mockResolvedValue({ receipt });
+    harness.startRun.mockImplementation(() => new Promise(() => {}));
+    const response = await postAgent(harness.env, 'durable-admission-key', { message: 'Research' });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual(receipt);
+    expect(harness.startRun).not.toHaveBeenCalled();
+    expect(harness.registerConversation).not.toHaveBeenCalled();
+    expect(harness.adminUser).toHaveBeenCalledTimes(1);
+    harness.pendingAgentRun.mockResolvedValue({ run: receipt, message: 'Research', admittedAt: 123 });
+    const poll = await app.request(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, {}, harness.env, executionContext);
+    expect(await poll.json()).toEqual(receipt);
+    expect(harness.getRun).not.toHaveBeenCalled();
+    const followup = await postAgent(harness.env, 'follow-up-admission-key', { conversationId: receipt.conversationId, message: 'More detail' });
+    expect(followup.status).toBe(409);
+  });
+
   test('retrieves a run from its conversation Durable Object', async () => {
     const conversationId = 'f1611a8b-cb84-4305-a365-328bd06bedac';
     const runId = 'cd056140-7d4c-4516-bb9e-c97914439553';
@@ -547,9 +566,11 @@ function agentHarness(enabled = 'true') {
     return { startRun, getRun, getConversation };
   });
   const accountInstanceNames: string[] = [];
+  const enqueueAgentRun = vi.fn().mockResolvedValue({ legacy: true });
+  const pendingAgentRun = vi.fn().mockResolvedValue(null);
   const accountGetByName = vi.fn((name: string) => {
     accountInstanceNames.push(name);
-    return { registerConversation, recordSession, listSessions, getSession };
+    return { registerConversation, recordSession, listSessions, getSession, enqueueAgentRun, pendingAgentRun };
   });
   return {
     env: {
@@ -567,6 +588,7 @@ function agentHarness(enabled = 'true') {
     getRun,
     getConversation,
     accountGetByName,
+    enqueueAgentRun, pendingAgentRun,
     accountInstanceNames,
     registerConversation,
     recordSession,

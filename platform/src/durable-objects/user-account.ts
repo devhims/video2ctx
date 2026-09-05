@@ -1,3 +1,5 @@
+import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
+import type { AgentRequest, AgentAdmission } from '../agents/contracts';
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 
@@ -60,15 +62,27 @@ interface SessionRunRow extends Record<string, SqlStorageValue> {
 }
 
 export class UserAccountDO extends DurableObject<Env> {
+  readonly #admissions: AgentAdmissionQueue;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.#admissions = new AgentAdmissionQueue(ctx, env, { assertActive: () => this.assertActive(),
+      register: id => this.registerConversation(id), record: input => this.recordSession(input) });
     ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
+      this.#admissions.initialize();
     });
   }
 
+  enqueueAgentRun(request: AgentRequest, admission: AgentAdmission) { return this.#admissions.enqueue(request, admission); }
+  async pendingAgentRun(conversationId: string, runId?: string) {
+    this.assertActive();
+    return this.#admissions.pending(conversationId, runId);
+  }
+  async alarm(): Promise<void> { await this.#admissions.alarm(); }
+
   registerConversation(conversationId: string): void {
     this.assertActive();
+    if (this.#admissions.pending(conversationId)) throw new Error('Conversation admission is pending.');
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO agent_conversations (conversation_id) VALUES (?)',
       z.string().uuid().parse(conversationId));
   }
@@ -81,6 +95,7 @@ export class UserAccountDO extends DurableObject<Env> {
   }
 
   finishDeletion(): void {
+    this.#admissions.clear();
     this.ctx.storage.sql.exec('DELETE FROM user_sessions_fts');
     this.ctx.storage.sql.exec('DELETE FROM user_session_runs');
     this.ctx.storage.sql.exec('DELETE FROM user_sessions');
