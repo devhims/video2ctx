@@ -18,6 +18,16 @@ npm run dev
 
 The combined local command starts the platform and web application with local Cloudflare storage. Local dashboard requests use isolated demo identities; they do not create resources in production D1.
 
+To call private platform endpoints without an API key or demo header, start the
+platform with the explicit local authentication bypass:
+
+```bash
+npm --prefix platform run dev:local:no-auth -- --port 8787
+```
+
+The bypass is disabled by default. It activates only for loopback requests when
+`ENVIRONMENT` is not `production` and uses one stable local demo account.
+
 Run the documentation separately with:
 
 ```bash
@@ -27,3 +37,28 @@ npm run docs:dev
 <Warning>
   Workers AI and explicitly remote bindings can incur usage even during local development. Never commit `.dev.vars`, API keys, OAuth secrets, or email credentials.
 </Warning>
+
+
+## Agent smoke test
+
+Start the local Worker with Docker running and local database migrations applied. To use the local demo account for this test:
+
+```bash
+npm --prefix platform run dev:agent -- --port 8787
+```
+
+These command-line overrides apply to the local process. Storage stays local, while the remote Workers AI binding runs GLM. Do not add `--local`, which disables that binding. Production remains configured for admin access.
+
+In another terminal:
+
+```bash
+npm --prefix platform run test:agent:live
+```
+
+The smoke test calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. It requires citations, evidence charges, and storyboard analysis in the inspect result. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
+
+For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, run the local Worker in `AGENT_ACCESS_MODE:admins`, configure its local `ADMIN_EMAILS_SECRET`, and also provide `AGENT_TEST_NON_ADMIN_TOKEN`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
+
+```bash
+npm --prefix platform run test:agent:live -- --help
+```

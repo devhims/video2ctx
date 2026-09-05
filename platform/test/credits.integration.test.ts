@@ -1,3 +1,4 @@
+import { AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from '../src/agents/runtime/billing';
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
 import { env as workerEnv } from 'cloudflare:workers';
@@ -24,6 +25,42 @@ const env = {
 } satisfies CreditEnv;
 
 describe('credit queries on D1', () => {
+  test('agent retries settle once and refund unused credits', async () => {
+    const id = 'agent-settlement';
+    await createUser(id);
+    await Promise.all([reserveAgentCredits(env, id, 'run'), reserveAgentCredits(env, id, 'run')]);
+    expect(await creditBalance(env, id)).toBe(1000 - AGENT_CREDIT_RESERVE);
+    await Promise.all([settleAgentCredits(env, id, 'run', 3, 42), settleAgentCredits(env, id, 'run', 3, 42)]);
+    expect(await creditBalance(env, id)).toBe(997);
+    expect(await reserveAgentCredits(env, id, 'run')).toBe(false);
+    expect(await operationCount(id, 'agent:run', 'reserve')).toBe(1);
+    expect(await operationCount(id, 'agent:run', 'settle')).toBe(1);
+  });
+
+  test('cancellation before reservation prevents a late debit or free refund', async () => {
+    const id = 'agent-cancel-before-reserve';
+    await createUser(id);
+    await creditBalance(env, id);
+    await settleAgentCredits(env, id, 'cancelled-run', 0, 0);
+    expect(await reserveAgentCredits(env, id, 'cancelled-run')).toBe(false);
+    expect(await creditBalance(env, id)).toBe(1000);
+  });
+
+  test('parallel agent runs cannot overdraw an account', async () => {
+    const id = 'agent-parallel-balance';
+    await createUser(id);
+    await setBuilderPlan(id);
+    await addCredits(id, AGENT_CREDIT_RESERVE, 'test:agent-funds');
+    const attempts = await Promise.allSettled([
+      reserveAgentCredits(env, id, 'run-a'), reserveAgentCredits(env, id, 'run-b'),
+    ]);
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(await creditBalance(env, id)).toBe(0);
+    const winner = attempts[0]?.status === 'fulfilled' ? 'run-a' : 'run-b';
+    await settleAgentCredits(env, id, winner, 0, 0);
+    expect(await creditBalance(env, id)).toBe(AGENT_CREDIT_RESERVE);
+  });
+
   test('grants Starter onboarding credits exactly once', async () => {
     const userId = 'payment-starter-credit-user';
     await createUser(userId);

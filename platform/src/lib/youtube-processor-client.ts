@@ -1,3 +1,4 @@
+import type { Storyboard } from '../agents/providers/youtube/storyboard';
 import { getContainer } from '@cloudflare/containers';
 import type {
   BrowseOptions,
@@ -34,6 +35,7 @@ export type YouTubeOperation =
   | { kind: 'all-comments'; id: string; maxPages: number }
   | { kind: 'caption-tracks'; id: string }
   | { kind: 'transcript'; id: string; lang?: string; granularity: 'segment' | 'word' }
+  | { kind: 'storyboard'; id: string }
   | { kind: 'endscreen'; id: string };
 
 export type YouTubeOperationResult<T extends YouTubeOperation> =
@@ -49,6 +51,7 @@ export type YouTubeOperationResult<T extends YouTubeOperation> =
   T extends { kind: 'all-comments' } ? CommentsCollection :
   T extends { kind: 'caption-tracks' } ? CaptionTrackList :
   T extends { kind: 'transcript' } ? Transcript :
+  T extends { kind: 'storyboard' } ? Storyboard :
   T extends { kind: 'endscreen' } ? EndscreenElement[] :
   never;
 

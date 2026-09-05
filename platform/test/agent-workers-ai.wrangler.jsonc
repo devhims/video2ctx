@@ -1,0 +1,102 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-agent-workers-ai-test",
+  "main": "./agent-workers-ai-worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_ORIGIN": "http://127.0.0.1:8791",
+    "AUTH_BASE_URL": "http://127.0.0.1:8791",
+    "BETTER_AUTH_SECRET": "agent-workers-ai-test-secret-000000000000",
+    "EMAIL_FROM": "noreply@example.test",
+    "EMAIL_REPLY_TO": "support@example.test",
+    "AI_GATEWAY_ID": "",
+    "PUBLIC_SEARCH_INSTANCE": "youtube-public",
+    "ADMIN_EMAILS": "",
+    "STARTER_ONBOARDING_CREDITS": "1000",
+    "BUILDER_MONTHLY_CREDITS": "20000",
+    "STARTER_PROJECT_LIMIT": "3",
+    "STARTER_MONITOR_LIMIT": "1",
+    "STARTER_DAILY_IMPORTS": "10",
+    "BUILDER_PROJECT_LIMIT": "100",
+    "BUILDER_MONITOR_LIMIT": "50",
+    "BUILDER_DAILY_IMPORTS": "200",
+    "LANDING_DEMO_RATE_LIMIT_MODE": "disabled",
+    "YOUTUBE_PROCESSOR_INSTANCE_COUNT": "1",
+    "YOUTUBE_PROCESSOR_VERSION": "agent-workers-ai-test-v1",
+    "YOUTUBE_PROCESSOR_MAX_ATTEMPTS": "1",
+    "YOUTUBE_PROCESSOR_TIMEOUT_MS": "120000",
+    "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "0",
+    "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
+    "AGENT_RUNTIME_ENABLED": "true",
+    "POLAR_ENVIRONMENT": "sandbox",
+    "POLAR_BUILDER_PRODUCT_ID": ""
+  },
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "containers": [
+    {
+      "class_name": "YouTubeProcessorContainer",
+      "name": "video2ctx-agent-workers-ai-test-processor",
+      "image": "../youtube-processor/Dockerfile",
+      "image_build_context": "../youtube-processor",
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "YOUTUBE_PROCESSOR",
+        "class_name": "YouTubeProcessorContainer"
+      },
+      {
+        "name": "YOUTUBE_REQUEST_COORDINATOR",
+        "class_name": "YouTubeRequestCoordinator"
+      },
+      {
+        "name": "AGENT_RUNTIME",
+        "class_name": "AgentRuntimeDO"
+      },
+      {
+        "name": "USER_ACCOUNT",
+        "class_name": "UserAccountDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["YouTubeProcessorContainer"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["YouTubeRequestCoordinator"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["AgentRuntimeDO"]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["UserAccountDO"]
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "video2ctx-agent-workers-ai-test",
+      "database_id": "00000000-0000-0000-0000-000000000091",
+      "migrations_dir": "../migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "YOUTUBE_CACHE",
+      "id": "00000000000000000000000000000091"
+    }
+  ]
+}

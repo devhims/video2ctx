@@ -6,7 +6,7 @@ indexRoutes.get('/', (c) => c.json({
   service: 'video2ctx-platform',
   version: 'v1',
   status: 'ok',
-  capabilities: ['providers', 'discover', 'inspect', 'save', 'search', 'compare', 'monitor', 'synthesize'],
+  capabilities: ['providers', 'discover', 'inspect', 'save', 'search', 'compare', 'monitor', 'synthesize', 'agent'],
 }));
 
 indexRoutes.get('/health', (c) => c.json({

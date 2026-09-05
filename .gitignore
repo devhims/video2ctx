@@ -8,6 +8,7 @@ dist/
 *.tgz
 .DS_Store
 .claude/
+.kiro/
 .env*
 !.env.example
 .dev.vars*

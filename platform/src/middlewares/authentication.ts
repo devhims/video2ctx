@@ -94,12 +94,15 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
       }
     }
 
-    const demoId = c.req.header('x-demo-user')?.trim();
-    if (demoId) {
+    const explicitDemoId = c.req.header('x-demo-user')?.trim();
+    if (explicitDemoId) {
       if (String(c.env.ENVIRONMENT) === 'production') {
         throw new ApiError(401, 'DEMO_AUTH_DISABLED', 'Demo authentication is disabled in production.');
       }
-      const user = await ensureDemoUser(c, demoId);
+      const user = await ensureDemoUser(c, explicitDemoId);
+      setPrincipal(c, { user, method: 'demo', permissions: {} });
+    } else if (localAuthBypassEnabled(c)) {
+      const user = await ensureDemoUser(c, 'local-auth-bypass');
       setPrincipal(c, { user, method: 'demo', permissions: {} });
     }
 
@@ -147,6 +150,13 @@ export function requireUser(c: Context<App>): AppUser {
 function setPrincipal(c: Context<App>, principal: AuthPrincipal): void {
   c.set('principal', principal);
   c.set('user', principal.user);
+}
+
+function localAuthBypassEnabled(c: Context<App>): boolean {
+  if (String(c.env.ENVIRONMENT) === 'production') return false;
+  if (String(c.env.LOCAL_AUTH_BYPASS_ENABLED) !== 'true') return false;
+  const hostname = new URL(c.req.url).hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }
 
 type SuppliedCredential = {
