@@ -10,7 +10,7 @@ import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
 type Schema = Record<string, unknown>;
 
 const agentResponseParameters = [
-  { name: 'responseFormat', in: 'query', required: false, description: 'Use compact for answer, deduplicated sources, outcome, and top-level billing. Applies only to this HTTP response; repeat on polling requests. Does not change execution or idempotency.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'legacy' } },
+  { name: 'responseFormat', in: 'query', required: false, description: 'Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'compact' } },
   { name: 'include', in: 'query', required: false, description: 'Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.', schema: { type: 'string', maxLength: 100, example: 'evidence,diagnostics' } },
 ];
 
