@@ -23,6 +23,22 @@ describe('partial evidence fallback', () => {
     expect(result.warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
   });
 
+  it('preserves analyst findings and visual evidence together', () => {
+    const analyzed = { ...packet, artifacts: [{ type: 'youtube_transcript_analysis', data: {
+      findings: [{ claim: 'The analyst recommends a consistent type scale.', excerptIds: ['excerpt:1'] },
+        { claim: 'Unsupported claim', excerptIds: ['invented'] }],
+    } }] };
+    const visual: EvidencePacket = { ...packet, packetId: 'visual', kind: 'youtube_storyboard',
+      sources: [{ id: 'visual', provider: 'youtube', kind: 'storyboard' }],
+      excerpts: [{ id: 'storyboard:1', sourceId: 'visual', text: 'A type scale is shown on screen.' }] };
+    const result = evidenceFallback([analyzed, visual], 'inspect_video')!;
+    expect(result.answer).toContain('The analyst recommends');
+    expect(result.answer).toContain('[cite:excerpt:1]');
+    expect(result.answer).toContain('[cite:storyboard:1]');
+    expect(result.answer).not.toContain('Unsupported claim');
+    expect(result.warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
+  });
+
   it('does not fabricate an answer when no usable evidence exists', () => {
     expect(evidenceFallback([], 'topic_research')).toBeNull();
     expect(evidenceFallback([{ ...packet, sources: [] }], 'topic_research')).toBeNull();
