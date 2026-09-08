@@ -73,7 +73,7 @@ Capabilities load explicit subsets. `topic_research` receives ten provider tools
 
 Both capabilities also load `finalize_answer`.
 
-The capability classifier is one bounded structured model call. Deterministic URL parsing supplies the video IDs it may select. An `inspect_video` result must copy a supplied ID, and the scoped provider adapter rejects every later call for a different video. A request that cannot resolve its video produces a clarification result without constructing Agent Core or calling the provider.
+The capability classifier is one structured model call bounded to 20 seconds, including retries. It remains cancellable and subject to provider errors. Deterministic URL parsing supplies the video IDs it may select. An `inspect_video` result must copy a supplied ID, and the scoped provider adapter rejects every later call for a different video. A request that cannot resolve its video produces a clarification result without constructing Agent Core or calling the provider.
 
 Within `topic_research`, the main model decides how often to search and which videos require transcript analysis. For each selected video, `get_video_transcript` fetches the complete timed transcript and invokes `TranscriptAnalyst`. This is one isolated structured model call, not another Agent Core, Agent, or Durable Object. `inspect_video` uses the same bounded one-call analysis for its pinned video so a long raw transcript never enters Agent Core.
 
@@ -81,7 +81,7 @@ During `topic_research`, `TranscriptAnalyst` receives all normalized transcript 
 
 During `inspect_video`, the same `get_video_transcript` wrapper invokes `TranscriptAnalyst` once with the complete returned transcript and the user's inspection question. The durable evidence packet retains the exact selected excerpts for citation validation. Agent Core receives only the bounded summary, findings, evidence identifiers, and coverage metadata.
 
-The application owns the hard limits: a 20-second classification timeout, eight Agent Core model steps, twelve total tool calls, four concurrent provider operations, one 60-second admission-based deadline covering classification, Agent Core, transcript analysis, and recovery, typed evidence packets, route and final-intent validation, citation validation, idempotency, and durable checkpoints.
+The application owns the phase limits: up to 40 seconds of research after classification, including provider fetches and transcript analysis, followed by up to 40 seconds of finalization. Classification has its own 20-second timeout. Saving has a separate 30-second persistence timeout. The application also enforces eight nominal Agent Core steps, twelve total tool calls, four concurrent provider operations, typed evidence packets, route and final-intent validation, citation validation, idempotency, and durable checkpoints.
 
 Production model calls use Workers AI through the configured AI Gateway. Tool implementations call the existing provider stack in process. Each `AgentRuntimeDO` SQLite database stores agent runs, route decisions, tool calls, evidence packets, and product events. The Agents SDK stores its fiber ledger in that same conversation object. Each `UserAccountDO` has a separate SQLite database for its bounded session catalog and FTS5 index.
 
@@ -137,16 +137,18 @@ Conversation memory does not use D1 or `UserAccountDO`. Each completed `agent_ru
 
 ## Deadline and citation assembly (September 2026)
 
-Every run has one 60-second deadline measured from durable admission. Recovery reuses that deadline; it does not receive a fresh budget. Agent Core reserves the final 20 seconds for recovery finalization, and final answers are instructed to stay under 180 words. Abort signals stop model work, an outer deadline race bounds non-cooperative calls, and durable finalization rejects expired or terminal runs.
+Classification also gates scope and storyboard access. Unsupported tasks return a persisted `rejected` route and reason without constructing the research loop or fetching evidence. The public completed result uses `intent: rejected` in legacy format or `outcome: rejected` in compact format, with an `OUT_OF_SCOPE` warning. New executable routes require `useStoryboard`; false removes the visual tool from the model and disables provider access. True makes sampled visual inspection available within the same research budget. Legacy persisted routes without the flag retain their original tool set.
+
+Classification, research, and finalization are separate phases. Classification has a 20-second timeout; research starts its 40-second clock only after routing completes. Finalization starts its own 40-second clock at handoff, including when research finishes early. Each deadline is saved in Durable Object SQLite and reused on recovery. Recovery during finalization skips research and uses the remaining finalization time. Abort signals cancel phase work, and a deadline race bounds non-cooperative calls. User cancellation and terminal-state checks still apply. Saving a validated answer has a separate 30-second timeout, and billing settlement is retried durably if needed. The three model phases total at most 100 seconds, but queueing and persistence can extend end-to-end completion.
 
 The model supplies inline `[cite:<excerptId>]` markers. The application resolves each marker against persisted excerpts and their source records, derives the public citation list, and rejects unknown or conflicting excerpt identities. The model no longer supplies duplicate packet/source/excerpt declarations. If recovery fails, the public run error preserves the recovery error rather than masking it with the original timeout.
 
 
 ## Reserved finalization and partial evidence
 
-Topic research now admits at most two transcript analyses. The research phase has a separate abortable cutoff at 40 seconds after admission, including classification time. A stalled provider/model call cannot consume the finalization window. Synthesis gets one bounded call, ending no later than 58.5 seconds after admission so persistence has a small margin. The run still has a 60-second outer deadline.
+Topic research targets two transcript analyses for focused questions and four for comparative questions. The research phase has an abortable cutoff 40 seconds after classification. A stalled provider/model call cannot consume the finalization window. Synthesis and any citation repair share one continuous finalization budget of up to 40 seconds from handoff. The durable watchdog checks the persisted phase deadlines plus the persistence allowance before cancelling abandoned work, so an alarm scheduled in an earlier phase cannot cancel a later phase prematurely.
 
-If synthesis times out or fails validation, application code returns a clearly labelled partial collection of retrieved excerpts. It uses the regular persisted-evidence citation validator, low confidence, and the `PARTIAL_EVIDENCE` warning. It does not invent a ranking or portray excerpts as a completed synthesis. When no usable evidence exists, the run remains an explicit failure. Model-based citation repair is no longer attempted after synthesis failure.
+If synthesis times out or cannot be validated within its budget, application code returns a clearly labelled partial collection of retrieved excerpts. It uses the regular persisted-evidence citation validator, low confidence, and the `PARTIAL_EVIDENCE` warning. It does not invent a ranking or portray excerpts as a completed synthesis. When no usable evidence exists, the run can still fail explicitly.
 
 
 ## Account deletion

@@ -193,6 +193,21 @@ describe('YouTube agent evidence tools', () => {
 });
 
 describe('TranscriptAnalyst', () => {
+  it('accepts compact findings without a generated summary and preserves attributed caveats and exact citations', async () => {
+    const claim = 'The speaker reports faster prototypes with reusable skills; cross-agent equivalence was not demonstrated.';
+    const result = await analyzeTranscriptWithModel({
+      model: transcriptAnalysisModel({ findings: [{ claim, windowIndexes: [0] }],
+        warnings: ['The demonstration does not independently establish cross-agent equivalence.'] }),
+      videoId: 'abcdefghijk', researchQuestion: 'Which design skills work across agents?', focus: 'Demonstrated benefits and caveats',
+      segments: [{ startMs: 0, durationMs: 1000, endMs: 1000, text: 'We made prototypes faster, but only tested this agent.' }],
+      signal: new AbortController().signal,
+    });
+    expect(result.findings).toEqual([{ claim, excerptIds: ['transcript:abcdefghijk:window:0:0'] }]);
+    expect(result.excerpts[0]?.text).toBe('We made prototypes faster, but only tested this agent.');
+    expect(result.warnings).toEqual(['The demonstration does not independently establish cross-agent equivalence.']);
+    expect(result.summary).toBe('Selected 1 relevant transcript finding.');
+  });
+
   it('reads every transcript segment and resolves an application-owned analysis window', async () => {
     const model = transcriptAnalysisModel({
       summary: 'The final segment contains the evidence relevant to the research question.',
@@ -217,7 +232,7 @@ describe('TranscriptAnalyst', () => {
     });
 
     expect(model.doGenerateCalls).toHaveLength(1);
-    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(4_000);
+    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(1_200);
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('at most 5 distinct findings');
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('The complete transcript starts here.');
@@ -479,7 +494,7 @@ function toolContext(overrides: Partial<AgentToolContext['provider']> & {
 }
 
 type TranscriptAnalysisOutput = {
-  summary: string;
+  summary?: string;
   findings: Array<{ claim: string; windowIndexes: number[] }>;
   warnings: string[];
 };

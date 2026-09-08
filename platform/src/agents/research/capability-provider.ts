@@ -1,12 +1,13 @@
 import type { CapabilityRouteDecision } from '../contracts';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
 
-type ExecutableRoute = Exclude<CapabilityRouteDecision, { route: 'clarification' }>;
+type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research' | 'inspect_video' }>;
 
 export function createCapabilityProvider(
   provider: YouTubeAgentProvider,
   decision: ExecutableRoute,
 ): YouTubeAgentProvider {
+  if (decision.useStoryboard === false) provider = { ...provider, storyboard: undefined };
   if (decision.route === 'topic_research') return provider;
   const requirePinnedVideo = (videoId: string) => {
     if (videoId !== decision.videoId) {

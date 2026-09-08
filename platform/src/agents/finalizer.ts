@@ -26,7 +26,7 @@ export function buildAgentTurnResult(
 ): AgentTurnResult {
   const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
   const citations: AgentCitation[] = [];
-  if (input.intent !== 'clarification' && markers.length === 0) {
+  if (input.intent !== 'clarification' && input.intent !== 'rejected' && markers.length === 0) {
     throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
   }
   for (const marker of markers) {

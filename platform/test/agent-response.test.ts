@@ -79,6 +79,16 @@ describe('compact agent response', () => {
     expect(compactAgentRun(run).result).toMatchObject({ outcome: 'needs_clarification', sources: [] });
   });
 
+  it('reports scope rejection separately from an answer or a clarification', () => {
+    const run = completedRun();
+    run.result!.intent = 'rejected';
+    run.result!.answer = 'I can research YouTube videos, but cannot make bookings.';
+    run.result!.citations = [];
+    run.route = { route: 'rejected', reason: 'Bookings are outside the supported scope.' };
+    expect(compactAgentRun(run, ['diagnostics'])).toMatchObject({ status: 'completed',
+      result: { outcome: 'rejected', sources: [] }, diagnostics: { route: run.route } });
+  });
+
   it.each(['pending', 'running', 'failed', 'cancelled'] as const)('keeps %s state without inventing a result or billing', status => {
     const run = completedRun(); delete run.result; run.status = status;
     if (status === 'failed') run.error = 'Provider unavailable';

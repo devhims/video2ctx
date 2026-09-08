@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { renderStructuredAnswer, structuredAnswerSchema } from '../src/agents/structured-answer';
+import { renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema } from '../src/agents/structured-answer';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -18,6 +19,23 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('transmits required references and omits application-owned fields for finalization', async () => {
+    const schema = await zodSchema(finalizationOutputSchema).jsonSchema;
+    expect(schema).toMatchObject({ type: 'object', properties: {
+      blocks: { minItems: 1, maxItems: 20, items: { properties: {
+        evidenceIds: { minItems: 1, maxItems: 12 },
+      }, required: ['text', 'evidenceIds'] } },
+    }, required: expect.arrayContaining(['confidence', 'blocks']) });
+    expect(schema.properties).not.toHaveProperty('intent');
+    expect(schema.properties).not.toHaveProperty('artifacts');
+    expect(finalizationOutputSchema.safeParse({ confidence: 'medium', blocks: [{ text: 'Unsupported', evidenceIds: [] }] }).success).toBe(false);
+  });
+  it('expresses clarification rules separately in JSON Schema', () => {
+    expect(z.toJSONSchema(clarificationAnswerSchema)).toMatchObject({ properties: {
+      blocks: { minItems: 1, maxItems: 1, items: { properties: { evidenceIds: { maxItems: 0 } } } },
+    } });
+    expect(clarificationAnswerSchema.safeParse({ ...base, intent: 'clarification', blocks: [{ text: 'Question?', evidenceIds: ['e1'] }] }).success).toBe(false);
+  });
   it('exposes answer fields directly in the model tool schema', () => {
     const schema = z.toJSONSchema(structuredAnswerSchema);
     expect(schema.type).toBe('object');

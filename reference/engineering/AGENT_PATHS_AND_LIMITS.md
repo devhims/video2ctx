@@ -1,16 +1,16 @@
 # Research and inspection: current architecture and limits
 
-Verified against the local implementation on 2026-09-05. This describes implemented behavior, including the reserved finalization window and partial-evidence fallback.
+Phase timing verified against the local implementation on 2026-09-08. This describes implemented behavior, including the separate finalization window and partial-evidence fallback.
 
 ## Shared architecture
 
 Both paths enter through POST /v1/agent. The request contains a message and optional conversation/parent identifiers; an Idempotency-Key header identifies an admission retry. Authentication and the credit balance check happen before durable admission. Local testing uses an explicitly enabled loopback authentication bypass.
 
-The HTTP Worker checks access and admits the run into an AgentRuntimeDO, one durable runtime per user-scoped conversation. UserAccountDO maintains the user's session catalog. D1 stores identity, entitlements, and the credit ledger. AgentRuntimeDO SQLite stores runs, routes, evidence, tool calls, model usage, and events. The Agents SDK fiber handles execution and recovery. Recovery preserves the original admission deadline.
+The HTTP Worker checks access and admits the run into an AgentRuntimeDO, one durable runtime per user-scoped conversation. UserAccountDO maintains the user's session catalog. D1 stores identity, entitlements, and the credit ledger. AgentRuntimeDO SQLite stores runs, routes, evidence, tool calls, model usage, and events. The Agents SDK fiber handles execution and recovery. Recovery preserves each phase's persisted deadline, without granting a new window.
 
-A classifier chooses topic_research, inspect_video, or clarification. The classifier and Agent Core receive bounded completed conversation history. The selected capability supplies instructions and a permitted tool set to the same ToolLoopAgent implementation. The classifier is a model call outside the Agent Core step count.
+A classifier chooses topic_research, inspect_video, clarification, or rejected. Rejections stop unsupported tasks without research or synthesis and expose a reason with the OUT_OF_SCOPE warning. The classifier and Agent Core receive bounded completed conversation history. New executable routes require useStoryboard, which controls whether get_video_storyboard is offered during research. The choice is persisted; legacy routes without it retain their prior tool access. The selected capability supplies instructions and a permitted tool set to the same ToolLoopAgent implementation. The classifier is a model call outside the Agent Core step count.
 
-Workers AI performs model inference through the configured AI Gateway. The configured model is @cf/zai-org/glm-5.3-flash. Agent Core uses medium reasoning for research and low reasoning for inspection; classification, transcript analysis, and finalization use low reasoning.
+Workers AI performs model inference through the configured AI Gateway. The configured model is @cf/zai-org/glm-5.3-flash. Agent Core, classification, transcript analysis, and finalization use low reasoning.
 
 Provider tools call the platform provider stack in process. Cache misses go through the YouTube processor container, which owns outbound YouTube calls. Postman does not call YouTube or Workers AI directly. Locally, the Docker/Wrangler egress bridge is an additional dependency; it has repeatedly failed while ordinary host HTTPS still worked.
 
@@ -110,24 +110,24 @@ Research has ten evidence tool types plus finalization. Inspection has five evid
 
 | Limit | Current behavior |
 |---|---|
-| Total run deadline | 60 seconds from durable admission, including classification and recovery |
-| Main phase | Ends by admission + 40 seconds; includes planning, tools, analyses, and any normal finalization |
+| Total run deadline | Up to 100 seconds across classification (20), research (40), and finalization (40), excluding queueing and persistence |
+| Research phase | Up to 40 seconds after classification; includes planning, tools, and analyses |
 | Forced early finalization | At a model-step boundary, when <=12 seconds remain in the main phase, nominal step 8 is reached, transcript/tool budget is exhausted, or estimated model cost reaches the reserve threshold |
-| Reserved synthesis | At most 20 seconds, ending by admission +58.5 seconds; early phase termination can start this sooner |
-| Persistence margin | Final 1.5 seconds before the outer deadline |
+| Finalization phase | Up to 40 seconds from handoff, including synthesis and any citation repair; early research completion starts it sooner |
+| Persistence | Separate 30-second timeout outside model-processing windows; billing settlement retries durably |
 | Agent Core steps | Eight nominal; finalization is forced by the eighth. Stop ceiling is ten including two retry allowances. Time can stop execution much earlier |
 | Durable tool calls | Twelve total: at most eleven evidence calls, reserving one successful finalization slot |
-| Research transcript analyses | Two distinct video/focus requests; identical requests reuse results |
+| Research transcript analyses | Two distinct video/focus requests for focused research, four for comparative; identical requests reuse results |
 | Inspection video scope | Exactly one pinned video; no separate one-analysis cap |
 | Research search_youtube calls | One per run, including failures |
 | Provider concurrency | Four evidence executions |
-| Analyst concurrency | Two isolated model analyses shared by transcript and visual analysts |
-| Classifier timeout | 20 seconds, inside the total budget |
-| Agent Core/finalizer output | 1,600 tokens per call |
-| Analyst output | Up to five findings, three supporting windows per finding, 4,000 output tokens |
+| Analyst concurrency | Two for focused research and inspection, four for comparative research |
+| Classifier timeout | 20 seconds from classification start, including retries; persisted across recovery |
+| Agent Core/finalizer output | Shared SDK ceiling: 1,500 tokens per generation for standard answers, 2,500 for explicitly detailed requests. Terminal tool-argument repair uses the same ceiling |
+| Analyst output | Up to five concise findings, three supporting windows per finding, 1,200 output tokens; target 250 to 350, no generated summary |
 | Analyst own timeout | 90-second helper default, overridden in practice by the earlier parent phase/run cancellation |
-| Tool-argument repair | Separate model call, 15-second own timeout and 2,000 output tokens, still bounded by parent cancellation |
-| Answer length | Under 180 words is prompt guidance, not a validator-enforced limit |
+| Tool-argument repair | Separate model call with a 15-second own timeout, bounded by parent cancellation. Nonterminal repairs allow 2,000 tokens; terminal repairs use the selected answer ceiling |
+| Answer length | Concise by default, expanded for explicit detail requests; native per-generation token ceilings and a schema ceiling of 20 blocks |
 | Model cost | $1 estimated admission budget; $0.10 reserved threshold for finalization. This uses locally configured token prices and completed usage, not a hard vendor billing ceiling |
 | Conversation memory | Up to eight completed ancestor turns, bounded to 64,000 characters |
 | Recovery evidence prompt | Up to 40,000 characters of compact evidence |
@@ -166,6 +166,14 @@ sequenceDiagram
 
 The finalizer resolves inline excerpt IDs against saved source records and exact text. The application constructs the returned citations; the model no longer duplicates packet/source declarations. Unknown or conflicting references are rejected. These checks establish provenance, not the truth of a claim or the quality of an interpretation.
 
+The reserved finalization phase uses `Output.object` with native Workers AI `response_format: json_schema`. Its stable `answer-blocks-v2` schema contains confidence, blocks and warnings. The application supplies the classified intent and retains persisted artifacts. Every research/inspection block requires one to twelve references in both the transmitted schema and local validation. Clarification has a separate schema and is normally rendered directly from classification. JSON-schema support does not replace citation membership validation or guarantee factual grounding.
+
+Classification supplies a required `answerDetail` enum (`standard` or `detailed`) through its tool schema. The application maps that choice to `maxOutputTokens`; the Workers AI provider forwards it as `max_tokens`. Persisted legacy routes without this field use standard. Every research-loop generation can naturally emit the final answer tool, so the selected ceiling applies to each loop generation, reserved synthesis and terminal-tool argument repair. Evidence-tool argument repairs retain their separate 2,000-token ceiling.
+
+Both answer paths share qualitative writing guidance about relevance, concise recommendations, explicit requested scope and evidence limitations. Token/word/block targets are no longer duplicated in prompts. The native answer schemas retain their block, string and reference limits, with application checks for citation membership and coverage. The model, reasoning and phase deadlines are unchanged. A token ceiling is a truncation boundary, not a guarantee of a complete answer or a wall-clock latency bound.
+
+A failed structured response gets at most one repair within the same 40-second finalization deadline. Repair receives the failed candidate and specific validation errors, with instructions to preserve valid content. Diagnostics record the schema version, validation stage, finish reason, candidate length and bounded issue paths/codes, without logging the candidate text. Test captures must preserve these structured issue arrays.
+
 Partial results contain quoted source excerpts, not a model-invented recommendation. They use status completed, confidence low, and warning code PARTIAL_EVIDENCE. A complete answer may also have low confidence for other reasons; use the warning code to identify this fallback.
 
 ## What the response counters mean
@@ -174,17 +182,17 @@ modelStepCount counts completed Agent Core steps. Classifier calls, transcript a
 
 toolCallCount counts durable tool-call rows. Failed evidence calls count. Successful finalization counts. Rejected finalization attempts are not stored as completed tool rows. Reused evidence may avoid another row. Provider-internal HTTP retries do not appear as separate tools: one search call can cause multiple YouTube attempts and processor-slot retries.
 
-The recovery finalizer and deterministic fallback occur outside Agent Core's step ceiling. Their successful persistence uses the same finalization budget and deadline checks.
+The recovery finalizer and deterministic fallback occur outside Agent Core's step ceiling. Synthesis and repair share the original finalization deadline; saving uses the separate persistence timeout. The three model phases total at most 100 seconds; queueing and persistence can extend end-to-end completion.
 
 ## Remaining limitations
 
 - Research sources are YouTube sources; this is not a general web/GitHub research engine.
 - Minimal tools and short answers are instructions. The loop can deviate within its enforced budgets; the one-search_youtube limit is enforced in code.
-- Two short analyses trade breadth for latency. Long transcripts and slow inference can still lead to partial results.
+- Two or four short analyses trade breadth for latency. Long transcripts and slow inference can still lead to partial results.
 - Saved evidence is required for a useful fallback. Total retrieval failure cannot produce a supported answer.
 - The recurring local Docker egress reset affects both paths on cache misses. Remote model availability is another independent dependency.
-- Deadline enforcement ends application processing and blocks late finalization; it cannot guarantee an external service has stopped all work already sent to it.
-- Agent responses expose calculated provider-credit usage. Full durable credit reservation/settlement is not implemented in this agent runtime.
+- Phase deadlines stop model processing; validated answers can still be saved within the separate persistence allowance. Cancellation cannot guarantee an external service has stopped all work already sent to it.
+- Agent responses expose settled provider-credit usage. The runtime reserves credits and settles completed evidence operations idempotently, including when a run fails.
 
 ## Source map
 
@@ -205,7 +213,7 @@ Both paths can call `get_video_storyboard(videoId, focus)`. The processor uses p
 
 An isolated GLM-5.3-Flash model reads the images and returns at most five visual findings, each tied to up to three supplied frame indexes. The application validates indexes and computes timestamps from the original mapping. Visual observations are labelled as such, rather than represented as transcript quotations. Raw images are not stored in evidence packets. This is sampled coverage, and two leading sheets may cover only the beginning of a long video.
 
-The visual call has a 20-second timeout, no automatic model retry, and shares the collection phase's cancellation signal. All agent model calls, including visual and transcript analysis, use the shared GLM model factory and GLM pricing. Visual analysis uses low reasoning effort and the run session affinity. The existing total run deadline and finalization reserve remain unchanged. The removed agent tools do not remove the standalone public endscreen or trends API routes.
+The visual call has a 20-second timeout, no automatic model retry, and shares the collection phase's cancellation signal. All agent model calls, including visual and transcript analysis, use the shared GLM model factory and GLM pricing. Visual analysis uses low reasoning effort and the run session affinity. Visual work remains inside the research phase's 40-second budget. The removed agent tools do not remove the standalone public endscreen or trends API routes.
 
 ## Production access and rollout
 

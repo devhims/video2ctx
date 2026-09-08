@@ -16,3 +16,4 @@ dist/
 .scratch/
 playwright-report/
 test-results/
+reference/engineering/experiments/

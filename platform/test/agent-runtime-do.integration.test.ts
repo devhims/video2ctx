@@ -16,9 +16,9 @@ async function seed(name: string, status = 'failed') {
     await instance.getRun(runId);
     instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,
       user_message_id,assistant_message_id,turn_ordinal,message,status,phase,
-      credits_remaining_at_admission,created_at,updated_at)
+      credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
       VALUES (${runId},${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},
-      1,'Private prompt',${status},'executing',1000,0,0)`;
+      1,'Private prompt',${status},'executing',1000,0,0,0)`;
     instance.sql`INSERT INTO agent_tool_calls (run_id,tool_call_id,semantic_key,tool_name,operation,status,credits,created_at,updated_at)
       VALUES (${runId},'tool','meaning','get_video','video','completed',1,0,0)`;
   });
@@ -43,6 +43,25 @@ test('pre-billing terminal runs are not charged retroactively', async () => {
   });
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
   expect(await creditBalance(env, userId)).toBe(1000);
+});
+
+test.each(['routing', 'executing', 'finalizing'])('migrates an active legacy %s run without restarting its phase clock', async phase => {
+  const { runtime, runId } = await seed(`agent-legacy-phase-${phase}`, 'running');
+  const createdAt = Date.now() - 30_000;
+  const updatedAt = Date.now() - 5_000;
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = ${phase}, created_at = ${createdAt}, updated_at = ${updatedAt}
+      WHERE id = ${runId}`;
+    instance.sql`ALTER TABLE agent_runs DROP COLUMN research_deadline_at`;
+    instance.sql`ALTER TABLE agent_runs DROP COLUMN finalization_deadline_at`;
+    instance.sql`ALTER TABLE agent_runs DROP COLUMN classification_deadline_at`;
+    await instance.getRun(runId);
+    expect(instance.sql`SELECT research_deadline_at, finalization_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
+      .toEqual({ research_deadline_at: phase === 'routing' ? null : createdAt + 40_000,
+        finalization_deadline_at: phase === 'finalizing' ? updatedAt + 40_000 : null });
+    expect(instance.sql`SELECT classification_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
+      .toEqual({ classification_deadline_at: phase === 'routing' ? updatedAt + 20_000 : null });
+  });
 });
 
 test('recovers a D1 settlement committed before the SQLite checkpoint', async () => {
@@ -99,15 +118,17 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
 });
 
 
-test('queued admissions retain their IDs and original deadline without starting late inference', async () => {
+test('queued admissions retain their IDs and do not expire before classification starts', async () => {
   const { runtime, userId } = await seed('queued-expired-admission');
   const request = { conversationId: crypto.randomUUID(), message: 'A delayed request' };
   const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() - 81_000 };
   await runInDurableObject(runtime, async instance => {
-    const fiber = vi.spyOn(instance, 'startFiber');
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: identity.runId, name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
     const receipt = await instance.startRun(request, { userId, idempotencyKey: 'expired-queued-request', creditsRemaining: 1000 }, identity);
-    expect(receipt).toMatchObject({ runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'failed' });
-    expect(fiber).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({ runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'pending' });
+    expect(fiber).toHaveBeenCalledOnce();
     fiber.mockRestore();
   });
 });
@@ -142,4 +163,88 @@ test('saves a ready answer after the model deadline and settles it idempotently'
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed' });
   await runtime.reconcileRun(runId);
   expect(await creditBalance(env, userId)).toBe(999);
+});
+
+
+test('a stale admission watchdog does not cancel classification or active phase budgets', async () => {
+  const { runtime, runId } = await seed('agent-phase-watchdog-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'routing', research_deadline_at = null,
+      classification_deadline_at = ${Date.now() + 20_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'executing', research_deadline_at = ${Date.now() + 40_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'finalizing', research_deadline_at = 0,
+      finalization_deadline_at = ${Date.now() + 40_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  // Saving a ready answer has its own allowance after model generation ends.
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET finalization_deadline_at = ${Date.now() - 5_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET finalization_deadline_at = ${Date.now() - 31_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
+});
+
+test('persists phase deadlines once so recovery cannot extend them', async () => {
+  const { runtime, runId } = await seed('agent-phase-persistence-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'routing', research_deadline_at = null WHERE id = ${runId}`;
+    const phases = instance as unknown as {
+      updatePhase: (runId: string, phase: 'routing' | 'executing' | 'finalizing', deadlineAt: number) => Promise<void>;
+    };
+    const classificationDeadline = Date.now() + 20_000;
+    await phases.updatePhase(runId, 'routing', classificationDeadline);
+    await phases.updatePhase(runId, 'routing', classificationDeadline + 20_000);
+    expect(instance.sql`SELECT classification_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
+      .toEqual({ classification_deadline_at: classificationDeadline });
+    const researchDeadline = Date.now() + 40_000;
+    await phases.updatePhase(runId, 'executing', researchDeadline);
+    await phases.updatePhase(runId, 'executing', researchDeadline + 20_000);
+    const finalizationDeadline = Date.now() + 60_000;
+    await phases.updatePhase(runId, 'finalizing', finalizationDeadline);
+    await phases.updatePhase(runId, 'finalizing', finalizationDeadline + 20_000);
+    expect(instance.sql`SELECT phase, research_deadline_at, finalization_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
+      .toEqual({ phase: 'finalizing', research_deadline_at: researchDeadline, finalization_deadline_at: finalizationDeadline });
+  });
+});
+
+test('settles abandoned classification once its saved deadline and persistence allowance expire', async () => {
+  const { runtime, runId } = await seed('agent-classification-watchdog', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'routing', research_deadline_at = null,
+      classification_deadline_at = ${Date.now() - 31_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
+});
+
+test('persists an out-of-scope rejection and refunds the evidence credit reservation', async () => {
+  const { runtime, runId, userId } = await seed('agent-rejected-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`DELETE FROM agent_tool_calls WHERE run_id = ${runId}`;
+    const decision = JSON.stringify({ route: 'rejected', reason: 'Bookings are outside YouTube video synthesis.' });
+    instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${runId},${decision},0)`;
+    const saving = instance as unknown as {
+      finalizeRun: (runId: string, toolId: string, input: import('../src/agents/contracts').FinalizeAnswerInput) => Promise<unknown>;
+    };
+    await saving.finalizeRun(runId, 'rejection', { answer: 'I can synthesize YouTube videos, but cannot make bookings.',
+      intent: 'rejected', confidence: 'low', citations: [], artifacts: [],
+      warnings: [{ code: 'OUT_OF_SCOPE', message: 'Bookings are outside YouTube video synthesis.' }] });
+  });
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed', route: { route: 'rejected' },
+    result: { intent: 'rejected', citations: [], billing: { creditsCharged: 0, creditsRemaining: 1000 } } });
+  expect(await creditBalance(env, userId)).toBe(1000);
 });

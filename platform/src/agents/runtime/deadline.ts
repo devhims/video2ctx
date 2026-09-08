@@ -1,7 +1,7 @@
+export const AGENT_CLASSIFICATION_TIMEOUT_MS = 20_000;
 export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
 export const AGENT_FINALIZATION_TIMEOUT_MS = 40_000;
 export const AGENT_PERSISTENCE_TIMEOUT_MS = 30_000;
-export const AGENT_RUN_TIMEOUT_MS = AGENT_RESEARCH_TIMEOUT_MS + AGENT_FINALIZATION_TIMEOUT_MS;
 
 /** Bounds a phase even when work ignores cancellation. Terminal saving can leave
  * this clock; its caller must apply a separate persistence timeout. Failed
