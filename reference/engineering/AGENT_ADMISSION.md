@@ -41,10 +41,11 @@ sequenceDiagram
 - Each alarm delivers up to four admissions concurrently. Startup RPCs have a
   five-second wait bound; ambiguous failures retry the same identities with
   exponential backoff capped at 30 seconds. Delivery can complete after a timeout.
-- The 60-second execution deadline starts at durable admission, not at eventual
-  startup. Expired deliveries fail without starting inference. During a runtime
-  outage, delivery acknowledgement and final status can take longer than this
-  execution budget; pending status is not a promise of active inference.
+- Queueing and classification do not consume the research or finalization
+  budgets. Classification has a separate 20-second timeout. Research starts its
+  40-second clock after classification, and finalization starts a separate
+  40-second clock at handoff. Each deadline is persisted on first entry and
+  reused on recovery. Pending status is not a promise of active inference.
 - Admission does not reserve or charge credits. Existing runtime reservation and
   settlement safeguards remain authoritative.
 - Account deletion includes queued conversations, blocks late admissions, and
@@ -57,6 +58,6 @@ sequenceDiagram
 
 Run `npm run build`, `npx vitest run`, and `npm run test:user-account` from platform.
 The Workers integration suite covers durable receipts, delivery retries,
-transaction rollback, deletion races, original deadlines, and interrupted startup.
+transaction rollback, deletion races, persisted phase deadlines, and interrupted startup.
 Local HTTP measurements demonstrate the admission path only; production latency
 must be measured after deployment under production authentication and networking.

@@ -17,6 +17,60 @@ import type { AgentModelCostBudget, AgentModelUsageEntry } from '../src/agents/r
 import type { EvidencePacket } from '../src/agents/contracts';
 
 describe('YouTube AgentCore loop control', () => {
+  it.each([undefined, 'standard', 'detailed'] as const)('enforces the same %s ceiling for natural answers and reserved synthesis', async answerDetail => {
+    const ceiling = answerDetail === 'detailed' ? 2500 : 1500;
+    const output = { blocks: [{ text: 'A supported finding.', evidenceIds: ['ref_1'] }],
+      confidence: 'low', warnings: [] };
+    const natural = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+      toolCallId: 'natural', toolName: 'finalize_answer', input: JSON.stringify({ ...output,
+        intent: 'inspect_video', artifacts: [] }),
+    }) });
+    const decision = { route: 'inspect_video' as const, videoId: 'abcdefghijk', answerDetail };
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model: natural, message: 'Inspect the video', decision, context });
+    expect(natural.doGenerateCalls[0]?.maxOutputTokens).toBe(ceiling);
+    expect(context.finalize).toHaveBeenCalledOnce();
+
+    const reserved = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult(output) });
+    await runResearchAgentWithModel({ model: natural, finalizationModel: reserved, message: 'Inspect the video',
+      decision, context: inspectContext(), finalizationDeadlineAt: Date.now() + 40_000,
+      recoveredEvidence: [transcriptAnalysisPacket()] });
+    expect(reserved.doGenerateCalls[0]?.maxOutputTokens).toBe(ceiling);
+    expect(reserved.doGenerateCalls[0]?.responseFormat?.type).toBe('json');
+  });
+
+  it.each(['standard', 'detailed'] as const)('keeps %s answer-tool repair within the selected ceiling', async answerDetail => {
+    const model = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+      toolCallId: 'broken-answer', toolName: 'finalize_answer', input: '{',
+    }) });
+    const repaired = { intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [],
+      blocks: [{ text: 'A supported finding.', evidenceIds: ['ref_1'] }] };
+    const repair = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult(repaired) });
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model, finalizationModel: repair, message: 'Inspect the video',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk', answerDetail }, context });
+    expect(repair.doGenerateCalls).toHaveLength(1);
+    expect(repair.doGenerateCalls[0]?.maxOutputTokens).toBe(answerDetail === 'detailed' ? 2500 : 1500);
+    expect(context.finalize).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist a length-truncated object even if its JSON parses', async () => {
+    const output = { confidence: 'low', blocks: [{ text: 'A finding', evidenceIds: ['ref_1'] }], warnings: [] };
+    let attempts = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(call.maxOutputTokens).toBe(1500);
+      return { ...finalizerModelResult(output), finishReason: {
+        unified: attempts++ === 0 ? 'length' as const : 'stop' as const, raw: undefined,
+      } };
+    } });
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model, message: 'Inspect the video',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      finalizationDeadlineAt: Date.now() + 40_000, recoveredEvidence: [transcriptAnalysisPacket()] });
+    expect(attempts).toBe(2);
+    expect(context.finalize).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])('permits one search even in a parallel batch and removes it after use (failure=%s)', async (fails) => {
     const context = inspectContext();
     context.provider.search = vi.fn(async () => {
@@ -253,23 +307,16 @@ describe('YouTube AgentCore loop control', () => {
           });
         }
 
-        expect(call.toolChoice).toEqual({
-          type: 'tool',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-        });
-        expect(call.tools?.map((tool) => tool.name)).toEqual([FINALIZE_ANSWER_TOOL_NAME]);
-        return modelResult({
-          toolCallId: 'finalize-1',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-          input: JSON.stringify({
+        expect(call.responseFormat?.type).toBe('json');
+        expect(call.tools).toBeUndefined();
+        return finalizerModelResult({
             blocks: [{ text: 'The available metadata identifies the video.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
             artifacts: [],
             warnings: [],
-          }),
-        });
+          });
       },
     });
     const context = inspectContext();
@@ -289,23 +336,16 @@ describe('YouTube AgentCore loop control', () => {
   it('switches AgentCore directly to finalization when only the cost reserve remains', async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async (call) => {
-        expect(call.toolChoice).toEqual({
-          type: 'tool',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-        });
-        expect(call.tools?.map((tool) => tool.name)).toEqual([FINALIZE_ANSWER_TOOL_NAME]);
-        return modelResult({
-          toolCallId: 'cost-finalize',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-          input: JSON.stringify({
+        expect(call.responseFormat?.type).toBe('json');
+        expect(call.tools).toBeUndefined();
+        return finalizerModelResult({
             blocks: [{ text: 'The run finalized with the evidence already collected.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
             artifacts: [],
             warnings: [],
-          }),
-        });
+          });
       },
     });
     const context = inspectContext();
@@ -341,22 +381,15 @@ describe('YouTube AgentCore loop control', () => {
     });
     const finalizationModel = new MockLanguageModelV4({
       doGenerate: async (call) => {
-        expect(call.toolChoice).toEqual({
-          type: 'tool',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-        });
-        return modelResult({
-          toolCallId: 'repaired-finalize',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-          input: JSON.stringify({
-            blocks: [{ text: 'Please clarify which aspect of the video to inspect.', evidenceIds: [] }],
-            intent: 'clarification',
+        expect(call.responseFormat?.type).toBe('json');
+        return finalizerModelResult({
+            blocks: [{ text: 'A supported video finding.', evidenceIds: ['ref_1'] }],
+            intent: 'inspect_video',
             confidence: 'low',
             citations: [],
             artifacts: [],
             warnings: [],
-          }),
-        });
+          });
       },
     });
     const context = inspectContext();
@@ -572,25 +605,16 @@ describe('YouTube AgentCore loop control', () => {
           })));
         }
 
-        expect(call.toolChoice).toEqual({
-          type: 'tool',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-        });
-        expect(call.tools?.map((availableTool) => availableTool.name)).toEqual([
-          FINALIZE_ANSWER_TOOL_NAME,
-        ]);
-        return modelResult({
-          toolCallId: 'finalize-after-transcript-budget',
-          toolName: FINALIZE_ANSWER_TOOL_NAME,
-          input: JSON.stringify({
+        expect(call.responseFormat?.type).toBe('json');
+        expect(call.tools).toBeUndefined();
+        return finalizerModelResult({
             blocks: [{ text: 'Two transcript analyses provide enough evidence.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
             intent: 'topic_research',
             confidence: 'medium',
             citations: [],
             artifacts: [],
             warnings: [],
-          }),
-        });
+          });
       },
     });
     const context = transcriptResearchContext();
@@ -669,10 +693,10 @@ describe('YouTube AgentCore loop control', () => {
         toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
         input: JSON.stringify({ videoId: `video00000${n}`, focus: 'Design skills' }),
       })));
-      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+      return finalizerModelResult({
         blocks: [{ text: 'Compared the sources.', evidenceIds: ['transcript:video000001:window:0:0'] }],
         intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
-      }) });
+      });
     } });
     const run = runResearchAgentWithModel({ model, message: 'Compare design skills',
       decision: { route: 'topic_research', researchBreadth }, toolNames: ['get_video_transcript', 'finalize_answer'], context });
@@ -687,6 +711,8 @@ describe('YouTube AgentCore loop control', () => {
   it.each([12_000, 45_000])('hands off synthesis once and bounds its own phase (duration=%s)', async (duration) => {
     vi.useFakeTimers();
     try {
+      const startedAt = Date.now();
+      const onFinalizing = vi.fn();
       const context = transcriptResearchContext();
       const research = new MockLanguageModelV4({ doGenerate: async () => {
         await new Promise(resolve => setTimeout(resolve, 34_000));
@@ -698,12 +724,13 @@ describe('YouTube AgentCore loop control', () => {
         return finalizerModelResult({ blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
           intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
       });
-      const run = runResearchAgentWithModel({ model: research,
+      const run = runResearchAgentWithModel({ model: research, onFinalizing,
         finalizationModel: new MockLanguageModelV4({ doGenerate: synthesis }),
         message: 'Research workflows', decision: { route: 'topic_research' },
         toolNames: ['get_video_transcript', 'finalize_answer'], context });
       await vi.advanceTimersByTimeAsync(85_000);
       await run;
+      expect(onFinalizing).toHaveBeenCalledExactlyOnceWith(startedAt + 34_000 + 40_000);
       expect(synthesis).toHaveBeenCalledTimes(1);
       expect(context.finalize).toHaveBeenCalledTimes(1);
       if (duration > 40_000) {
@@ -799,8 +826,11 @@ describe('YouTube AgentCore loop control', () => {
     const finalizationModel = new MockLanguageModelV4({
       doGenerate: async (call) => {
         finalizerAttempt += 1;
+        expect(call.responseFormat?.type).toBe('json');
+        expect(call.tools).toBeUndefined();
         if (finalizerAttempt === 2) {
           expect(JSON.stringify(call.prompt)).toContain('Citation validation rejected the first answer.');
+          expect(JSON.stringify(call.prompt)).toContain('An invalid first answer.');
         }
         return finalizerModelResult({
           blocks: [{ text: finalizerAttempt === 1
@@ -867,7 +897,16 @@ describe('YouTube AgentCore loop control', () => {
     let attempts = 0;
     const recovery = new MockLanguageModelV4({ doGenerate: async (call) => {
       attempts += 1;
-      if (attempts === 2) expect(JSON.stringify(call.prompt)).toContain('validationFeedback');
+      if (attempts === 2) {
+        const prompt = JSON.stringify(call.prompt);
+        expect(prompt).toContain('validationFeedback');
+        expect(prompt).toContain('previousCandidate');
+        expect(prompt).toContain('Use the supported workflow.');
+        if (failure === 'missing') {
+          expect(prompt).toContain('evidenceIds');
+          expect(prompt).toContain('too_small');
+        }
+      }
       return finalizerModelResult({
         blocks: [{ text: 'Use the supported workflow.', evidenceIds:
           failure === 'exhausted' || (attempts === 1 && failure === 'unknown') ? ['invented'] :
@@ -1012,7 +1051,9 @@ function modelResult(toolCall: {
 }
 
 function finalizerModelResult(output: unknown) {
-  return modelResult({ toolCallId: 'recovery-answer', toolName: 'finalize_answer', input: JSON.stringify(output) });
+  return { ...modelResult({ toolCallId: 'unused', toolName: 'unused', input: '{}' }),
+    content: [{ type: 'text' as const, text: JSON.stringify(output) }],
+    finishReason: { unified: 'stop' as const, raw: undefined } };
 }
 
 function multiToolModelResult(toolCalls: Array<{

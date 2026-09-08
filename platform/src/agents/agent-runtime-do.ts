@@ -1,7 +1,7 @@
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
-import { AGENT_RUN_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
+import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
 import {
   Agent,
   type FiberContext,
@@ -77,6 +77,9 @@ interface RunRow {
   message: string;
   status: RunStatus;
   phase: string;
+  classification_deadline_at: number | null;
+  research_deadline_at: number | null;
+  finalization_deadline_at: number | null;
   result_json: string | null;
   error: string | null;
   credits_remaining_at_admission: number;
@@ -129,8 +132,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.ensureAgentRuntimeSchema();
     if (!this.#deleted) {
       for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
-        await this.schedule(new Date(Math.max(Date.now() + 1000, run.created_at + AGENT_RUN_TIMEOUT_MS + 1000)),
-          'reconcileRun', run.id, { idempotent: true });
+        await this.scheduleRunReconciliation(run);
       }
     }
   }
@@ -204,11 +206,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private async startPersistedRun(row: RunRow): Promise<void> {
-    if (Date.now() >= row.created_at + AGENT_RUN_TIMEOUT_MS) {
+    const deadlineAt = this.reconciliationDeadline(row);
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
       await this.reconcileRun(row.id);
       return;
     }
-    await this.schedule(new Date(row.created_at + AGENT_RUN_TIMEOUT_MS + 1000), 'reconcileRun', row.id, { idempotent: true });
+    await this.scheduleRunReconciliation(row);
     if (this.#deleted) throw new Error('Account deletion is in progress.');
     await this.startFiber(FIBER_NAME, async fiber => { await this.executeRun(row.id, fiber); }, {
       fiberId: row.id, idempotencyKey: row.idempotency_key, metadata: { runId: row.id }, waitForCompletion: false,
@@ -324,10 +327,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const modelBudget = this.createModelCostBudget(runId);
     const conversationHistory = this.readConversationHistory(row);
     const timestamp = Date.now();
-    fiber.stash({ runId, phase: 'routing' });
+    const phase = row.finalization_deadline_at !== null ? 'finalizing'
+      : row.research_deadline_at !== null ? 'executing' : 'routing';
+    fiber.stash({ runId, phase });
     this.sql`
       UPDATE agent_runs
-      SET status = 'running', phase = 'routing', error = null, updated_at = ${timestamp}
+      SET status = 'running', phase = ${phase}, error = null, updated_at = ${timestamp}
       WHERE id = ${runId}
     `;
 
@@ -340,7 +345,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       }
       fiber.signal.throwIfAborted();
       await executeResearchRun({
-        deadlineAt: row.created_at + AGENT_RUN_TIMEOUT_MS,
+        classificationDeadlineAt: row.classification_deadline_at ?? undefined,
+        onClassifying: deadlineAt => this.updatePhase(runId, 'routing', deadlineAt),
+        researchDeadlineAt: row.research_deadline_at ?? undefined,
+        finalizationDeadlineAt: row.finalization_deadline_at ?? undefined,
         env: this.env,
         runId,
         message: row.message,
@@ -360,14 +368,15 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           this.persistRoute(runId, selected);
           this.recordEvent(runId, 'capability.routed', selected);
         },
-        onCapabilityLoaded: (capability) => {
+        onCapabilityLoaded: async (capability, deadlineAt) => {
+          if (this.requireRun(runId).finalization_deadline_at !== null) return;
           this.recordEvent(runId, 'capability.loaded', { capability });
           fiber.stash({ runId, phase: 'executing' });
-          this.updatePhase(runId, 'executing');
+          await this.updatePhase(runId, 'executing', deadlineAt);
         },
-        onFinalizing: () => {
+        onFinalizing: async (deadlineAt) => {
           fiber.stash({ runId, phase: 'finalizing' });
-          this.updatePhase(runId, 'finalizing');
+          await this.updatePhase(runId, 'finalizing', deadlineAt);
         },
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
@@ -579,14 +588,32 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId}`;
   }
 
-  // A durable watchdog also retries settlement if D1 was unavailable when a
-  // fiber ended. It never restarts inference after the admission deadline.
+  // The watchdog allows phase budgets and persistence to finish, and retries
+  // failed settlement. Queued work has no clock until classification starts.
+  // An alarm from an earlier phase must never cancel a later phase prematurely.
+  private reconciliationDeadline(run: RunRow): number | undefined {
+    if (run.finalization_deadline_at !== null) return run.finalization_deadline_at + AGENT_PERSISTENCE_TIMEOUT_MS;
+    if (run.research_deadline_at !== null) return run.research_deadline_at + AGENT_FINALIZATION_TIMEOUT_MS + AGENT_PERSISTENCE_TIMEOUT_MS;
+    if (run.classification_deadline_at !== null) return run.classification_deadline_at + AGENT_PERSISTENCE_TIMEOUT_MS;
+    return undefined;
+  }
+
+  private async scheduleRunReconciliation(run: RunRow): Promise<void> {
+    const wakeAt = isTerminal(run.status) ? Date.now() + 1000
+      : Math.max(Date.now() + 1000, (this.reconciliationDeadline(run) ?? Date.now() + 60_000) + 1000);
+    await this.schedule(new Date(wakeAt), 'reconcileRun', run.id, { idempotent: true });
+  }
   async reconcileRun(runId: string): Promise<void> {
     if (this.#deleted) return;
     const run = this.readRun(runId);
     if (!run || run.billing_settled) return;
     try {
       if (!isTerminal(run.status)) {
+        const deadlineAt = this.reconciliationDeadline(run);
+        if (deadlineAt === undefined || Date.now() < deadlineAt) {
+          await this.scheduleRunReconciliation(run);
+          return;
+        }
         this.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed',
           error = 'Agent run did not finish before its deadline.', updated_at = ${Date.now()}
           WHERE id = ${runId}`;
@@ -816,11 +843,22 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     ];
   }
 
-  private updatePhase(runId: string, phase: string): void {
-    if (this.#deleted) return;
-    this.sql`
-      UPDATE agent_runs SET phase = ${phase}, updated_at = ${Date.now()} WHERE id = ${runId}
-    `;
+  private async updatePhase(runId: string, phase: 'routing' | 'executing' | 'finalizing', deadlineAt: number): Promise<void> {
+    this.assertRunActive(runId);
+    if (phase === 'routing') {
+      this.sql`UPDATE agent_runs SET phase = ${phase},
+        classification_deadline_at = COALESCE(classification_deadline_at, ${deadlineAt}), updated_at = ${Date.now()}
+        WHERE id = ${runId}`;
+    } else if (phase === 'executing') {
+      this.sql`UPDATE agent_runs SET phase = ${phase},
+        research_deadline_at = COALESCE(research_deadline_at, ${deadlineAt}), updated_at = ${Date.now()}
+        WHERE id = ${runId}`;
+    } else {
+      this.sql`UPDATE agent_runs SET phase = ${phase},
+        finalization_deadline_at = COALESCE(finalization_deadline_at, ${deadlineAt}), updated_at = ${Date.now()}
+        WHERE id = ${runId}`;
+    }
+    await this.scheduleRunReconciliation(this.requireRun(runId));
   }
 
   private recordEvent(runId: string, type: string, payload: Record<string, unknown>): void {
@@ -875,6 +913,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       runEstimatedCostMicros: this.modelCostMicros(runId),
       limitMicros: AGENT_MODEL_COST_LIMIT_MICROS,
     });
+    // Usage counters only, so live latency comparisons need no prompts or headers.
+    console.log(JSON.stringify({ event: 'agent_model_usage', runId, category: entry.category,
+      callId: entry.callId, modelId, inputTokens, cachedInputTokens, outputTokens, estimatedCostMicros }));
   }
 
   private ensureAgentRuntimeSchema(): void {
@@ -913,6 +954,22 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         this.sql`UPDATE agent_runs SET billing_settled = 1,
           result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${run.id}`;
       }
+    }
+    if (!columns.some(column => column.name === 'classification_deadline_at')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN classification_deadline_at INTEGER`;
+      this.sql`UPDATE agent_runs SET classification_deadline_at = updated_at + ${AGENT_CLASSIFICATION_TIMEOUT_MS}
+        WHERE phase = 'routing' AND status = 'running'`;
+    }
+    if (!columns.some(column => column.name === 'research_deadline_at')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN research_deadline_at INTEGER`;
+      // Preserve the already-running research clock for pre-migration runs.
+      this.sql`UPDATE agent_runs SET research_deadline_at = created_at + ${AGENT_RESEARCH_TIMEOUT_MS}
+        WHERE phase IN ('executing', 'finalizing') AND status IN ('pending', 'running')`;
+    }
+    if (!columns.some(column => column.name === 'finalization_deadline_at')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN finalization_deadline_at INTEGER`;
+      this.sql`UPDATE agent_runs SET finalization_deadline_at = updated_at + ${AGENT_FINALIZATION_TIMEOUT_MS}
+        WHERE phase = 'finalizing' AND status IN ('pending', 'running')`;
     }
     this.ensureTurnOrdinalColumn();
     this.sql`

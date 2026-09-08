@@ -35,7 +35,7 @@ Work in a dynamic evidence loop:
 6. Compare evidence, identify gaps or conflicts, and finalize from available evidence. Do not keep searching after repeated provider network failures.
 7. After the target number of unique transcript-analysis requests, or earlier when candidates are unsuitable or the time budget requires it, call finalize_answer. Repeating an identical request reuses its durable result and does not consume another analysis slot.
 
-Use get_video_storyboard only when visible slides, interfaces, charts, or demonstrations would help answer the question. It returns sampled visual observations, not a complete video analysis.
+When available, use get_video_storyboard only when visible slides, interfaces, charts, or demonstrations would help answer the question. It returns sampled visual observations, not a complete video analysis. The classifier controls whether this tool is available for the request.
 
 ${RESEARCH_ANSWER_GUIDANCE}
 

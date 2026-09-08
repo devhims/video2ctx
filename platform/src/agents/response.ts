@@ -27,7 +27,7 @@ export const compactAgentSourceSchema = z.object({
   url: z.url().optional(),
 });
 export const compactAgentResultSchema = z.object({
-  outcome: z.enum(['answered', 'partial', 'insufficient_evidence', 'needs_clarification']).describe('Answer availability based on clarification intent and persisted evidence warnings. This is not a factual-confidence score.'),
+  outcome: z.enum(['answered', 'partial', 'insufficient_evidence', 'needs_clarification', 'rejected']).describe('Answer availability based on routing intent and persisted evidence warnings. Rejected means outside supported YouTube video research and synthesis. This is not a factual-confidence score.'),
   answer: z.string(),
   sources: z.array(compactAgentSourceSchema),
   warnings: z.array(agentWarningSchema),
@@ -91,7 +91,8 @@ function compactResult(result: AgentTurnResult, include: AgentResponseOptions['i
     return [...refs].map(id => `[${id}]`).join('');
   });
   const codes = new Set(result.warnings.map(warning => warning.code));
-  const outcome = result.intent === 'clarification' ? 'needs_clarification'
+  const outcome = result.intent === 'rejected' ? 'rejected'
+    : result.intent === 'clarification' ? 'needs_clarification'
     : codes.has('NO_CONTENT_EVIDENCE') ? 'insufficient_evidence'
     : codes.has('PARTIAL_EVIDENCE') || codes.has('RESEARCH_COVERAGE_SHORTFALL') ? 'partial' : 'answered';
   return {

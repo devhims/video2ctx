@@ -50,6 +50,8 @@ export async function runAgentCoreWithModel(options: {
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
   hardBudgetMs?: number;
+  /** Shared ceiling for any generation that can emit the terminal answer tool. */
+  maxOutputTokens?: number;
   manageTimeoutExternally?: boolean;
   /** Allows a caller to hand off before synthesis starts under the research deadline. */
   onFinalizationRequested?: () => never;
@@ -67,7 +69,7 @@ export async function runAgentCoreWithModel(options: {
     activeTools: [...options.definition.activeTools],
     toolOrder: [...options.definition.activeTools],
     toolChoice: 'required',
-    repairToolCall: async ({ toolCall, tools: availableTools, inputSchema, error }) => {
+    repairToolCall: async ({ toolCall, tools: availableTools, error }) => {
       if (NoSuchToolError.isInstance(error)) return null;
       const selectedTool = availableTools[toolCall.toolName as keyof typeof availableTools];
       if (!selectedTool) return null;
@@ -78,14 +80,13 @@ export async function runAgentCoreWithModel(options: {
         output: Output.object({ schema: selectedTool.inputSchema }),
         prompt: [
           `Repair the arguments for the tool ${toolCall.toolName}.`,
-          'Return only arguments that satisfy the supplied output schema.',
           `Invalid arguments: ${toolCall.input}`,
           `Validation error: ${error.message}`,
-          `JSON schema: ${JSON.stringify(await inputSchema({ toolName: toolCall.toolName }))}`,
         ].join('\n'),
         temperature: 0,
         maxRetries: 1,
-        maxOutputTokens: MAX_REPAIR_OUTPUT_TOKENS,
+        maxOutputTokens: toolCall.toolName === finalizationToolName
+          ? options.maxOutputTokens ?? MAX_AGENT_OUTPUT_TOKENS : MAX_REPAIR_OUTPUT_TOKENS,
         abortSignal: options.context.signal,
         timeout: { totalMs: 15_000 },
       });
@@ -148,7 +149,7 @@ export async function runAgentCoreWithModel(options: {
       }
     },
     maxRetries: 2,
-    maxOutputTokens: MAX_AGENT_OUTPUT_TOKENS,
+    maxOutputTokens: options.maxOutputTokens ?? MAX_AGENT_OUTPUT_TOKENS,
     temperature: 0.2,
   });
 

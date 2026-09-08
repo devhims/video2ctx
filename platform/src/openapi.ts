@@ -677,7 +677,7 @@ export const openApiDocument = {
           ...agentResponseParameters,
         ],
         responses: {
-          '200': jsonResponse('Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, and needs_clarification; completed describes execution, not evidence quality.', { oneOf: [schemaRef('AgentRun'), schemaRef('CompactAgentRun')] }),
+          '200': jsonResponse('Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, needs_clarification, and rejected; completed describes execution, not evidence quality or scope acceptance.', { oneOf: [schemaRef('AgentRun'), schemaRef('CompactAgentRun')] }),
           ...standardErrors,
           '404': responseRef('NotFound'),
         },
@@ -2073,16 +2073,27 @@ export const openApiDocument = {
           {
             type: 'object', required: ['route'], properties: {
               route: { const: 'topic_research' },
+              researchBreadth: { type: 'string', enum: ['focused', 'comparative'] },
+              searchQuery: { type: 'string' },
+              useStoryboard: { type: 'boolean', description: 'Classifier selection of visual evidence access. Absent on legacy routes.' },
+              answerDetail: { type: 'string', enum: ['standard', 'detailed'], description: 'Classifier selection of the output budget. Legacy routes default to standard.' },
             },
           },
           {
             type: 'object', required: ['route', 'videoId'], properties: {
               route: { const: 'inspect_video' }, videoId: { type: 'string' },
+              useStoryboard: { type: 'boolean', description: 'Classifier selection of visual evidence access. Absent on legacy routes.' },
+              answerDetail: { type: 'string', enum: ['standard', 'detailed'], description: 'Classifier selection of the output budget. Legacy routes default to standard.' },
             },
           },
           {
             type: 'object', required: ['route', 'question'], properties: {
               route: { const: 'clarification' }, question: { type: 'string' },
+            },
+          },
+          {
+            type: 'object', required: ['route', 'reason'], properties: {
+              route: { const: 'rejected' }, reason: { type: 'string' },
             },
           },
         ],
@@ -2103,7 +2114,7 @@ export const openApiDocument = {
         properties: {
           runId: { type: 'string', format: 'uuid' }, conversationId: { type: 'string', format: 'uuid' },
           userMessageId: { type: 'string', format: 'uuid' }, assistantMessageId: { type: 'string', format: 'uuid' },
-          answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification'] },
+          answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification', 'rejected'] },
           confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           citations: { type: 'array', items: schemaRef('AgentCitation') },
           artifacts: { type: 'array', items: { type: 'object', required: ['type', 'data'], properties: { type: { type: 'string' }, title: { type: 'string' }, data: { type: 'object', additionalProperties: true } } } },

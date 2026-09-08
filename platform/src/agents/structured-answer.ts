@@ -12,25 +12,24 @@ const block = z.object({
   text: z.string().trim().min(1).max(2_000),
   evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(12),
 });
-// Keep tool parameters as a top-level object so models can see the actual fields.
-// Conditional citation rules are still enforced before an answer can be persisted.
+// Executable routes require references in the transmitted JSON schema itself.
+// Do not hide model-facing requirements in refinements that JSON Schema omits.
 export const structuredAnswerSchema = fields.extend({
-  intent: z.enum(['topic_research', 'inspect_video', 'clarification']),
-  blocks: z.array(block.extend({ evidenceIds: z.array(block.shape.evidenceIds.element).max(12) })).min(1).max(20),
-}).superRefine((input, ctx) => {
-  if (input.intent === 'clarification' && input.blocks.length !== 1) {
-    ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Clarification requires exactly one block.' });
-  }
-  input.blocks.forEach((value, index) => {
-    if (input.intent === 'clarification' ? value.evidenceIds.length !== 0 : value.evidenceIds.length === 0) {
-      ctx.addIssue({ code: 'custom', path: ['blocks', index, 'evidenceIds'],
-        message: input.intent === 'clarification' ? 'Clarification must not cite evidence.' : 'Every answer block requires supporting evidenceIds.' });
-    }
-  });
+  intent: z.enum(['topic_research', 'inspect_video']),
+  blocks: z.array(block).min(1).max(20),
 });
 
-export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema>): FinalizeAnswerInput {
-  const input = structuredAnswerSchema.parse(value);
+export const clarificationAnswerSchema = fields.extend({
+  intent: z.literal('clarification'),
+  blocks: z.array(block.extend({ evidenceIds: z.array(block.shape.evidenceIds.element).max(0) })).length(1),
+});
+
+// The classifier owns intent; persisted evidence owns artifacts and citations.
+export const finalizationOutputSchema = structuredAnswerSchema.omit({ intent: true, artifacts: true });
+export const FINALIZATION_SCHEMA_VERSION = 'answer-blocks-v2';
+
+export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema>): FinalizeAnswerInput {
+  const input = value.intent === 'clarification' ? clarificationAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,
     confidence: input.confidence,

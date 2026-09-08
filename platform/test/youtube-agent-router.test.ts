@@ -32,6 +32,24 @@ describe('YouTube agent capability router', () => {
     expect(extractYouTubeVideoIds('video ID: ABCDEFG1234')).toEqual(['ABCDEFG1234']);
   });
 
+  it.each(['standard', 'detailed'] as const)('persists the native answer budget choice %s', async answerDetail => {
+    const model = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', answerDetail });
+    const decision = await classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk', model,
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ answerDetail });
+    expect(model.doGenerateCalls[0]?.tools?.find(t => t.type === 'function')?.inputSchema).toMatchObject({
+      required: expect.arrayContaining(['answerDetail']),
+      properties: { answerDetail: { enum: ['standard', 'detailed'] } },
+    });
+    expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
+  });
+
+  it('rejects a new classification without an output-budget choice', async () => {
+    await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
+      model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', answerDetail: undefined }),
+      signal: new AbortController().signal })).rejects.toThrow();
+  });
+
   it('routes a request pinned to one supplied video into inspect_video', async () => {
     const decision = await classifyCapabilityWithModel({
       message: 'Summarize https://youtu.be/abcdefghijk',
@@ -39,7 +57,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false, answerDetail: 'standard' });
   });
 
   it('routes discovery and comparison requests into topic_research', async () => {
@@ -50,7 +68,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', useStoryboard: false, answerDetail: 'standard' });
     expect(model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema).toMatchObject({ type: 'object', properties: expect.objectContaining({ route: expect.any(Object), searchQuery: expect.any(Object) }) });
   });
 
@@ -60,7 +78,7 @@ describe('YouTube agent capability router', () => {
       model: classifierModel({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', useStoryboard: false, answerDetail: 'standard' });
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
@@ -77,6 +95,51 @@ describe('YouTube agent capability router', () => {
       model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative' }),
       signal: new AbortController().signal,
     })).rejects.toThrow();
+  });
+
+  it.each(['topic_research', 'inspect_video'] as const)('requires an explicit storyboard choice for new %s routes', async route => {
+    await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
+      model: classifierModel({ route, videoId: 'abcdefghijk', researchBreadth: 'focused', searchQuery: 'YouTube', useStoryboard: undefined }),
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/useStoryboard/);
+  });
+
+  it.each([true, false])('persists the classifier storyboard choice %s', async useStoryboard => {
+    const decision = await classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
+      model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard }),
+      signal: new AbortController().signal,
+    });
+    const recovered = await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() });
+    expect(recovered).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard, answerDetail: 'standard' });
+  });
+
+  it('accepts a rejection with a reason and disallows executable answers for it', async () => {
+    const decision = await classifyCapabilityWithModel({ message: 'Book a flight for me',
+      model: classifierModel({ route: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.' }),
+      signal: new AbortController().signal,
+    });
+    expect(decision).toEqual({ route: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.' });
+    expect(finalIntentMatchesRoute(decision, 'rejected')).toBe(true);
+    expect(finalIntentMatchesRoute(decision, 'topic_research')).toBe(false);
+    expect(finalIntentMatchesRoute(decision, 'clarification')).toBe(false);
+    expect(finalIntentMatchesRoute({ route: 'topic_research' }, 'rejected')).toBe(false);
+  });
+
+  it('rejects malformed scope rejections that omit the reason', async () => {
+    await expect(classifyCapabilityWithModel({ message: 'Book a flight for me',
+      model: classifierModel({ route: 'rejected' }), signal: new AbortController().signal,
+    })).rejects.toThrow();
+  });
+
+  it('bounds even a classifier provider that ignores cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
+      const result = classifyCapabilityWithModel({ message: 'Research YouTube tutorials', model,
+        signal: new AbortController().signal }).then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await result).toBe('Classification phase timeout.');
+    } finally { vi.useRealTimers(); }
   });
 
   it('restores comparative breadth without rerunning the classifier', async () => {
@@ -115,7 +178,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false, answerDetail: 'standard' });
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('Find a useful example.');
     expect(prompt).toContain('Inspect that one in more detail.');
@@ -192,12 +255,36 @@ describe('YouTube agent capability router', () => {
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(loop.stepCount).toBe(1);
   });
+
+  it.each([
+    ['inspect_video', false], ['inspect_video', true], ['topic_research', false], ['topic_research', true],
+  ] as const)('gates the %s storyboard tool using classifier choice %s', async (route, useStoryboard) => {
+    const model = finalizingModel();
+    await runResearchAgentWithModel({ model, message: 'Inspect the video',
+      decision: route === 'inspect_video' ? { route, videoId: 'abcdefghijk', useStoryboard } : { route, useStoryboard },
+      context: inspectContext(),
+      // Even an explicit caller tool list cannot override the classifier's decision.
+      toolNames: ['get_video_storyboard', 'finalize_answer'],
+    });
+    const names = model.doGenerateCalls[0]?.tools?.map(tool => tool.name);
+    expect(names?.includes('get_video_storyboard')).toBe(useStoryboard);
+    expect(names).toContain('finalize_answer');
+  });
+
+  it('blocks provider storyboard execution when the classifier disables it', async () => {
+    const storyboard = vi.fn();
+    const provider = createCapabilityProvider(providerWith({ storyboard }), {
+      route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false,
+    });
+    await expect(provider.storyboard!('abcdefghijk')).rejects.toThrow('unavailable');
+    expect(storyboard).not.toHaveBeenCalled();
+  });
 });
 
-function classifierModel(output: unknown): MockLanguageModelV4 {
+function classifierModel(output: Record<string, unknown>): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doGenerate: async () => ({
-      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify(output) }],
+      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify({ useStoryboard: false, answerDetail: 'standard', ...output }) }],
       finishReason: { unified: 'tool-calls', raw: undefined },
       usage: {
         inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
@@ -224,8 +311,8 @@ function finalizingModel(): MockLanguageModelV4 {
         toolCallId: 'finalize-inspect',
         toolName: 'finalize_answer',
         input: JSON.stringify({
-          blocks: [{ text: 'Please clarify the requested aspect of the video.', evidenceIds: [] }],
-          intent: 'clarification',
+          blocks: [{ text: 'A supported finding from the video.', evidenceIds: ['ref_1'] }],
+          intent: 'inspect_video',
           confidence: 'low',
           citations: [],
           artifacts: [],

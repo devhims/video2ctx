@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const answerDetailSchema = z.enum(['standard', 'detailed']);
+
 export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_video']);
 
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
@@ -7,14 +9,22 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     route: z.literal('topic_research'),
     researchBreadth: z.enum(['focused', 'comparative']).optional(),
     searchQuery: z.string().trim().min(1).max(500).optional(),
+    useStoryboard: z.boolean().optional(),
+    answerDetail: answerDetailSchema.optional(),
   }),
   z.object({
     route: z.literal('inspect_video'),
     videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+    useStoryboard: z.boolean().optional(),
+    answerDetail: answerDetailSchema.optional(),
   }),
   z.object({
     route: z.literal('clarification'),
     question: z.string().trim().min(1).max(1_000),
+  }),
+  z.object({
+    route: z.literal('rejected'),
+    reason: z.string().trim().min(1).max(1_000),
   }),
 ]);
 
@@ -131,7 +141,7 @@ export const agentCitationSchema = z.object({
 
 export const finalizeAnswerInputSchema = z.object({
   answer: z.string().min(1).max(20_000),
-  intent: z.enum(['topic_research', 'inspect_video', 'clarification']),
+  intent: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),
   citations: z.array(citationReferenceSchema).max(50),
   artifacts: z.array(agentArtifactSchema).max(20).default([]),
@@ -144,7 +154,7 @@ export const agentTurnResultSchema = z.object({
   userMessageId: z.string().uuid(),
   assistantMessageId: z.string().uuid(),
   answer: z.string(),
-  intent: z.enum(['topic_research', 'inspect_video', 'clarification']),
+  intent: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),
   citations: z.array(agentCitationSchema),
   artifacts: z.array(agentArtifactSchema),

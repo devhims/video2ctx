@@ -716,7 +716,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, and needs_clarification; completed describes execution, not evidence quality.",
+            "description": "Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, needs_clarification, and rejected; completed describes execution, not evidence quality or scope acceptance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6384,9 +6384,10 @@
                   "answered",
                   "partial",
                   "insufficient_evidence",
-                  "needs_clarification"
+                  "needs_clarification",
+                  "rejected"
                 ],
-                "description": "Answer availability based on clarification intent and persisted evidence warnings. This is not a factual-confidence score."
+                "description": "Answer availability based on routing intent and persisted evidence warnings. Rejected means outside supported YouTube video research and synthesis. This is not a factual-confidence score."
               },
               "answer": {
                 "type": "string"
@@ -6619,6 +6620,16 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 500
+                      },
+                      "useStoryboard": {
+                        "type": "boolean"
+                      },
+                      "answerDetail": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "detailed"
+                        ]
                       }
                     },
                     "required": [
@@ -6638,6 +6649,16 @@
                       "videoId": {
                         "type": "string",
                         "pattern": "^[A-Za-z0-9_-]{11}$"
+                      },
+                      "useStoryboard": {
+                        "type": "boolean"
+                      },
+                      "answerDetail": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "detailed"
+                        ]
                       }
                     },
                     "required": [
@@ -6664,6 +6685,27 @@
                     "required": [
                       "route",
                       "question"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "route": {
+                        "type": "string",
+                        "enum": [
+                          "rejected"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "route",
+                      "reason"
                     ],
                     "additionalProperties": false
                   }
@@ -6916,6 +6958,28 @@
             "properties": {
               "route": {
                 "const": "topic_research"
+              },
+              "researchBreadth": {
+                "type": "string",
+                "enum": [
+                  "focused",
+                  "comparative"
+                ]
+              },
+              "searchQuery": {
+                "type": "string"
+              },
+              "useStoryboard": {
+                "type": "boolean",
+                "description": "Classifier selection of visual evidence access. Absent on legacy routes."
+              },
+              "answerDetail": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "detailed"
+                ],
+                "description": "Classifier selection of the output budget. Legacy routes default to standard."
               }
             }
           },
@@ -6931,6 +6995,18 @@
               },
               "videoId": {
                 "type": "string"
+              },
+              "useStoryboard": {
+                "type": "boolean",
+                "description": "Classifier selection of visual evidence access. Absent on legacy routes."
+              },
+              "answerDetail": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "detailed"
+                ],
+                "description": "Classifier selection of the output budget. Legacy routes default to standard."
               }
             }
           },
@@ -6945,6 +7021,21 @@
                 "const": "clarification"
               },
               "question": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "route",
+              "reason"
+            ],
+            "properties": {
+              "route": {
+                "const": "rejected"
+              },
+              "reason": {
                 "type": "string"
               }
             }
@@ -7038,7 +7129,8 @@
             "enum": [
               "topic_research",
               "inspect_video",
-              "clarification"
+              "clarification",
+              "rejected"
             ]
           },
           "confidence": {
