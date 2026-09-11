@@ -264,3 +264,72 @@ test('revoking access removes the remembered session list', async ({ page, conte
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
 });
+
+for (const newSession of [true, false]) {
+  test(`renders ${newSession ? 'new-session' : 'follow-up'} message before admission and reconciles without duplicates`, async ({ page, context }, testInfo) => {
+    await login(context, 'allowed');
+    await page.goto(newSession ? '/dashboard/sessions' : `/dashboard/sessions/${sessionId}`);
+    const composer = page.getByRole('textbox', { name: newSession ? 'Start a new session' : 'Follow-up message' });
+    await expect(composer).toBeVisible();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let posts = 0;
+    await page.route('**/api/platform/v1/agent?*', async route => { posts++; await held; await route.continue(); });
+    const text = `Immediate ${newSession ? 'new session' : 'follow-up'} message`;
+    await composer.fill(text);
+    await expect(page.getByRole('button', { name: newSession ? 'Start session' : 'Send follow-up', exact: true })).toBeEnabled();
+    await composer.press('Enter');
+    try {
+      const bubble = page.locator('.agent-user-message').filter({ hasText: text });
+      await expect(bubble).toBeVisible({ timeout: 1500 });
+      await expect(bubble).toBeFocused();
+      await expect(bubble.getByRole('status')).toHaveText('Sending…');
+      await expect(composer).toHaveValue('');
+      await expect(page.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+      await composer.press('Enter');
+      expect(posts).toBe(1);
+      await page.screenshot({ path: testInfo.outputPath('optimistic-message.png') });
+    } finally { release(); }
+    await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+    await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+    await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+    expect(posts).toBe(1);
+  });
+}
+
+test('failed delivery removes the optimistic message, announces the error and restores the exact draft', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const composer = page.getByRole('textbox', { name: 'Start a new session' });
+  const draft = '  Preserve this message\nwith its original formatting.  ';
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent?*', async route => { await held; await route.fulfill({ status: 422, json: {} }); });
+  await composer.fill(draft);
+  await composer.press('Enter');
+  try { await expect(page.locator('.agent-pending-message')).toBeVisible(); }
+  finally { release(); }
+  await expect(page.locator('.agent-composer').getByRole('alert')).toContainText('This message could not be accepted');
+  await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+  await expect(composer).toHaveValue(draft);
+  await expect(composer).toBeEditable();
+  await expect(composer).toBeFocused();
+});
+
+test('keeps an admitted new message visible while session history is still loading', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent/sessions/*?*', async route => { await held; await route.continue(); });
+  const text = 'Keep my new message visible during navigation';
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill(text);
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  try {
+    await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
+    await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+    await expect(page.locator('.agent-user-message').filter({ hasText: text })).toBeVisible();
+    await expect(page.getByRole('status', { name: 'Loading session' })).toHaveCount(0);
+  } finally { release(); }
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
@@ -57,24 +57,26 @@ export default function SessionsClient({ sessionId }: { sessionId?: string }) {
   const { agentAccess } = useDashboardSession();
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
     {!agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
-      : sessionId ? <SessionHistory sessionId={sessionId} /> : <SessionList />}
+      : sessionId ? <SessionHistory key={sessionId} sessionId={sessionId} /> : <SessionList />}
   </section>;
 }
 
 function SessionList() {
   const router = useRouter();
+  const [pendingMessage, showPendingMessage] = useOptimistic<PendingMessage | null>(null);
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState('');
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
   return <>
-    <header className='agent-welcome'><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>
-    <MessageComposer onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
-    <form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
+    {!pendingMessage && <header className='agent-welcome'><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>}
+    {pendingMessage && <div className='agent-messages'><PendingUserMessage message={pendingMessage} /></div>}
+    <MessageComposer onSendAction={showPendingMessage} onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
+    <div hidden={!!pendingMessage}><form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
       <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
       <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
     </form>
-    <SessionResults key={`${search}:${revision}`} search={search} />
+    <SessionResults key={`${search}:${revision}`} search={search} /></div>
   </>;
 }
 
@@ -122,7 +124,8 @@ function SessionResults({ search }: { search: string }) {
 function SessionHistory({ sessionId }: { sessionId: string }) {
   const cache = useAgentSessionCache();
   const messagesRef = useRef<HTMLDivElement>(null);
-  const [session, setSession] = useState<AgentSessionDetail>();
+  const [pendingMessage, showPendingMessage] = useOptimistic<PendingMessage | null>(null);
+  const [session, setSession] = useState<AgentSessionDetail | undefined>(() => cache.readSessionPreview(sessionId));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -186,9 +189,10 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
       {session?.messages.map(message => message.role === 'user'
         ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
         : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} initiallyOpen={message.runId === session.lastRunId} onProgress={onProgress} />)}
+      {pendingMessage && <PendingUserMessage message={pendingMessage} />}
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
-    {session && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting}
+    {session && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting} onSendAction={showPendingMessage}
       disabled={loading || session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
   </>;
 }
@@ -238,34 +242,58 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   </article>;
 }
 
-function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending }: {
-  sessionId?: string; disabled?: boolean; onSending?: (sending: boolean) => void; onAdmitted: (receipt: AgentAdmission, message: string) => void;
+interface PendingMessage { key: string; message: string }
+
+function PendingUserMessage({ message }: { message: PendingMessage }) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    ref.current?.focus({ preventScroll: true });
+  }, [message.key]);
+  return <article ref={ref} className='agent-message agent-user-message agent-pending-message' tabIndex={-1} aria-label='Your message'>
+    <header><strong>You</strong><span className='agent-delivery-status' role='status'>Sending…</span></header>
+    <div className='agent-answer'>{message.message}</div>
+  </article>;
+}
+
+function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, onSendAction }: {
+  sessionId?: string; disabled?: boolean; onSending?: (sending: boolean) => void;
+  onSendAction: (message: PendingMessage) => void; onAdmitted: (receipt: AgentAdmission, message: string) => void;
 }) {
   const cache = useAgentSessionCache();
   const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
+  const [sending, startTransition] = useTransition();
   const [error, setError] = useState('');
   const [uncertain, setUncertain] = useState(false);
-  const attempt = useRef<{ message: string; key: string } | null>(null);
-  const submit = async (event: FormEvent) => {
+  const inFlight = useRef(false);
+  const attempt = useRef<(PendingMessage & { draft: string }) | null>(null);
+  const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (disabled || sending || !draft.trim()) return;
+    if (disabled || inFlight.current || sending || !draft.trim()) return;
     // Keep the exact body and key when admission may have succeeded upstream.
-    const request = attempt.current ?? { message: draft.trim(), key: crypto.randomUUID() };
+    const request = attempt.current ?? { message: draft.trim(), draft, key: crypto.randomUUID() };
     attempt.current = request;
-    setSending(true); onSending?.(true); setError('');
-    try {
-      const receipt = await sendAgentMessage(request.message, request.key, sessionId);
-      cache.recordAdmission(receipt, request.message);
-      onAdmitted(receipt, request.message);
-      setDraft(''); attempt.current = null; setUncertain(false);
-    } catch (cause) {
-      const retryable = cause instanceof AgentSendError && cause.retryable;
-      setError(errorMessage(cause)); setUncertain(retryable);
-      if (!retryable) attempt.current = null;
-    } finally { setSending(false); onSending?.(false); }
+    inFlight.current = true;
+    setDraft(''); setError(''); onSending?.(true);
+    startTransition(async () => {
+      onSendAction(request);
+      try {
+        const receipt = await sendAgentMessage(request.message, request.key, sessionId);
+        // Commit the server messages and remove the optimistic message together.
+        startTransition(() => {
+          cache.recordAdmission(receipt, request.message);
+          onAdmitted(receipt, request.message);
+        });
+        attempt.current = null; setUncertain(false);
+      } catch (cause) {
+        const retryable = cause instanceof AgentSendError && cause.retryable;
+        setDraft(request.draft);
+        setError(errorMessage(cause)); setUncertain(retryable);
+        if (!retryable) attempt.current = null;
+      } finally { inFlight.current = false; onSending?.(false); }
+    });
   };
-  return <AgentPromptBar value={draft} onChange={setDraft} onSubmit={event => void submit(event)}
+  return <AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
     label={sessionId ? 'Follow-up message' : 'Start a new session'}
     sendLabel={sending ? 'Sending…' : uncertain ? 'Retry sending' : sessionId ? 'Send follow-up' : 'Start session'}
     disabled={disabled} sending={sending} uncertain={uncertain} error={error} />;
