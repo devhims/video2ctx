@@ -1602,6 +1602,7 @@
         ],
         "operationId": "getVideo",
         "summary": "Inspect a video",
+        "description": "Bot challenges retry an alternate processor and are not cached as successful metadata. If refresh fails, previously successful metadata can be returned with freshness.state=stale and its original freshness.fetchedAt timestamp. Without usable cached metadata, upstream bot challenges return 503 UNAVAILABLE. Private and age-restricted video responses retain their availability metadata.",
         "security": [
           {
             "bearerApiKey": []
@@ -1678,6 +1679,16 @@
           },
           "500": {
             "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "description": "YouTube metadata is temporarily unavailable and no usable cached metadata exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-video2ctx-audience": "consumer"

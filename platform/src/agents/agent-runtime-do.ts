@@ -43,6 +43,7 @@ import {
   type AgentRequest,
 } from './contracts';
 import { buildAgentTurnResult } from './finalizer';
+import { metadataForConversation, evidenceWithConversationMetadata } from './runtime/conversation-metadata';
 import { AGENT_MODEL_ID, estimateAgentModelCostMicros } from './model';
 import { normalizeAgentExecutionError } from './runtime/agent-errors';
 import {
@@ -389,7 +390,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           SELECT COUNT(*) AS count FROM agent_tool_calls
           WHERE run_id = ${runId} AND tool_name = 'search_youtube'
         `[0]?.count ?? 0) > 0,
-        recoveredEvidence: this.readEvidencePackets(runId),
+        recoveredEvidence: evidenceWithConversationMetadata(this.readEvidencePackets(runId), conversationHistory),
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         modelBudget,
         modelCallPrefix,
@@ -573,7 +574,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       conversationId: run.conversation_id,
       userMessageId: run.user_message_id,
       assistantMessageId: run.assistant_message_id,
-    }, admission, parsedInput, this.readEvidencePackets(runId), creditsCharged);
+    }, admission, parsedInput,
+    evidenceWithConversationMetadata(this.readEvidencePackets(runId), this.readConversationHistory(run)), creditsCharged);
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();
     this.sql`
@@ -796,15 +798,22 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       `[0];
       if (!parent || parent.status !== 'completed' || !parent.result_json) return undefined;
       const result = agentTurnResultSchema.parse(JSON.parse(parent.result_json));
+      const metadata = metadataForConversation(this.sql<{ packet_json: string; created_at: number }>`
+        SELECT packet_json, created_at FROM agent_evidence_packets
+        WHERE run_id = ${parent.id} AND json_extract(packet_json, '$.kind') = 'youtube_video'
+        ORDER BY created_at ASC, packet_id ASC
+      `.map(record => ({ packet: evidencePacketSchema.parse(JSON.parse(record.packet_json)), recordedAt: record.created_at })));
       return {
         userMessageId: parent.user_message_id,
         assistantMessageId: parent.assistant_message_id,
         parentMessageId: parent.parent_message_id,
         user: parent.execution_message ?? parent.message,
         assistant: result.answer,
+        ...(metadata.length ? { metadata } : {}),
         resourceIds: [...new Set([
           ...extractYouTubeVideoIds(parent.execution_message ?? parent.message),
           ...result.citations.flatMap((citation) => citation.videoId ? [citation.videoId] : []),
+          ...metadata.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])),
         ])],
       } satisfies LinkedConversationTurn;
     });

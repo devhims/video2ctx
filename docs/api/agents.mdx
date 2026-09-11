@@ -42,6 +42,10 @@ existing conversation history. The composer waits for the active run to finish.
 Admission retries reuse the same message and idempotency key when the outcome is
 uncertain.
 
+Follow-up memory includes source-linked video metadata from completed ancestor turns, even when the earlier answer did not mention it. Snapshots can include the title, channel, view count, duration, availability, caption status, and keywords. Memory keeps up to eight videos and 8,000 serialized metadata characters per turn, within the existing eight-turn and 64,000-character model-memory limits. It excludes bot challenges and private provider payloads, and stays within the selected session branch.
+
+Remembered metadata remains historical. The agent can cite it without repeating the provider operation or its evidence charge, or request a refresh when current data is needed. A successful current-run lookup supersedes the remembered snapshot for that video. If refresh fails, the earlier value remains available with its timestamp. Older runs that did not store a fetch time use the evidence recording time, explicitly labeled as such. Metadata reuse does not count as new transcript coverage.
+
 To watch an admitted run, request:
 
 ```http

@@ -11,8 +11,25 @@ import { executeGetVideoComments } from '../src/agents/providers/youtube/tools/g
 import { executeGetVideoTracks } from '../src/agents/providers/youtube/tools/get-video-tracks';
 import { executeGetVideo } from '../src/agents/providers/youtube/tools/get-video';
 import { discoverInitialEvidence } from '../src/agents/research/initial-discovery';
+import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
 
 describe('YouTube agent provider-operation tools', () => {
+  it('keeps an exact stale view count and its observation time visible to the model', async () => {
+    const provider: YouTubeAgentProvider = providerFixture();
+    const original = await provider.video('abcdefghijk');
+    const fetchedAt = Date.parse('2026-09-11T12:20:00.000Z');
+    provider.video = async () => ({ cacheStatus: 'stale', value: {
+      ...original.value, description: 'Long description. '.repeat(500), viewCount: 404433, viewCountText: '404K views',
+      freshness: { state: 'stale', fetchedAt, reason: 'UPSTREAM_UNAVAILABLE' },
+    } });
+    const packet = await executeGetVideo({ videoId: 'abcdefghijk' }, toolContext(provider), 'stale-video');
+    const model = evidencePacketForModel(packet);
+    expect(model.excerpts?.[0]?.text).toContain('404433');
+    expect(model.excerpts?.[0]?.text).toContain('2026-09-11T12:20:00.000Z');
+    expect(model.warnings).toContainEqual(expect.objectContaining({ code: 'STALE_VIDEO_METADATA' }));
+    expect(packet.artifacts[0]?.data.freshness).toMatchObject({ state: 'stale', fetchedAt });
+  });
+
   it('resolves channel identity before reading its catalog and searching with its canonical ID', async () => {
     const provider: YouTubeAgentProvider = providerFixture();
     provider.search = vi.fn<YouTubeAgentProvider['search']>(async (_query, filters) => {

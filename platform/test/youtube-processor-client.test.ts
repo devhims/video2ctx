@@ -29,6 +29,39 @@ function environment(responses: Array<Response | Error>): { env: Env; requested:
 }
 
 describe('YouTube processor client', () => {
+  const blockedVideo = {
+    id: 'abcdefghijk',
+    availability: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' },
+    meta: { partial: true },
+  };
+
+  test('retries bot-challenged metadata on the other processor', async () => {
+    const { env, requested } = environment([
+      Response.json({ value: blockedVideo }),
+      Response.json({ value: { id: 'abcdefghijk', viewCount: 404433 } }),
+    ]);
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' }))
+      .resolves.toMatchObject({ viewCount: 404433 });
+    expect(requested).toHaveLength(2);
+    expect(requested[0]).not.toBe(requested[1]);
+  });
+
+  test('reports upstream unavailability when every metadata processor hits a bot challenge', async () => {
+    const { env, requested } = environment([
+      Response.json({ value: blockedVideo }), Response.json({ value: blockedVideo }),
+    ]);
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' }))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', status: 503, retryable: true });
+    expect(requested).toHaveLength(2);
+  });
+
+  test.each(['This is a private video', 'Sign in to confirm your age'])('preserves real video restrictions: %s', async (reason) => {
+    const value = { ...blockedVideo, availability: { status: 'LOGIN_REQUIRED', reason } };
+    const { env, requested } = environment([Response.json({ value })]);
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' })).resolves.toEqual(value);
+    expect(requested).toHaveLength(1);
+  });
+
   test('starts from the selected random slot and orders every fallback once', () => {
     expect(processorSlotOrder(4, 2)).toEqual([2, 3, 0, 1]);
     expect(processorSlotOrder(2, 1)).toEqual([1, 0]);

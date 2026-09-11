@@ -1,4 +1,4 @@
-import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
+import { readYouTubeCacheEntry, YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import type { YouTubeOperation } from '../src/lib/youtube-processor-client';
 
 const request = {
@@ -13,6 +13,40 @@ function environment(cache: { get: ReturnType<typeof vi.fn>; put: ReturnType<typ
 }
 
 describe('YouTube cache coordinator', () => {
+  const blocked = {
+    id: 'abcdefghijk', availability: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' },
+    meta: { partial: true },
+  };
+
+  test('preserves the last good metadata and its timestamp when refresh returns a bot challenge', async () => {
+    const fetchedAt = Date.now() - 120_000;
+    const value = { id: 'abcdefghijk', viewCount: 404433 };
+    const cache = { get: vi.fn(async () => ({ version: 1, value, fetchedAt, freshUntil: Date.now() - 60_000 })), put: vi.fn() };
+    const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), async () => blocked);
+    await expect(coordinator.getOrLoad(request)).resolves.toMatchObject({ ok: true, cacheStatus: 'stale', value, fetchedAt });
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  test('does not cache bot challenges when there is no usable metadata', async () => {
+    const cache = { get: vi.fn(async () => null), put: vi.fn() };
+    const loader = vi.fn(async () => blocked);
+    const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), loader);
+    for (let index = 0; index < 2; index++) {
+      await expect(coordinator.getOrLoad(request)).resolves.toMatchObject({ ok: false, error: { code: 'UNAVAILABLE', retryable: true } });
+    }
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  test.each([60_000, -60_000])('ignores previously cached bot challenges with freshness offset %i', async (offset) => {
+    const cache = { get: vi.fn(async () => ({ version: 1, value: blocked, fetchedAt: Date.now() - 1000, freshUntil: Date.now() + offset })), put: vi.fn() };
+    await expect(readYouTubeCacheEntry(environment(cache), request.cacheKey, 'video')).resolves.toBeNull();
+    const loader = vi.fn(async () => ({ id: 'abcdefghijk', viewCount: 404434 }));
+    const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), loader);
+    await expect(coordinator.getOrLoad(request)).resolves.toMatchObject({ ok: true, cacheStatus: 'miss', value: { viewCount: 404434 } });
+    expect(loader).toHaveBeenCalledOnce();
+  });
+
   test('coalesces simultaneous misses into one upstream operation', async () => {
     let complete: ((value: unknown) => void) | undefined;
     const loader = vi.fn(() => new Promise<unknown>((resolve) => { complete = resolve; }));
