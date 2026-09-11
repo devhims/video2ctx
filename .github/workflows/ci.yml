@@ -75,6 +75,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run CLI and browser auth E2E
         run: npm --prefix .. run test:auth:e2e
+      - name: Run agent dashboard E2E
+        run: npm run test:agent:dashboard
 
   web:
     name: Web

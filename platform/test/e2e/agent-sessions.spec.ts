@@ -1,5 +1,80 @@
 import { expect, test } from '@playwright/test';
 
+test('session loading uses one compact placeholder and dashboard headers scroll away', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => { await pending; await route.continue(); });
+  try {
+    await page.goto(`/dashboard/sessions/${sessionId}`);
+    await expect(page.getByRole('status', { name: 'Loading session' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Loading session…' })).toHaveCount(0);
+    await expect(page.getByText('Loading messages…')).toHaveCount(0);
+    await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+    await page.screenshot({ path: testInfo.outputPath('session-loading.png') });
+  } finally { release(); }
+  await expect(page.locator('.agent-markdown').first()).toBeVisible();
+  await page.goto('/dashboard/developer');
+  await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+  await page.goto('/dashboard?section=monitors');
+  await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+});
+
+test('returning to all sessions shows the remembered list without waiting for another fetch', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
+  await expect(title).toBeVisible();
+  const header = (await page.locator('.topbar').boundingBox())!;
+  const welcome = (await page.getByRole('heading', { name: 'What would you like to learn?' }).boundingBox())!;
+  expect(welcome.y - header.y - header.height).toBeLessThan(55);
+  await expect(page.locator('.agent-welcome-mark')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('recent-sessions.png') });
+  await page.getByRole('link', { name: /Fable and Astra: key takeaways/ }).click();
+  await expect(page.getByRole('link', { name: 'All sessions', exact: true })).toBeVisible();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent/sessions?*', async route => { await pending; await route.continue(); });
+  try {
+    await page.getByRole('link', { name: 'All sessions', exact: true }).click();
+    await expect(title).toBeVisible({ timeout: 1500 });
+  } finally { release(); }
+});
+
+test('new follow-ups receive focus and saved answers keep full Markdown styling', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill('Summarise a YouTube video for the scroll check.');
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  await expect(page.locator('.agent-user-message').last()).toBeFocused();
+  await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  await composer.fill('Explain the evidence for this conclusion.');
+  await composer.press('Enter');
+  const latestUser = page.locator('.agent-user-message').last();
+  await expect(latestUser).toContainText('Explain the evidence for this conclusion.');
+  await expect(latestUser).toBeFocused();
+  await expect(latestUser).toBeInViewport();
+  const userBounds = (await latestUser.boundingBox())!;
+  const dockBounds = (await page.locator('.agent-composer-dock').boundingBox())!;
+  expect(userBounds.y).toBeGreaterThanOrEqual(0);
+  expect(userBounds.y + userBounds.height).toBeLessThanOrEqual(dockBounds.y);
+  await composer.focus();
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-status')).toHaveText('completed');
+  await expect(composer).toBeFocused();
+  await page.reload();
+  const older = page.locator('.agent-assistant-message').first();
+  const latest = page.locator('.agent-assistant-message').last();
+  await expect(older.locator('.agent-markdown')).toBeVisible();
+  await expect(older.locator('.agent-answer-preview')).toHaveCount(0);
+  await expect(latest.locator('.agent-markdown')).toBeVisible();
+  for (const property of ['font-size', 'color', 'line-height']) {
+    const actual = await page.evaluate<string>(`getComputedStyle(document.querySelector('.agent-assistant-message:last-child .agent-markdown')).getPropertyValue('${property}')`);
+    await expect(older.locator('.agent-markdown')).toHaveCSS(property, actual);
+  }
+  await page.screenshot({ path: testInfo.outputPath('consistent-answers.png'), fullPage: true });
+});
+
 const sessionId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
 async function login(context: import('@playwright/test').BrowserContext, role: string) {
   await context.addCookies([{ name: 'agent-ui', value: role, domain: '127.0.0.1', path: '/' }]);
@@ -155,8 +230,8 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   })}\n\n` }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   await expect(page.getByRole('heading', { name: 'What the video shows' })).toBeVisible();
-  await expect(page.locator('.agent-markdown strong')).toHaveText('Fable for coding');
-  await expect(page.locator('.agent-markdown > ul')).toHaveCSS('list-style-type', 'disc');
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown strong')).toHaveText('Fable for coding');
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown > ul')).toHaveCSS('list-style-type', 'disc');
   await expect(page.getByRole('table')).toContainText('Refinement');
   await expect(page.getByRole('link', { name: 'Watch the video' })).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('link', { name: 'Unsafe link' })).toHaveCount(0);
@@ -176,4 +251,16 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   const navigationBounds = (await page.getByRole('navigation', { name: 'Dashboard navigation' }).boundingBox())!;
   expect(sendBounds.y + sendBounds.height).toBeLessThan(navigationBounds.y);
   await page.screenshot({ path: testInfo.outputPath('markdown-mobile.png') });
+});
+
+
+test('revoking access removes the remembered session list', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 403, json: { enabled: false } }));
+  await page.evaluate("window.dispatchEvent(new Event('focus'))");
+  await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
 });

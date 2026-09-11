@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
+import { useAgentSessionCache } from './AgentSessionCache';
+import { SessionLoading } from './SessionLoading';
 import type { DashboardProject } from '../../../lib/dashboard-data';
 import { useRouter } from 'next/navigation';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -15,7 +17,7 @@ import {
   type AgentSessionList, type AgentSessionDetail, type AgentMessage, type AgentAdmission, type AgentProgress,
 } from '../../../lib/agent-sessions';
 
-export default function SessionsClient({ sessionId }: { sessionId?: string }) {
+export function AgentShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, agentAccess, signOut } = useDashboardSession();
   const [projects, setProjects] = useState<DashboardProject[]>([]);
@@ -45,13 +47,18 @@ export default function SessionsClient({ sessionId }: { sessionId?: string }) {
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
-      <header className='topbar'><div><span className='topbar-context'>Research workspace</span><h1>Agent</h1></div><Link href='/dashboard/sessions' className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></header>
-      <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
-        {!agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
-          : sessionId ? <SessionHistory sessionId={sessionId} /> : <SessionList />}
-      </section>
+      <header className='topbar'><div><span className='topbar-context'>Research workspace</span><h1>Agent</h1></div><Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></header>
+      {children}
     </div>
   </main>;
+}
+
+export default function SessionsClient({ sessionId }: { sessionId?: string }) {
+  const { agentAccess } = useDashboardSession();
+  return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
+    {!agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
+      : sessionId ? <SessionHistory sessionId={sessionId} /> : <SessionList />}
+  </section>;
 }
 
 function SessionList() {
@@ -61,7 +68,7 @@ function SessionList() {
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
   return <>
-    <header className='agent-welcome'><div className='agent-welcome-mark'><YoutubeLogoIcon size={24} aria-hidden='true' /></div><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>
+    <header className='agent-welcome'><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>
     <MessageComposer onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
     <form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
       <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
@@ -72,25 +79,28 @@ function SessionList() {
 }
 
 function SessionResults({ search }: { search: string }) {
-  const [page, setPage] = useState<AgentSessionList>({ sessions: [], nextCursor: null });
+  const cache = useAgentSessionCache();
+  const [page, setPage] = useState<AgentSessionList>(() => cache.readList(search) ?? { sessions: [], nextCursor: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useEffect(() => {
-    const controller = new AbortController();
+    let cancelled = false;
     setLoading(true); setError('');
-    void fetchAgentData(`/sessions?${new URLSearchParams({ q: search, limit: '20' })}`, agentSessionListSchema, controller.signal)
-      .then(setPage).catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [search, revision]);
+    void cache.loadList(search, revision > 0)
+      .then(page => { if (!cancelled) setPage(page); })
+      .catch(cause => { if (!cancelled) setError(errorMessage(cause)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [cache, search, revision]);
 
   const loadMore = async () => {
     if (!page.nextCursor || loading) return;
     setLoading(true); setError('');
     try {
       const next = await fetchAgentData(`/sessions?${new URLSearchParams({ q: search, limit: '20', cursor: page.nextCursor })}`, agentSessionListSchema);
-      setPage(previous => ({ ...next, sessions: [...new Map([...previous.sessions, ...next.sessions].map(session => [session.sessionId, session])).values()] }));
+      const merged = { ...next, sessions: [...new Map([...page.sessions, ...next.sessions].map(session => [session.sessionId, session])).values()] };
+      setPage(merged); cache.saveList(search, merged);
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setLoading(false); }
   };
@@ -104,12 +114,14 @@ function SessionResults({ search }: { search: string }) {
       </Link>)}
       {!page.sessions.length && !loading && !error && <div className='agent-empty'><h3>{search ? 'No matching sessions' : 'No sessions yet'}</h3><p>{search ? 'Try another topic or clear your search.' : 'Start a session above. Requests from the API also appear here.'}</p></div>}
     </div>
-    {loading && <div className='agent-loading' role='status'><span className='sr-only'>Loading sessions…</span><span /><span /><span /></div>}
+    {loading && !page.sessions.length && <div className='agent-loading' role='status'><span className='sr-only'>Loading sessions…</span><span /><span /><span /></div>}
     {page.nextCursor && <button className='agent-load-more' disabled={loading} onClick={() => void loadMore()}>Load more sessions</button>}
   </>;
 }
 
 function SessionHistory({ sessionId }: { sessionId: string }) {
+  const cache = useAgentSessionCache();
+  const messagesRef = useRef<HTMLDivElement>(null);
   const [session, setSession] = useState<AgentSessionDetail>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -139,6 +151,20 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     return () => controller.abort();
   }, [sessionId, revision]);
 
+  useEffect(() => {
+    const messageId = cache.pendingFocus(sessionId);
+    if (!messageId) return;
+    const element = messagesRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+    if (!element) return;
+    const frame = requestAnimationFrame(() => {
+      // Scroll synchronously with focus so incoming snapshots cannot restart an animation.
+      element.scrollIntoView({ block: 'start', behavior: 'instant' });
+      element.focus({ preventScroll: true });
+      cache.clearFocus(sessionId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [cache, sessionId, session?.messages]);
+
   const loadOlder = async () => {
     if (!session?.nextCursor || olderLoading) return;
     setOlderLoading(true); setError('');
@@ -149,16 +175,16 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     finally { setOlderLoading(false); }
   };
   return <>
-    <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions'><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
+    <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
       <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
-    <header className='agent-heading'><div><h2>{session?.title ?? 'Loading session…'}</h2>
-      <details className='agent-session-info'><summary>Session details</summary><p className='agent-id'>Session ID: {sessionId}</p></details></div></header>
+    {session && <header className='agent-heading'><div><h2>{session.title}</h2>
+      <details className='agent-session-info'><summary>Session details</summary><p className='agent-id'>Session ID: {sessionId}</p></details></div></header>}
     {error && <p className='alert error' role='alert'>{error}</p>}
-    {loading && <p role='status'>Loading messages…</p>}
+    {loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}
-    <div className='agent-messages' aria-busy={loading}>
+    <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {session?.messages.map(message => message.role === 'user'
-        ? <article className='agent-message agent-user-message' key={message.messageId}><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
+        ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
         : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} initiallyOpen={message.runId === session.lastRunId} onProgress={onProgress} />)}
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
@@ -170,7 +196,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
 function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   sessionId: string; message: AgentMessage; initiallyOpen: boolean; onProgress: (progress: AgentProgress) => void;
 }) {
-  const [open, setOpen] = useState(initiallyOpen);
+  const [open, setOpen] = useState(initiallyOpen || !message.content);
   const [progress, setProgress] = useState<AgentProgress>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -189,11 +215,11 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   const result = run?.result;
   return <article className='agent-message agent-assistant-message'>
     <header><span className='agent-avatar'><YoutubeLogoIcon size={17} aria-hidden='true' /></span><strong>Agent</strong><span className={`agent-status status-${status}`}>{status}</span><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time></header>
-    {!open && <button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View answer and sources <CaretRightIcon size={13} aria-hidden='true' /></button>}
-    {!open && <p className='agent-answer-preview'>{message.content.replace(/\[cite:[^\]]+\]/g, '') || (isActiveAgentRun(status) ? 'This run is still in progress.' : 'Open this run to view its result.')}</p>}
+    {!open && <><AgentMarkdown>{message.content}</AgentMarkdown><button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View sources and tool activity <CaretRightIcon size={13} aria-hidden='true' /></button></>}
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
-      {!run && !error && <p role='status'>Loading answer…</p>}
+      {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
+      {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{phaseLabel(progress?.phase)}</p>}
       {progress && <ToolTrace tools={progress.tools} />}
       {run?.error && <div className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
@@ -215,6 +241,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
 function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending }: {
   sessionId?: string; disabled?: boolean; onSending?: (sending: boolean) => void; onAdmitted: (receipt: AgentAdmission, message: string) => void;
 }) {
+  const cache = useAgentSessionCache();
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -229,6 +256,7 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending }:
     setSending(true); onSending?.(true); setError('');
     try {
       const receipt = await sendAgentMessage(request.message, request.key, sessionId);
+      cache.recordAdmission(receipt, request.message);
       onAdmitted(receipt, request.message);
       setDraft(''); attempt.current = null; setUncertain(false);
     } catch (cause) {

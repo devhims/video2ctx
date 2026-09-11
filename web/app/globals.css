@@ -3700,3 +3700,6 @@ html:has(.developer-page) body {
     grid-row: auto;
   }
 }
+
+/* Dashboard page headers scroll with their content. Homepage navigation is separate. */
+.workspace-shell .topbar { position: static; top: auto; z-index: auto; }

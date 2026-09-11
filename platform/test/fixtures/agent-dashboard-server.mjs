@@ -7,7 +7,7 @@ const activeId = 'cd056140-7d4c-4516-bb9e-c97914439553';
 const stamp = 1789111800000;
 const summary = { sessionId, title: 'Fable and Astra: key takeaways', latestMessagePreview: 'Summarise the key takeaways from this video.', lastRunId: sessionId, runCount: 2, createdAt: stamp, updatedAt: stamp };
 const summaries = [summary, { ...summary, sessionId: failedId, title: 'A comparison that failed', lastRunId: failedId, runCount: 1 }, { ...summary, sessionId: activeId, title: 'Research in progress', lastRunId: activeId, runCount: 1 }];
-const message = (role, turn, id, status = 'completed') => ({ messageId: role === 'user' ? (turn === 1 ? '8a8671bd-5387-43dc-9031-65a69af2a40e' : otherId) : id, runId: id, conversationTurn: turn, parentMessageId: role === 'user' ? null : otherId, role, status, content: role === 'user' ? 'Summarise the key takeaways from this video.' : '', createdAt: stamp, updatedAt: stamp });
+const message = (role, turn, id, status = 'completed') => ({ messageId: role === 'user' ? (turn === 1 ? '8a8671bd-5387-43dc-9031-65a69af2a40e' : otherId) : id, runId: id, conversationTurn: turn, parentMessageId: role === 'user' ? null : otherId, role, status, content: role === 'user' ? 'Summarise the key takeaways from this video.' : status === 'completed' ? '## Saved video analysis\n\nThe speaker compares **Fable and Astra** using practical examples.\n\n- Compare the claims against the transcript.\n- Treat personal experience as anecdotal evidence. [1]' : '', createdAt: stamp, updatedAt: stamp });
 const success = id => ({ sessionId: id, runId: id, status: 'completed', request: { message: 'Summarise the key takeaways from this video.' }, result: { outcome: 'answered', answer: 'The speaker prefers Fable for coding and Astra for broader tasks. [1]\n\nUse Astra to prototype 3D scenes, then refine interactions with Fable. [1]', sources: [{ id: '1', title: 'Fable Vs Astra Debate Is Over', url: 'https://www.youtube.com/watch?v=P7bxbDSnZRM' }], warnings: [{ code: 'SOURCE_CAVEAT', message: 'These are the speaker’s experiences, not independent measurements.' }], coverage: { reviewedVideos: 1, targetVideos: 1 } }, billing: { creditsCharged: 2, creditsRemaining: 679 } });
 const turns = new Map();
 const admissions = new Map();
@@ -34,7 +34,7 @@ createServer(async (req, res) => {
       if (existing) return reply(202, existing.receipt);
       const id = input.sessionId ?? crypto.randomUUID(), runId = crypto.randomUUID();
       const receipt = { sessionId: id, runId, assistantMessageId: crypto.randomUUID(), status: 'pending',
-        diagnostics: { userMessageId: crypto.randomUUID(), conversationTurn: 3 } };
+        diagnostics: { userMessageId: crypto.randomUUID(), conversationTurn: 3 + [...turns.values()].filter(turn => turn.receipt.sessionId === id).length } };
       const turn = { receipt, message: input.message, connections: 0, completed: false };
       admissions.set(key, turn); turns.set(runId, turn);
       if (!summaries.some(row => row.sessionId === id)) summaries.push({ ...summary, sessionId: id, title: input.message, lastRunId: runId });
@@ -78,8 +78,8 @@ createServer(async (req, res) => {
       if (latestTurn && !older) {
         const { receipt, message: content, completed } = latestTurn;
         return reply(200, { ...current, lastRunId: receipt.runId, messages: [message('user', 2, detailId), message('assistant', 2, detailId),
-          { ...message('user', 3, receipt.runId), messageId: receipt.diagnostics.userMessageId, content },
-          { ...message('assistant', 3, receipt.runId, completed ? 'completed' : 'running'), messageId: receipt.assistantMessageId }], nextCursor: null });
+          { ...message('user', receipt.diagnostics.conversationTurn, receipt.runId), messageId: receipt.diagnostics.userMessageId, content },
+          { ...message('assistant', receipt.diagnostics.conversationTurn, receipt.runId, completed ? 'completed' : 'running'), messageId: receipt.assistantMessageId }], nextCursor: null });
       }
       return reply(200, { ...current, messages: older ? [{ ...message('user', 1, otherId), content: 'Earlier request in this session.' }, { ...message('assistant', 1, otherId), messageId: failedId }] : [message('user', 2, detailId), message('assistant', 2, detailId, status)], nextCursor: detailId === sessionId && !older ? 'older-message-fixture' : null });
     }
@@ -88,6 +88,9 @@ createServer(async (req, res) => {
     if (runId) return reply(200, success(runId));
   }
   if (url.pathname === '/v1/projects') return reply(200, { projects: [] });
+  if (url.pathname === '/v1/monitors') return reply(200, { monitors: [] });
+  if (url.pathname === '/v1/notifications') return reply(200, { notifications: [] });
+  if (url.pathname === '/v1/billing' || url.pathname === '/v1/notification-preferences') return reply(404, {});
   if (url.pathname === '/v1/usage') return reply(200, { creditBalance: 679 });
   return reply(200, {});
 }).listen(8797, '127.0.0.1', () => console.log('Agent dashboard fixture server ready'));
