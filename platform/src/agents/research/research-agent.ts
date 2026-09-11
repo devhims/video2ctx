@@ -1,3 +1,4 @@
+import { createFrameAnalyst } from '../providers/youtube/frame-analyst';
 import type { ClassificationDiagnostic } from './capability-router';
 import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research-plan';
@@ -160,6 +161,10 @@ export async function executeResearchRun(options: {
   const context: AgentToolContext = {
     runId: options.runId,
     provider,
+    analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
+      createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
+      options.modelBudget,
+    )(input),
     analyzeStoryboard: decision.useStoryboard === false ? undefined : (input) => createVisualAnalyst(
       createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
@@ -279,7 +284,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => name !== 'get_video_storyboard' || options.decision.useStoryboard !== false);
+    .filter(name => (name !== 'get_video_storyboard' && name !== 'get_video_frames') || options.decision.useStoryboard !== false);
   const evidence = new Map(
     evidenceWithConversationMetadata(options.recoveredEvidence ?? [], options.conversationHistory ?? [])
       .map((packet) => [packet.packetId, packet]),
@@ -354,6 +359,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       }
       : options.context.transcriptPolicy,
+    analyzeFrames: options.context.analyzeFrames ? (input) => analystLimiter.run(() => {
+      input.signal.throwIfAborted();
+      return options.context.analyzeFrames!(input);
+    }) : undefined,
     analyzeStoryboard: options.context.analyzeStoryboard ? (input) => analystLimiter.run(() => {
       input.signal.throwIfAborted();
       return options.context.analyzeStoryboard!(input);

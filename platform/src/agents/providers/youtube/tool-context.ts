@@ -1,3 +1,4 @@
+import type { FrameAnalyst } from './frame-analyst';
 import type { VisualAnalyst } from './visual-analyst';
 import type { AgentTurnResult, EvidenceOperation, EvidencePacket, FinalizeAnswerInput } from '../../contracts';
 import type { YouTubeAgentProvider } from './provider';
@@ -20,6 +21,7 @@ export interface EvidenceToolExecution {
 
 export interface AgentToolContext {
   analyzeStoryboard?: VisualAnalyst;
+  analyzeFrames?: FrameAnalyst;
   validateAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): void;
   runId: string;
   provider: YouTubeAgentProvider;

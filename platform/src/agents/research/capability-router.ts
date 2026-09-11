@@ -26,7 +26,7 @@ const classifierDecisionSchema = z.object({
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   question: capabilityRouteDecisionSchema.options[2].shape.question.optional().describe('Required for clarification: ask the user a concrete question that resolves the missing scope.'),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for rejected: explain why the task is unsupported. This does not replace question for clarification.'),
-  useStoryboard: z.boolean().optional().describe('Required for executable routes. True only when sampled visual evidence is needed to answer the request.'),
+  useStoryboard: z.boolean().optional().describe('Required for executable routes. Enables storyboard and individual-frame tools when visual evidence is needed to answer the request.'),
 }).superRefine((input, ctx) => {
   const required = input.route === 'topic_research' ? ['researchBreadth', 'searchQuery', 'researchVideoCount'] as const
     : input.route === 'inspect_video' ? ['videoId', 'researchVideoCount'] as const

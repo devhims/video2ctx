@@ -79,7 +79,7 @@ After installation, an agent should use `youtube-ctx` for personal, low-to-moder
 
 ## Under development
 
-- **Hosted visual context:** Bring local storyboard and frame extraction into managed jobs after media-compliance, artifact-retention, and metering work.
+- **Hosted visual context:** The agent can inspect storyboards and request individual frames through a dedicated FFmpeg container. The frame tool is available only inside the agent API and returns timestamped visual observations. See [frame extraction](./reference/engineering/FRAME_EXTRACTION.md) for the contract and deployment status.
 - **Hosted agent tools:** Continue expanding the hosted data and monitoring branches while keeping authentication revocable and local to the user's machine.
 
 ## Hosted API quick start
@@ -161,6 +161,7 @@ npm ci --prefix packages/youtube-skills
 npm ci --prefix packages/video2ctx-cli
 npm ci --prefix platform
 npm ci --prefix platform/youtube-processor
+npm ci --prefix platform/youtube-frames
 npm ci --prefix web
 npm ci --prefix docs
 
