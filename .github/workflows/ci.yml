@@ -67,8 +67,6 @@ jobs:
       - name: Verify published CLI package contents
         run: npm pack --dry-run
         working-directory: packages/video2ctx-cli
-      - name: Build local extraction dependency
-        run: npm ci --prefix ../packages/all-things-youtube && npm run build --prefix ../packages/all-things-youtube
       - name: Verify platform
         run: npm run verify
       - name: Install web dependencies for auth E2E

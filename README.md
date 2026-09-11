@@ -291,7 +291,7 @@ Common commands, run from the repository root:
 | `npm run build`                                           | Type-check/build the library, platform, and web application                                 |
 | `npm test`                                                | Run the library and complete platform test suites                                           |
 | `npm --prefix web test`                                   | Run web unit tests                                                                          |
-| `npm --prefix platform run verify`                        | Install processor dependencies, type-check the Worker, and run platform and processor tests |
+| `npm --prefix platform run verify`                        | Build the local extraction library, install processor dependencies, and verify the Worker and processor |
 | `npm --prefix platform run test:container`                | Run only the processor contract tests                                                       |
 | `npm --prefix packages/all-things-youtube run test:watch` | Run the library suite in watch mode                                                         |
 | `npm run test:skills`                                    | Test, type-check, and verify the private direct-skill source and committed bundles          |
