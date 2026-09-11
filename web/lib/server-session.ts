@@ -59,3 +59,24 @@ function getRequestOrigin(requestHeaders: Headers): string | undefined {
   const protocol = requestHeaders.get('x-forwarded-proto') ?? (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https');
   return `${protocol}://${host}`;
 }
+
+/** Ask the platform's actual agent gate. Never copy the admin email list into web. */
+export async function fetchServerAgentAccess(
+  requestHeaders: Headers,
+  options: ServerSessionOptions = {},
+): Promise<boolean> {
+  const cookie = requestHeaders.get('cookie');
+  if (!cookie) return false;
+  const platformBaseUrl = options.platformBaseUrl ?? process.env.PLATFORM_API_BASE_URL ??
+    (process.env.NODE_ENV === 'production' ? 'https://api.video2ctx.dev' : 'http://localhost:8787');
+  const origin = getRequestOrigin(requestHeaders);
+  const response = await (options.fetch ?? fetch)(new URL('/v1/agent/access', platformBaseUrl), {
+    cache: 'no-store',
+    headers: { accept: 'application/json', cookie, ...(origin ? { origin } : {}) },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 401 || response.status === 403) return false;
+  if (!response.ok) throw new Error('Agent access could not be checked. Please try again.');
+  const result = await response.json() as { enabled?: unknown };
+  return result.enabled === true;
+}

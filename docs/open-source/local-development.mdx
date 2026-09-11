@@ -95,8 +95,8 @@ Compact responses are the default for admission and polling. Existing clients th
 In Postman:
 
 1. Send `POST {{baseUrl}}/v1/agent?responseFormat=compact` with your usual authorization, `Idempotency-Key`, and JSON body such as `{"message":"Research the best design skills for frontend developers using Claude Code"}`.
-2. Save `runId` and `conversationId` from the `202` receipt.
-3. Poll `GET {{baseUrl}}/v1/agent/{{conversationId}}/runs/{{runId}}?responseFormat=compact` until the status is terminal.
+2. Save `runId` and `sessionId` from the `202` receipt.
+3. Poll `GET {{baseUrl}}/v1/agent/{{sessionId}}/runs/{{runId}}?responseFormat=compact` until the status is terminal.
 4. Read `result.answer` and resolve its `[1]` references using `result.sources`. Billing appears once at the top level. Keep `assistantMessageId` if you want to use that answer as a follow-up's `parentMessageId`.
 
 Research and inspect use the same compact schema. Each cited video appears once in `sources`, numbered by its first reference in the answer. Channel and playlist evidence retains its source identity when a video is not involved. Source URLs come from persisted evidence or the known video ID. Several adjacent excerpts from one video collapse to one source reference. Excerpts and timestamps remain stored internally.

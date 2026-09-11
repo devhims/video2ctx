@@ -16,6 +16,7 @@
     "verify": "npm ci --prefix youtube-processor && npm run build && npm test && npm run test:auth:integration",
     "test:auth": "vitest run test/auth-config.test.ts test/authentication.test.ts test/cli-auth-boundary.test.ts test/account-route.test.ts",
     "test:container": "npm --prefix youtube-processor test",
+    "test:agent:dashboard": "npm --prefix ../web run build -- --webpack && playwright test --config playwright.agent-dashboard.config.ts",
     "test:agent:live": "tsc --noEmit -p tsconfig.agent-live.json && tsx scripts/test-youtube-agent-live.ts",
     "test:user-account": "vitest run --config vitest.user-account.config.ts",
     "types": "wrangler types",

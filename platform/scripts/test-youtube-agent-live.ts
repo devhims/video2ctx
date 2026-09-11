@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { agentRunReceiptSchema, agentTurnResultSchema } from '../src/agents/contracts';
+import { publicAgentRunReceiptSchema, publicAgentTurnResultSchema } from '../src/agents/response';
 
 // Exercise the deployed Worker path, including its real GLM model factory,
 // processor, persistence, access controls, and billing. Never load API secrets
@@ -36,11 +36,11 @@ async function main(): Promise<void> {
         body: JSON.stringify({ message }), signal: AbortSignal.timeout(15_000),
       });
       assert.equal(response.status, 202, `Admission failed: ${await response.clone().text()}`);
-      const receipt = agentRunReceiptSchema.parse(await response.json());
+      const receipt = publicAgentRunReceiptSchema.parse(await response.json());
       assert.equal(receipt.request?.message, message, 'Receipt must return the original stored message');
       let complete = false;
       while (Date.now() - started < 120_000) {
-        const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
+        const poll = await fetch(new URL(`/v1/agent/${receipt.sessionId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
           headers, signal: AbortSignal.timeout(10_000),
         });
         if (poll.status === 429) {
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
         assert(!['failed', 'cancelled'].includes(run.status), `${route} run ${receipt.runId} failed: ${run.error ?? run.status}`);
         if (run.status === 'completed') {
           assert.equal(run.route?.route, route);
-          const result = agentTurnResultSchema.parse(run.result);
+          const result = publicAgentTurnResultSchema.parse(run.result);
           assert(!result.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE'), 'Expected a full answer, received partial evidence');
           assert(result.citations.length > 0, 'An answer must contain citations');
           assert(result.billing.creditsCharged > 0, 'Evidence usage must be charged');

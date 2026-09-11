@@ -61,7 +61,7 @@ Important routes:
 | Discovery | `GET /v1/providers/:provider/search`, `GET /v1/providers/:provider/browse`, `GET /v1/providers/:provider/trends`; `GET /v1/search` searches private indexed evidence |
 | Entities | `/v1/providers/:provider/videos/:id`, `/tracks`, `/transcript`, `/comments`, `/endscreen`; `/channels/:id`, `/channels/:id/videos`, `/channels/:id/playlists`; `/playlists/:id` |
 | Research | `/v1/projects`, `/v1/projects/:id/items`, `/v1/answers`, `/v1/comparisons`, `/v1/reports` |
-| Agents | `POST /v1/agent`, `GET /v1/agent/:conversationId/runs/:runId` |
+| Agents | `POST /v1/agent`, `GET /v1/agent/:sessionId/runs/:runId` |
 | Jobs | `POST /v1/imports`, `GET /v1/jobs/:id` |
 | Exports | `POST /v1/projects/:id/exports`, `GET /v1/exports/:id/download` |
 | Automation | `/v1/monitors`, `/v1/notifications`, `/v1/notification-preferences` |

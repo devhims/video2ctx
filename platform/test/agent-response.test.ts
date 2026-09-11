@@ -1,4 +1,4 @@
-import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema } from '../src/agents/response';
+import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
 import type { AgentRunView } from '../src/agents/agent-runtime-do';
 
 function completedRun(): AgentRunView {
@@ -153,4 +153,17 @@ it('exposes private rejection captures only when compact diagnostics are request
   expect(JSON.stringify(compactAgentRun(run, ['evidence', 'artifacts']))).not.toContain('Private');
   expect(compactAgentRun(run, ['diagnostics']).diagnostics?.transcriptAnalysis).toEqual(run.transcriptDiagnostics);
   expect(JSON.stringify(run)).toBe(original);
+});
+
+
+it('returns sessionId in both response formats and nested legacy results without changing storage', () => {
+  const run = completedRun();
+  const before = structuredClone(run);
+  for (const response of [compactAgentRun(run), legacyAgentRun(run)]) {
+    expect(response.sessionId).toBe(run.conversationId);
+    expect(response).not.toHaveProperty('conversationId');
+    expect(response.result).not.toHaveProperty('conversationId');
+  }
+  expect(legacyAgentRun(run).result?.sessionId).toBe(run.conversationId);
+  expect(run).toEqual(before);
 });

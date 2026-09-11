@@ -1,4 +1,6 @@
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
+import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
+import { compactAgentRun } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
@@ -239,6 +241,26 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ...(row.result_json ? { result: agentTurnResultSchema.parse(JSON.parse(row.result_json)) } : {}),
       ...(row.error ? { error: row.error } : {}),
     };
+  }
+
+  async getRunProgress(runId: string) {
+    this.ensureAgentRuntimeSchema();
+    let row = this.readRun(runId);
+    if (!row) return null;
+    const terminal = isTerminal(row.status);
+    if (terminal) { await this.settleRun(runId); row = this.requireRun(runId); }
+    const run: AgentRunView = { ...this.receipt(row),
+      ...(row.result_json ? { result: agentTurnResultSchema.parse(JSON.parse(row.result_json)) } : {}),
+      ...(row.error ? { error: row.error } : {}),
+      route: this.readRoute(runId) ?? undefined,
+    };
+    return agentRunProgressSchema.parse({
+      run: compactAgentRun(run, []),
+      phase: terminal ? row.status : row.status === 'pending' ? 'queued'
+        : row.phase === 'routing' ? 'classification' : row.phase === 'finalizing' ? 'finalization' : 'research',
+      tools: this.sql<ToolCallRow>`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} ORDER BY created_at, tool_call_id`
+        .map(tool => toolTrace(tool, terminal)),
+    });
   }
 
   async getConversation(

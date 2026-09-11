@@ -38,8 +38,9 @@ export const compactAgentResultSchema = z.object({
   evidence: z.array(agentCitationSchema).optional().describe('Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.'),
 });
 export const compactAgentRunSchema = agentRunReceiptSchema.pick({
-  runId: true, conversationId: true, assistantMessageId: true, status: true, request: true,
+  runId: true, assistantMessageId: true, status: true, request: true,
 }).extend({
+  sessionId: z.string().uuid(),
   result: compactAgentResultSchema.optional(),
   billing: agentTurnResultSchema.shape.billing.optional(),
   error: z.string().optional(),
@@ -53,7 +54,7 @@ export function compactAgentRun(run: AgentRunView, include: AgentResponseOptions
   return compactAgentRunSchema.parse({
     request: run.request,
     runId: run.runId,
-    conversationId: run.conversationId,
+    sessionId: run.conversationId,
     assistantMessageId: run.assistantMessageId,
     status: run.status,
     ...(run.result ? { result: compactResult(run.result, include, run.route), billing: run.result.billing } : {}),
@@ -132,3 +133,17 @@ function storedVideoTitles(result: AgentTurnResult): Map<string, string> {
   }
   return titles;
 }
+
+/** Public naming only. Keep durable identities and stored records unchanged. */
+export function withSessionId<T extends { conversationId: string }>(value: T) {
+  const { conversationId, ...rest } = value;
+  return { ...rest, sessionId: conversationId };
+}
+
+export function legacyAgentRun(run: AgentRunView) {
+  const { result, ...receipt } = run;
+  return { ...withSessionId(receipt), ...(result ? { result: withSessionId(result) } : {}) };
+}
+
+export const publicAgentRunReceiptSchema = agentRunReceiptSchema.omit({ conversationId: true }).extend({ sessionId: z.string().uuid() });
+export const publicAgentTurnResultSchema = agentTurnResultSchema.omit({ conversationId: true }).extend({ sessionId: z.string().uuid() });

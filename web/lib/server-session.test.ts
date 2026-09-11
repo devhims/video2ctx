@@ -47,3 +47,24 @@ describe('server dashboard session', () => {
     assert.equal(isLocalDashboardDemoEnabled(new Headers({ 'x-forwarded-host': 'localhost:3000' }), 'production'), false);
   });
 });
+
+describe('agent dashboard gate', () => {
+  test('requires an authenticated cookie and a positive backend decision', async () => {
+    const { fetchServerAgentAccess } = await import('./server-session.ts');
+    let calls = 0;
+    assert.equal(await fetchServerAgentAccess(new Headers(), { fetch: async () => { calls++; return Response.json({ enabled: true }); } }), false);
+    assert.equal(calls, 0);
+    const headers = new Headers({ cookie: 'test-cookie=fixture', host: 'www.video2ctx.dev', 'x-forwarded-proto': 'https' });
+    assert.equal(await fetchServerAgentAccess(headers, { platformBaseUrl: 'https://platform.example', fetch: async (input, init) => {
+      assert.equal(String(input), 'https://platform.example/v1/agent/access');
+      assert.equal(new Headers(init?.headers).get('cookie'), 'test-cookie=fixture');
+      assert.equal(init?.cache, 'no-store');
+      return Response.json({ enabled: true });
+    } }), true);
+    for (const status of [401, 403]) {
+      assert.equal(await fetchServerAgentAccess(headers, { fetch: async () => new Response(null, { status }) }), false);
+    }
+    assert.equal(await fetchServerAgentAccess(headers, { fetch: async () => Response.json({ enabled: 'true' }) }), false);
+    await assert.rejects(fetchServerAgentAccess(headers, { fetch: async () => new Response(null, { status: 503 }) }));
+  });
+});

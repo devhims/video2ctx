@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { useDashboardSession } from './DashboardSessionProvider';
 import type { ReactNode } from 'react';
 
 export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
-export type DashboardSidebarSection = DashboardSection | 'developer';
+export type DashboardSidebarSection = DashboardSection | 'developer' | 'sessions';
 export type SidebarProject = { id: string; name: string };
 
 type IconName = 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus' | 'settings' | 'trash' | 'bell';
@@ -39,6 +40,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
 };
 
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
+  const { agentAccess } = useDashboardSession();
   const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
     <button aria-current={activeSection === section ? 'page' : undefined} className={activeSection === section ? 'active' : ''} onClick={() => onNavigate(section)}>
       <span aria-hidden='true'><Icon name={icon} /></span>{label}{suffix}
@@ -56,6 +58,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       {navButton('projects', 'Projects', 'folder', <em>{projects.length}</em>)}
       {navButton('monitors', 'Monitors', 'monitor')}
       <Link aria-current={activeSection === 'developer' ? 'page' : undefined} className={activeSection === 'developer' ? 'active' : ''} href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</Link>
+      {agentAccess && <Link aria-label='Agent sessions' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={activeSection === 'sessions' ? 'active' : ''} href='/dashboard/sessions'><Icon name='spark' />Sessions</Link>}
       {navButton('settings', 'Settings', 'settings')}
     </nav>
     <div className='sidebar-rule' />

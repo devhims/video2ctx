@@ -15,3 +15,55 @@ Start personal, low-to-moderate public YouTube requests with `youtube-ctx` on th
 Install the hosted CLI with `npm i -g @video2ctx/cli`. It keeps its revocable session in private local configuration. An existing `VIDEO2CTX_API_KEY` remains a non-interactive fallback and takes precedence. Bound query length, response size, continuation depth, and the number of fresh operations an agent can initiate.
 
 Use the platform skill's data branch only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use its monitoring branch only for monitors, notifications, and delivery preferences.
+
+
+## Session identifiers and dashboard
+
+Agent receipts, run results, session lists, and session details return `sessionId`.
+Continue an existing session by sending `sessionId` in `POST /v1/agent`.
+The older `conversationId` request field remains a deprecated alias; if both fields
+are supplied they must match. Responses no longer return `conversationId`, including
+`responseFormat=legacy`. Update clients that read that response field. Existing UUIDs,
+polling URLs and stored session history remain valid.
+
+Accounts with agent access can open **Sessions** in the dashboard to search their
+own sessions and read messages, answers, cited sources, warnings, and run failures.
+The menu and page use `GET /v1/agent/access`, which applies the same runtime flag,
+access mode, and current verified-email allowlist as the agent API. A successful check
+returns `{ "enabled": true }`; denied accounts receive 403 and disabled or unavailable
+checks receive 503. Every session and run read checks access again. Admin access does
+not grant access to another account's sessions.
+
+## Dashboard chat and live activity
+
+Accounts that pass the agent access check can start sessions and send follow-up
+messages from **Dashboard → Sessions**. Follow-ups use the same session and the
+existing conversation history. The composer waits for the active run to finish.
+Admission retries reuse the same message and idempotency key when the outcome is
+uncertain.
+
+To watch an admitted run, request:
+
+```http
+GET /v1/agent/{sessionId}/runs/{runId}/events
+```
+
+The authenticated endpoint returns `text/event-stream`. A `snapshot` event
+contains `{ run, phase, tools }`. `run` has the compact run response shape;
+`phase` is `queued`, `classification`, `research`, `finalization`, or the terminal
+status. Each tool includes its name, status, start/end times, public input
+arguments, and an evidence summary when available. Raw provider payloads,
+continuation tokens, diagnostic captures, and model reasoning are excluded.
+
+Replace the previous snapshot instead of appending it. The first snapshot on
+any connection restores the saved state, so completed sessions retain their tool
+trace. Active connections rotate after roughly 25 seconds; reconnect on EOF
+while the run is pending or running. `heartbeat` events keep idle connections
+active. An `unavailable` event means live observation was interrupted; it does
+not mean inference failed. Reconnect to the same run to resume observing it.
+Disconnecting never cancels or restarts the durable run, and observing it does
+not add a run charge.
+
+Progress and tool results stream during execution. The answer is delivered after
+finalization and validation, in the terminal snapshot. This endpoint does not
+stream unvalidated model tokens.
