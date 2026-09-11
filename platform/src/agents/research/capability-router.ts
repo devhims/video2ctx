@@ -8,7 +8,7 @@ import {
   numberedItemCountSchema,
   type CapabilityRouteDecision,
 } from '../contracts';
-import type { ConversationTurn } from '../runtime/conversation-memory';
+import { conversationAssistantMessage, type ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 
@@ -114,7 +114,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       prompt: JSON.stringify({
         conversationHistory: conversationHistory.map((turn) => ({
           user: turn.user,
-          assistant: turn.assistant,
+          assistant: conversationAssistantMessage(turn),
         })),
         currentMessage: input.message,
         ...(feedback.length ? { classificationRepair: { instruction: 'The previous classification was invalid. Submit one complete classify_request call that satisfies the schema and these validation requirements.', issues: feedback } } : {}),

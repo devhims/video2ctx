@@ -5,6 +5,7 @@ import {
   type YouTubeOperation,
 } from './youtube-processor-client';
 import { safeErrorLog } from './http';
+import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
@@ -106,6 +107,12 @@ export class YouTubeCacheCoordinatorCore {
 
     try {
       const value = await this.loadOperation(this.env, request.operation);
+      // Defense in depth: a resolved provider response can still be a failed
+      // lookup. Preserve the last good value instead of overwriting it.
+      if (request.operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {
+        throw new YouTubeProcessorError('UNAVAILABLE',
+          'YouTube blocked the metadata lookup with a bot challenge.', 503, true);
+      }
       const entry: YouTubeCacheEntry = {
         version: 1,
         value,
@@ -137,7 +144,11 @@ export async function readYouTubeCacheEntry<T>(
       type: 'json',
       cacheTtl: CACHE_READ_TTL_SECONDS,
     });
-    return isCacheEntry<T>(value) ? value : null;
+    if (!isCacheEntry<T>(value)) return null;
+    // Also invalidate bot challenges written by older deployments. Both the
+    // edge cache fast path and the coordinator use this reader.
+    if (resourceType === 'video' && isVideoMetadataBotChallenge(value.value)) return null;
+    return value;
   } catch (error) {
     logCacheFailure('youtube_cache_read_failed', resourceType, error);
     return null;

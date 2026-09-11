@@ -40,6 +40,16 @@ export function executeGetVideo(input: GetVideoInput, context: AgentToolContext,
 
 function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
   const sourceId = `youtube:video:${safeIdPart(video.id)}`;
+  const freshness = z.object({
+    state: z.enum(['fresh', 'stale']), fetchedAt: z.number().finite(), reason: z.string().optional(),
+  }).optional().safeParse('freshness' in video ? video.freshness : undefined);
+  const observation = freshness.success ? freshness.data : undefined;
+  const date = observation ? new Date(observation.fetchedAt) : undefined;
+  const fetchedAt = date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  const staleWarning = observation?.state === 'stale' ? [{
+    code: 'STALE_VIDEO_METADATA',
+    message: `The metadata refresh failed. These are previously observed values${fetchedAt ? ` from ${fetchedAt}` : ''}; state their age and do not describe them as current.`,
+  }] : [];
   return {
     kind: 'youtube_video',
     sources: [{
@@ -57,11 +67,12 @@ function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacke
       text: bounded([
         video.title,
         `Channel: ${video.channel.name}`,
-        video.description,
-        video.viewCountText ? `Views: ${video.viewCountText}` : undefined,
+        video.viewCount !== undefined ? `Views: ${video.viewCount}` : video.viewCountText ? `Views: ${video.viewCountText}` : undefined,
+        fetchedAt ? `Metadata fetched at: ${fetchedAt}${observation?.state === 'stale' ? ' (stale; refresh failed)' : ''}` : undefined,
         video.publishedTimeText ? `Published: ${video.publishedTimeText}` : undefined,
         video.durationText ? `Duration: ${video.durationText}` : undefined,
         `Availability: ${video.availability.status}`,
+        video.description,
         video.keywords.length ? `Keywords: ${video.keywords.slice(0, 20).join(', ')}` : undefined,
       ].filter(Boolean).join('\n')),
     }],
@@ -77,12 +88,13 @@ function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacke
         hasCaptions: video.hasCaptions,
         keywords: video.keywords.slice(0, 40),
         availability: video.availability,
+        ...(observation ? { freshness: observation } : {}),
       },
     }],
-    warnings: providerWarnings(
+    warnings: [...providerWarnings(
       video.meta,
       'PARTIAL_VIDEO_METADATA',
       'YouTube returned partial video metadata.',
-    ),
+    ), ...staleWarning],
   };
 }

@@ -2,6 +2,8 @@ import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import { reserveAgentCredits, settleAgentCredits } from '../src/agents/runtime/billing';
 import { creditBalance } from '../src/lib/entitlements';
+import { conversationModelMessages, type ConversationTurn } from '../src/agents/runtime/conversation-memory';
+import type { AgentTurnResult, FinalizeAnswerInput } from '../src/agents/contracts';
 
 async function seed(name: string, status = 'failed') {
   const runtime = env.AGENT_RUNTIME.getByName(name);
@@ -24,6 +26,52 @@ async function seed(name: string, status = 'failed') {
   });
   return { runtime, userId, runId, conversationId };
 }
+
+test('restores provider metadata for follow-ups and validates historical citations without another evidence charge', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-metadata-memory', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
+      assistantMessageId: parent.assistant_message_id, intent: 'inspect_video', answer: 'A summary.',
+      confidence: 'medium', citations: [], artifacts: [{ type: 'youtube_video_metadata', data: { id: 'abcdefghijk', viewCount: 999999 } }],
+      warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } });
+    instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
+    const packetId = `packet:${runId}:video`;
+    const packet = JSON.stringify({ packetId, kind: 'youtube_video',
+      sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk', title: 'A video' }],
+      excerpts: [], artifacts: [{ type: 'youtube_video_metadata', title: 'A video', data: { id: 'abcdefghijk', viewCount: 404433 } }],
+      warnings: [], usage: [{ operation: 'video', credits: 1, cacheStatus: 'miss' }] });
+    instance.sql`INSERT INTO agent_evidence_packets (packet_id,run_id,tool_call_id,packet_json,created_at)
+      VALUES (${packetId},${runId},'tool',${packet},2000)`;
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({ fiberId: 'metadata-test', name: 'agent-runtime-run',
+      status: 'running', createdAt: Date.now(), accepted: true });
+    const receipt = await instance.startRun({ message: 'How many views did it have?', conversationId },
+      { userId, idempotencyKey: 'metadata-followup', creditsRemaining: 999 });
+    if ('rejected' in receipt) throw Error(receipt.message);
+    await reserveAgentCredits(env, userId, receipt.runId);
+    const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
+    const methods = instance as unknown as {
+      readConversationHistory(row: unknown): ConversationTurn[];
+      finalizeRun(runId: string, toolCallId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+    };
+    const history = methods.readConversationHistory(row);
+    const modelMemory = JSON.stringify(conversationModelMessages(history, 'How many views did it have?'));
+    expect(modelMemory).toContain('404433');
+    expect(modelMemory).not.toContain('999999');
+    expect(history[0]?.resourceIds).toContain('abcdefghijk');
+    expect(() => methods.readConversationHistory({ ...row, user_id: 'another-user' })).toThrow(/parent/);
+    expect(() => methods.readConversationHistory({ ...row, conversation_id: crypto.randomUUID() })).toThrow(/parent/);
+    const citationId = history[0]!.metadata![0]!.excerpts[0]!.id;
+    const route = JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false });
+    instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
+    const result = await methods.finalizeRun(receipt.runId, 'final', { intent: 'inspect_video', confidence: 'medium',
+      answer: `The earlier record showed 404433 views. [cite:${citationId}]`, citations: [], artifacts: [], warnings: [] });
+    expect(result.citations[0]).toMatchObject({ videoId: 'abcdefghijk' });
+    expect(result.billing.creditsCharged).toBe(0);
+    expect(instance.sql`SELECT * FROM agent_evidence_packets WHERE run_id = ${receipt.runId}`).toHaveLength(0);
+    fiber.mockRestore();
+  });
+});
 
 test('terminal run polling settles persisted evidence exactly once', async () => {
   const { runtime, userId, runId } = await seed('agent-settle-runtime');

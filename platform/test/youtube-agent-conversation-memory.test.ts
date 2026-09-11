@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
+import type { EvidencePacket } from '../src/agents/contracts';
 import {
   boundConversationHistory,
   conversationModelMessages,
@@ -8,6 +10,19 @@ import {
 } from '../src/agents/runtime/conversation-memory';
 
 describe('YouTube agent conversation memory', () => {
+  it('exposes bounded prior metadata and includes it in the history character budget', () => {
+    const metadata = metadataForConversation([{ recordedAt: 1000, packet: {
+      packetId: 'prior-video', kind: 'youtube_video',
+      sources: [{ id: 'video', kind: 'video', provider: 'youtube', videoId: 'abcdefghijk', title: 'Video' }],
+      excerpts: [], artifacts: [{ type: 'youtube_video_metadata', data: { id: 'abcdefghijk', viewCount: 404433 } }],
+      warnings: [], usage: [],
+    } as EvidencePacket }]);
+    const history = [{ ...turn('summarize', 'A summary without a view count.'), metadata }];
+    expect(JSON.stringify(conversationModelMessages(history, 'How many views?'))).toContain('404433');
+    expect(JSON.stringify(conversationModelMessages(history, 'How many views?'))).toContain('1970-01-01T00:00:01.000Z');
+    expect(boundConversationHistory(history, { maxCharacters: 100 })).toEqual([]);
+  });
+
   it('keeps a single-turn request free of invented history', () => {
     expect(conversationModelMessages([], 'Inspect this video')).toEqual([
       { role: 'user', content: 'Inspect this video' },

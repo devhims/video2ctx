@@ -21,6 +21,7 @@ import type {
   YouTubeErrorCode,
 } from 'all-things-youtube';
 import type { YouTubeProcessorContainer } from '../youtube-processor-container';
+import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
 export type YouTubeOperation =
   | { kind: 'search'; query: string; filters?: SearchFilters }
@@ -214,6 +215,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     const slot = slots[index]!;
     const startedAt = Date.now();
     const hasFallback = index < slots.length - 1;
+    let failureReason: 'YOUTUBE_BOT_CHALLENGE' | undefined;
     try {
       const response = await processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
         method: 'POST',
@@ -230,6 +232,16 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       }
 
       const result = await resultFrom<YouTubeOperationResult<T>>(response);
+      if (operation.kind === 'video' && isVideoMetadataBotChallenge(result)) {
+        failureReason = 'YOUTUBE_BOT_CHALLENGE';
+        if (hasFallback) {
+          logProcessorAttempt(operation.kind, slot, index, response.status, 'fallback', startedAt, failureReason);
+          await waitBeforeFallback(env, index);
+          continue;
+        }
+        throw new YouTubeProcessorError('UNAVAILABLE',
+          'YouTube blocked the metadata lookup with a bot challenge. The video may still be available.', 503, true);
+      }
       if (hasFallback && shouldFallbackResult(operation, result)) {
         logProcessorAttempt(operation.kind, slot, index, response.status, 'fallback', startedAt);
         await waitBeforeFallback(env, index);
@@ -244,7 +256,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
           await waitBeforeFallback(env, index);
           continue;
         }
-        logProcessorAttempt(operation.kind, slot, index, error.status, 'processor-error', startedAt);
+        logProcessorAttempt(operation.kind, slot, index, error.status, 'processor-error', startedAt, failureReason);
         throw error;
       }
       lastFailure = error;
@@ -270,6 +282,7 @@ function logProcessorAttempt(
   status: number | undefined,
   outcome: 'success' | 'fallback' | 'processor-error' | 'transport-error',
   startedAt: number,
+  reason?: 'YOUTUBE_BOT_CHALLENGE',
 ): void {
   const payload = JSON.stringify({
     event: 'youtube_processor_attempt',
@@ -278,6 +291,7 @@ function logProcessorAttempt(
     attempt: attempt + 1,
     status,
     outcome,
+    ...(reason ? { reason } : {}),
     durationMs: Date.now() - startedAt,
   });
   if (outcome === 'success') console.log(payload);

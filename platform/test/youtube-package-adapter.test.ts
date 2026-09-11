@@ -104,6 +104,44 @@ function environment(
 }
 
 describe('platform YouTube container adapter', () => {
+  const blockedMetadata = { type: 'video', id: 'abcdefghijk',
+    availability: { status: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" },
+    meta: { ...meta, partial: true },
+  };
+
+  test('repairs a cached bot challenge using the alternate processor and then serves the good cache', async () => {
+    let stored: unknown = { version: 1, value: blockedMetadata, fetchedAt: Date.now(), freshUntil: Date.now() + 60_000 };
+    const cache = { get: vi.fn(async () => stored), put: vi.fn(async (_key: string, value: string) => { stored = JSON.parse(value); }) };
+    const run = vi.fn(async (_operation: YouTubeOperation): Promise<unknown> => ({ type: 'video', id: 'abcdefghijk', meta, viewCount: 404433 }));
+    run.mockResolvedValueOnce(blockedMetadata);
+    const env = environment(run, cache);
+    const result = await getVideoWithCache(env, 'abcdefghijk');
+    expect(result).toMatchObject({ cacheStatus: 'miss', value: { viewCount: 404433, freshness: { state: 'fresh' } } });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(cache.put).toHaveBeenCalledOnce();
+    expect(await getVideoWithCache(env, 'abcdefghijk')).toMatchObject({ cacheStatus: 'hit', value: { viewCount: 404433 } });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test('returns the previous timestamped count when both processors are blocked', async () => {
+    const fetchedAt = Date.now() - 5_400_000;
+    const cache = { get: vi.fn(async () => ({ version: 1, value: { id: 'abcdefghijk', viewCount: 404433, meta }, fetchedAt, freshUntil: Date.now() - 60_000 })), put: vi.fn() };
+    const run = vi.fn(async (_operation: YouTubeOperation) => blockedMetadata);
+    expect(await getVideoWithCache(environment(run, cache), 'abcdefghijk')).toMatchObject({
+      cacheStatus: 'stale', value: { viewCount: 404433, freshness: { state: 'stale', fetchedAt, reason: 'UPSTREAM_UNAVAILABLE' } },
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  test('returns 503 instead of partial success when both processors are blocked and the cache is poisoned', async () => {
+    const cache = { get: vi.fn(async () => ({ version: 1, value: blockedMetadata, fetchedAt: Date.now(), freshUntil: Date.now() + 60_000 })), put: vi.fn() };
+    const run = vi.fn(async (_operation: YouTubeOperation) => blockedMetadata);
+    await expect(getVideoWithCache(environment(run, cache), 'abcdefghijk')).rejects.toMatchObject({ status: 503, code: 'UNAVAILABLE' });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
   test('routes every YouTube resource through the processor operation protocol', async () => {
     const run = vi.fn(async (operation: YouTubeOperation) => valueFor(operation));
     const env = environment(run);

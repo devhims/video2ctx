@@ -15,6 +15,8 @@ Start with video details, then request only the deeper datasets your workflow ne
 
 The default comments request returns YouTube's default-ranked page. Add `all=true` for a bounded newest-first collection, then inspect `meta.partial` and `meta.warnings` before treating it as complete.
 
+Video metadata lookups retry an alternate processor when YouTube returns an explicit bot challenge. Bot challenges are not cached as successful metadata and do not establish that a video is private or unavailable. If refresh fails and previously successful metadata exists, the response retains that data with `freshness.state: "stale"`, its original `freshness.fetchedAt` timestamp in milliseconds, and `freshness.reason: "UPSTREAM_UNAVAILABLE"`. Treat view counts as observations from that time. If no usable cached metadata exists, the lookup returns HTTP 503 with error code `UNAVAILABLE`. Genuine private and age-restricted video responses keep their availability metadata.
+
 ## Channels
 
 - `GET /v1/providers/youtube/channels/{id}` — profile, public totals, links, and metadata

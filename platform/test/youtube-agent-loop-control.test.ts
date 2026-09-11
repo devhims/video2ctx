@@ -15,8 +15,74 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import type { AgentModelCostBudget, AgentModelUsageEntry } from '../src/agents/runtime/model-budget';
 import type { EvidencePacket } from '../src/agents/contracts';
+import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
 
 describe('YouTube AgentCore loop control', () => {
+  it.each([false, true])('refreshes remembered metadata and retains it only if refresh fails (%s)', async fails => {
+    const metadata = metadataForConversation([{ recordedAt: 2000, packet: {
+      packetId: 'prior-video', kind: 'youtube_video',
+      sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk', title: 'A video' }],
+      excerpts: [], artifacts: [{ type: 'youtube_video_metadata', title: 'A video', data: { id: 'abcdefghijk', viewCount: 404433 } }],
+      warnings: [], usage: [],
+    } }]);
+    const context = inspectContext();
+    if (fails) context.provider.video = vi.fn(async () => { throw new Error('YouTube bot challenge'); });
+    let step = 0;
+    const research = new MockLanguageModelV4({ doGenerate: async () => {
+      if (step++ === 0) return modelResult({ toolCallId: 'fresh-video', toolName: 'get_video', input: JSON.stringify({ videoId: 'abcdefghijk' }) });
+      return modelResult({ toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'A view count.', evidenceIds: [fails ? metadata[0]!.excerpts[0]!.id : 'video:abcdefghijk:fresh-video'] }],
+      }) });
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      const prompt = JSON.stringify(call.prompt);
+      if (fails) expect(prompt).toContain('404433');
+      else { expect(prompt).not.toContain('404433'); expect(prompt).toContain('1000'); }
+      return finalizerModelResult({ confidence: 'medium', warnings: [], blocks: [{
+        text: fails ? 'The earlier record showed 404433 views; refresh failed.' : 'The latest lookup shows 1000 views.', evidenceIds: ['ref_1'],
+      }] });
+    } });
+    await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'Refresh the view count now.',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      conversationHistory: [{ userMessageId: 'u', assistantMessageId: 'a', user: 'Summarize', assistant: 'A summary.', resourceIds: ['abcdefghijk'], metadata }] });
+    expect(context.provider.video).toHaveBeenCalledTimes(1);
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('answers a follow-up from metadata memory in both research and isolated finalization without a provider call', async () => {
+    const metadata = metadataForConversation([{ recordedAt: 2000, packet: {
+      packetId: 'prior-video', kind: 'youtube_video',
+      sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk', title: 'A video' }],
+      excerpts: [], artifacts: [{ type: 'youtube_video_metadata', title: 'A video', data: { id: 'abcdefghijk', viewCount: 404433 } }],
+      warnings: [], usage: [],
+    } }]);
+    const research = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(JSON.stringify(call.prompt)).toContain('404433');
+      return modelResult({ toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'Previously recorded 404433 views.', evidenceIds: [metadata[0]!.excerpts[0]!.id] }],
+      }) });
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(JSON.stringify(call.prompt)).toContain('404433');
+      expect(JSON.stringify(call.prompt)).toContain('1970-01-01T00:00:02.000Z');
+      return finalizerModelResult({ confidence: 'medium', warnings: [], blocks: [{
+        text: 'The earlier record showed 404433 views.', evidenceIds: ['ref_1'],
+      }] });
+    } });
+    const context = inspectContext();
+    vi.spyOn(context, 'executeEvidenceTool');
+    await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'How many views did it have?',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      conversationHistory: [{ userMessageId: 'u', assistantMessageId: 'a', user: 'Summarize the video',
+        assistant: 'A summary.', resourceIds: ['abcdefghijk'], metadata }] });
+    expect(context.provider.video).not.toHaveBeenCalled();
+    expect(context.executeEvidenceTool).not.toHaveBeenCalled();
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+    expect(vi.mocked(context.finalize).mock.calls[0]?.[1].answer).toContain(`[cite:${metadata[0]!.excerpts[0]!.id}]`);
+  });
+
   it('hands an ordinary research completion to the configured finalizer', async () => {
     const packet = transcriptAnalysisPacket();
     const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({

@@ -830,10 +830,12 @@ export const openApiDocument = {
         tags: ['Videos'],
         operationId: 'getVideo',
         summary: 'Inspect a video',
+        description: 'Bot challenges retry an alternate processor and are not cached as successful metadata. If refresh fails, previously successful metadata can be returned with freshness.state=stale and its original freshness.fetchedAt timestamp. Without usable cached metadata, upstream bot challenges return 503 UNAVAILABLE. Private and age-restricted video responses retain their availability metadata.',
         security: dataSecurity,
         parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ')],
         responses: {
           '200': meteredJsonResponse('Normalized video metadata.', schemaRef('Video')),
+          '503': jsonResponse('YouTube metadata is temporarily unavailable and no usable cached metadata exists.', schemaRef('Error')),
           '401': responseRef('Unauthorized'),
           '402': responseRef('InsufficientCredits'),
           '404': responseRef('NotFound'),

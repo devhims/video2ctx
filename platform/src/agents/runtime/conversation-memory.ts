@@ -1,4 +1,6 @@
 import type { ModelMessage } from 'ai';
+import type { EvidencePacket } from '../contracts';
+import { evidencePacketForModel } from './model-evidence';
 
 export const MAX_CONVERSATION_MEMORY_TURNS = 8;
 export const MAX_CONVERSATION_MEMORY_CHARACTERS = 64_000;
@@ -9,6 +11,7 @@ export interface ConversationTurn {
   user: string;
   assistant: string;
   resourceIds: string[];
+  metadata?: EvidencePacket[];
 }
 
 export interface LinkedConversationTurn extends ConversationTurn {
@@ -55,7 +58,7 @@ export function boundConversationHistory(
 
   for (const turn of newestFirst) {
     if (selected.length >= maxTurns) break;
-    const turnCharacters = turn.user.length + turn.assistant.length;
+    const turnCharacters = turn.user.length + conversationAssistantMessage(turn).length;
     if (characters + turnCharacters > maxCharacters) break;
     selected.push(turn);
     characters += turnCharacters;
@@ -71,16 +74,22 @@ export function conversationModelMessages(
 ): ModelMessage[] {
   const messages: ModelMessage[] = history.flatMap((turn): ModelMessage[] => [
     { role: 'user', content: turn.user },
-    { role: 'assistant', content: turn.assistant },
+    { role: 'assistant', content: conversationAssistantMessage(turn) },
   ]);
   const recovered = recoveredEvidence.length
     ? [
       '',
-      'Persisted evidence from an interrupted attempt is included below.',
+      'Available persisted evidence is included below. Historical metadata is labeled with its observation time.',
       'Reuse exact identifiers when relevant and do not repeat a provider operation unnecessarily.',
       JSON.stringify(recoveredEvidence),
     ].join('\n')
     : '';
   messages.push({ role: 'user', content: `${currentMessage}${recovered}` });
   return messages;
+}
+
+export function conversationAssistantMessage(turn: ConversationTurn): string {
+  if (!turn.metadata?.length) return turn.assistant;
+  return [turn.assistant, '', 'Recorded video metadata from this completed turn (historical observations, not current lookups):',
+    JSON.stringify(turn.metadata.map(evidencePacketForModel))].join('\n');
 }
