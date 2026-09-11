@@ -71,10 +71,10 @@ export function buildAgentTurnResult(
   });
 }
 
-function deduplicateWarnings<T extends { code: string; message: string }>(warnings: T[]): T[] {
+function deduplicateWarnings<T extends { code: string; message: string; videoId?: string }>(warnings: T[]): T[] {
   const seen = new Set<string>();
   return warnings.filter((warning) => {
-    const key = `${warning.code}:${warning.message}`;
+    const key = `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

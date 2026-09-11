@@ -10,7 +10,7 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 
 - `platform/` owns authentication, authorization, credit metering, cache policy, and the public HTTP contract.
 - `platform/youtube-processor/` owns every outbound YouTube call. Reach YouTube through the processor rather than calling it from the Worker.
-- `packages/all-things-youtube/` is the extraction library. The processor image installs the pinned, published version — local library source is not copied into the production image, so publish and pin a library release before deploying platform behavior that depends on library changes.
+- `packages/all-things-youtube/` is the extraction library. The processor image compiles this package from the same checkout in a separate Docker stage and installs it using a locked local dependency. Cloudflare deployment does not require publishing the independent npm package. The Dockerfile-specific allowlist excludes credentials and local artifacts from the repository-root build context.
 - `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both `video2ctx-platform` branches, and verify the npm tarball before releasing it.
 
 ## Configuration

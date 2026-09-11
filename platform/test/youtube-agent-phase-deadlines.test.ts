@@ -18,7 +18,7 @@ function setup(classificationMs: number, decision = { route: 'inspect_video', vi
       abortSignal?.addEventListener('abort', () => reject(abortSignal.reason), { once: true });
     });
     return { content: [{ type: 'tool-call', toolCallId: 'classification', toolName: 'classify_request',
-      input: JSON.stringify({ answerDetail: 'standard', ...decision }) }],
+      input: JSON.stringify({ researchVideoCount: decision.route === 'inspect_video' ? 1 : decision.route === 'topic_research' ? 3 : 0, answerDetail: 'standard', ...decision }) }],
     finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
     usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
@@ -36,7 +36,7 @@ function setup(classificationMs: number, decision = { route: 'inspect_video', vi
     conversationHistory: [], recoveredEvidence: [], recoveredToolFailures: [],
     modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage: vi.fn() },
     modelCallPrefix: 'phase', persistRoute: vi.fn(), onClassifying: vi.fn(), onCapabilityLoaded: vi.fn(),
-    onFinalizing: vi.fn(), executeEvidenceTool: vi.fn(), finalize: vi.fn(),
+    onFinalizing: vi.fn(), executeEvidenceTool: vi.fn(async () => ({ packetId: 'metadata', kind: 'youtube_video' as const, sources: [], excerpts: [], artifacts: [], warnings: [], usage: [] })), finalize: vi.fn(),
   };
   return { options, classifier, research, finalizer, controller };
 }

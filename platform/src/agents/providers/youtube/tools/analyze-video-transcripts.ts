@@ -4,7 +4,7 @@ import type { AgentToolContext } from '../tool-context';
 import { executeGetVideoTranscriptForModel } from './get-video-transcript';
 
 export const analyzeVideoTranscriptsInputSchema = z.object({
-  videoIds: z.array(z.string().regex(/^[A-Za-z0-9_-]{11}$/)).min(1).max(4)
+  videoIds: z.array(z.string().regex(/^[A-Za-z0-9_-]{11}$/)).min(1).max(8)
     .refine(ids => new Set(ids).size === ids.length, 'Select distinct videos.'),
   focus: z.string().trim().min(1).max(500),
 });

@@ -16,10 +16,10 @@ export function createCapabilityProvider(
   };
 
   return {
-    storyboard: async (videoId) => {
+    storyboard: async (videoId, timestampsMs, options) => {
       requirePinnedVideo(videoId);
       if (!provider.storyboard) throw new Error('Storyboard provider is unavailable.');
-      return provider.storyboard(videoId);
+      return provider.storyboard(videoId, timestampsMs, options);
     },
     search: (query, filters) => provider.search(query, filters),
     browse: (options) => provider.browse(options),

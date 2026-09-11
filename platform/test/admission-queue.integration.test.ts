@@ -18,8 +18,9 @@ describe('durable first-turn admission', () => {
       const hooks = { assertActive() {}, register: (id: string) => instance.registerConversation(id), record: (input: Parameters<typeof instance.recordSession>[0]) => instance.recordSession(input) };
       const queue = new AgentAdmissionQueue(state, bindings, hooks);
       const first = await queue.enqueue(request, admission);
-      const retry = await queue.enqueue(request, admission);
+      const retry = await queue.enqueue({ ...request, message: 'Different retry text must not replace the original' }, admission);
       expect(retry).toEqual(first);
+      expect(first.receipt?.request?.message).toBe(request.message);
       expect(startRun).not.toHaveBeenCalled();
       expect(await state.storage.getAlarm()).not.toBeNull();
       const restored = new AgentAdmissionQueue(state, bindings, hooks);

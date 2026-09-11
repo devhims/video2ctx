@@ -35,7 +35,8 @@ export class AgentAdmissionQueue {
         const existing = this.row(parsed.conversationId);
         if (existing) {
           if (existing.idempotency_key !== owner.idempotencyKey) return { legacy: true as const };
-          return { receipt: storedSchema.parse(JSON.parse(existing.payload)).receipt };
+          const stored = storedSchema.parse(JSON.parse(existing.payload));
+          return { receipt: { ...stored.receipt, request: { message: stored.request.message } } };
         }
         // Preserve pre-outbox idempotency, including interrupted legacy admissions.
         if (this.ctx.storage.sql.exec('SELECT conversation_id FROM agent_conversations WHERE conversation_id = ?', parsed.conversationId).toArray().length) {
@@ -50,7 +51,7 @@ export class AgentAdmissionQueue {
         const admittedAt = Date.now();
         const receipt = agentRunReceiptSchema.parse({ runId: crypto.randomUUID(), conversationId: parsed.conversationId,
           userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), conversationTurn: 1,
-          modelStepCount: 0, toolCallCount: 0, status: 'pending' });
+          modelStepCount: 0, toolCallCount: 0, status: 'pending', request: { message: parsed.message } });
         this.ctx.storage.transactionSync(() => {
           this.hooks.register(parsed.conversationId);
           this.hooks.record({ conversationId: parsed.conversationId, runId: receipt.runId, message: parsed.message, updatedAt: admittedAt });
@@ -71,7 +72,7 @@ export class AgentAdmissionQueue {
     const row = this.row(conversationId);
     if (!row || row.status === 'delivered' || (runId !== undefined && row.run_id !== runId)) return null;
     const stored = storedSchema.parse(JSON.parse(row.payload));
-    const run = { ...stored.receipt, status: row.status === 'failed' ? 'failed' as const : 'pending' as const,
+    const run = { ...stored.receipt, request: { message: stored.request.message }, status: row.status === 'failed' ? 'failed' as const : 'pending' as const,
       ...(row.error ? { error: row.error } : {}) };
     return { run, message: stored.request.message, admittedAt: stored.admittedAt };
   }

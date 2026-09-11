@@ -12,6 +12,9 @@ export function createFinalizeAnswerTool(context: AgentToolContext) {
     ].join(' '),
     inputSchema: structuredAnswerSchema,
     outputSchema: agentTurnResultSchema,
-    execute: (input, { toolCallId }) => context.finalize(toolCallId, renderStructuredAnswer(input)),
+    execute: (input, { toolCallId }) => {
+      context.validateAnswerBlocks?.(input.blocks);
+      return context.finalize(toolCallId, renderStructuredAnswer(input));
+    },
   });
 }

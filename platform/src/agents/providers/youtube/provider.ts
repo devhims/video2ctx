@@ -1,5 +1,5 @@
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
-import { storyboardSchema, type Storyboard } from './storyboard';
+import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
   BrowseOptions,
   BrowseResponse,
@@ -23,7 +23,7 @@ import type { TrendReport } from '../../../lib/trends';
 import { getProvider, type ProviderAdapter } from '../../../providers';
 
 export interface YouTubeAgentProvider {
-  storyboard?(videoId: string): Promise<CachedResult<Storyboard>>;
+  storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions): Promise<CachedResult<Storyboard>>;
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
@@ -54,7 +54,7 @@ export function createYouTubeAgentProvider(
   provider: ProviderAdapter = getProvider('youtube'),
 ): YouTubeAgentProvider {
   return {
-    storyboard: async (videoId) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId })), cacheStatus: 'miss' }),
+    storyboard: async (videoId, timestampsMs, options = {}) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options })), cacheStatus: 'miss' }),
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),
     trends: async (query, limit, includeAiInsights) => ({

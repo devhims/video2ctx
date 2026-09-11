@@ -89,7 +89,7 @@ describe('YouTube agent evidence tools', () => {
         startMs: 42_000,
         endMs: 50_000,
       }],
-      warnings: [],
+      warnings: ['No pricing figures in this video.'],
       coverage: {
         completeTranscriptRead: true as const,
         segmentCount: 3,
@@ -121,6 +121,7 @@ describe('YouTube agent evidence tools', () => {
       type: 'youtube_transcript_analysis',
       data: { coverage: { completeTranscriptRead: true, segmentCount: 3 } },
     });
+    expect(packet.warnings).toContainEqual({ code: 'TRANSCRIPT_ANALYST_WARNING', message: 'No pricing figures in this video.', videoId: 'abcdefghijk' });
     expect(packet.usage).toEqual([{ operation: 'transcript', credits: 1, cacheStatus: 'hit' }]);
   });
 
@@ -202,7 +203,7 @@ describe('TranscriptAnalyst', () => {
       segments: [{ startMs: 0, durationMs: 1000, endMs: 1000, text: 'We made prototypes faster, but only tested this agent.' }],
       signal: new AbortController().signal,
     });
-    expect(result.findings).toEqual([{ claim, excerptIds: ['transcript:abcdefghijk:window:0:0'] }]);
+    expect(result.findings).toEqual([{ claim, excerptIds: ['transcript:abcdefghijk:window:0:0'], entities: [], quantities: [], uncertainty: null }]);
     expect(result.excerpts[0]?.text).toBe('We made prototypes faster, but only tested this agent.');
     expect(result.warnings).toEqual(['The demonstration does not independently establish cross-agent equivalence.']);
     expect(result.summary).toBe('Selected 1 relevant transcript finding.');
@@ -232,7 +233,7 @@ describe('TranscriptAnalyst', () => {
     });
 
     expect(model.doGenerateCalls).toHaveLength(1);
-    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(1_200);
+    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(2_400);
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('at most 5 distinct findings');
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('The complete transcript starts here.');
@@ -262,6 +263,18 @@ describe('TranscriptAnalyst', () => {
     });
     expect(result.findings).toHaveLength(5);
     expect(result.excerpts).toHaveLength(5);
+  });
+
+  it('retains ten findings when classification requests ten items', async () => {
+    const findings = Array.from({ length: 10 }, (_, i) => ({ claim: `Finding ${i + 1}`, windowIndexes: [i] }));
+    const result = await analyzeTranscriptWithModel({
+      model: transcriptAnalysisModel({ findings, warnings: [] }), maxFindings: 10,
+      videoId: 'abcdefghijk', researchQuestion: 'List ten lessons', focus: 'Ten distinct lessons',
+      segments: findings.map((_, i) => ({ startMs: i * 65_000, durationMs: 1000, endMs: i * 65_000 + 1000, text: `Evidence ${i + 1}` })),
+      signal: new AbortController().signal,
+    });
+    expect(result.findings).toHaveLength(10);
+    expect(result.excerpts).toHaveLength(10);
   });
 
   it('rejects analyst output exceeding the five-finding budget', async () => {

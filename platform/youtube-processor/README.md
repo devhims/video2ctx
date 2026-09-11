@@ -28,14 +28,17 @@ The Worker routes each cache miss to a random member of its fixed container pool
 ## Verification
 
 ```sh
-npm install
+npm --prefix ../../packages/all-things-youtube ci
+npm --prefix ../../packages/all-things-youtube run build
+npm ci
 npm test
-docker build -t video2ctx-youtube-processor .
+docker build -f Dockerfile -t video2ctx-youtube-processor ../..
 ```
 
-The container installs the exact `all-things-youtube` version recorded in
-`package.json` and `package-lock.json`. Local library source is never copied into
-the production image. Publish a library release first, then deliberately update
-both platform manifests and lockfiles before deploying it.
+The container installs the compiled local `all-things-youtube` package and the registry dependencies recorded in `package-lock.json`. Build the library before installing the processor dependencies for direct Node development. Docker performs that build itself.
 
-Wrangler builds the same Dockerfile from the processor directory during platform deployment.
+Wrangler builds the Dockerfile with the repository root as its context. The library compiles in a separate build stage, and the runtime installs that compiled local package using the processor lockfile. The Dockerfile-specific allowlist excludes credentials, local artifacts, and unrelated source. No npm publication is needed for Cloudflare deployment.
+
+### Agent storyboard selection
+
+Storyboard operations accept `metadataOnly`, `maxSheets`, `sheetIndexes`, and `timestampsMs`. Metadata mode reads the available storyboard mapping without downloading JPEGs. The agent uses that mapping to choose a spread count or explicit source sheets. The processor allows 1 to 20 sheets per call, with at most 4 MiB per JPEG and 8 MiB total. Requests exceeding the payload limit reject and clean up their temporary files. The agent can retry a smaller selection within its existing research budget. No sheets are silently dropped.

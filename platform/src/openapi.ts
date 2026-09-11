@@ -1,3 +1,4 @@
+import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
 import { compactAgentRunSchema } from './agents/response';
 import {
@@ -2126,6 +2127,7 @@ export const openApiDocument = {
         allOf: [schemaRef('AgentRunReceipt'), {
           type: 'object', properties: {
             route: schemaRef('AgentRouteDecision'), result: schemaRef('AgentTurnResult'), error: { type: 'string' },
+            transcriptDiagnostics: { type: 'array', items: z.toJSONSchema(transcriptDiagnosticSchema, { target: 'openapi-3.0' }) },
           },
         }],
       },

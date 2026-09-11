@@ -181,19 +181,39 @@ export interface StoryboardContactSheet {
   intervalMs: number;
 }
 
+export interface StoryboardManifest {
+  totalSheets: number;
+  framesPerSheet: number;
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  lastSampleMs: number;
+}
+
 export interface StoryboardIndex {
+  manifest?: StoryboardManifest;
   videoId: string;
   level: number;
   frameCount: number;
   intervalMs: number;
+  selection?: { mode: 'leading' | 'spread' | 'timestamps' | 'indexes' | 'metadata'; requestedTimestampsMs?: number[]; requestedSheetIndexes?: number[] };
   sheets: StoryboardContactSheet[];
   meta: SourceMetadata;
 }
 
 export interface StoryboardOptions {
+  /** Inspect available coverage without downloading images. */
+  metadataOnly?: boolean;
+  /** Zero-based source sheet indexes. Mutually exclusive with timestampsMs. */
+  sheetIndexes?: number[];
   videoId: string;
   outputDir: string;
   maxSheets?: number;
+  /** Defaults to leading for compatibility. Spread includes both ends when the budget allows. */
+  selection?: 'leading' | 'spread';
+  /** Select sheets containing these sampled moments, overriding selection. */
+  timestampsMs?: number[];
 }
 
 export interface TranscriptOptions {

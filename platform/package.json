@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",
+    "@ai-sdk/fireworks": "3.0.50",
     "@better-auth/api-key": "1.6.26",
     "@cloudflare/containers": "0.3.7",
     "@polar-sh/better-auth": "1.8.4",

@@ -98,7 +98,9 @@ describe('all-things-youtube public API', () => {
     await getTranscript({ videoId: 'abcdefghijk', lang: 'hi', granularity: 'word' });
     await getDetails({ videoId: 'abcdefghijk' });
     await getEndscreen({ videoId: 'abcdefghijk' });
-    await getStoryboard({ videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3 });
+    await getStoryboard({ videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3, selection: 'spread', timestampsMs: [905000] });
+    await getStoryboard({ videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', metadataOnly: true });
+    await getStoryboard({ videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 4, sheetIndexes: [0, 2, 4, 6] });
 
     expect(mocks.createYouTubeClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: fetchMock }));
     expect(mocks.client.getCaptionTracks).toHaveBeenCalledWith('abcdefghijk');
@@ -107,8 +109,10 @@ describe('all-things-youtube public API', () => {
     });
     expect(mocks.client.getVideo).toHaveBeenCalledWith('abcdefghijk');
     expect(mocks.client.getEndscreen).toHaveBeenCalledWith('abcdefghijk');
+    expect(mocks.client.getStoryboard).toHaveBeenCalledWith(expect.objectContaining({ metadataOnly: true }));
+    expect(mocks.client.getStoryboard).toHaveBeenCalledWith(expect.objectContaining({ maxSheets: 4, sheetIndexes: [0, 2, 4, 6] }));
     expect(mocks.client.getStoryboard).toHaveBeenCalledWith({
-      videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3,
+      videoId: 'abcdefghijk', outputDir: '/tmp/storyboards', maxSheets: 3, selection: 'spread', timestampsMs: [905000],
     });
   });
 

@@ -8,6 +8,7 @@ import { INSPECT_VIDEO_TOOL_NAMES } from '../src/agents/research/capabilities/in
 import {
   classifyCapabilityWithModel,
   extractYouTubeVideoIds,
+  extractYouTubeChannelIds,
   finalIntentMatchesRoute,
   resolveCapabilityRoute,
 } from '../src/agents/research/capability-router';
@@ -17,6 +18,47 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
+  it.each([1, 3, 6, 8])('persists an explicit research count of %s independently of breadth', async researchVideoCount => {
+    const decision = await classifyCapabilityWithModel({ message: 'Compare model coding workflows',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'coding workflows', researchVideoCount }),
+      signal: new AbortController().signal });
+    const { researchVideoTarget } = await import('../src/agents/research/research-plan');
+    expect(researchVideoTarget(decision)).toBe(researchVideoCount);
+    expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
+  });
+  it('requires a count for newly classified executable routes', async () => {
+    await expect(classifyCapabilityWithModel({ message: 'Compare models',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'models', researchVideoCount: undefined }),
+      signal: new AbortController().signal })).rejects.toThrow('researchVideoCount');
+  });
+  it('preserves an explicit source requirement above capacity separately from the research target', async () => {
+    const decision = await classifyCapabilityWithModel({ message: 'Compare findings from ten videos',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'models', researchVideoCount: 8, requiredVideoCount: 10 }),
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ researchVideoCount: 8, requiredVideoCount: 10 });
+  });
+  it('retains the explicitly classified numbered-list requirement', async () => {
+    const decision = await classifyCapabilityWithModel({ message: 'Research exactly ten use cases. Number all ten.',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'use cases', numberedItemCount: 10 }),
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ numberedItemCount: 10 });
+  });
+  it('retains supplied channel scope even when the model omits it', async () => {
+    const decision = await classifyCapabilityWithModel({
+      message: 'Find protein lab tests on https://youtube.com/@Trustified-Certification/videos',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'protein lab tests' }),
+      signal: new AbortController().signal,
+    });
+    expect(decision).toMatchObject({ channelId: '@Trustified-Certification' });
+    expect(extractYouTubeChannelIds('https://youtube.com.evil.test/@fake https://evilyoutube.com/@fake https://evil.youtube.com/@fake https://evil.test/youtube.com/@fake https://youtu.be/abcdefghijk')).toEqual([]);
+  });
+
+  it('does not accept an invented channel identifier from classification', async () => {
+    const decision = await classifyCapabilityWithModel({ message: 'Research video lighting',
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'video lighting', channelId: '@invented' }),
+      signal: new AbortController().signal });
+    expect(decision.route).toBe('clarification');
+  });
   it('uses low reasoning for bounded research planning and inspection', () => {
     expect(agentCoreReasoningEffort('topic_research')).toBe('low');
     expect(agentCoreReasoningEffort('inspect_video')).toBe('low');
@@ -38,7 +80,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal });
     expect(decision).toMatchObject({ answerDetail });
     expect(model.doGenerateCalls[0]?.tools?.find(t => t.type === 'function')?.inputSchema).toMatchObject({
-      required: expect.arrayContaining(['answerDetail']),
+      required: expect.arrayContaining(['answerDetail', 'researchVideoCount']),
       properties: { answerDetail: { enum: ['standard', 'detailed'] } },
     });
     expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
@@ -57,7 +99,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, answerDetail: 'standard' });
   });
 
   it('routes discovery and comparison requests into topic_research', async () => {
@@ -68,7 +110,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', researchVideoCount: 3, useStoryboard: false, answerDetail: 'standard' });
     expect(model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema).toMatchObject({ type: 'object', properties: expect.objectContaining({ route: expect.any(Object), searchQuery: expect.any(Object) }) });
   });
 
@@ -78,7 +120,7 @@ describe('YouTube agent capability router', () => {
       model: classifierModel({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', researchVideoCount: 3, useStoryboard: false, answerDetail: 'standard' });
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
@@ -110,7 +152,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
     const recovered = await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() });
-    expect(recovered).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard, answerDetail: 'standard' });
+    expect(recovered).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard, answerDetail: 'standard' });
   });
 
   it('accepts a rejection with a reason and disallows executable answers for it', async () => {
@@ -178,7 +220,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, answerDetail: 'standard' });
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('Find a useful example.');
     expect(prompt).toContain('Inspect that one in more detail.');
@@ -284,7 +326,7 @@ describe('YouTube agent capability router', () => {
 function classifierModel(output: Record<string, unknown>): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doGenerate: async () => ({
-      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify({ useStoryboard: false, answerDetail: 'standard', ...output }) }],
+      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify({ researchVideoCount: output.route === 'inspect_video' ? 1 : output.route === 'topic_research' ? 3 : 0, useStoryboard: false, answerDetail: 'standard', ...output }) }],
       finishReason: { unified: 'tool-calls', raw: undefined },
       usage: {
         inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },

@@ -22,3 +22,10 @@ OUTBOUND_PROXY_URL=
 
 # Private comma-separated admin allowlist. Production: wrangler secret put ADMIN_EMAILS_SECRET
 ADMIN_EMAILS_SECRET=
+
+# DeepSeek finalizer candidate. GLM research/classification continue on Workers AI.
+AGENT_FINALIZER_PROVIDER=fireworks
+AGENT_FINALIZER_MODEL=deepseek-v4-flash-0731
+# Set to fireworks to test GLM classification/research/vision on Fireworks too.
+AGENT_GLM_PROVIDER=fireworks
+FIREWORKS_API_KEY=

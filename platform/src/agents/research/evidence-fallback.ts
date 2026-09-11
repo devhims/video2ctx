@@ -55,6 +55,9 @@ export function evidenceFallback(
   return {
     intent, confidence: 'low', citations: [], artifacts: [],
     answer: `Partial evidence summary\n\nFinal synthesis could not be completed. These are individually supported findings or source excerpts, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
-    warnings: [{ code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings or excerpts because final synthesis did not complete. This is not a completed comparison or recommendation.' }],
+    warnings: [
+      { code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings or excerpts because final synthesis did not complete. This is not a completed comparison or recommendation.' },
+      { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
+    ],
   };
 }

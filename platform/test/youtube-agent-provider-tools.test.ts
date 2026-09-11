@@ -10,8 +10,45 @@ import { executeGetPlaylist } from '../src/agents/providers/youtube/tools/get-pl
 import { executeGetVideoComments } from '../src/agents/providers/youtube/tools/get-video-comments';
 import { executeGetVideoTracks } from '../src/agents/providers/youtube/tools/get-video-tracks';
 import { executeGetVideo } from '../src/agents/providers/youtube/tools/get-video';
+import { discoverInitialEvidence } from '../src/agents/research/initial-discovery';
 
 describe('YouTube agent provider-operation tools', () => {
+  it('resolves channel identity before reading its catalog and searching with its canonical ID', async () => {
+    const provider: YouTubeAgentProvider = providerFixture();
+    provider.search = vi.fn<YouTubeAgentProvider['search']>(async (_query, filters) => {
+      expect(provider.channel).toHaveBeenCalledWith('@agentdesign');
+      expect(filters?.channelId).toBe('channel-1');
+      return { cacheStatus: 'hit', value: { query: 'design', results: [], videos: [], channels: [], playlists: [], meta: meta() } };
+    });
+    await discoverInitialEvidence({ route: 'topic_research', channelId: '@agentdesign', searchQuery: 'design' }, toolContext(provider), false);
+    expect(provider.channelVideos).toHaveBeenCalledWith('channel-1', undefined, 'latest');
+    expect(provider.search).toHaveBeenCalledOnce();
+  });
+
+  it('does not silently spend the search budget on global results when channel resolution fails', async () => {
+    const provider = providerFixture();
+    provider.channel = vi.fn(async () => { throw new Error('Channel unavailable'); });
+    provider.search = vi.fn();
+    await expect(discoverInitialEvidence({ route: 'topic_research', channelId: '@missing', searchQuery: 'design' }, toolContext(provider), false)).rejects.toThrow('Channel unavailable');
+    expect(provider.search).not.toHaveBeenCalled();
+    expect(provider.channelVideos).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat search on recovery after the one-search budget was consumed', async () => {
+    const provider = providerFixture();
+    provider.search = vi.fn();
+    await discoverInitialEvidence({ route: 'topic_research', channelId: '@agentdesign', searchQuery: 'design' }, toolContext(provider), true);
+    expect(provider.search).not.toHaveBeenCalled();
+    expect(provider.channelVideos).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a handle resolution that returned a different channel', async () => {
+    const provider = providerFixture();
+    provider.search = vi.fn();
+    await expect(discoverInitialEvidence({ route: 'topic_research', channelId: '@different', searchQuery: 'design' }, toolContext(provider), false)).rejects.toThrow(/does not match/);
+    expect(provider.search).not.toHaveBeenCalled();
+    expect(provider.channelVideos).not.toHaveBeenCalled();
+  });
   it('maps each added tool wrapper to exactly one provider operation', async () => {
     const provider = providerFixture();
     const context = toolContext(provider);

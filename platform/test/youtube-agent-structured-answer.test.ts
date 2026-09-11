@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema } from '../src/agents/structured-answer';
+import { renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, assertRequestedNumberedItems } from '../src/agents/structured-answer';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -19,6 +19,46 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('rejects a schema-valid one-item answer for an explicit ten-item request', () => {
+    const output = finalizationOutputSchema.parse({ confidence: 'medium', warnings: [],
+      blocks: [{ text: '1. A single item that ends', evidenceIds: ['e1'] }] });
+    expect(() => assertRequestedNumberedItems(output, 10)).toThrow(/10 numbered items/);
+    const complete = { ...output, blocks: Array.from({ length: 10 }, (_, i) => ({
+      text: `### ${i + 1}. Complete supported item.`, evidenceIds: ['e1'],
+    })) };
+    expect(() => assertRequestedNumberedItems(complete, 10)).not.toThrow();
+    expect(() => assertRequestedNumberedItems({ ...output, warnings: [{
+      code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only one item is supported by the available evidence.',
+    }] }, 10)).not.toThrow();
+  });
+  it('allows a complete long paragraph without forcing a citation into a word at 2000 characters', () => {
+    const text = 'A complete supported sentence. '.repeat(75).trim();
+    expect(renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] }).answer)
+      .toBe(`${text} [cite:e1]`);
+    expect(z.toJSONSchema(finalizationOutputSchema).properties?.blocks).not.toMatchObject({
+      items: { properties: { text: { maxLength: 2000 } } },
+    });
+  });
+
+  it('rejects continuation fragments before adding citations between them', () => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [
+      { text: 'Converts the design into production-adj', evidenceIds: ['e1'] },
+      { text: 'ady code using the existing components.', evidenceIds: ['e1'] },
+    ] })).toThrow(/complete/);
+  });
+
+  it('rejects repetitive generation commentary in warnings instead of persisting it', () => {
+    expect(() => renderStructuredAnswer({ ...base,
+      blocks: [{ text: 'The report is supported.', evidenceIds: ['e1'] }],
+      warnings: [{ code: 'SOURCE_CAVEAT', message: 'Continue the report from where it was cut off. '.repeat(4) }],
+    })).toThrow(/repetit/i);
+  });
+
+  it('still rejects answers larger than the public response limit without silently cutting them', () => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{
+      text: 'A complete sentence. '.repeat(1100), evidenceIds: ['e1'],
+    }] })).toThrow();
+  });
   it('transmits required references and omits application-owned fields for finalization', async () => {
     const schema = await zodSchema(finalizationOutputSchema).jsonSchema;
     expect(schema).toMatchObject({ type: 'object', properties: {
@@ -28,6 +68,7 @@ describe('structured answer citations', () => {
     }, required: expect.arrayContaining(['confidence', 'blocks']) });
     expect(schema.properties).not.toHaveProperty('intent');
     expect(schema.properties).not.toHaveProperty('artifacts');
+    expect(schema.properties).toHaveProperty('warnings.maxItems', 3);
     expect(finalizationOutputSchema.safeParse({ confidence: 'medium', blocks: [{ text: 'Unsupported', evidenceIds: [] }] }).success).toBe(false);
   });
   it('expresses clarification rules separately in JSON Schema', () => {
@@ -88,5 +129,11 @@ describe('structured answer citations', () => {
   });
   it('does not allow answer text to inject extra references', () => {
     expect(finalize(['e1'], 'Text [cite:invented]').citations.map(c => c.id)).toEqual(['e1']);
+  });
+  it('removes model-written short reference markers before adding validated citations', () => {
+    const rendered = renderStructuredAnswer({ ...base, blocks: [
+      { text: 'Supported claim【ref_1】 with an example[ref_2].', evidenceIds: ['e1'] },
+    ] });
+    expect(rendered.answer).toBe('Supported claim with an example. [cite:e1]');
   });
 });
