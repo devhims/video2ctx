@@ -29,6 +29,8 @@ Open the existing `video2ctx` Worker, select **Settings → Builds**, and connec
 
 Configure branch control to build only `main` for now. Do not enable automatic Worker previews for other branches until a completely isolated preview environment exists for D1, KV, R2, Queues, Workflows, Durable Objects, and Containers.
 
+`npm run verify` installs the processor dependencies from its lockfile, including the published `all-things-youtube` version. Library releases must be published to npm before updating that dependency. GitHub CI and Cloudflare Builds use the same verification command; neither needs locally compiled library artifacts for the processor.
+
 The production deploy command applies pending D1 migrations before deploying the Worker. Runtime secrets remain attached to the existing Worker and must not be added to Git build variables.
 
 The anonymous landing-page inspection fails closed in production unless

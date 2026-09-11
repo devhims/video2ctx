@@ -28,16 +28,14 @@ The Worker routes each cache miss to a random member of its fixed container pool
 ## Verification
 
 ```sh
-npm --prefix ../../packages/all-things-youtube ci
-npm --prefix ../../packages/all-things-youtube run build
 npm ci
 npm test
-docker build -f Dockerfile -t video2ctx-youtube-processor ../..
+docker build -f Dockerfile -t video2ctx-youtube-processor .
 ```
 
-The container installs the compiled local `all-things-youtube` package and the registry dependencies recorded in `package-lock.json`. Build the library before installing the processor dependencies for direct Node development. Docker performs that build itself.
+The container installs the published `all-things-youtube` package and registry dependencies recorded in `package-lock.json`. Publish library changes first, then update the processor to the exact npm version and regenerate its lockfile. Local processor tests and Docker use the same published dependency, without requiring a library build in this repository.
 
-Wrangler builds the Dockerfile with the repository root as its context. The library compiles in a separate build stage, and the runtime installs that compiled local package using the processor lockfile. The Dockerfile-specific allowlist excludes credentials, local artifacts, and unrelated source. No npm publication is needed for Cloudflare deployment.
+Wrangler builds with the processor directory as its context. The Dockerfile-specific allowlist excludes credentials, tests, and local artifacts.
 
 ### Agent storyboard selection
 

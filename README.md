@@ -244,7 +244,7 @@ flowchart LR
 
 The Worker owns authentication, authorization, rate limits, credit metering, caching, private research, and the public HTTP contract. Outbound YouTube work is isolated in a private Cloudflare Container. Identical cache misses are coalesced by a Durable Object before the request reaches a processor instance; cache hits never wake a container.
 
-The processor image builds `packages/all-things-youtube` from the same checkout in a separate Docker stage. Its local package dependency and registry dependencies are locked. Deploying library changes with the Cloudflare API does not require an npm publication. The public npm package remains an independent release.
+The processor installs the published `all-things-youtube` npm package at an exact version recorded in its lockfile. Publish library changes before updating the processor dependency and deploying the Cloudflare API. The processor image does not compile the library from repository source.
 
 For the complete request path and reliability model, see [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md).
 
@@ -291,7 +291,7 @@ Common commands, run from the repository root:
 | `npm run build`                                           | Type-check/build the library, platform, and web application                                 |
 | `npm test`                                                | Run the library and complete platform test suites                                           |
 | `npm --prefix web test`                                   | Run web unit tests                                                                          |
-| `npm --prefix platform run verify`                        | Install processor dependencies, type-check the Worker, and run platform and processor tests |
+| `npm --prefix platform run verify`                        | Install published processor dependencies, type-check the Worker, and run platform and processor tests |
 | `npm --prefix platform run test:container`                | Run only the processor contract tests                                                       |
 | `npm --prefix packages/all-things-youtube run test:watch` | Run the library suite in watch mode                                                         |
 | `npm run test:skills`                                    | Test, type-check, and verify the private direct-skill source and committed bundles          |
