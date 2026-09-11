@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
+import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
+import { AgentPromptBar } from './AgentPromptBar';
+import { AgentMarkdown } from './AgentMarkdown';
 import type { DashboardProject } from '../../../lib/dashboard-data';
 import { useRouter } from 'next/navigation';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -34,7 +37,7 @@ export default function SessionsClient({ sessionId }: { sessionId?: string }) {
     void load();
     return () => controller.abort();
   }, [user?.id, agentAccess]);
-  return <main className='workspace-shell'>
+  return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
       onNavigate={section => router.push(`/dashboard?section=${section}`)}
       onNewProject={() => router.push('/dashboard?section=projects')}
@@ -42,8 +45,8 @@ export default function SessionsClient({ sessionId }: { sessionId?: string }) {
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
-      <header className='topbar'><div><span className='topbar-context'>Research workspace</span><h1>Agent sessions</h1></div></header>
-      <section className='agent-sessions'>
+      <header className='topbar'><div><span className='topbar-context'>Research workspace</span><h1>Agent</h1></div><Link href='/dashboard/sessions' className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></header>
+      <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
         {!agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
           : sessionId ? <SessionHistory sessionId={sessionId} /> : <SessionList />}
       </section>
@@ -58,11 +61,11 @@ function SessionList() {
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
   return <>
-    <header className='agent-heading'><div><p className='panel-label'>Your research history</p><h2>Pick up where you left off.</h2><p>Continue a session or start a new YouTube research request.</p></div></header>
+    <header className='agent-welcome'><div className='agent-welcome-mark'><YoutubeLogoIcon size={24} aria-hidden='true' /></div><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>
     <MessageComposer onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
     <form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
-      <label htmlFor='session-search'>Search your sessions</label>
-      <div><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search by topic or request' /><button type='submit'>Search</button></div>
+      <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
+      <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
     </form>
     <SessionResults key={`${search}:${revision}`} search={search} />
   </>;
@@ -92,16 +95,16 @@ function SessionResults({ search }: { search: string }) {
     finally { setLoading(false); }
   };
   return <>
-    <div className='agent-list-heading'><h3>{search ? 'Search results' : 'Recent sessions'}</h3><button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh</button></div>
+    <div className='agent-list-heading'><h3>{search ? 'Search results' : 'Recent sessions'}</h3><button className='agent-icon-button' aria-label='Refresh sessions' title='Refresh sessions' disabled={loading} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {error && <p role='alert' className='alert error'>{error}</p>}
     <div className='agent-session-list' aria-busy={loading}>
       {page.sessions.map(session => <Link key={session.sessionId} href={`/dashboard/sessions/${session.sessionId}`} className='agent-session-row'>
-        <div><h3>{session.title || 'Untitled session'}</h3><p>{session.latestMessagePreview}</p></div>
-        <div className='agent-session-meta'><time dateTime={new Date(session.updatedAt).toISOString()}>{formatTime(session.updatedAt)}</time><span>{session.runCount} {session.runCount === 1 ? 'run' : 'runs'} <span aria-hidden='true'>↗</span></span></div>
+        <span className='agent-session-icon'><ChatCircleTextIcon size={19} aria-hidden='true' /></span><div className='agent-session-copy'><h3>{session.title || 'Untitled session'}</h3><p>{session.latestMessagePreview}</p></div>
+        <div className='agent-session-meta'><time dateTime={new Date(session.updatedAt).toISOString()}>{formatTime(session.updatedAt)}</time><span>{session.runCount} {session.runCount === 1 ? 'run' : 'runs'} <ArrowUpRightIcon size={13} aria-hidden='true' /></span></div>
       </Link>)}
       {!page.sessions.length && !loading && !error && <div className='agent-empty'><h3>{search ? 'No matching sessions' : 'No sessions yet'}</h3><p>{search ? 'Try another topic or clear your search.' : 'Start a session above. Requests from the API also appear here.'}</p></div>}
     </div>
-    {loading && <p role='status'>Loading sessions…</p>}
+    {loading && <div className='agent-loading' role='status'><span className='sr-only'>Loading sessions…</span><span /><span /><span /></div>}
     {page.nextCursor && <button className='agent-load-more' disabled={loading} onClick={() => void loadMore()}>Load more sessions</button>}
   </>;
 }
@@ -146,8 +149,10 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     finally { setOlderLoading(false); }
   };
   return <>
-    <Link className='agent-back' href='/dashboard/sessions'>← All sessions</Link>
-    <header className='agent-heading'><div><p className='panel-label'>Session history</p><h2>{session?.title ?? 'Loading session…'}</h2><p className='agent-id'>Session ID: {sessionId}</p></div><button disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}>Refresh</button></header>
+    <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions'><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
+      <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
+    <header className='agent-heading'><div><h2>{session?.title ?? 'Loading session…'}</h2>
+      <details className='agent-session-info'><summary>Session details</summary><p className='agent-id'>Session ID: {sessionId}</p></details></div></header>
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && <p role='status'>Loading messages…</p>}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}
@@ -157,8 +162,8 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
         : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} initiallyOpen={message.runId === session.lastRunId} onProgress={onProgress} />)}
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
-    {session && <MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting}
-      disabled={loading || session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} />}
+    {session && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting}
+      disabled={loading || session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
   </>;
 }
 
@@ -183,26 +188,26 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   const status = run?.status ?? message.status;
   const result = run?.result;
   return <article className='agent-message agent-assistant-message'>
-    <header><strong>Agent</strong><span className={`agent-status status-${status}`}>{status}</span><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time></header>
-    <button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? 'Hide answer details' : 'View answer and sources'}</button>
+    <header><span className='agent-avatar'><YoutubeLogoIcon size={17} aria-hidden='true' /></span><strong>Agent</strong><span className={`agent-status status-${status}`}>{status}</span><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time></header>
+    {!open && <button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View answer and sources <CaretRightIcon size={13} aria-hidden='true' /></button>}
     {!open && <p className='agent-answer-preview'>{message.content.replace(/\[cite:[^\]]+\]/g, '') || (isActiveAgentRun(status) ? 'This run is still in progress.' : 'Open this run to view its result.')}</p>}
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && !error && <p role='status'>Loading answer…</p>}
-      {run && !error && isActiveAgentRun(run.status) && <p role='status'>{phaseLabel(progress?.phase)} Live updates are connected.</p>}
+      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{phaseLabel(progress?.phase)}</p>}
       {progress && <ToolTrace tools={progress.tools} />}
       {run?.error && <div className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
       {result && <>
-        <div className='agent-result-meta'><span>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
-        <div className='agent-answer'>{result.answer}</div>
+        <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
+        <AgentMarkdown>{result.answer}</AgentMarkdown>
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {
           const href = safeSourceUrl(source.url);
-          return <li key={source.id}><span>[{source.id}]</span>{href ? <a href={href} target='_blank' rel='noreferrer'>{source.title} ↗</a> : <span>{source.title}</span>}</li>;
+          return <li key={source.id}>{href ? <a href={href} target='_blank' rel='noreferrer'><span className='agent-source-number'>[{source.id}]</span><span>{source.title}</span><ArrowUpRightIcon size={13} aria-hidden='true' /></a> : <span>[{source.id}] {source.title}</span>}</li>;
         })}</ul></section>}
         {!!result.warnings.length && <details className='agent-caveats'><summary>Source notes and limitations ({result.warnings.length})</summary><ul>{result.warnings.map((warning, index) => <li key={index}>{warning.message}</li>)}</ul></details>}
       </>}
-      <p className='agent-id'>Run ID: {message.runId}</p>
+      <div className='agent-answer-actions'>{result && <CopyAnswer answer={result.answer} />}<details><summary>Run details</summary><p className='agent-id'>Run ID: {message.runId}</p></details></div>
     </div>}
   </article>;
 }
@@ -232,15 +237,10 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending }:
       if (!retryable) attempt.current = null;
     } finally { setSending(false); onSending?.(false); }
   };
-  return <form className='agent-composer' onSubmit={event => void submit(event)}>
-    <label htmlFor='agent-message'>{sessionId ? 'Follow-up message' : 'Start a new session'}</label>
-    <textarea id='agent-message' value={draft} onChange={event => setDraft(event.target.value)}
-      readOnly={sending || uncertain} maxLength={10_000} rows={3}
-      aria-describedby='agent-composer-help' placeholder={sessionId ? 'Ask a follow-up or explore another detail…' : 'Paste a YouTube URL or describe what you want to research…'} />
-    <div className='agent-composer-footer'><p id='agent-composer-help'>{disabled ? 'Wait for the active run to finish before sending another message.' : sessionId ? 'The agent uses the prior turns in this session. Each new run uses credits.' : 'Research videos, channels, transcripts, comments, and sampled frames.'}</p>
-      <button type='submit' disabled={disabled || sending || !draft.trim()}>{sending ? 'Sending…' : uncertain ? 'Retry sending' : sessionId ? 'Send follow-up' : 'Start session'}</button></div>
-    {error && <p className='alert error' role='alert'>{error}</p>}
-  </form>;
+  return <AgentPromptBar value={draft} onChange={setDraft} onSubmit={event => void submit(event)}
+    label={sessionId ? 'Follow-up message' : 'Start a new session'}
+    sendLabel={sending ? 'Sending…' : uncertain ? 'Retry sending' : sessionId ? 'Send follow-up' : 'Start session'}
+    disabled={disabled} sending={sending} uncertain={uncertain} error={error} />;
 }
 
 function phaseLabel(phase?: AgentProgress['phase']) {
@@ -252,22 +252,45 @@ function phaseLabel(phase?: AgentProgress['phase']) {
   }
 }
 
+// Compact disclosure rows follow Beautiful UI's Tool Chips pattern.
 function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
-  return <details className='agent-trace' open={tools.some(tool => tool.status === 'running')}>
-    <summary>Tool activity ({tools.length})</summary>
-    {!tools.length && <p>No tool calls were recorded for this run.</p>}
-    <ol>{tools.map(tool => <li key={tool.toolCallId}>
-      <details><summary><span>{tool.name.replaceAll('_', ' ')}</span><span className={`agent-status status-${tool.status}`}>{tool.status}</span>
-        {tool.finishedAt !== undefined && <span>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}</summary>
-        {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
-        {tool.output && <><h4>Result</h4><p>{tool.output.sourceCount} sources · {tool.output.excerptCount} evidence excerpts</p>
-          <ul>{tool.output.sources.map((source, index) => <li key={index}>{source.title ?? source.videoId ?? source.channelId ?? 'YouTube source'}</li>)}</ul>
-          {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}
-        {tool.status === 'failed' && <p>This tool did not complete successfully. Check the answer’s source notes for any effect on coverage.</p>}
-        {tool.status === 'running' && <p>Waiting for the tool result…</p>}
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const running = tools.some(tool => tool.status === 'running');
+  const open = expanded ?? running;
+  if (!tools.length) return null;
+  return <div className='agent-trace'>
+    <button className='agent-trace-toggle' aria-expanded={open} onClick={() => setExpanded(!open)}>
+      <CaretRightIcon size={13} className={open ? 'is-open' : ''} aria-hidden='true' />
+      Tool activity ({tools.length})<span>{running ? 'In progress' : `${tools.filter(tool => tool.status === 'completed').length} completed`}</span>
+    </button>
+    {open && <ol>{tools.map(tool => <li key={tool.toolCallId}>
+      <details className='agent-tool-chip'><summary>
+        <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
+          : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
+        <span className='agent-tool-name'>{tool.name.replaceAll('_', ' ')}</span>
+        <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
+        <span className='sr-only'>{tool.status}</span>
+        {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}
+        <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
+        <div className='agent-tool-content'>
+          {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
+          {tool.output && <><h4>Result</h4><p>{tool.output.sourceCount} {tool.output.sourceCount === 1 ? 'source' : 'sources'} · {tool.output.excerptCount} evidence excerpts</p>
+            <ul>{tool.output.sources.map((source, index) => <li key={index}>{source.title ?? source.videoId ?? source.channelId ?? 'YouTube source'}</li>)}</ul>
+            {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}
+          {tool.status === 'failed' && <p>This tool did not complete successfully. Check the answer's source notes for any effect on coverage.</p>}
+          {tool.status === 'running' && <p>Waiting for the tool result…</p>}
+        </div>
       </details>
-    </li>)}</ol>
-  </details>;
+    </li>)}</ol>}
+  </div>;
+}
+
+function CopyAnswer({ answer }: { answer: string }) {
+  const [status, setStatus] = useState('');
+  useEffect(() => { if (!status) return; const timer = setTimeout(() => setStatus(''), 2_000); return () => clearTimeout(timer); }, [status]);
+  return <button className='agent-copy-answer' onClick={() => {
+    void navigator.clipboard.writeText(answer).then(() => setStatus('Copied'), () => setStatus('Could not copy'));
+  }}><CopyIcon size={14} aria-hidden='true' /><span aria-live='polite'>{status || 'Copy answer'}</span></button>;
 }
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }

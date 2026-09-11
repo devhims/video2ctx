@@ -58,7 +58,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       {navButton('projects', 'Projects', 'folder', <em>{projects.length}</em>)}
       {navButton('monitors', 'Monitors', 'monitor')}
       <Link aria-current={activeSection === 'developer' ? 'page' : undefined} className={activeSection === 'developer' ? 'active' : ''} href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</Link>
-      {agentAccess && <Link aria-label='Agent sessions' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={activeSection === 'sessions' ? 'active' : ''} href='/dashboard/sessions'><Icon name='spark' />Sessions</Link>}
+      {agentAccess && <Link aria-label='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={activeSection === 'sessions' ? 'active' : ''} href='/dashboard/sessions'><Icon name='spark' />Agent</Link>}
       {navButton('settings', 'Settings', 'settings')}
     </nav>
     <div className='sidebar-rule' />

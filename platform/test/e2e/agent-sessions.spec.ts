@@ -8,7 +8,7 @@ async function login(context: import('@playwright/test').BrowserContext, role: s
 test('allowed account can search, paginate, open history and read cited answers', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sessions');
-  await expect(page.getByRole('link', { name: 'Agent sessions', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Agent', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.getByRole('button', { name: 'Load more sessions' }).click();
   await expect(page.getByRole('heading', { name: 'Earlier research session' })).toBeVisible();
@@ -42,7 +42,7 @@ test('failed runs show the error, and running history can retrieve the completed
   await expect(page.getByText('Classification returned an invalid routing decision.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sources', exact: true })).toHaveCount(0);
   await page.goto('/dashboard/sessions/cd056140-7d4c-4516-bb9e-c97914439553');
-  await expect(page.getByText('Researching YouTube sources. Live updates are connected.')).toBeVisible();
+  await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeDisabled();
   await expect(page.locator('.agent-assistant-message > header .agent-status')).toHaveText('completed');
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
@@ -54,7 +54,7 @@ test('non-admin and signed-out accounts have no menu and cannot open a session d
   for (const role of ['denied', 'signed-out']) {
     await login(context, role);
     await page.goto('/dashboard/developer');
-    await expect(page.getByRole('link', { name: 'Agent sessions', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
     await page.goto(`/dashboard/sessions/${sessionId}`);
     await expect(page.getByText('This page could not be found.')).toBeVisible();
     await expect(page.getByText('Summarise the key takeaways from this video.')).toHaveCount(0);
@@ -85,7 +85,7 @@ test('follow-up uses the same session, restores a disconnected stream, and persi
   await expect(page.getByText('Sending could not be confirmed. Retry to check the same request.')).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Follow-up message' })).toHaveAttribute('readonly');
   await page.getByRole('button', { name: 'Retry sending' }).click();
-  await expect(page.getByText('Researching YouTube sources. Live updates are connected.')).toBeVisible();
+  await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   const latest = page.locator('.agent-assistant-message').last();
   await expect(latest.getByText('get video transcript', { exact: true })).toBeVisible();
   await latest.getByText('get video transcript', { exact: true }).click();
@@ -100,9 +100,9 @@ test('follow-up uses the same session, restores a disconnected stream, and persi
   await page.reload();
   await expect(page.getByText('Retry this follow-up: explain the differences.', { exact: true })).toBeVisible();
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
-  await page.locator('.agent-assistant-message').last().getByText('Tool activity (1)', { exact: true }).click();
+  await page.locator('.agent-assistant-message').last().getByRole('button', { name: /^Tool activity \(1\)/ }).click();
   await page.locator('.agent-assistant-message').last().getByText('get video transcript', { exact: true }).click();
-  await expect(page.getByText('1 sources · 4 evidence excerpts', { exact: true })).toBeVisible();
+  await expect(page.getByText('1 source · 4 evidence excerpts', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   await page.evaluate('window.scrollTo(0, 0)');
@@ -116,4 +116,64 @@ test('starts a session from the dashboard and opens the admitted run', async ({ 
   await page.getByRole('button', { name: 'Start session', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+});
+
+test('single composer grows with text, preserves newlines and composition, and sends with Enter', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const composer = page.getByRole('textbox', { name: 'Start a new session' });
+  await expect(page.locator('textarea')).toHaveCount(1);
+  const initialHeight = (await composer.boundingBox())!.height;
+  await composer.fill(Array.from({ length: 18 }, (_, i) => `Research question ${i}`).join('\n'));
+  await expect.poll(async () => (await composer.boundingBox())!.height).toBeGreaterThan(initialHeight);
+  expect((await composer.boundingBox())!.height).toBeLessThanOrEqual(160);
+  const posts: Record<string, unknown>[] = [];
+  page.on('request', request => { if (request.method() === 'POST' && request.url().includes('/v1/agent?')) posts.push(request.postDataJSON()); });
+  await composer.fill('Compare the claims in this YouTube video.');
+  await composer.press('Shift+Enter');
+  await composer.press('End');
+  await composer.press('x');
+  await expect(composer).toHaveValue('Compare the claims in this YouTube video.\nx');
+  await composer.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true, bubbles: true });
+  expect(posts).toHaveLength(0);
+  await composer.press('Enter');
+  await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
+  await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.message).toBe('Compare the claims in this YouTube video.\nx');
+});
+
+test('answers render readable Markdown, block unsafe content, and fit the mobile composer', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const answer = '## What the video shows\n\nThe speaker prefers **Fable for coding**, with a few caveats. [1]\n\n- Fable is useful for refining interactions.\n- Astra helps with initial prototypes.\n\n| Task | Suggested approach |\n| --- | --- |\n| Prototyping | Start with Astra |\n| Refinement | Use Fable |\n\n[Watch the video](https://www.youtube.com/watch?v=P7bxbDSnZRM)\n\n[Unsafe link](javascript:alert(1))\n\n![Remote image](https://example.test/tracking.png)\n\n<script>alert(1)</script>';
+  const imageRequests: string[] = [];
+  page.on('request', request => { if (request.url().includes('example.test/tracking.png')) imageRequests.push(request.url()); });
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+    run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed', result: { outcome: 'answered', answer,
+      sources: [{ id: '1', title: 'Fable Vs Astra Debate Is Over', url: 'https://www.youtube.com/watch?v=P7bxbDSnZRM' }], warnings: [], coverage: { reviewedVideos: 1, targetVideos: 1 } } }, phase: 'completed', tools: [],
+  })}\n\n` }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  await expect(page.getByRole('heading', { name: 'What the video shows' })).toBeVisible();
+  await expect(page.locator('.agent-markdown strong')).toHaveText('Fable for coding');
+  await expect(page.locator('.agent-markdown > ul')).toHaveCSS('list-style-type', 'disc');
+  await expect(page.getByRole('table')).toContainText('Refinement');
+  await expect(page.getByRole('link', { name: 'Watch the video' })).toHaveAttribute('target', '_blank');
+  await expect(page.getByRole('link', { name: 'Unsafe link' })).toHaveCount(0);
+  await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
+  expect(imageRequests).toHaveLength(0);
+  await page.getByRole('button', { name: 'Copy answer' }).click();
+  await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+  expect(await page.evaluate('navigator.clipboard.readText()')).toBe(answer);
+  await page.evaluate('window.scrollTo(0, 0)');
+  await page.screenshot({ path: testInfo.outputPath('markdown-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Which claims are supported by the transcript?');
+  await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
+  await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeInViewport();
+  expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  const sendBounds = (await page.getByRole('button', { name: 'Send follow-up' }).boundingBox())!;
+  const navigationBounds = (await page.getByRole('navigation', { name: 'Dashboard navigation' }).boundingBox())!;
+  expect(sendBounds.y + sendBounds.height).toBeLessThan(navigationBounds.y);
+  await page.screenshot({ path: testInfo.outputPath('markdown-mobile.png') });
 });
