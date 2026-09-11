@@ -1,14 +1,17 @@
 # video2ctx Workspace
 
-This repository implements the beta with a standalone library, private agent-skill source, two Worker applications, and one containerized processing boundary:
+This repository implements the beta with a standalone library, private agent-skill source, two Worker applications, and two private container processing boundaries:
 
 1. `packages/all-things-youtube/` contains the publishable normalized YouTube client, public helpers, retry transport, and data model.
 2. `packages/youtube-skills/` contains the private source, tests, and bundling for the self-contained `youtube-ctx` skill's direct and visual branches; generated executables remain under `.agents/skills/youtube-ctx/`.
 3. `platform/` is the typed Hono platform Worker and owns auth, private data, ingestion, retrieval, AI metering, monitoring, billing, notifications, and deletion.
 4. `web/` is the Next.js 16 application deployed on Vercel. Its same-origin BFF reaches the platform through `PLATFORM_API_BASE_URL`, defaulting to the public API domain in production and the local Worker in development.
 5. `platform/youtube-processor/` is a private Node/Hono Cloudflare Container that owns outbound YouTube calls, parsing, retries, and optional proxy egress.
+6. `platform/youtube-frames/` is a private Node/Hono Cloudflare Container that uses the shared watch extractor and FFmpeg for agent-requested video frames.
 
 The platform's core YouTube routes call `platform/src/lib/youtube.ts`. That adapter checks Workers KV first and sends misses through a cache-key-specific `YOUTUBE_REQUEST_COORDINATOR` Durable Object. The coordinator rechecks KV, coalesces identical concurrent misses, and invokes a randomly selected `YOUTUBE_PROCESSOR` container. The container executes both public package helpers and the internal search, browse, and trend-signal client. No platform route calls YouTube directly from the Worker runtime.
+
+Individual-frame requests are available only through the agent API. The agent tool uses the dedicated private `YOUTUBE_FRAMES` container. See [frame extraction](./FRAME_EXTRACTION.md) for the tool contract, skill implementation, resource limits, and verification.
 
 ## YouTube processor boundary
 

@@ -42,6 +42,13 @@
   },
   "containers": [
     {
+      "class_name": "YouTubeFramesContainer",
+      "image": "./youtube-frames/Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "lite",
+      "max_instances": 2,
+    },
+    {
       "class_name": "YouTubeProcessorContainer",
       "name": "all-things-youtube-platform-youtubeprocessorcontainer",
       "image": "./youtube-processor/Dockerfile",
@@ -52,6 +59,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      { "name": "YOUTUBE_FRAMES", "class_name": "YouTubeFramesContainer" },
       {
         "name": "YOUTUBE_PROCESSOR",
         "class_name": "YouTubeProcessorContainer",
@@ -95,6 +103,7 @@
       "tag": "v5",
       "new_sqlite_classes": ["UserAccountDO"],
     },
+    { "tag": "v6", "new_sqlite_classes": ["YouTubeFramesContainer"] },
   ],
   "d1_databases": [
     {

@@ -1,4 +1,5 @@
 import { storyboardManifestSchema } from '../providers/youtube/storyboard';
+import { framesSchema } from '../../lib/youtube-frames-contract';
 import { transcriptFactsSchema, transcriptSourceContextSchema } from './transcript-grounding';
 import { z } from 'zod';
 import {
@@ -13,6 +14,11 @@ const MODEL_EXCERPT_CHARACTERS = 800;
 const MODEL_ANALYSIS_SUMMARY_CHARACTERS = 2_000;
 const MODEL_ANALYSIS_FINDINGS = 20;
 const MODEL_ANALYSIS_FINDING_CHARACTERS = 600;
+const frameCoverageSchema = z.object({
+  requestedTimestampsMs: z.array(z.number().int().nonnegative()).max(6),
+  frames: z.array(framesSchema.shape.frames.element.omit({ imageBase64: true })).max(6),
+  failures: framesSchema.shape.failures,
+});
 const visualCoverageSchema = z.object({
   manifest: storyboardManifestSchema.optional(),
   selection: z.object({ mode: z.enum(['leading', 'spread', 'timestamps', 'indexes', 'metadata']),
@@ -58,6 +64,7 @@ export const modelEvidencePacketSchema = z.object({
   }).optional(),
   excerpts: z.array(evidenceExcerptSchema).max(MODEL_EXCERPTS_PER_PACKET).optional(),
   visualCoverage: visualCoverageSchema.optional(),
+  frameCoverage: frameCoverageSchema.optional(),
   artifacts: z.array(z.object({
     type: z.string().min(1).max(100),
     title: z.string().min(1).max(500).optional(),
@@ -97,9 +104,12 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
 
   // One visual finding can have three frame citations. Keep each distinct
   // finding before adding duplicate observations at other timestamps.
-  const ordered = packet.kind === 'youtube_storyboard' ? distinctVisualFindingsFirst(packet.excerpts) : packet.excerpts;
+  const ordered = (packet.kind === 'youtube_storyboard' || packet.kind === 'youtube_frames') ? distinctVisualFindingsFirst(packet.excerpts) : packet.excerpts;
   const coverage = packet.kind === 'youtube_storyboard'
     ? visualCoverageSchema.safeParse(packet.artifacts.find(artifact => artifact.type === 'youtube_storyboard_analysis')?.data)
+    : undefined;
+  const frameCoverage = packet.kind === 'youtube_frames'
+    ? frameCoverageSchema.safeParse(packet.artifacts.find(artifact => artifact.type === 'youtube_frame_analysis')?.data)
     : undefined;
   const excerpts = ordered.slice(0, MODEL_EXCERPTS_PER_PACKET).map((excerpt) => ({
     ...excerpt,
@@ -114,6 +124,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
     sources: sources.length > 0 ? sources : packet.sources.slice(0, 1),
     excerpts,
     visualCoverage: coverage?.success ? coverage.data : undefined,
+    frameCoverage: frameCoverage?.success ? frameCoverage.data : undefined,
     artifacts: packet.artifacts.map((artifact) => ({
       type: artifact.type,
       title: artifact.title,
@@ -181,7 +192,7 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
     });
   }
 
-  const excerpts = packet.excerpts?.slice(0, packet.kind === 'youtube_storyboard' ? 5 : 1).map((excerpt) => ({
+  const excerpts = packet.excerpts?.slice(0, (packet.kind === 'youtube_storyboard' || packet.kind === 'youtube_frames') ? 5 : 1).map((excerpt) => ({
     ...excerpt,
     text: boundedText(excerpt.text, 200),
   }));

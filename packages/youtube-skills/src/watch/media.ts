@@ -54,7 +54,7 @@ function codecPreference(candidate: MediaCandidate): number {
   return 3;
 }
 
-function selectCandidates(raw: JsonObject, maxWidth: number): MediaCandidate[] {
+export function selectCandidates(raw: JsonObject, maxWidth: number, preferResolution = false): MediaCandidate[] {
   const streaming = object(raw.streamingData);
   const all = [
     ...formats(streaming.formats, true),
@@ -64,16 +64,24 @@ function selectCandidates(raw: JsonObject, maxWidth: number): MediaCandidate[] {
   const pool = bounded.length
     ? bounded
     : [...all].sort((a, b) => (a.width ?? Number.MAX_SAFE_INTEGER) - (b.width ?? Number.MAX_SAFE_INTEGER));
-  return pool
+  const ranked = pool
     .sort((a, b) => {
-      if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
       const width = (b.width ?? 0) - (a.width ?? 0);
+      if (preferResolution && width) return width;
+      if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
       return width || codecPreference(a) - codecPreference(b);
     })
     .filter((candidate, index, candidates) =>
       candidates.findIndex((other) => other.url === candidate.url) === index
-    )
-    .slice(0, 4);
+    );
+  const selected = ranked.slice(0, 4);
+  // Keep a progressive fallback even when four higher-resolution adaptive
+  // streams rank ahead of it. Some YouTube clients deny adaptive range reads.
+  if (preferResolution && !selected.some(candidate => candidate.progressive)) {
+    const fallback = ranked.find(candidate => candidate.progressive);
+    if (fallback) selected[selected.length - 1] = fallback;
+  }
+  return selected;
 }
 
 export async function loadMediaCandidateGroup(
@@ -81,12 +89,13 @@ export async function loadMediaCandidateGroup(
   videoId: string,
   maxWidth: number,
   options: YouTubeClientOptions,
+  preferResolution = false,
 ): Promise<MediaCandidateGroup | undefined> {
   const profile = WATCH_MEDIA_PROFILES[profileIndex];
   if (!profile) return undefined;
   try {
     const response = await callWatchPlayer(videoId, profile, options);
-    const candidates = selectCandidates(response.raw, maxWidth);
+    const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
     return candidates.length ? { profile: response.profile, candidates } : undefined;
   } catch {
     return undefined;

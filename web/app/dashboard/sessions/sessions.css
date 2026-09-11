@@ -137,6 +137,24 @@
 .agent-tool-content h4 { margin: 12px 0 6px; font-size: 10px; font-weight: 600; }
 .agent-tool-content pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-dashboard-surface-muted); border-radius: 6px; padding: 10px; font: 11px/1.7 var(--font-mono); margin: 0 0 10px; }
 .agent-tool-content ul { padding-left: 18px; }
+.agent-frame-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+.agent-sessions .agent-frame-card { padding: 0; overflow: hidden; text-align: left; border-radius: 8px; }
+.agent-sessions .agent-frame-card:disabled { opacity: 1; }
+.agent-frame-thumbnail { position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: var(--color-dashboard-surface-muted); }
+.agent-frame-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
+.agent-frame-zoom { position: absolute; right: 8px; bottom: 8px; box-sizing: content-box; padding: 5px; color: var(--ink); background: var(--panel); border-radius: 5px; }
+.agent-frame-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; padding: 8px 10px; font: 10px/1.5 var(--font-mono); }
+.agent-frame-caption > span + span { color: var(--muted); }
+.agent-frame-note { font-size: 11px; color: var(--muted); margin: 8px 0 12px; }
+.agent-frame-missing { padding: 20px; color: var(--muted); font-size: 12px; text-align: center; }
+.agent-frame-dialog { margin: auto; width: min(1200px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--panel); }
+.agent-frame-dialog::backdrop { background: rgb(0 0 0 / 72%); }
+.agent-frame-viewer header, .agent-frame-viewer footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; }
+.agent-frame-viewer header > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.agent-frame-viewer header strong { font-size: 13px; font-weight: 600; }
+.agent-frame-viewer header span, .agent-frame-viewer footer > span { font: 11px var(--font-mono); color: var(--muted); }
+.agent-frame-viewer > img { display: block; width: 100%; height: auto; max-height: calc(100dvh - 170px); object-fit: contain; background: var(--color-dashboard-surface-muted); }
+.agent-sessions .agent-frame-viewer button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; min-width: 44px; }
 .agent-spin { animation: agent-spin 1s linear infinite; }
 @keyframes agent-spin { to { transform: rotate(360deg); } }
 @keyframes agent-pulse { 50% { opacity: .45; } }

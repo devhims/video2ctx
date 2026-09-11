@@ -7,6 +7,7 @@ import {
   restrictCliSessionAuthRoutes,
 } from './middlewares';
 import indexRoutes from './routes/index.route';
+import { agentFramePreviewRoutes } from './routes/agent/frame-previews';
 import { agentRoutes } from './routes/agent/agent.index';
 import { dataRoutes } from './routes/data/data.index';
 import { publicRoutes } from './routes/public/public.index';
@@ -24,6 +25,7 @@ app.on(['GET', 'POST'], '/api/auth/*', (c) => c.get('auth')!.handler(c.req.raw))
 
 app.use('/v1/*', applicationCors);
 app.route('/v1', publicRoutes);
+app.route('/v1', agentFramePreviewRoutes);
 app.use('/v1/*', establishPrincipal);
 
 app.route('/v1', agentRoutes);
