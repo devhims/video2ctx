@@ -1,6 +1,7 @@
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
 import { compactAgentRunSchema } from './agents/response';
+import { agentRunProgressSchema } from './agents/runtime/run-progress';
 import {
   BROWSE_CATEGORIES,
   BROWSE_LANGUAGES,
@@ -611,7 +612,7 @@ export const openApiDocument = {
         tags: ['Agents'],
         operationId: 'startAgentRun',
         summary: 'Start a durable agent run',
-        description: 'Starts a new conversation when conversationId is omitted. Follow-up requests reuse the Durable Object selected by the supplied conversationId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.',
+        description: 'Starts a new conversation when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.',
         security: dataSecurity,
         parameters: [...agentResponseParameters, {
           name: 'Idempotency-Key',
@@ -626,6 +627,14 @@ export const openApiDocument = {
           '409': responseRef('Conflict'),
           ...dataErrors,
         },
+      },
+    },
+    '/v1/agent/access': {
+      get: {
+        tags: ['Agents'], operationId: 'getAgentAccess', summary: 'Check agent access for the authenticated account',
+        description: 'Uses the same runtime flag, rollout mode and current verified-email allowlist as agent execution. Returns 403 for accounts without access and 503 when disabled or verification is unavailable. Does not expose the allowlist or start a run.',
+        security: dataSecurity,
+        responses: { '200': jsonResponse('Agent access is enabled.', { type: 'object', required: ['enabled'], properties: { enabled: { const: true } } }), ...standardErrors },
       },
     },
     '/v1/agent/sessions': {
@@ -646,26 +655,26 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/agent/sessions/{conversationId}': {
+    '/v1/agent/sessions/{sessionId}': {
       get: {
         tags: ['Agents'],
         operationId: 'getAgentSession',
-        summary: 'Restore an agent conversation',
+        summary: 'Read an agent session',
         description: 'Returns the authenticated user’s session metadata and a chronological page of user and assistant messages. The first page contains the newest turns, ordered oldest to newest within the page. Use nextCursor to load older turns. Tool calls, evidence packets, and internal events are not included.',
         security: dataSecurity,
         parameters: [
-          pathParameter('conversationId', 'Conversation UUID returned by agent admission.'),
+          pathParameter('sessionId', 'Session UUID returned by agent admission.'),
           queryParameter('limit', 'Maximum turns to return. Each turn produces one user message and one assistant message.', { type: 'integer', minimum: 1, maximum: 100, default: 50 }),
           queryParameter('cursor', 'Opaque cursor for loading turns older than the current page.', { type: 'string', maxLength: 500 }),
         ],
         responses: {
-          '200': jsonResponse('The restored agent conversation.', schemaRef('AgentSessionDetail')),
+          '200': jsonResponse('The restored agent session.', schemaRef('AgentSessionDetail')),
           ...standardErrors,
           '404': responseRef('NotFound'),
         },
       },
     },
-    '/v1/agent/{conversationId}/runs/{runId}': {
+    '/v1/agent/{sessionId}/runs/{runId}': {
       get: {
         tags: ['Agents'],
         operationId: 'getAgentRun',
@@ -673,7 +682,7 @@ export const openApiDocument = {
         description: 'Reads the current status and, once complete, the persisted result from the conversation-scoped Durable Object.',
         security: dataSecurity,
         parameters: [
-          pathParameter('conversationId', 'Conversation UUID returned by agent admission.'),
+          pathParameter('sessionId', 'Session UUID returned by agent admission.'),
           pathParameter('runId', 'Agent run UUID returned by agent admission.'),
           ...agentResponseParameters,
         ],
@@ -681,6 +690,18 @@ export const openApiDocument = {
           '200': jsonResponse('Current agent run state. Compact results distinguish answered, partial, insufficient_evidence, needs_clarification, and rejected; completed describes execution, not evidence quality or scope acceptance.', { oneOf: [schemaRef('AgentRun'), schemaRef('CompactAgentRun')] }),
           ...standardErrors,
           '404': responseRef('NotFound'),
+        },
+      },
+    },
+    '/v1/agent/{sessionId}/runs/{runId}/events': {
+      get: {
+        tags: ['Agents'], operationId: 'streamAgentRun', summary: 'Watch an agent run and its tool activity',
+        description: 'Streams persisted snapshots as SSE. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. The validated answer arrives in a terminal snapshot, not as unvalidated model tokens. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.',
+        security: dataSecurity,
+        parameters: [pathParameter('sessionId', 'Session UUID returned by agent admission.'), pathParameter('runId', 'Agent run UUID returned by agent admission.')],
+        responses: {
+          '200': { description: 'SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status. Reconnect after EOF for an active run.', content: { 'text/event-stream': { schema: { type: 'string' } } } },
+          ...standardErrors, '404': responseRef('NotFound'),
         },
       },
     },
@@ -2004,17 +2025,19 @@ export const openApiDocument = {
         required: ['message'],
         properties: {
           message: { type: 'string', minLength: 1, maxLength: 10000 },
-          conversationId: { type: 'string', format: 'uuid', description: 'Reuse this conversation and its Durable Object.' },
+          sessionId: { type: 'string', format: 'uuid', description: 'Continue an existing agent session.' },
+          conversationId: { type: 'string', format: 'uuid', deprecated: true, description: 'Deprecated request alias for sessionId. If both are supplied, they must match. Responses return only sessionId.' },
           parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
         },
       },
+      AgentRunProgress: z.toJSONSchema(agentRunProgressSchema, { target: 'openapi-3.0' }),
       CompactAgentRun: z.toJSONSchema(compactAgentRunSchema, { target: 'openapi-3.0' }),
       AgentRunReceipt: {
         type: 'object',
-        required: ['runId', 'conversationId', 'userMessageId', 'assistantMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
+        required: ['runId', 'sessionId', 'userMessageId', 'assistantMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
         properties: {
           runId: { type: 'string', format: 'uuid' },
-          conversationId: { type: 'string', format: 'uuid' },
+          sessionId: { type: 'string', format: 'uuid' },
           userMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier assigned to the admitted user message.' },
           assistantMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier reserved for the assistant response.' },
           conversationTurn: { type: 'integer', minimum: 1, description: 'One-based position of this user and assistant turn within the conversation.' },
@@ -2025,9 +2048,9 @@ export const openApiDocument = {
       },
       AgentSession: {
         type: 'object',
-        required: ['conversationId', 'title', 'latestMessagePreview', 'lastRunId', 'runCount', 'createdAt', 'updatedAt'],
+        required: ['sessionId', 'title', 'latestMessagePreview', 'lastRunId', 'runCount', 'createdAt', 'updatedAt'],
         properties: {
-          conversationId: { type: 'string', format: 'uuid' },
+          sessionId: { type: 'string', format: 'uuid' },
           title: { type: 'string', maxLength: 80 },
           latestMessagePreview: { type: 'string', maxLength: 240 },
           lastRunId: { type: 'string', format: 'uuid' },
@@ -2111,9 +2134,9 @@ export const openApiDocument = {
       },
       AgentTurnResult: {
         type: 'object',
-        required: ['runId', 'conversationId', 'userMessageId', 'assistantMessageId', 'answer', 'intent', 'confidence', 'citations', 'artifacts', 'warnings', 'billing'],
+        required: ['runId', 'sessionId', 'userMessageId', 'assistantMessageId', 'answer', 'intent', 'confidence', 'citations', 'artifacts', 'warnings', 'billing'],
         properties: {
-          runId: { type: 'string', format: 'uuid' }, conversationId: { type: 'string', format: 'uuid' },
+          runId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' },
           userMessageId: { type: 'string', format: 'uuid' }, assistantMessageId: { type: 'string', format: 'uuid' },
           answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification', 'rejected'] },
           confidence: { type: 'string', enum: ['high', 'medium', 'low'] },

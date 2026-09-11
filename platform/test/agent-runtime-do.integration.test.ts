@@ -34,6 +34,19 @@ test('terminal run polling settles persisted evidence exactly once', async () =>
   expect(await creditBalance(env, userId)).toBe(999);
 });
 
+test('progress restores the persisted phase and tool trace without inference or private diagnostics', async () => {
+  const { runtime, runId } = await seed('agent-progress-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`INSERT INTO agent_events (run_id,type,payload_json,created_at)
+      VALUES (${runId},'transcript.diagnostic','invalid private capture',0)`;
+  });
+  expect(await runtime.getRunProgress(runId)).toMatchObject({ phase: 'research', run: { status: 'running' },
+    tools: [{ toolCallId: 'tool', name: 'get_video', status: 'completed' }] });
+  expect(await runtime.getRunProgress(crypto.randomUUID())).toBeNull();
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRunProgress(runId)).toMatchObject({ phase: 'failed', run: { status: 'failed' } });
+});
+
 test('pre-billing terminal runs are not charged retroactively', async () => {
   const { runtime, userId, runId } = await seed('agent-legacy-runtime');
   await env.DB.prepare('DELETE FROM credit_ledger WHERE user_id = ? AND operation_id = ?')

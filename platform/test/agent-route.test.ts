@@ -28,6 +28,7 @@ vi.mock('../src/middlewares/authentication', () => {
 });
 
 import { app } from '../src/index';
+import { withSessionId } from '../src/agents/response';
 
 const executionContext = {
   waitUntil: vi.fn(),
@@ -41,7 +42,8 @@ describe('agent routes', () => {
   });
 
   test.each([
-    '/v1/agent', '/v1/agent/sessions',
+    '/v1/agent', '/v1/agent/access', '/v1/agent/sessions',
+    '/v1/agent/f1611a8b-cb84-4305-a365-328bd06bedac/runs/cd056140-7d4c-4516-bb9e-c97914439553/events',
     '/v1/agent/sessions/f1611a8b-cb84-4305-a365-328bd06bedac',
     '/v1/agent/f1611a8b-cb84-4305-a365-328bd06bedac/runs/cd056140-7d4c-4516-bb9e-c97914439553',
   ])('denies non-admins before work or data access at %s', async (path) => {
@@ -52,6 +54,52 @@ describe('agent routes', () => {
     expect(response.status).toBe(403);
     expect(harness.getByName).not.toHaveBeenCalled();
     expect(harness.accountGetByName).not.toHaveBeenCalled();
+    expect(creditBalance).not.toHaveBeenCalled();
+  });
+
+  test('exposes access eligibility without starting work or exposing the allowlist', async () => {
+    const harness = agentHarness();
+    const response = await app.request('/v1/agent/access', {}, harness.env, executionContext);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ enabled: true });
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(harness.adminUser).toHaveBeenCalledOnce();
+    expect(harness.getByName).not.toHaveBeenCalled();
+    expect(harness.accountGetByName).not.toHaveBeenCalled();
+    expect(creditBalance).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { AGENT_RUNTIME_ENABLED: 'false' },
+    { AGENT_ACCESS_MODE: 'invalid' },
+    { ADMIN_EMAILS_SECRET: '' },
+  ])('fails closed on access discovery with %o', async configuration => {
+    const harness = agentHarness();
+    Object.assign(harness.env, configuration);
+    const response = await app.request('/v1/agent/access', {}, harness.env, executionContext);
+    expect([403, 503]).toContain(response.status);
+    expect(harness.getByName).not.toHaveBeenCalled();
+  });
+
+  test('accepts sessionId for follow-ups and preserves the existing durable identity', async () => {
+    const harness = agentHarness();
+    const sessionId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
+    const response = await postAgent(harness.env, 'session-id-follow-up', { message: 'Continue', sessionId });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ sessionId });
+    expect(harness.startRun.mock.calls[0]?.[0]).toMatchObject({ conversationId: sessionId });
+    expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('sessionId');
+    await postAgent(harness.env, 'legacy-id-follow-up', { message: 'Continue', conversationId: sessionId });
+    expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
+  });
+
+  test('rejects conflicting session aliases before admission or billing', async () => {
+    const harness = agentHarness();
+    const response = await postAgent(harness.env, 'conflicting-session-ids', {
+      message: 'Continue', sessionId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+    });
+    expect(response.status).toBe(422);
+    expect(harness.startRun).not.toHaveBeenCalled();
     expect(creditBalance).not.toHaveBeenCalled();
   });
 
@@ -106,9 +154,9 @@ describe('agent routes', () => {
 
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
-    const firstReceipt = await first.json<{ conversationId: string }>();
-    const secondReceipt = await second.json<{ conversationId: string }>();
-    expect(firstReceipt.conversationId).not.toBe(secondReceipt.conversationId);
+    const firstReceipt = await first.json<{ sessionId: string }>();
+    const secondReceipt = await second.json<{ sessionId: string }>();
+    expect(firstReceipt.sessionId).not.toBe(secondReceipt.sessionId);
     expect(harness.instanceNames[0]).not.toBe(harness.instanceNames[1]);
   });
 
@@ -119,11 +167,11 @@ describe('agent routes', () => {
     });
 
     expect(response.status).toBe(202);
-    const receipt = await response.json<{ conversationId: string; runId: string }>();
+    const receipt = await response.json<{ sessionId: string; runId: string }>();
     expect(harness.accountInstanceNames).toHaveLength(1);
     expect(harness.registerConversation.mock.invocationCallOrder[0]).toBeLessThan(harness.startRun.mock.invocationCallOrder[0]!);
     expect(harness.recordSession).toHaveBeenCalledWith(expect.objectContaining({
-      conversationId: receipt.conversationId,
+      conversationId: receipt.sessionId,
       runId: receipt.runId,
       message: 'Research durable agent memory',
     }));
@@ -159,7 +207,7 @@ describe('agent routes', () => {
     }, harness.env, executionContext);
     expect(response.status).toBe(202);
     const receipt = await response.json<Record<string, unknown>>();
-    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'conversationId', 'request', 'runId', 'status']);
+    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'request', 'runId', 'sessionId', 'status']);
     expect(receipt).toHaveProperty('request.message', 'Research design');
     expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('responseFormat');
   });
@@ -172,7 +220,7 @@ describe('agent routes', () => {
     harness.getRun.mockResolvedValue(stored);
     const path = `/v1/agent/${stored.conversationId}/runs/${stored.runId}`;
     const legacy = await app.request(`${path}?responseFormat=legacy`, {}, harness.env, executionContext);
-    expect(await legacy.json()).toEqual(stored);
+    expect(await legacy.json()).toEqual(withSessionId(stored));
     const compact = await app.request(`${path}?responseFormat=compact&include=diagnostics`, {}, harness.env, executionContext);
     expect(compact.status).toBe(200);
     expect(await compact.json()).toMatchObject({ status: 'running', request: { message: 'Compare models' }, diagnostics: { toolCallCount: 3 } });
@@ -216,6 +264,8 @@ describe('agent routes', () => {
     expect(response.status).toBe(200);
     const page = await response.json<{ sessions: unknown[]; nextCursor: string }>();
     expect(page.sessions).toHaveLength(1);
+    expect(page.sessions[0]).toHaveProperty('sessionId', conversationId);
+    expect(page.sessions[0]).not.toHaveProperty('conversationId');
     expect(page.nextCursor).toEqual(expect.any(String));
     expect(harness.listSessions).toHaveBeenCalledWith({
       query: 'durable objects',
@@ -293,6 +343,8 @@ describe('agent routes', () => {
 
     expect(response.status).toBe(200);
     const restored = await response.json<{ messages: Array<{ role: string }>; nextCursor: string }>();
+    expect(restored).toHaveProperty('sessionId', conversationId);
+    expect(restored).not.toHaveProperty('conversationId');
     expect(restored.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(restored.nextCursor).toEqual(expect.any(String));
     expect(JSON.stringify(restored)).not.toContain('toolCalls');
@@ -423,10 +475,53 @@ describe('agent routes', () => {
     const first = await postAgent(harness.env, 'retry-admission-1', { message: 'Retry this safely' });
     const second = await postAgent(harness.env, 'retry-admission-1', { message: 'Retry this safely' });
 
-    const firstReceipt = await first.json<{ conversationId: string }>();
-    const secondReceipt = await second.json<{ conversationId: string }>();
-    expect(firstReceipt.conversationId).toBe(secondReceipt.conversationId);
+    const firstReceipt = await first.json<{ sessionId: string }>();
+    const secondReceipt = await second.json<{ sessionId: string }>();
+    expect(firstReceipt.sessionId).toBe(secondReceipt.sessionId);
     expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
+  });
+
+  test('streams the saved terminal snapshot, isolates ownership, and never starts work', async () => {
+    const harness = agentHarness();
+    const sessionId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    const snapshot = { run: { sessionId, runId, assistantMessageId: crypto.randomUUID(), status: 'failed', error: 'Classification failed' }, phase: 'failed', tools: [] };
+    harness.getRunProgress.mockResolvedValue(snapshot);
+    const path = `/v1/agent/${sessionId}/runs/${runId}/events`;
+    const response = await app.request(path, {}, harness.env, executionContext);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(response.headers.get('cache-control')).toBe('no-store, no-transform');
+    expect(await response.text()).toBe(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    expect(harness.startRun).not.toHaveBeenCalled();
+    expect(creditBalance).not.toHaveBeenCalled();
+    expect(harness.instanceNames[0]).toBe(await (await import('../src/agents/runtime/identity')).agentInstanceName('agent-user', sessionId));
+    harness.getRunProgress.mockResolvedValue(null);
+    expect((await app.request(path, {}, harness.env, executionContext)).status).toBe(404);
+  });
+
+  test('disconnecting the observer stops reads without cancelling or restarting execution', async () => {
+    const harness = agentHarness();
+    const sessionId = crypto.randomUUID(), runId = crypto.randomUUID();
+    harness.getRunProgress.mockResolvedValue({ run: { sessionId, runId, status: 'running' }, phase: 'research', tools: [] });
+    const response = await app.request(`/v1/agent/${sessionId}/runs/${runId}/events`, {}, harness.env, executionContext);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('event: snapshot');
+    await reader.cancel();
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    expect(harness.getRunProgress).toHaveBeenCalledTimes(1);
+    expect(harness.startRun).not.toHaveBeenCalled();
+  });
+
+  test('stream errors expose a recoverable event without raw upstream errors', async () => {
+    const harness = agentHarness();
+    const sessionId = crypto.randomUUID(), runId = crypto.randomUUID();
+    harness.getRunProgress.mockResolvedValueOnce({ run: { sessionId, runId, status: 'running' }, phase: 'research', tools: [] })
+      .mockRejectedValue(new Error('secret upstream diagnostic'));
+    const response = await app.request(`/v1/agent/${sessionId}/runs/${runId}/events`, {}, harness.env, executionContext);
+    const events = await response.text();
+    expect(events).toContain('event: snapshot');
+    expect(events).toContain('event: unavailable');
+    expect(events).not.toContain('secret upstream');
   });
 
   test('requires a valid idempotency key and request body', async () => {
@@ -468,13 +563,13 @@ describe('agent routes', () => {
     harness.startRun.mockImplementation(() => new Promise(() => {}));
     const response = await postAgent(harness.env, 'durable-admission-key', { message: 'Research' });
     expect(response.status).toBe(202);
-    expect(await response.json()).toEqual(receipt);
+    expect(await response.json()).toEqual(withSessionId(receipt));
     expect(harness.startRun).not.toHaveBeenCalled();
     expect(harness.registerConversation).not.toHaveBeenCalled();
     expect(harness.adminUser).toHaveBeenCalledTimes(1);
     harness.pendingAgentRun.mockResolvedValue({ run: receipt, message: 'Research', admittedAt: 123 });
     const poll = await app.request(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, {}, harness.env, executionContext);
-    expect(await poll.json()).toEqual(receipt);
+    expect(await poll.json()).toEqual(withSessionId(receipt));
     expect(harness.getRun).not.toHaveBeenCalled();
     const followup = await postAgent(harness.env, 'follow-up-admission-key', { conversationId: receipt.conversationId, message: 'More detail' });
     expect(followup.status).toBe(409);
@@ -504,7 +599,7 @@ describe('agent routes', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       runId,
-      conversationId,
+      sessionId: conversationId,
       assistantMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
       status: 'running',
     });
@@ -557,6 +652,7 @@ function agentHarness(enabled = 'true') {
     };
   });
   const getRun = vi.fn(async () => null as unknown);
+  const getRunProgress = vi.fn(async () => null as unknown);
   const getConversation = vi.fn(async (): Promise<AgentConversationPage | null> => null);
   const registerConversation = vi.fn(async () => undefined);
   const recordSession = vi.fn(async () => undefined);
@@ -564,7 +660,7 @@ function agentHarness(enabled = 'true') {
   const getSession = vi.fn(async (): Promise<UserSessionSummary | null> => null);
   const getByName = vi.fn((name: string) => {
     instanceNames.push(name);
-    return { startRun, getRun, getConversation };
+    return { startRun, getRun, getRunProgress, getConversation };
   });
   const accountInstanceNames: string[] = [];
   const enqueueAgentRun = vi.fn().mockResolvedValue({ legacy: true });
@@ -586,7 +682,7 @@ function agentHarness(enabled = 'true') {
     instanceNames,
     adminUser,
     startRun,
-    getRun,
+    getRun, getRunProgress,
     getConversation,
     accountGetByName,
     enqueueAgentRun, pendingAgentRun,

@@ -19,6 +19,7 @@ async function proxy(request: Request, context: RouteContext): Promise<Response>
   headers.set('x-forwarded-prefix', '/api/platform');
   const init: RequestInit = {
     method: request.method,
+    signal: request.signal,
     headers,
     redirect: 'manual',
     body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,

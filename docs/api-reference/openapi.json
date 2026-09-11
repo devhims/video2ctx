@@ -340,7 +340,7 @@
         ],
         "operationId": "startAgentRun",
         "summary": "Start a durable agent run",
-        "description": "Starts a new conversation when conversationId is omitted. Follow-up requests reuse the Durable Object selected by the supplied conversationId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.",
+        "description": "Starts a new conversation when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.",
         "security": [
           {
             "bearerApiKey": []
@@ -460,6 +460,69 @@
         "x-video2ctx-audience": "consumer"
       }
     },
+    "/v1/agent/access": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "getAgentAccess",
+        "summary": "Check agent access for the authenticated account",
+        "description": "Uses the same runtime flag, rollout mode and current verified-email allowlist as agent execution. Returns 403 for accounts without access and 503 when disabled or verification is unavailable. Does not expose the allowlist or start a run.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent access is enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
     "/v1/agent/sessions": {
       "get": {
         "tags": [
@@ -550,13 +613,13 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/agent/sessions/{conversationId}": {
+    "/v1/agent/sessions/{sessionId}": {
       "get": {
         "tags": [
           "Agents"
         ],
         "operationId": "getAgentSession",
-        "summary": "Restore an agent conversation",
+        "summary": "Read an agent session",
         "description": "Returns the authenticated user’s session metadata and a chronological page of user and assistant messages. The first page contains the newest turns, ordered oldest to newest within the page. Use nextCursor to load older turns. Tool calls, evidence packets, and internal events are not included.",
         "security": [
           {
@@ -577,10 +640,10 @@
         ],
         "parameters": [
           {
-            "name": "conversationId",
+            "name": "sessionId",
             "in": "path",
             "required": true,
-            "description": "Conversation UUID returned by agent admission.",
+            "description": "Session UUID returned by agent admission.",
             "schema": {
               "type": "string",
               "minLength": 1
@@ -611,7 +674,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The restored agent conversation.",
+            "description": "The restored agent session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -642,7 +705,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/agent/{conversationId}/runs/{runId}": {
+    "/v1/agent/{sessionId}/runs/{runId}": {
       "get": {
         "tags": [
           "Agents"
@@ -669,10 +732,10 @@
         ],
         "parameters": [
           {
-            "name": "conversationId",
+            "name": "sessionId",
             "in": "path",
             "required": true,
-            "description": "Conversation UUID returned by agent admission.",
+            "description": "Session UUID returned by agent admission.",
             "schema": {
               "type": "string",
               "minLength": 1
@@ -728,6 +791,86 @@
                       "$ref": "#/components/schemas/CompactAgentRun"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/agent/{sessionId}/runs/{runId}/events": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "streamAgentRun",
+        "summary": "Watch an agent run and its tool activity",
+        "description": "Streams persisted snapshots as SSE. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. The validated answer arrives in a terminal snapshot, not as unvalidated model tokens. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID returned by agent admission.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "description": "Agent run UUID returned by agent admission.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status. Reconnect after EOF for an active run.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6335,10 +6478,16 @@
             "minLength": 1,
             "maxLength": 10000
           },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Continue an existing agent session."
+          },
           "conversationId": {
             "type": "string",
             "format": "uuid",
-            "description": "Reuse this conversation and its Durable Object."
+            "deprecated": true,
+            "description": "Deprecated request alias for sessionId. If both are supplied, they must match. Responses return only sessionId."
           },
           "parentMessageId": {
             "type": "string",
@@ -6347,15 +6496,810 @@
           }
         }
       },
+      "AgentRunProgress": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "assistantMessageId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ]
+              },
+              "request": {
+                "description": "Original stored user message for this run, not a model-generated restatement.",
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "maxLength": 10000
+                  }
+                },
+                "required": [
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "sessionId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "result": {
+                "type": "object",
+                "properties": {
+                  "coverage": {
+                    "type": "object",
+                    "properties": {
+                      "targetVideos": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true,
+                        "maximum": 9007199254740991
+                      },
+                      "reviewedVideos": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "requiredVideos": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "targetVideos",
+                      "reviewedVideos"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "answered",
+                      "partial",
+                      "insufficient_evidence",
+                      "needs_clarification",
+                      "rejected"
+                    ],
+                    "description": "Answer availability based on routing intent and persisted evidence warnings. Rejected means outside supported YouTube video research and synthesis. This is not a factual-confidence score."
+                  },
+                  "answer": {
+                    "type": "string"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Source number used by [1] references in this answer."
+                        },
+                        "videoId": {
+                          "type": "string"
+                        },
+                        "channelId": {
+                          "type": "string"
+                        },
+                        "playlistId": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "title"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "warnings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "videoId": {
+                          "description": "Video to which this source-specific caveat applies.",
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        },
+                        "code": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "data": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "data"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "evidence": {
+                    "description": "Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.",
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        },
+                        "sourceId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "youtube"
+                          ]
+                        },
+                        "videoId": {
+                          "type": "string",
+                          "maxLength": 100
+                        },
+                        "channelId": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "playlistId": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "excerpt": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "startMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "endMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceId",
+                        "provider",
+                        "excerpt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "answer",
+                  "sources",
+                  "warnings"
+                ],
+                "additionalProperties": false
+              },
+              "billing": {
+                "type": "object",
+                "properties": {
+                  "creditsCharged": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "creditsRemaining": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "creditsCharged",
+                  "creditsRemaining"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "string"
+              },
+              "diagnostics": {
+                "type": "object",
+                "properties": {
+                  "userMessageId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "conversationTurn": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  },
+                  "modelStepCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "toolCallCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "route": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "route": {
+                            "type": "string",
+                            "enum": [
+                              "topic_research"
+                            ]
+                          },
+                          "researchVideoCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "requiredVideoCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100
+                          },
+                          "researchBreadth": {
+                            "type": "string",
+                            "enum": [
+                              "focused",
+                              "comparative"
+                            ]
+                          },
+                          "searchQuery": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          "channelId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$"
+                          },
+                          "useStoryboard": {
+                            "type": "boolean"
+                          },
+                          "answerDetail": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "detailed"
+                            ]
+                          },
+                          "numberedItemCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100
+                          }
+                        },
+                        "required": [
+                          "route"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "route": {
+                            "type": "string",
+                            "enum": [
+                              "inspect_video"
+                            ]
+                          },
+                          "researchVideoCount": {
+                            "type": "number",
+                            "enum": [
+                              1
+                            ]
+                          },
+                          "videoId": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{11}$"
+                          },
+                          "useStoryboard": {
+                            "type": "boolean"
+                          },
+                          "answerDetail": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "detailed"
+                            ]
+                          },
+                          "numberedItemCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100
+                          }
+                        },
+                        "required": [
+                          "route",
+                          "videoId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "route": {
+                            "type": "string",
+                            "enum": [
+                              "clarification"
+                            ]
+                          },
+                          "question": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": [
+                          "route",
+                          "question"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "route": {
+                            "type": "string",
+                            "enum": [
+                              "rejected"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": [
+                          "route",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "transcriptAnalysis": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "number",
+                          "enum": [
+                            1
+                          ]
+                        },
+                        "stage": {
+                          "type": "string",
+                          "enum": [
+                            "transcript_analysis"
+                          ]
+                        },
+                        "videoId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "attemptId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2
+                        },
+                        "recordedAt": {
+                          "type": "number"
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "started",
+                            "rejected",
+                            "accepted",
+                            "failed",
+                            "canceled"
+                          ]
+                        },
+                        "elapsedMs": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "GROUNDING_REJECTED",
+                            "INVALID_REFERENCE",
+                            "OUTPUT_LIMIT",
+                            "SCHEMA_INVALID",
+                            "PROVIDER_ERROR",
+                            "ANALYSIS_ERROR",
+                            "ANALYSIS_TIMEOUT",
+                            "CANCELED"
+                          ]
+                        },
+                        "finishReason": {
+                          "type": "string",
+                          "maxLength": 50
+                        },
+                        "modelId": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "inputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputTokens": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cancellationReason": {
+                          "type": "string",
+                          "maxLength": 50
+                        },
+                        "statusCode": {
+                          "type": "number"
+                        },
+                        "issues": {
+                          "maxItems": 100,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "ENTITY_NOT_SUPPORTED",
+                                  "QUANTITY_NOT_SUPPORTED",
+                                  "UNIT_NOT_EXPLICIT",
+                                  "UNIT_MISMATCH",
+                                  "BASIS_NOT_SUPPORTED",
+                                  "UNCERTAINTY_MISSING",
+                                  "CLAIM_QUANTITY_NOT_SUPPORTED",
+                                  "UNKNOWN_WINDOW",
+                                  "OUTPUT_LIMIT",
+                                  "SCHEMA_INVALID"
+                                ]
+                              },
+                              "findingIndex": {
+                                "description": "Zero-based index in the rejected model output.",
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fieldIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "windowIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "message": {
+                                "type": "string",
+                                "maxLength": 1000
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "issueCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "repairFeedback": {
+                          "type": "string",
+                          "maxLength": 4000
+                        },
+                        "rejectedOutput": {
+                          "type": "string",
+                          "maxLength": 24000
+                        },
+                        "sourceContext": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "channel": {
+                              "type": "string",
+                              "maxLength": 300
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "sourceWindows": {
+                          "maxItems": 15,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "index": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "endMs": {
+                                "type": "number"
+                              },
+                              "text": {
+                                "type": "string",
+                                "maxLength": 2000
+                              }
+                            },
+                            "required": [
+                              "index",
+                              "startMs",
+                              "endMs",
+                              "text"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "captureTruncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "stage",
+                        "videoId",
+                        "modelCallId",
+                        "attemptId",
+                        "attempt",
+                        "recordedAt",
+                        "outcome",
+                        "elapsedMs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "userMessageId",
+                  "conversationTurn",
+                  "modelStepCount",
+                  "toolCallCount"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "runId",
+              "assistantMessageId",
+              "status",
+              "sessionId"
+            ],
+            "additionalProperties": false
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "classification",
+              "research",
+              "finalization",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "toolCallId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "running",
+                    "completed",
+                    "failed"
+                  ]
+                },
+                "startedAt": {
+                  "type": "number"
+                },
+                "finishedAt": {
+                  "type": "number"
+                },
+                "input": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "sourceCount": {
+                      "type": "number"
+                    },
+                    "excerptCount": {
+                      "type": "number"
+                    },
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "videoId": {
+                            "type": "string"
+                          },
+                          "channelId": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "warningCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "sourceCount",
+                    "excerptCount",
+                    "sources",
+                    "warningCodes"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "toolCallId",
+                "name",
+                "operation",
+                "status",
+                "startedAt",
+                "input"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "run",
+          "phase",
+          "tools"
+        ],
+        "additionalProperties": false
+      },
       "CompactAgentRun": {
         "type": "object",
         "properties": {
           "runId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "conversationId": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
@@ -6388,6 +7332,11 @@
               "message"
             ],
             "additionalProperties": false
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
           "result": {
             "type": "object",
@@ -7014,9 +7963,9 @@
         },
         "required": [
           "runId",
-          "conversationId",
           "assistantMessageId",
-          "status"
+          "status",
+          "sessionId"
         ],
         "additionalProperties": false
       },
@@ -7024,7 +7973,7 @@
         "type": "object",
         "required": [
           "runId",
-          "conversationId",
+          "sessionId",
           "userMessageId",
           "assistantMessageId",
           "conversationTurn",
@@ -7037,7 +7986,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "conversationId": {
+          "sessionId": {
             "type": "string",
             "format": "uuid"
           },
@@ -7081,7 +8030,7 @@
       "AgentSession": {
         "type": "object",
         "required": [
-          "conversationId",
+          "sessionId",
           "title",
           "latestMessagePreview",
           "lastRunId",
@@ -7090,7 +8039,7 @@
           "updatedAt"
         ],
         "properties": {
-          "conversationId": {
+          "sessionId": {
             "type": "string",
             "format": "uuid"
           },
@@ -7384,7 +8333,7 @@
         "type": "object",
         "required": [
           "runId",
-          "conversationId",
+          "sessionId",
           "userMessageId",
           "assistantMessageId",
           "answer",
@@ -7400,7 +8349,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "conversationId": {
+          "sessionId": {
             "type": "string",
             "format": "uuid"
           },

@@ -27,7 +27,7 @@ sequenceDiagram
     participant M as Workers AI
     participant Y as Provider stack and YouTube processor
     P->>R: POST message and idempotency key
-    R-->>P: 202 with conversationId and runId
+    R-->>P: 202 with sessionId and runId
     R->>M: Classify request
     M-->>R: topic_research
     R->>M: Agent Core chooses search tools
@@ -70,7 +70,7 @@ sequenceDiagram
     participant M as Workers AI
     participant Y as Provider stack and YouTube processor
     P->>R: POST request with a YouTube URL or ID
-    R-->>P: 202 with conversationId and runId
+    R-->>P: 202 with sessionId and runId
     R->>R: Extract allowed video IDs
     R->>M: Classify with supplied IDs
     M-->>R: inspect_video and selected ID

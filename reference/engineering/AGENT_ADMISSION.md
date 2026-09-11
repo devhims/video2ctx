@@ -18,7 +18,7 @@ sequenceDiagram
     API->>Account: Enqueue first turn
     Account->>Account: Arm alarm, atomically save admission and session
     Account-->>API: Stable receipt
-    API-->>Client: 202 with conversationId and runId
+    API-->>Client: 202 with sessionId and runId
     Account->>Runtime: Alarm delivers request and assigned IDs
     Client->>API: Poll run
     API->>Account: Check undelivered admission
@@ -32,7 +32,7 @@ sequenceDiagram
 
 ## Guarantees and limits
 
-- The fast path applies when the request omits conversationId and parentMessageId.
+- The fast path applies when the request omits sessionId and parentMessageId.
   Follow-ups retain synchronous parent and active-run validation.
 - Retries with the original Idempotency-Key reuse the admission receipt and IDs.
   Existing conversations admitted before this change retain the original path.
