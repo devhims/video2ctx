@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { evidencePacketSchema } from '../contracts';
 import { compactAgentRunSchema } from '../response';
+import { framePreviewSchema, packetFramePreviews } from './frame-previews';
 
 const inputValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.number())]);
 export const agentToolTraceSchema = z.object({
@@ -12,6 +13,7 @@ export const agentToolTraceSchema = z.object({
     sourceCount: z.number(), excerptCount: z.number(),
     sources: z.array(z.object({ title: z.string().optional(), videoId: z.string().optional(), channelId: z.string().optional() })),
     warningCodes: z.array(z.string()),
+    frames: z.array(framePreviewSchema).max(6).optional(),
   }).optional(),
 });
 export const agentRunProgressSchema = z.object({
@@ -49,6 +51,7 @@ export function toolTrace(row: {
       sourceCount: packet.data.sources.length, excerptCount: packet.data.excerpts.length,
       sources: packet.data.sources.map(({ title, videoId, channelId }) => ({ title, videoId, channelId })),
       warningCodes: [...new Set(packet.data.warnings.map(warning => warning.code))],
+      ...(packet.data.kind === 'youtube_frames' ? { frames: packetFramePreviews(packet.data) } : {}),
     } } : {}),
   });
 }

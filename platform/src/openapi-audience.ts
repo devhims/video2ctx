@@ -34,6 +34,7 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   listAgentSessions: 'consumer',
   getAgentSession: 'consumer',
   getAgentRun: 'consumer',
+  getAgentFramePreview: 'consumer',
   streamAgentRun: 'consumer',
   searchPrivateEvidence: 'consumer',
   listProviders: 'consumer',

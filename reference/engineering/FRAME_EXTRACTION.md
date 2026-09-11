@@ -47,7 +47,7 @@ sequenceDiagram
     Worker-->>Agent: Timestamped visual evidence
 ```
 
-Frame extraction is available only through `get_video_frames` inside the existing agent API. There is no public data API frame endpoint. The private container's `/frames` route is reached through its Worker binding. The built-in agent tool passes JPEGs to an isolated visual analyst, then returns observations with timestamped citations. It persists the evidence and image metadata, without persisting JPEG data, media URLs, or container paths. The existing visual classifier, pinned-video checks, analyst concurrency limit, model budget, and research deadline apply.
+Frame extraction is available only through `get_video_frames` inside the existing agent API. There is no public data API frame endpoint. The private container's `/frames` route is reached through its Worker binding. The built-in agent tool passes JPEGs to an isolated visual analyst, then returns observations with timestamped citations. It persists the evidence and compact image metadata. After successful analysis, it saves the original JPEG bytes in R2 storage for dashboard previews. Media URLs and container paths are not persisted. The existing visual classifier, pinned-video checks, analyst concurrency limit, model budget, and research deadline apply.
 
 ## Agent tool and private container contract
 
@@ -66,7 +66,7 @@ The selection contains 1 to 6 nonnegative integer millisecond timestamps. Duplic
 
 Successful private container responses contain `videoId`, `frames`, `failures`, and `meta`. Each frame contains `timestampMs`, `mimeType`, `width`, `height`, optional source dimensions, and `imageBase64`. The response accounts for every unique requested timestamp exactly once, either as a JPEG or an explicit failure. The Worker checks this mapping before running vision. The agent receives visual findings and image metadata, with no JPEG bytes in its evidence packet.
 
-The agreed price is 2 credits per successful batch of 1 to 6 frames, including visual analysis and partial results, through the existing agent usage and reservation lifecycle. Failed extraction or analysis does not charge for that tool call. An identical request reused within the same agent run incurs no additional charge. Other successful tools in the run retain their own charges. Images are not cached or stored in R2.
+The agreed price is 2 credits per successful batch of 1 to 6 frames, including visual analysis and partial results, through the existing agent usage and reservation lifecycle. Failed extraction or analysis does not charge for that tool call. An identical request reused within the same agent run incurs no additional charge. Other successful tools in the run retain their own charges. Viewing a saved preview does not charge credits or repeat extraction.
 
 ## Resource bounds and deployment
 
@@ -102,7 +102,7 @@ Run `9d9cf344-f62d-44d8-9224-73cfbe6b9f7a`, session `cd590466-2383-81ce-98b2-70d
 
 The persisted progress snapshot records a completed `get_video_frames` call with `timestampsMs: [14000, 30000, 60000]`. That tool completed in 26.0 seconds and produced three evidence excerpts. The response contains a `youtube_frame_analysis` artifact with three 1920 by 1080 frames, no extraction failures, and three matching timestamped citations. The only other recorded tools are metadata retrieval and finalization; no transcript or storyboard tool ran. This verifies that the deployed agent used individual-frame evidence to answer the request.
 
-For independent visual checking, the same production container was queried through a temporary token-protected verification Worker. One three-frame retrieval timed out after the container's 60-second deadline; individual-frame requests were then used to retrieve comparison JPEGs. Comparison files are separate extractions at the same requested timestamps and dimensions. The agent does not persist its original JPEG bytes or hashes, so this check does not establish byte-for-byte identity with the images passed to its visual analyst.
+For independent visual checking, the same production container was queried through a temporary token-protected verification Worker. One three-frame retrieval timed out after the container's 60-second deadline; individual-frame requests were then used to retrieve comparison JPEGs. Comparison files are separate extractions at the same requested timestamps and dimensions. At the time of this test, the agent did not persist its original JPEG bytes or hashes, so this check does not establish byte-for-byte identity with the images passed to its visual analyst.
 
 All three comparison requests succeeded at 1920 by 1080. Each JPEG was opened and visually inspected against the corresponding answer and citation:
 
@@ -133,3 +133,21 @@ docker build -f platform/youtube-frames/Dockerfile -t video2ctx-youtube-frames:l
 The automated tests cover agent-only exposure, agent credit usage, request validation, response coverage, timestamp citations, visual isolation, scope restrictions, process-tree termination, cleanup, and resolution fallback. The existing `WATCH_FFMPEG_TEST=1` test exercises a real FFmpeg seek through the range proxy; `YOUTUBE_LIVE=1` exercises the upstream service and can fail when YouTube rejects media access.
 
 Cloudflare references: [Container class](https://developers.cloudflare.com/containers/reference/container-class/) and [Worker best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/).
+
+## Dashboard frame previews
+
+New frame calls save the exact JPEGs sent to the visual analyst after analysis succeeds. The expanded dashboard tool trace shows a thumbnail grid with timestamps and dimensions, plus an enlarged viewer. The trace contains only preview descriptors, never base64 image data. Historical calls without saved images explain that previews were not saved.
+
+Objects live under `agent-frames/{collectionId}/{assetId}.jpg` in the existing RESEARCH bucket. Collection IDs are derived from the account ID; each asset ID has 256 random bits. URLs contain no session IDs, run IDs, prompts, or raw account IDs. Images remain available until account deletion. The deletion flow drains active agent work before deleting both private research data and the account’s frame collection. Failed or cancelled uploads roll back their batch; storage failures leave successful visual evidence usable with a `FRAME_PREVIEW_UNAVAILABLE` warning.
+
+`GET /v1/agent/frames/{collectionId}/{assetId}` is public. Anyone with the unguessable URL can view the JPEG without a login or API key. The handler is mounted before authentication and can read only JPEG keys in the frame namespace. The R2 bucket itself is not public. There is no listing route or data API frame endpoint. Session reads and new extraction requests still require authentication. Responses use `image/jpeg`, `no-store`, `nosniff`, and `noindex, nofollow`. The dashboard loads original images through its existing API proxy with Next.js image optimization disabled.
+
+### Preview deployment verification
+
+The preview backend was deployed on September 12, 2026 to Worker version `d252c94e-4034-405c-9dc1-f70c9df51462`, using `wrangler deploy --containers-rollout=none`. Both container images were preserved. The dashboard preview UI is included in PR #37 and requires the web deployment after merge.
+
+Validation passed: platform and web type checking, the web production build, 31 web tests, all 17 dashboard browser tests in Chrome, 30 Worker runtime integration tests, and focused persistence, public-route, cleanup, trace, and routing tests. Screenshots were inspected on desktop and mobile. The full platform suite passed before the final routing clarification; the 44 routing tests passed afterward.
+
+The first preview smoke run (`f30a76cb-3af6-4300-b7c4-cd6b120e69c4`) returned metadata only. The classifier had interpreted “do not use storyboards” as `useStoryboard: false`, which disables both visual tools. The classifier instruction now explicitly enables individual-frame requests even when the user declines storyboards.
+
+The repeated request passed after that clarification. Run `a7c684ae-c469-48df-82e2-1ca86ec5f0df` in session `a10c268b-10ee-896a-91ec-b805a3edf9f0` extracted frames at 14,000 and 30,000 ms from `dQw4w9WgXcQ`. The completed trace contained both preview descriptors. Anonymous GETs returned valid 1920 by 1080 JPEGs of 109,199 and 97,810 bytes. Both saved originals were opened and compared with the answer; the shirt, sunglasses, fence, framing, and pillarbox descriptions matched the visible images. The run charged 3 credits, comprising metadata plus the frame batch. Anonymous session reads still returned 401, and the data API frame path returned 404.

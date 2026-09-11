@@ -4,6 +4,7 @@ import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
+import { toolTrace } from '../src/agents/runtime/run-progress';
 
 const frames = { videoId: 'abcdefghijk', frames: [{ timestampMs: 1234, mimeType: 'image/jpeg' as const,
   width: 1920, height: 1080, imageBase64: '/9j/2Q==' }], failures: [], meta: { partial: false, warnings: [] } };
@@ -26,6 +27,30 @@ function context(): AgentToolContext {
 }
 const input = { videoId: frames.videoId, timestampsMs: [1234], focus: 'Read the chart' };
 describe('agent frame tool', () => {
+  test('saves the original analyzed frames and exposes only descriptors', async () => {
+    const ctx = context();
+    const previews = [{ assetId: 'a'.repeat(64), collectionId: 'b'.repeat(64), timestampMs: 1234, width: 1920, height: 1080 }];
+    ctx.saveFramePreviews = vi.fn(async () => previews);
+    const result = await executeGetVideoFrames(input, ctx, 'saved-call');
+    expect(ctx.saveFramePreviews).toHaveBeenCalledWith(frames, ctx.signal);
+    expect(result.artifacts[0]!.data.previews).toEqual(previews);
+    expect(JSON.stringify(result)).not.toContain('/9j/');
+    expect(JSON.stringify(evidencePacketForModel(result))).not.toContain('assetId');
+    const trace = toolTrace({ tool_call_id: 'saved-call', tool_name: 'get_video_frames', operation: 'frames',
+      semantic_key: `frames:${JSON.stringify(input)}`, status: 'completed', created_at: 0, updated_at: 100,
+      result_json: JSON.stringify(result) }, true);
+    expect(trace.output?.frames).toEqual(previews);
+    expect(JSON.stringify(trace)).not.toContain('/9j/');
+  });
+  test('preserves successful visual analysis when preview storage fails', async () => {
+    const ctx = context();
+    ctx.saveFramePreviews = async () => { throw new Error('private storage failure'); };
+    const result = await executeGetVideoFrames(input, ctx, 'unsaved-call');
+    expect(result.excerpts[0]!.text).toContain('42');
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'FRAME_PREVIEW_UNAVAILABLE' }));
+    expect(JSON.stringify(result)).not.toContain('private storage failure');
+    expect(result.usage[0]!.credits).toBe(2);
+  });
   test('delivers JPEGs to vision and returns timestamped evidence without image bytes', async () => {
     const result = await executeGetVideoFrames(input, context(), 'call-1');
     expect(result.excerpts[0]).toMatchObject({ startMs: 1234, endMs: 1234, text: expect.stringContaining('42') });

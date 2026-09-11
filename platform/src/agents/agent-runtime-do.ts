@@ -1,5 +1,6 @@
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
+import { saveFramePreviews } from './runtime/frame-previews';
 import { compactAgentRun } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
@@ -415,6 +416,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           await this.updatePhase(runId, 'finalizing', deadlineAt);
         },
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
+        saveFramePreviews: (frames, signal) => {
+          this.assertRunActive(runId);
+          return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal);
+        },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });
       const completed = this.requireRun(runId);

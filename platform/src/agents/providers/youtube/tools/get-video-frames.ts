@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { frameRequestSchema, validateFrameResponse } from '../../../../lib/youtube-frames';
 import { evidencePacketSchema } from '../../../contracts';
+import { framePreviewSchema } from '../../../runtime/frame-previews';
 import type { AgentToolContext } from '../tool-context';
 import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence';
 
@@ -35,7 +36,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         modelCallId: `frame-analyst:${context.runId}:${toolCallId}` });
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:frames`;
-      return evidencePacketSchema.parse({
+      const packet = evidencePacketSchema.parse({
         packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_frames',
         sources: [{ id: sourceId, provider: 'youtube', kind: 'frames', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
         excerpts: analysis.findings.flatMap((finding, index) => [...new Set(finding.timestampsMs)].map(time => {
@@ -54,6 +55,20 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         ],
         usage: [{ operation: 'frames', credits: meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
+      if (context.saveFramePreviews) {
+        try {
+          const previews = z.array(framePreviewSchema).max(6).parse(
+            await context.saveFramePreviews(frames, context.signal),
+          );
+          packet.artifacts[0]!.data.previews = previews;
+        } catch {
+          context.signal.throwIfAborted();
+          packet.warnings.push({ code: 'FRAME_PREVIEW_UNAVAILABLE',
+            message: 'The frames were analyzed, but their image previews could not be saved.' });
+        }
+      }
+      context.signal.throwIfAborted();
+      return packet;
     },
   });
 }

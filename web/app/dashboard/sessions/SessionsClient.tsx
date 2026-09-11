@@ -7,6 +7,7 @@ import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
+import { FramePreviews } from './FramePreviews';
 import type { DashboardProject } from '../../../lib/dashboard-data';
 import { useRouter } from 'next/navigation';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -330,6 +331,7 @@ function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
         <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
+          {tool.name === 'get_video_frames' && tool.status === 'completed' && <FramePreviews frames={tool.output?.frames ?? []} />}
           {tool.output && <><h4>Result</h4><p>{tool.output.sourceCount} {tool.output.sourceCount === 1 ? 'source' : 'sources'} · {tool.output.excerptCount} evidence excerpts</p>
             <ul>{tool.output.sources.map((source, index) => <li key={index}>{source.title ?? source.videoId ?? source.channelId ?? 'YouTube source'}</li>)}</ul>
             {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}

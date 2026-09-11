@@ -333,3 +333,58 @@ test('keeps an admitted new message visible while session history is still loadi
   } finally { release(); }
   await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
 });
+
+test('frame traces show original images, enlarge, navigate, and handle missing previews', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  const collectionId = 'a'.repeat(64);
+  const frames = [14000, 16000, 18000].map((timestampMs, index) => ({ assetId: String(index + 1).repeat(64),
+    collectionId, timestampMs, width: 1280, height: 720 }));
+  const jpeg = await page.evaluate<string>(`(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#24384b'; ctx.fillRect(0, 0, 1280, 720);
+    ctx.fillStyle = '#77c4a3'; ctx.fillRect(140, 350, 180, 230); ctx.fillRect(440, 240, 180, 340); ctx.fillRect(740, 120, 180, 460);
+    ctx.fillStyle = '#ffffff'; ctx.font = '40px sans-serif'; ctx.fillText('Video frame preview fixture', 100, 80);
+    return canvas.toDataURL('image/jpeg').split(',')[1];
+  })()`);
+  await page.route('**/api/platform/v1/agent/frames/*/*', route => route.fulfill(route.request().url().endsWith(frames[2]!.assetId)
+    ? { status: 404, body: '' } : { status: 200, contentType: 'image/jpeg', body: Buffer.from(jpeg, 'base64') }));
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+    run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed', result: {
+      outcome: 'answered', answer: 'The frames show the chart at the requested timestamps.', sources: [], warnings: [] } }, phase: 'completed',
+    tools: [{ toolCallId: 'frames', name: 'get_video_frames', operation: 'frames', status: 'completed', startedAt: 100, finishedAt: 200,
+      input: { videoId: 'abcdefghijk', timestampsMs: [14000, 16000, 18000] }, output: { sourceCount: 1, excerptCount: 3, sources: [], warningCodes: [], frames } }],
+  })}\n\n` }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const latest = page.locator('.agent-assistant-message').last();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await latest.getByText('get video frames', { exact: true }).click();
+  const first = latest.getByRole('button', { name: 'Open frame at 0:14' });
+  await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 1280);
+  await expect(latest.getByRole('button', { name: 'Open frame at 0:18' })).toBeDisabled();
+  await first.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('frame-gallery-desktop.png') });
+  await first.click();
+  let modal = page.getByRole('dialog');
+  await expect(modal).toBeVisible();
+  await expect(modal).toHaveAttribute('aria-label', 'Frame at 0:14');
+  await expect(modal.getByRole('button', { name: 'Previous frame' })).toBeDisabled();
+  await modal.getByRole('button', { name: 'Next frame' }).click();
+  await expect(modal).toHaveAttribute('aria-label', 'Frame at 0:16');
+  await page.screenshot({ path: testInfo.outputPath('frame-viewer-desktop.png') });
+  await page.keyboard.press('Escape');
+  await expect(modal).not.toBeVisible();
+  await expect(first).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await first.click();
+  await expect(modal).toBeVisible();
+  expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('frame-viewer-mobile.png') });
+  await modal.getByRole('button', { name: 'Close frame preview' }).click();
+  await expect(modal).not.toBeVisible();
+  frames.splice(0);
+  await page.reload();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await latest.getByText('get video frames', { exact: true }).click();
+  await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
+});
