@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   }
   const failures: string[] = [];
   for (const [route, message] of [
-    ['topic_research', process.env.AGENT_TEST_MESSAGE ?? 'Research the best design skills for frontend developers using Claude Code. Use one YouTube search and cite the evidence.'],
+    ['topic_research', process.env.AGENT_TEST_MESSAGE ?? 'Research the best design skills for frontend developers using Claude Code. Research exactly four source videos using one YouTube search and cite the evidence.'],
     ['inspect_video', 'Summarize https://youtu.be/Ct-mtWqV3Ro. You must use get_video_storyboard to analyze its visual presentation and get_video_transcript to summarize the discussion. Cite both visual and transcript evidence.'],
   ] as const) {
     try {
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
       });
       assert.equal(response.status, 202, `Admission failed: ${await response.clone().text()}`);
       const receipt = agentRunReceiptSchema.parse(await response.json());
+      assert.equal(receipt.request?.message, message, 'Receipt must return the original stored message');
       let complete = false;
       while (Date.now() - started < 120_000) {
         const poll = await fetch(new URL(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
@@ -62,8 +63,9 @@ async function main(): Promise<void> {
             const reviewedVideos = new Set(result.artifacts
               .filter(artifact => artifact.type === 'youtube_transcript_analysis')
               .map(artifact => artifact.data.videoId));
-            assert.equal(reviewedVideos.size, 4, 'Comparative research should analyze four distinct videos');
-            assert(!result.warnings.some(warning => warning.code === 'RESEARCH_COVERAGE_SHORTFALL'), 'Expected the research coverage target to be met');
+            assert.equal(reviewedVideos.size, 4, 'The explicit four-video request must be fulfilled');
+            assert.equal((run.route as { researchVideoCount?: number }).researchVideoCount, 4, 'Classification must preserve the four-video plan');
+            assert.equal((run.route as { requiredVideoCount?: number }).requiredVideoCount, 4, 'Classification must distinguish an explicit source-count requirement');
           }
           if (route === 'inspect_video') {
             assert(result.citations.some(citation => citation.sourceId.endsWith(':transcript')), 'Inspect must cite transcript evidence');

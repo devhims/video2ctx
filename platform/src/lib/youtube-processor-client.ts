@@ -35,7 +35,7 @@ export type YouTubeOperation =
   | { kind: 'all-comments'; id: string; maxPages: number }
   | { kind: 'caption-tracks'; id: string }
   | { kind: 'transcript'; id: string; lang?: string; granularity: 'segment' | 'word' }
-  | { kind: 'storyboard'; id: string }
+  | { kind: 'storyboard'; id: string; timestampsMs?: number[]; maxSheets?: number; sheetIndexes?: number[]; metadataOnly?: boolean }
   | { kind: 'endscreen'; id: string };
 
 export type YouTubeOperationResult<T extends YouTubeOperation> =

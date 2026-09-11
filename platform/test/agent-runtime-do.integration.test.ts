@@ -27,7 +27,7 @@ async function seed(name: string, status = 'failed') {
 
 test('terminal run polling settles persisted evidence exactly once', async () => {
   const { runtime, userId, runId } = await seed('agent-settle-runtime');
-  expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed', request: { message: 'Private prompt' } });
   expect(await creditBalance(env, userId)).toBe(999);
   await runtime.getRun(runId);
   await runtime.reconcileRun(runId);
@@ -127,7 +127,7 @@ test('queued admissions retain their IDs and do not expire before classification
       fiberId: identity.runId, name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const receipt = await instance.startRun(request, { userId, idempotencyKey: 'expired-queued-request', creditsRemaining: 1000 }, identity);
-    expect(receipt).toMatchObject({ runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'pending' });
+    expect(receipt).toMatchObject({ request: { message: request.message }, runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'pending' });
     expect(fiber).toHaveBeenCalledOnce();
     fiber.mockRestore();
   });
@@ -247,4 +247,33 @@ test('persists an out-of-scope rejection and refunds the evidence credit reserva
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed', route: { route: 'rejected' },
     result: { intent: 'rejected', citations: [], billing: { creditsCharged: 0, creditsRemaining: 1000 } } });
   expect(await creditBalance(env, userId)).toBe(1000);
+});
+
+test('persists private transcript rejection details and retrieves only this run diagnostics', async () => {
+  const { runtime, runId } = await seed('agent-transcript-diagnostics');
+  const attemptId = crypto.randomUUID();
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as { recordTranscriptDiagnostic(runId: string, event: import('../src/agents/runtime/transcript-diagnostics').TranscriptDiagnostic): void };
+    const event = { version: 1 as const, stage: 'transcript_analysis' as const, videoId: 'abcdefghijk',
+      modelCallId: 'analyst:tool', attemptId, attempt: 1, recordedAt: 10, outcome: 'rejected' as const,
+      elapsedMs: 15000, code: 'GROUNDING_REJECTED' as const,
+      repairFeedback: 'Unsupported entity PrivateName', rejectedOutput: 'Private rejected model content',
+      issues: [{ code: 'ENTITY_NOT_SUPPORTED' as const, findingIndex: 0, fieldIndex: 0, message: 'Private diagnostic detail' }] };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    writer.recordTranscriptDiagnostic(runId, event);
+    writer.recordTranscriptDiagnostic(crypto.randomUUID(), { ...event, rejectedOutput: 'Other run content' });
+    const logs = JSON.stringify(log.mock.calls);
+    expect(logs).toContain('ENTITY_NOT_SUPPORTED');
+    expect(logs).not.toContain('PrivateName');
+    expect(logs).not.toContain('Private rejected model content');
+    expect(logs).not.toContain('Private diagnostic detail');
+    log.mockRestore();
+  });
+  // A separate RPC reads the persisted event, with no in-memory callback or active model needed.
+  const first = await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null;
+  const second = await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null;
+  expect(first?.transcriptDiagnostics).toHaveLength(1);
+  expect(second?.transcriptDiagnostics).toEqual(first?.transcriptDiagnostics);
+  expect(second?.transcriptDiagnostics?.[0]).toMatchObject({ attemptId,
+    repairFeedback: 'Unsupported entity PrivateName', rejectedOutput: 'Private rejected model content' });
 });

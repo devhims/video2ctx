@@ -159,7 +159,8 @@ describe('agent routes', () => {
     }, harness.env, executionContext);
     expect(response.status).toBe(202);
     const receipt = await response.json<Record<string, unknown>>();
-    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'conversationId', 'runId', 'status']);
+    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'conversationId', 'request', 'runId', 'status']);
+    expect(receipt).toHaveProperty('request.message', 'Research design');
     expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('responseFormat');
   });
 
@@ -167,14 +168,14 @@ describe('agent routes', () => {
     const harness = agentHarness();
     const stored = { runId: '102992fd-7e50-47be-bc96-3508a2a5c9e0', conversationId: '5a04cf06-ea91-4b07-b892-ce87f63954de',
       assistantMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553', userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac',
-      status: 'running', conversationTurn: 1, modelStepCount: 2, toolCallCount: 3 };
+      status: 'running', conversationTurn: 1, modelStepCount: 2, toolCallCount: 3, request: { message: 'Compare models' } };
     harness.getRun.mockResolvedValue(stored);
     const path = `/v1/agent/${stored.conversationId}/runs/${stored.runId}`;
     const legacy = await app.request(`${path}?responseFormat=legacy`, {}, harness.env, executionContext);
     expect(await legacy.json()).toEqual(stored);
     const compact = await app.request(`${path}?responseFormat=compact&include=diagnostics`, {}, harness.env, executionContext);
     expect(compact.status).toBe(200);
-    expect(await compact.json()).toMatchObject({ status: 'running', diagnostics: { toolCallCount: 3 } });
+    expect(await compact.json()).toMatchObject({ status: 'running', request: { message: 'Compare models' }, diagnostics: { toolCallCount: 3 } });
     expect(compact.headers.get('Cache-Control')).toBe('no-store');
     expect(harness.startRun).not.toHaveBeenCalled();
     expect(creditBalance).not.toHaveBeenCalled();
@@ -541,9 +542,10 @@ function agentHarness(enabled = 'true') {
   const adminUser = vi.fn(async () => ({ email: 'agent@example.com', emailVerified: 1 }));
   const instanceNames: string[] = [];
   let conversationTurn = 0;
-  const startRun = vi.fn(async (request: { conversationId: string }) => {
+  const startRun = vi.fn(async (request: { conversationId: string; message: string }) => {
     conversationTurn += 1;
     return {
+      request: { message: request.message },
       runId: crypto.randomUUID(),
       conversationId: request.conversationId,
       userMessageId: crypto.randomUUID(),

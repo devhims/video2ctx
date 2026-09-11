@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { fireworksModelPricing } from '../fireworks-finalizer';
 import { generateText, tool, type LanguageModel } from 'ai';
 import {
   capabilityRouteDecisionSchema,
   answerDetailSchema,
+  numberedItemCountSchema,
   type CapabilityRouteDecision,
 } from '../contracts';
 import type { ConversationTurn } from '../runtime/conversation-memory';
@@ -14,18 +16,29 @@ import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/dea
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
   answerDetail: answerDetailSchema.describe('Use detailed for an explicit request for an extensive report, exhaustive coverage, detailed steps or extensive examples. Otherwise use standard, including ordinary summaries, comparisons and numbered shortlists. For rejected or clarification routes use standard.'),
+  numberedItemCount: numberedItemCountSchema.describe('Only when the user explicitly requests a numbered list of a specific size, record that count. Otherwise omit. Do not derive a count from numbers in a video title, product name, or year.'),
+  researchVideoCount: z.number().int().min(0).max(8).describe('Use 0 for rejection or clarification. Required for executable routes. Number of distinct videos to research within the 40-second research budget, 1 to 8. For inspect_video use 1. Choose based on the question, not the number of requested answer items.'),
+  requiredVideoCount: capabilityRouteDecisionSchema.options[0].shape.requiredVideoCount.describe('Only if the user explicitly requires a number of source videos. This is separate from the number of answer items. Preserve counts above the research capacity so incomplete source requirements remain visible.'),
   researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth,
   searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery,
+  channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   question: capabilityRouteDecisionSchema.options[2].shape.question.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional(),
   useStoryboard: z.boolean().optional().describe('Required for executable routes. True only when sampled visual evidence is needed to answer the request.'),
 }).superRefine((input, ctx) => {
-  const required = input.route === 'topic_research' ? ['researchBreadth', 'searchQuery'] as const
-    : input.route === 'inspect_video' ? ['videoId'] as const
+  const required = input.route === 'topic_research' ? ['researchBreadth', 'searchQuery', 'researchVideoCount'] as const
+    : input.route === 'inspect_video' ? ['videoId', 'researchVideoCount'] as const
     : input.route === 'rejected' ? ['reason'] as const : ['question'] as const;
   for (const key of required) {
     if (!input[key]) ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required for ${input.route}.` });
+  }
+  if ((input.route === 'rejected' || input.route === 'clarification') && input.researchVideoCount !== 0) {
+    ctx.addIssue({ code: 'custom', path: ['researchVideoCount'], message: 'Non-executable routes require zero research videos.' });
+  }
+  if (input.route === 'topic_research' && input.requiredVideoCount !== undefined
+    && input.researchVideoCount !== Math.min(input.requiredVideoCount, 8)) {
+    ctx.addIssue({ code: 'custom', path: ['researchVideoCount'], message: 'Match the explicit source count up to the capacity of 8.' });
   }
   if ((input.route === 'topic_research' || input.route === 'inspect_video') && input.useStoryboard === undefined) {
     ctx.addIssue({ code: 'custom', path: ['useStoryboard'], message: 'useStoryboard is required for executable routes.' });
@@ -57,6 +70,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
     ...extractYouTubeVideoIds(input.message),
     ...conversationHistory.flatMap((turn) => turn.resourceIds),
   ])];
+  const channelIds = extractYouTubeChannelIds(input.message);
   const result = await generateText({
     model: input.model,
     instructions: [
@@ -67,8 +81,11 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       'YouTube topic discovery, recommendations, comparisons, summaries, extraction, visual interpretation, and follow-ups synthesizing previously researched videos are supported. A topic question that can be answered by researching YouTube videos does not need to mention YouTube or include a URL. Do not reinterpret an unrelated task as a video search just to accept it.',
       'A general topic or recommendation request does not need a supplied video. Do not ask for a video URL for such requests. With no suppliedVideoIds, inspect_video is never valid.',
       'Return topic_research when the request needs discovery, comparisons, multiple sources, or synthesis beyond one video.',
-      'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. The application targets two or four videos respectively.',
+      'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. Also set researchVideoCount explicitly. Usually choose 1-2 for a narrow question, 3 for an ordinary comparison, and 4-8 only when the requested breadth warrants it. Fewer focused sources leave more time for careful extraction. This is a research target, not proof that the answer is incomplete if fewer sufficient sources are found.',
+      'For rejection or clarification set researchVideoCount to 0. For every executable route explicitly choose its researchVideoCount.',
+      'Set requiredVideoCount only when the user explicitly requests that many source videos, not that many recommendations or answer items. Set researchVideoCount to that required count up to the capacity of 8; preserve the actual required count separately. For inspect_video set researchVideoCount to 1.',
       'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name and requested task. The application executes this search immediately; no separate search-planning step is needed.',
+      'When the request targets a supplied channel, set channelId from suppliedChannelIds. The application will inspect its identity and Videos tab and restrict search to that channel. Do not replace channel research with an unrestricted search.',
       'Return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
       'For inspect_video, copy the selected ID exactly from suppliedVideoIds. Never invent an ID.',
       'Return clarification when the request refers to a video that cannot be resolved or when the intended scope is genuinely ambiguous.',
@@ -83,6 +100,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       })),
       currentMessage: input.message,
       suppliedVideoIds: videoIds,
+      suppliedChannelIds: channelIds,
     }),
     tools: {
       classify_request: tool({
@@ -100,11 +118,36 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   input.modelBudget?.recordUsage({
     callId: input.modelCallId ?? `classifier:${crypto.randomUUID()}`,
     category: 'classifier',
+    modelId: result.response.modelId,
+    pricing: fireworksModelPricing(result.response.modelId),
     usage: result.usage,
   });
 
   const decision = classifierDecisionSchema.parse(result.toolCalls.find(call => call.toolName === 'classify_request')?.input);
-  return resolveClassification(capabilityRouteDecisionSchema.parse(decision), videoIds);
+  const resolved = resolveClassification(capabilityRouteDecisionSchema.parse(decision), videoIds);
+  if (resolved.route === 'topic_research') {
+    if (resolved.channelId && !channelIds.includes(resolved.channelId)) {
+      return { route: 'clarification', question: 'Which YouTube channel should I research? Please provide its channel URL or handle.' };
+    }
+    if (!resolved.channelId && channelIds.length === 1) return { ...resolved, channelId: channelIds[0] };
+  }
+  return resolved;
+}
+
+export function extractYouTubeChannelIds(message: string): string[] {
+  const ids = new Set<string>();
+  const candidates = message.match(/(?<![\w./-])(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/[^\s<>"']+/gi) ?? [];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+      if (!['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname.toLowerCase())) continue;
+      const [kind, id] = url.pathname.replace(/[),.!?;]+$/, '').split('/').filter(Boolean);
+      const value = kind?.startsWith('@') ? kind : kind === 'channel' ? id : undefined;
+      if (value && capabilityRouteDecisionSchema.options[0].shape.channelId.safeParse(value).success) ids.add(value);
+    } catch { /* Ignore malformed links. */ }
+  }
+  for (const match of message.matchAll(/(?:^|\s)(@[A-Za-z0-9_.-]+)(?=$|\s|[,;!?])/g)) ids.add(match[1]!);
+  return [...ids];
 }
 
 export function extractYouTubeVideoIds(message: string): string[] {

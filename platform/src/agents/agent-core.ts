@@ -1,3 +1,4 @@
+import { fireworksModelPricing } from './fireworks-finalizer';
 import {
   NoSuchToolError,
   Output,
@@ -71,12 +72,13 @@ export async function runAgentCoreWithModel(options: {
     toolChoice: 'required',
     repairToolCall: async ({ toolCall, tools: availableTools, error }) => {
       if (NoSuchToolError.isInstance(error)) return null;
+      if (toolCall.toolName === finalizationToolName) options.onFinalizationRequested?.();
       const selectedTool = availableTools[toolCall.toolName as keyof typeof availableTools];
       if (!selectedTool) return null;
 
       assertModelCostAvailable(options.modelBudget);
       const result = await generateText({
-        model: options.finalizationModel ?? options.model,
+        model: toolCall.toolName === finalizationToolName ? options.finalizationModel ?? options.model : options.model,
         output: Output.object({ schema: selectedTool.inputSchema }),
         prompt: [
           `Repair the arguments for the tool ${toolCall.toolName}.`,
@@ -94,6 +96,8 @@ export async function runAgentCoreWithModel(options: {
         callId: `${modelCallPrefix}:repair:${toolCall.toolCallId}`,
         category: 'tool_repair',
         usage: result.usage,
+        modelId: result.response.modelId,
+        pricing: fireworksModelPricing(result.response.modelId),
       });
       return { ...toolCall, input: JSON.stringify(result.output) };
     },
@@ -134,11 +138,13 @@ export async function runAgentCoreWithModel(options: {
       options.onFinalizationRequested?.();
       return forceFinalization(options.finalizationModel ?? options.model, finalizationToolName);
     },
-    onStepEnd: ({ stepNumber, content, usage }) => {
+    onStepEnd: ({ stepNumber, content, usage, response }) => {
       options.onModelStepComplete?.(stepNumber);
       options.modelBudget?.recordUsage({
         callId: `${modelCallPrefix}:agent-core:${stepNumber}`,
         category: 'agent_core',
+        modelId: response.modelId,
+        pricing: fireworksModelPricing(response.modelId),
         usage,
       });
       for (const part of content) {

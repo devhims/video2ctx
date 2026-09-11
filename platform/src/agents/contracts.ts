@@ -3,20 +3,29 @@ import { z } from 'zod';
 export const answerDetailSchema = z.enum(['standard', 'detailed']);
 
 export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_video']);
+export const researchVideoCountSchema = z.number().int().min(1).max(8);
+export const researchCoverageSchema = z.object({ targetVideos: z.number().int().positive(), reviewedVideos: z.number().int().nonnegative(), requiredVideos: z.number().int().positive().optional() });
+export const numberedItemCountSchema = z.number().int().min(1).max(100).optional();
 
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
     route: z.literal('topic_research'),
+    researchVideoCount: researchVideoCountSchema.optional(),
+    requiredVideoCount: z.number().int().min(1).max(100).optional(),
     researchBreadth: z.enum(['focused', 'comparative']).optional(),
     searchQuery: z.string().trim().min(1).max(500).optional(),
+    channelId: z.string().trim().min(1).max(200).regex(/^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$/).optional(),
     useStoryboard: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
+    numberedItemCount: numberedItemCountSchema,
   }),
   z.object({
     route: z.literal('inspect_video'),
+    researchVideoCount: z.literal(1).optional(),
     videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
     useStoryboard: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
+    numberedItemCount: numberedItemCountSchema,
   }),
   z.object({
     route: z.literal('clarification'),
@@ -29,6 +38,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
 ]);
 
 export const agentWarningSchema = z.object({
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional().describe('Video to which this source-specific caveat applies.'),
   code: z.string().min(1).max(100),
   message: z.string().min(1).max(1_000),
 });
@@ -178,6 +188,7 @@ export const agentAdmissionSchema = z.object({
 });
 
 export const agentRunReceiptSchema = z.object({
+  request: z.object({ message: z.string().max(10_000) }).optional().describe('Original stored user message for this run, not a model-generated restatement.'),
   runId: z.string().uuid(),
   conversationId: z.string().uuid(),
   userMessageId: z.string().uuid(),

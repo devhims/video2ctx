@@ -88,7 +88,7 @@ export function createYouTubeRuntime(environment = process.env) {
               granularity: operation.granularity,
             });
           case 'storyboard':
-            return await loadStoryboard(operation.id, youtube.getStoryboard, options);
+            return await loadStoryboard(operation.id, youtube.getStoryboard, { ...options, timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets, sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
           case 'endscreen':
             return youtube.getEndscreen({ ...options, videoId: operation.id });
           default:

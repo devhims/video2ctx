@@ -6375,9 +6375,50 @@
               "cancelled"
             ]
           },
+          "request": {
+            "description": "Original stored user message for this run, not a model-generated restatement.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "maxLength": 10000
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "additionalProperties": false
+          },
           "result": {
             "type": "object",
             "properties": {
+              "coverage": {
+                "type": "object",
+                "properties": {
+                  "targetVideos": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  },
+                  "reviewedVideos": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "requiredVideos": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "targetVideos",
+                  "reviewedVideos"
+                ],
+                "additionalProperties": false
+              },
               "outcome": {
                 "type": "string",
                 "enum": [
@@ -6430,6 +6471,11 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "videoId": {
+                      "description": "Video to which this source-specific caveat applies.",
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{11}$"
+                    },
                     "code": {
                       "type": "string",
                       "minLength": 1,
@@ -6609,6 +6655,16 @@
                           "topic_research"
                         ]
                       },
+                      "researchVideoCount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8
+                      },
+                      "requiredVideoCount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
                       "researchBreadth": {
                         "type": "string",
                         "enum": [
@@ -6621,6 +6677,12 @@
                         "minLength": 1,
                         "maxLength": 500
                       },
+                      "channelId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$"
+                      },
                       "useStoryboard": {
                         "type": "boolean"
                       },
@@ -6630,6 +6692,11 @@
                           "standard",
                           "detailed"
                         ]
+                      },
+                      "numberedItemCount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
                       }
                     },
                     "required": [
@@ -6646,6 +6713,12 @@
                           "inspect_video"
                         ]
                       },
+                      "researchVideoCount": {
+                        "type": "number",
+                        "enum": [
+                          1
+                        ]
+                      },
                       "videoId": {
                         "type": "string",
                         "pattern": "^[A-Za-z0-9_-]{11}$"
@@ -6659,6 +6732,11 @@
                           "standard",
                           "detailed"
                         ]
+                      },
+                      "numberedItemCount": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
                       }
                     },
                     "required": [
@@ -6710,6 +6788,219 @@
                     "additionalProperties": false
                   }
                 ]
+              },
+              "transcriptAnalysis": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "stage": {
+                      "type": "string",
+                      "enum": [
+                        "transcript_analysis"
+                      ]
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{11}$"
+                    },
+                    "modelCallId": {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    "attemptId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "attempt": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2
+                    },
+                    "recordedAt": {
+                      "type": "number"
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "started",
+                        "rejected",
+                        "accepted",
+                        "failed",
+                        "canceled"
+                      ]
+                    },
+                    "elapsedMs": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "GROUNDING_REJECTED",
+                        "INVALID_REFERENCE",
+                        "OUTPUT_LIMIT",
+                        "SCHEMA_INVALID",
+                        "PROVIDER_ERROR",
+                        "ANALYSIS_ERROR",
+                        "ANALYSIS_TIMEOUT",
+                        "CANCELED"
+                      ]
+                    },
+                    "finishReason": {
+                      "type": "string",
+                      "maxLength": 50
+                    },
+                    "modelId": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "inputTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "outputTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cancellationReason": {
+                      "type": "string",
+                      "maxLength": 50
+                    },
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "issues": {
+                      "maxItems": 100,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "ENTITY_NOT_SUPPORTED",
+                              "QUANTITY_NOT_SUPPORTED",
+                              "UNIT_NOT_EXPLICIT",
+                              "UNIT_MISMATCH",
+                              "BASIS_NOT_SUPPORTED",
+                              "UNCERTAINTY_MISSING",
+                              "CLAIM_QUANTITY_NOT_SUPPORTED",
+                              "UNKNOWN_WINDOW",
+                              "OUTPUT_LIMIT",
+                              "SCHEMA_INVALID"
+                            ]
+                          },
+                          "findingIndex": {
+                            "description": "Zero-based index in the rejected model output.",
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "fieldIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "windowIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "message": {
+                            "type": "string",
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "issueCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "repairFeedback": {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    "rejectedOutput": {
+                      "type": "string",
+                      "maxLength": 24000
+                    },
+                    "sourceContext": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "channel": {
+                          "type": "string",
+                          "maxLength": 300
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "sourceWindows": {
+                      "maxItems": 15,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 2000
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "startMs",
+                          "endMs",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "captureTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "stage",
+                    "videoId",
+                    "modelCallId",
+                    "attemptId",
+                    "attempt",
+                    "recordedAt",
+                    "outcome",
+                    "elapsedMs"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -7222,6 +7513,219 @@
               },
               "error": {
                 "type": "string"
+              },
+              "transcriptDiagnostics": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "stage": {
+                      "type": "string",
+                      "enum": [
+                        "transcript_analysis"
+                      ]
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{11}$"
+                    },
+                    "modelCallId": {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    "attemptId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "attempt": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2
+                    },
+                    "recordedAt": {
+                      "type": "number"
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "started",
+                        "rejected",
+                        "accepted",
+                        "failed",
+                        "canceled"
+                      ]
+                    },
+                    "elapsedMs": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "GROUNDING_REJECTED",
+                        "INVALID_REFERENCE",
+                        "OUTPUT_LIMIT",
+                        "SCHEMA_INVALID",
+                        "PROVIDER_ERROR",
+                        "ANALYSIS_ERROR",
+                        "ANALYSIS_TIMEOUT",
+                        "CANCELED"
+                      ]
+                    },
+                    "finishReason": {
+                      "type": "string",
+                      "maxLength": 50
+                    },
+                    "modelId": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "inputTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "outputTokens": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cancellationReason": {
+                      "type": "string",
+                      "maxLength": 50
+                    },
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "issues": {
+                      "maxItems": 100,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "ENTITY_NOT_SUPPORTED",
+                              "QUANTITY_NOT_SUPPORTED",
+                              "UNIT_NOT_EXPLICIT",
+                              "UNIT_MISMATCH",
+                              "BASIS_NOT_SUPPORTED",
+                              "UNCERTAINTY_MISSING",
+                              "CLAIM_QUANTITY_NOT_SUPPORTED",
+                              "UNKNOWN_WINDOW",
+                              "OUTPUT_LIMIT",
+                              "SCHEMA_INVALID"
+                            ]
+                          },
+                          "findingIndex": {
+                            "description": "Zero-based index in the rejected model output.",
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "fieldIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "windowIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "message": {
+                            "type": "string",
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "issueCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "repairFeedback": {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    "rejectedOutput": {
+                      "type": "string",
+                      "maxLength": 24000
+                    },
+                    "sourceContext": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "channel": {
+                          "type": "string",
+                          "maxLength": 300
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "sourceWindows": {
+                      "maxItems": 15,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 2000
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "startMs",
+                          "endMs",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "captureTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "stage",
+                    "videoId",
+                    "modelCallId",
+                    "attemptId",
+                    "attempt",
+                    "recordedAt",
+                    "outcome",
+                    "elapsedMs"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           }

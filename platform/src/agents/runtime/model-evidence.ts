@@ -1,3 +1,5 @@
+import { storyboardManifestSchema } from '../providers/youtube/storyboard';
+import { transcriptFactsSchema, transcriptSourceContextSchema } from './transcript-grounding';
 import { z } from 'zod';
 import {
   agentWarningSchema,
@@ -9,12 +11,24 @@ import {
 const MODEL_EXCERPTS_PER_PACKET = 8;
 const MODEL_EXCERPT_CHARACTERS = 800;
 const MODEL_ANALYSIS_SUMMARY_CHARACTERS = 2_000;
-const MODEL_ANALYSIS_FINDINGS = 5;
+const MODEL_ANALYSIS_FINDINGS = 20;
 const MODEL_ANALYSIS_FINDING_CHARACTERS = 600;
+const visualCoverageSchema = z.object({
+  manifest: storyboardManifestSchema.optional(),
+  selection: z.object({ mode: z.enum(['leading', 'spread', 'timestamps', 'indexes', 'metadata']),
+    requestedTimestampsMs: z.array(z.number().int().nonnegative()).max(20).optional(),
+    requestedSheetIndexes: z.array(z.number().int().nonnegative()).max(20).optional() }).optional(),
+  sampledRanges: z.array(z.object({ startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() })).max(20),
+  totalFrames: z.number().int().positive(),
+  sampledFrames: z.number().int().nonnegative(),
+  intervalMs: z.number().int().positive(),
+});
 
 const transcriptAnalysisDataSchema = z.object({
+  groundingVersion: z.literal(1).optional(),
   summary: z.string().trim().min(1),
-  findings: z.array(z.object({
+  sourceContext: transcriptSourceContextSchema.optional(),
+  findings: z.array(transcriptFactsSchema.extend({
     claim: z.string().trim().min(1),
     excerptIds: z.array(z.string().min(1).max(300)).max(3),
   })),
@@ -32,8 +46,10 @@ export const modelEvidencePacketSchema = z.object({
   kind: z.string().min(1).max(100),
   sources: z.array(evidenceSourceSchema).max(24),
   transcriptAnalysis: z.object({
+    groundingVersion: z.literal(1).optional(),
+    sourceContext: transcriptSourceContextSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_ANALYSIS_SUMMARY_CHARACTERS),
-    findings: z.array(z.object({
+    findings: z.array(transcriptFactsSchema.extend({
       claim: z.string().trim().min(1).max(MODEL_ANALYSIS_FINDING_CHARACTERS),
       excerptIds: z.array(z.string().min(1).max(300)).max(3),
     })).max(MODEL_ANALYSIS_FINDINGS),
@@ -41,6 +57,7 @@ export const modelEvidencePacketSchema = z.object({
     selectedExcerptCount: z.number().int().nonnegative(),
   }).optional(),
   excerpts: z.array(evidenceExcerptSchema).max(MODEL_EXCERPTS_PER_PACKET).optional(),
+  visualCoverage: visualCoverageSchema.optional(),
   artifacts: z.array(z.object({
     type: z.string().min(1).max(100),
     title: z.string().min(1).max(500).optional(),
@@ -63,8 +80,11 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
       kind: packet.kind,
       sources: packet.sources,
       transcriptAnalysis: {
+        groundingVersion: transcriptAnalysis.groundingVersion,
+        sourceContext: transcriptAnalysis.sourceContext,
         summary: boundedText(transcriptAnalysis.summary, MODEL_ANALYSIS_SUMMARY_CHARACTERS),
         findings: transcriptAnalysis.findings.slice(0, MODEL_ANALYSIS_FINDINGS).map((finding) => ({
+          ...finding,
           claim: boundedText(finding.claim, MODEL_ANALYSIS_FINDING_CHARACTERS),
           excerptIds: finding.excerptIds,
         })),
@@ -75,7 +95,13 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
     });
   }
 
-  const excerpts = packet.excerpts.slice(0, MODEL_EXCERPTS_PER_PACKET).map((excerpt) => ({
+  // One visual finding can have three frame citations. Keep each distinct
+  // finding before adding duplicate observations at other timestamps.
+  const ordered = packet.kind === 'youtube_storyboard' ? distinctVisualFindingsFirst(packet.excerpts) : packet.excerpts;
+  const coverage = packet.kind === 'youtube_storyboard'
+    ? visualCoverageSchema.safeParse(packet.artifacts.find(artifact => artifact.type === 'youtube_storyboard_analysis')?.data)
+    : undefined;
+  const excerpts = ordered.slice(0, MODEL_EXCERPTS_PER_PACKET).map((excerpt) => ({
     ...excerpt,
     text: boundedText(excerpt.text, MODEL_EXCERPT_CHARACTERS),
   }));
@@ -87,6 +113,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
     kind: packet.kind,
     sources: sources.length > 0 ? sources : packet.sources.slice(0, 1),
     excerpts,
+    visualCoverage: coverage?.success ? coverage.data : undefined,
     artifacts: packet.artifacts.map((artifact) => ({
       type: artifact.type,
       title: artifact.title,
@@ -94,6 +121,18 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
     continuation: packet.continuation,
     warnings: packet.warnings,
   });
+}
+
+function distinctVisualFindingsFirst(excerpts: EvidencePacket['excerpts']) {
+  const groups = new Map<string, EvidencePacket['excerpts']>();
+  for (const excerpt of excerpts) {
+    const key = JSON.stringify([excerpt.sourceId, excerpt.text]);
+    const group = groups.get(key) ?? [];
+    group.push(excerpt);
+    groups.set(key, group);
+  }
+  const values = [...groups.values()];
+  return [...values.flatMap(group => group.slice(0, 1)), ...values.flatMap(group => group.slice(1))];
 }
 
 export function evidencePacketsForModel(
@@ -142,7 +181,7 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
     });
   }
 
-  const excerpts = packet.excerpts?.slice(0, 1).map((excerpt) => ({
+  const excerpts = packet.excerpts?.slice(0, packet.kind === 'youtube_storyboard' ? 5 : 1).map((excerpt) => ({
     ...excerpt,
     text: boundedText(excerpt.text, 200),
   }));

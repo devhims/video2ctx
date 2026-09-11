@@ -277,6 +277,14 @@ for (const sheet of storyboard.sheets) {
 | `outputDir` | `string` | Yes      | —       | Caller-owned directory for JPEGs    |
 | `maxSheets` | `number` | No       | `12`    | Sheet budget from 1 through 20      |
 
+By default, downloads start at the beginning for backward compatibility. Set `selection: 'spread'` to distribute the sheet budget across the video, including the first and last sheets when at least two are allowed. With a one-sheet budget, spread selects the middle sheet.
+
+For a focused inspection, pass `timestampsMs: [905000]` to select the sheet containing the sample at or before 15:05. Nearby timestamps on the same sheet share one download. Timestamps override `selection`; requests requiring more distinct sheets than `maxSheets` are rejected. Returned `selection` metadata records the mode and requested timestamps. Global `firstFrameIndex` values remain unchanged, including when sheets are non-contiguous. These previews do not provide exact frames between samples or higher-resolution source pixels.
+
+To plan inspection without downloading images, pass `metadataOnly: true`. The result has empty `sheets` and a `manifest` with `totalSheets`, `framesPerSheet`, tile dimensions, grid dimensions, and `lastSampleMs`. The top-level `frameCount` and `intervalMs` describe all available samples. For sheet index `i`, the first sample is `i * framesPerSheet * intervalMs` and the last is `Math.min((i + 1) * framesPerSheet - 1, frameCount - 1) * intervalMs`.
+
+Then pass `sheetIndexes: [0, 3, 7]` to download those zero-based source sheets. Indexes are deduplicated and returned chronologically. Out-of-range indexes, mixed index/timestamp selectors, and selections exceeding `maxSheets` reject before image downloads. Metadata mode cannot include sheet or timestamp selectors. The library default remains 12 sheets; callers choose `maxSheets` up to 20 per call.
+
 The highest usable storyboard level is selected. A tile at `row` and `column` represents
 `(firstFrameIndex + row * columns + column) * intervalMs`. The package creates a `storyboards` child directory but never recursively deletes `outputDir`.
 

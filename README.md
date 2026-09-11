@@ -156,6 +156,7 @@ git clone https://github.com/devhims/video2ctx.git
 cd video2ctx
 
 npm ci --prefix packages/all-things-youtube
+npm run build --prefix packages/all-things-youtube
 npm ci --prefix packages/youtube-skills
 npm ci --prefix packages/video2ctx-cli
 npm ci --prefix platform
@@ -243,7 +244,7 @@ flowchart LR
 
 The Worker owns authentication, authorization, rate limits, credit metering, caching, private research, and the public HTTP contract. Outbound YouTube work is isolated in a private Cloudflare Container. Identical cache misses are coalesced by a Durable Object before the request reaches a processor instance; cache hits never wake a container.
 
-The processor image installs the pinned, published `all-things-youtube` version. Local library source is not copied into that production image. Publish and pin a library release before deploying platform behavior that depends on library changes.
+The processor image builds `packages/all-things-youtube` from the same checkout in a separate Docker stage. Its local package dependency and registry dependencies are locked. Deploying library changes with the Cloudflare API does not require an npm publication. The public npm package remains an independent release.
 
 For the complete request path and reliability model, see [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md).
 

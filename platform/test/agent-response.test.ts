@@ -16,6 +16,15 @@ function completedRun(): AgentRunView {
 }
 
 describe('compact agent response', () => {
+  it('exposes the stored request for every run state without regenerating it', () => {
+    for (const status of ['pending', 'running', 'completed', 'failed', 'cancelled'] as const) {
+      const run = completedRun();
+      run.status = status;
+      Object.assign(run, { request: { message: 'Compare these models exactly as requested.' } });
+      expect(compactAgentRun(run)).toHaveProperty('request.message', 'Compare these models exactly as requested.');
+    }
+  });
+
   it('deduplicates videos across tools and numbers sources by first use without mutating storage', () => {
     const run = completedRun();
     const before = structuredClone(run);
@@ -37,6 +46,22 @@ describe('compact agent response', () => {
     const run = completedRun(); run.result!.intent = intent;
     expect(compactAgentRunSchema.safeParse(compactAgentRun(run)).success).toBe(true);
     expect(compactAgentRun(run).result?.outcome).toBe('answered');
+  });
+
+  it('reports internal research coverage without marking a fulfilled answer partial', () => {
+    const run = completedRun();
+    run.route = { route: 'topic_research', researchVideoCount: 4 };
+    run.result!.artifacts.push({ type: 'research_coverage', data: { targetVideos: 4, reviewedVideos: 3 } });
+    const result = compactAgentRun(run).result!;
+    expect(result.outcome).toBe('answered');
+    expect(result.coverage).toEqual({ targetVideos: 4, reviewedVideos: 3 });
+    run.result!.warnings.push({ code: 'PARTIAL_EVIDENCE', message: 'User requested four source videos; three reviewed.' });
+    expect(compactAgentRun(run).result?.outcome).toBe('partial');
+  });
+  it('preserves video identity on source caveats in compact responses', () => {
+    const run = completedRun();
+    run.result!.warnings = [{ code: 'TRANSCRIPT_ANALYST_WARNING', message: 'No cost figures in this video.', videoId: 'video000001' }];
+    expect(compactAgentRun(run).result?.warnings[0]).toMatchObject({ videoId: 'video000001' });
   });
 
   it('uses stored video titles without exposing uncited discovery candidates', () => {
@@ -65,7 +90,7 @@ describe('compact agent response', () => {
 
   it.each([
     ['NO_CONTENT_EVIDENCE', 'insufficient_evidence'], ['PARTIAL_EVIDENCE', 'partial'],
-    ['RESEARCH_COVERAGE_SHORTFALL', 'partial'], ['TRANSCRIPT_ANALYST_WARNING', 'answered'],
+    ['RESEARCH_COVERAGE_SHORTFALL', 'answered'], ['FINAL_SYNTHESIS_UNAVAILABLE', 'partial'], ['CHANNEL_INSPECTION_INCOMPLETE', 'partial'], ['ANSWER_SCOPE_SHORTFALL', 'partial'], ['TRANSCRIPT_ANALYST_WARNING', 'answered'],
   ])('maps %s to %s', (code, outcome) => {
     const run = completedRun(); run.result!.warnings = [{ code, message: 'Limitation' }];
     expect(compactAgentRun(run).result?.outcome).toBe(outcome);
@@ -114,4 +139,18 @@ describe('compact agent response', () => {
       expect(agentResponseOptionsSchema.safeParse(input).success).toBe(false);
     }
   });
+});
+
+it('exposes private rejection captures only when compact diagnostics are requested', () => {
+  const run = completedRun();
+  run.transcriptDiagnostics = [{ version: 1, stage: 'transcript_analysis', videoId: 'abcdefghijk',
+    modelCallId: 'analyst:tool', attemptId: '47c2710a-83e1-4c41-889e-41f2699f2293', attempt: 1,
+    recordedAt: 100, outcome: 'rejected', elapsedMs: 15000, code: 'GROUNDING_REJECTED',
+    repairFeedback: 'Unsupported entity PrivateName', rejectedOutput: 'Private rejected model content',
+    issues: [{ code: 'ENTITY_NOT_SUPPORTED', findingIndex: 0, message: 'Unsupported entity PrivateName' }] }];
+  const original = JSON.stringify(run);
+  expect(JSON.stringify(compactAgentRun(run))).not.toContain('Private');
+  expect(JSON.stringify(compactAgentRun(run, ['evidence', 'artifacts']))).not.toContain('Private');
+  expect(compactAgentRun(run, ['diagnostics']).diagnostics?.transcriptAnalysis).toEqual(run.transcriptDiagnostics);
+  expect(JSON.stringify(run)).toBe(original);
 });

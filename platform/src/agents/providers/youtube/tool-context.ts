@@ -20,6 +20,7 @@ export interface EvidenceToolExecution {
 
 export interface AgentToolContext {
   analyzeStoryboard?: VisualAnalyst;
+  validateAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): void;
   runId: string;
   provider: YouTubeAgentProvider;
   transcriptPolicy:

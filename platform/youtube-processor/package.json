@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.0",
-    "all-things-youtube": "0.4.0",
+    "all-things-youtube": "file:../../packages/all-things-youtube",
     "hono": "4.13.1",
     "undici": "8.10.0"
   },

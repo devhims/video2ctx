@@ -1,3 +1,4 @@
+import { type TranscriptSourceContext, TranscriptGroundingError } from '../../../runtime/transcript-grounding';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { tool } from 'ai';
@@ -16,6 +17,7 @@ type TranscriptToolErrorCode =
   | 'TRANSCRIPT_FETCH_FAILED'
   | 'TRANSCRIPT_ANALYSIS_TIMEOUT'
   | 'TRANSCRIPT_ANALYSIS_INVALID_REFERENCE'
+  | 'TRANSCRIPT_ANALYSIS_UNGROUNDED'
   | 'TRANSCRIPT_ANALYSIS_FAILED';
 
 export class TranscriptToolStageError extends Error {
@@ -118,7 +120,7 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = context.transcriptPolicy.mode === 'contextual_analysis'
-        ? await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_analysis' }, context.signal, () => analystEvidence(parsed, context, response.value.segments, sourceId, toolCallId, semanticKey))
+        ? await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_analysis' }, context.signal, () => analystEvidence(parsed, context, response.value.segments, sourceId, toolCallId, semanticKey, { language: response.value.track.languageCode, provenance: response.value.track.provenance, ...(response.value.translatedTo ? { translatedTo: response.value.translatedTo.languageCode } : {}) }))
         : completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       context.signal.throwIfAborted();
 
@@ -152,7 +154,7 @@ export function executeGetVideoTranscript(
           ...(evidence.excerpts.length === 0
             ? [{ code: 'NO_TRANSCRIPT_EVIDENCE', message: 'The transcript contained no usable evidence.' }]
             : []),
-        ],
+        ].map(warning => ({ ...warning, videoId: parsed.videoId })),
         usage: [{
           operation: 'transcript',
           credits: dataOperationCost('transcript', response.cacheStatus),
@@ -170,6 +172,7 @@ async function analystEvidence(
   sourceId: string,
   toolCallId: string,
   analysisKey: string,
+  sourceContext: TranscriptSourceContext,
 ) {
   if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Transcript analyst is unavailable.');
   if (!input.focus) throw new Error('A focused evidence question is required for contextual transcript analysis.');
@@ -177,6 +180,7 @@ async function analystEvidence(
   try {
     analysis = await context.transcriptPolicy.analyze({
       videoId: input.videoId,
+      sourceContext,
       researchQuestion: context.transcriptPolicy.researchQuestion,
       focus: input.focus,
       segments,
@@ -188,6 +192,7 @@ async function analystEvidence(
     if (error instanceof TranscriptAnalysisInvalidReferenceError) {
       throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_INVALID_REFERENCE', error);
     }
+    if (error instanceof TranscriptGroundingError) throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_UNGROUNDED', error);
     if (isTimeoutError(error)) {
       throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_TIMEOUT', error);
     }
@@ -204,6 +209,8 @@ async function analystEvidence(
     artifactType: 'youtube_transcript_analysis',
     artifactTitle: `Complete transcript analysis for ${input.videoId}`,
     artifactData: {
+      groundingVersion: analysis.groundingVersion,
+      sourceContext: analysis.sourceContext ?? sourceContext,
       summary: analysis.summary,
       findings: analysis.findings,
       coverage: analysis.coverage,

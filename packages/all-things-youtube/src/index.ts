@@ -33,9 +33,16 @@ export interface TranscriptRequest extends VideoRequest {
   granularity?: 'segment' | 'word';
 }
 
+/** Used by consumers to reject releases that silently ignore selection options. */
+export const STORYBOARD_SELECTION_VERSION = 2;
+
 export interface StoryboardRequest extends VideoRequest {
+  metadataOnly?: boolean;
+  sheetIndexes?: number[];
   outputDir: string;
   maxSheets?: number;
+  selection?: 'leading' | 'spread';
+  timestampsMs?: number[];
 }
 
 export interface CommentsRequest extends VideoRequest {
@@ -164,8 +171,8 @@ export function getTranscript(options: TranscriptRequest): Promise<Transcript> {
 
 /** Download normalized YouTube storyboard contact sheets and timestamp mappings. */
 export function getStoryboard(options: StoryboardRequest) {
-  const { videoId, outputDir, maxSheets } = options;
-  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets });
+  const { videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes } = options;
+  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes });
 }
 
 export function getComments(options: AllCommentsRequest): Promise<CommentsCollection>;

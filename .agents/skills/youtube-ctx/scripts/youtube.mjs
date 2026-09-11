@@ -19248,7 +19248,46 @@ function validateOptions(options) {
       `maxSheets must be an integer from 1 to ${MAX_SHEETS}.`
     );
   }
+  if (options.selection !== void 0 && !["leading", "spread"].includes(options.selection)) {
+    throw new YouTubeClientError("INVALID_INPUT", "Unknown storyboard selection.");
+  }
+  if (options.timestampsMs !== void 0 && (!Array.isArray(options.timestampsMs) || options.timestampsMs.length === 0 || options.timestampsMs.length > MAX_SHEETS || options.timestampsMs.some((time) => !Number.isSafeInteger(time) || time < 0))) {
+    throw new YouTubeClientError("INVALID_INPUT", "timestampsMs must contain 1 to 20 nonnegative integer timestamps.");
+  }
+  if (options.metadataOnly !== void 0 && typeof options.metadataOnly !== "boolean") {
+    throw new YouTubeClientError("INVALID_INPUT", "metadataOnly must be a boolean.");
+  }
+  if (options.sheetIndexes !== void 0 && (!Array.isArray(options.sheetIndexes) || options.sheetIndexes.length === 0 || options.sheetIndexes.length > MAX_SHEETS || options.sheetIndexes.some((index) => !Number.isSafeInteger(index) || index < 0))) {
+    throw new YouTubeClientError("INVALID_INPUT", "sheetIndexes must contain 1 to 20 nonnegative integers.");
+  }
+  if (options.sheetIndexes && options.timestampsMs || options.metadataOnly && (options.sheetIndexes || options.timestampsMs)) {
+    throw new YouTubeClientError("INVALID_INPUT", "Choose metadata, sheet indexes, or timestamps separately.");
+  }
   return maxSheets;
+}
+function selectSheets(level, options, maxSheets) {
+  const capacity = level.columns * level.rows;
+  const count = Math.ceil(level.frameCount / capacity);
+  if (options.metadataOnly) return [];
+  if (options.sheetIndexes) {
+    const sheets = [...new Set(options.sheetIndexes)].sort((a, b) => a - b);
+    if (sheets.length > maxSheets || sheets.some((index) => index >= count)) {
+      throw new YouTubeClientError("INVALID_INPUT", "Requested sheet indexes exceed the available sheets or sheet budget.");
+    }
+    return sheets;
+  }
+  if (options.timestampsMs) {
+    if (options.timestampsMs.some((time) => time >= level.frameCount * level.intervalMs)) {
+      throw new YouTubeClientError("INVALID_INPUT", "A requested timestamp is outside the storyboard sampling range.");
+    }
+    const sheets = [...new Set(options.timestampsMs.map((time) => Math.floor(time / level.intervalMs / capacity)))].sort((a, b) => a - b);
+    if (sheets.length > maxSheets) {
+      throw new YouTubeClientError("INVALID_INPUT", "Requested timestamps exceed the storyboard sheet budget.");
+    }
+    return sheets;
+  }
+  const take = Math.min(count, maxSheets);
+  return Array.from({ length: take }, (_, i) => options.selection === "spread" ? take === 1 ? Math.floor((count - 1) / 2) : Math.round(i * (count - 1) / (take - 1)) : i);
 }
 function metadata(warnings) {
   return {
@@ -19272,11 +19311,11 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   }
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
-  const requestedSheets = Math.min(availableSheets, maxSheets);
+  const selectedSheets = selectSheets(level, options, maxSheets);
   const directory = resolve(options.outputDir, "storyboards");
-  await mkdir(directory, { recursive: true });
+  if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets = [];
-  for (let sheet = 0; sheet < requestedSheets; sheet += 1) {
+  for (const sheet of selectedSheets) {
     const response = await fetchImpl(sheetUrl(spec, level, sheet));
     const bytes = await jpegResponse(response);
     const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.jpg`);
@@ -19293,12 +19332,26 @@ async function downloadStoryboard(raw, options, fetchImpl) {
       intervalMs: level.intervalMs
     });
   }
-  const warnings = requestedSheets < availableSheets ? [`Storyboard: limited to ${requestedSheets} sheets`] : [];
+  const warnings = !options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : [];
   return {
     videoId: options.videoId,
     level: level.index,
     frameCount: level.frameCount,
     intervalMs: level.intervalMs,
+    manifest: {
+      totalSheets: availableSheets,
+      framesPerSheet: capacity,
+      tileWidth: level.tileWidth,
+      tileHeight: level.tileHeight,
+      columns: level.columns,
+      rows: level.rows,
+      lastSampleMs: (level.frameCount - 1) * level.intervalMs
+    },
+    selection: {
+      mode: options.metadataOnly ? "metadata" : options.sheetIndexes ? "indexes" : options.timestampsMs ? "timestamps" : options.selection ?? "leading",
+      ...options.sheetIndexes ? { requestedSheetIndexes: options.sheetIndexes } : {},
+      ...options.timestampsMs ? { requestedTimestampsMs: options.timestampsMs } : {}
+    },
     sheets,
     meta: metadata(warnings)
   };

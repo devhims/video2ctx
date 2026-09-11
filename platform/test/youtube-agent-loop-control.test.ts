@@ -17,6 +17,43 @@ import type { AgentModelCostBudget, AgentModelUsageEntry } from '../src/agents/r
 import type { EvidencePacket } from '../src/agents/contracts';
 
 describe('YouTube AgentCore loop control', () => {
+  it('hands an ordinary research completion to the configured finalizer', async () => {
+    const packet = transcriptAnalysisPacket();
+    const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+      toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'Research draft.', evidenceIds: [packet.excerpts[0]!.id] }],
+      }),
+    }) });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
+      confidence: 'medium', warnings: [], blocks: [{ text: 'Finalizer synthesis.', evidenceIds: ['ref_1'] }],
+    }) });
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'Summarize this video',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context, recoveredEvidence: [packet] });
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+    expect(context.finalize).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.finalize).mock.calls[0]![1].answer).toContain('Finalizer synthesis.');
+    expect(vi.mocked(context.finalize).mock.calls[0]![1].answer).not.toContain('Research draft.');
+  });
+
+  it('repairs a schema-valid but broken sentence before persisting an answer', async () => {
+    const invalid = { confidence: 'low', warnings: [], blocks: [
+      { text: 'Converts the design into production-adj', evidenceIds: ['ref_1'] },
+      { text: 'ady code using existing components.', evidenceIds: ['ref_1'] },
+    ] };
+    const valid = { confidence: 'low', warnings: [], blocks: [{ text: 'Uses existing components.', evidenceIds: ['ref_1'] }] };
+    let attempts = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult(attempts++ ? valid : invalid) });
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model, message: 'Inspect the video',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      finalizationDeadlineAt: Date.now() + 40_000, recoveredEvidence: [transcriptAnalysisPacket()] });
+    expect(attempts).toBe(2);
+    expect(context.finalize).toHaveBeenCalledOnce();
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: expect.stringContaining('Uses existing components.') }));
+    expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('complete paragraph');
+  });
   it.each([undefined, 'standard', 'detailed'] as const)('enforces the same %s ceiling for natural answers and reserved synthesis', async answerDetail => {
     const ceiling = answerDetail === 'detailed' ? 2500 : 1500;
     const output = { blocks: [{ text: 'A supported finding.', evidenceIds: ['ref_1'] }],
@@ -412,14 +449,19 @@ describe('YouTube AgentCore loop control', () => {
 
     expect(result.stepCount).toBe(2);
     expect(researchModel.doGenerateCalls).toHaveLength(1);
-    expect(finalizationModel.doGenerateCalls).toHaveLength(1);
+    expect(finalizationModel.doGenerateCalls).toHaveLength(2);
     expect(context.finalize).toHaveBeenCalledTimes(2);
   });
 
   it('repairs malformed tool arguments before executing the tool', async () => {
     let generation = 0;
     const researchModel = new MockLanguageModelV4({
-      doGenerate: async () => {
+      doGenerate: async (call) => {
+        if (call.responseFormat?.type === 'json') {
+          return { content: [{ type: 'text', text: JSON.stringify({ videoId: 'abcdefghijk' }) }],
+            finishReason: { unified: 'stop' as const, raw: undefined },
+            usage: { inputTokens: { total: 40, noCache: 40, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 10, text: 10, reasoning: undefined } }, warnings: [] };
+        }
         generation += 1;
         return generation === 1
           ? modelResult({
@@ -441,17 +483,9 @@ describe('YouTube AgentCore loop control', () => {
           });
       },
     });
-    const repairModel = new MockLanguageModelV4({
-      doGenerate: async () => ({
-        content: [{ type: 'text', text: JSON.stringify({ videoId: 'abcdefghijk' }) }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: {
-          inputTokens: { total: 40, noCache: 40, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 10, text: 10, reasoning: undefined },
-        },
-        warnings: [],
-      }),
-    });
+    const repairModel = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
+      confidence: 'low', warnings: [], blocks: [{ text: 'The repaired call retrieved the selected video.', evidenceIds: ['ref_1'] }],
+    }) });
     const context = inspectContext();
     const modelBudget = inMemoryModelBudget();
 
@@ -466,14 +500,16 @@ describe('YouTube AgentCore loop control', () => {
       modelCallPrefix: 'repair-test',
     });
 
-    expect(result.stepCount).toBe(2);
+    expect(result.stepCount).toBe(3);
     expect(repairModel.doGenerateCalls).toHaveLength(1);
+    expect(researchModel.doGenerateCalls).toHaveLength(3);
     expect(context.provider.video).toHaveBeenCalledWith('abcdefghijk');
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(modelBudget.entries.map((entry) => entry.category)).toEqual([
       'tool_repair',
       'agent_core',
       'agent_core',
+      'timeout_finalizer',
     ]);
   });
 
@@ -638,6 +674,26 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledOnce();
   });
 
+  it('uses the classified video count for the actual analysis budget instead of comparative breadth', async () => {
+    const context = transcriptResearchContext();
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => step++ === 0
+      ? modelResult({ toolCallId: 'batch', toolName: 'analyze_video_transcripts', input: JSON.stringify({
+        videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Practical tasks',
+      }) })
+      : modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Supported comparison.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) }),
+    });
+    await runResearchAgentWithModel({ model, message: 'Compare options',
+      decision: { route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 3 }, context });
+    expect(context.provider.transcript).toHaveBeenCalledTimes(3);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 3, reviewedVideos: 3 } })]),
+    }));
+  });
+
   it('collects independent batch results even when one selected transcript fails', async () => {
     const context = transcriptResearchContext();
     const original = context.provider.transcript;
@@ -661,15 +717,13 @@ describe('YouTube AgentCore loop control', () => {
       decision: { route: 'topic_research', researchBreadth: 'comparative' }, context });
     expect(context.provider.transcript).toHaveBeenCalledTimes(4);
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      warnings: expect.arrayContaining([expect.objectContaining({
-        code: 'RESEARCH_COVERAGE_SHORTFALL', message: expect.stringContaining('3 of 4'),
-      })]),
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 4, reviewedVideos: 3 } })]),
     }));
   });
 
   it('rejects duplicate or oversized transcript batches before provider calls', () => {
     expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: ['video000001', 'video000001'], focus: 'Tasks' }).success).toBe(false);
-    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: [1, 2, 3, 4, 5].map(n => `video00000${n}`), focus: 'Tasks' }).success).toBe(false);
+    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `video00000${n}`), focus: 'Tasks' }).success).toBe(false);
   });
 
   it.each([['focused', 2], ['comparative', 4]] as const)('bounds %s analysts to %i concurrent calls', async (researchBreadth, limit) => {
@@ -797,7 +851,7 @@ describe('YouTube AgentCore loop control', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('discloses distinct usable video coverage in recovery answers', async () => {
+  it.each([undefined, 4])('reports coverage and enforces explicit source count %s', async requiredVideoCount => {
     const context = inspectContext();
     const recovery = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
       blocks: [{ text: 'A supported finding.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
@@ -806,13 +860,12 @@ describe('YouTube AgentCore loop control', () => {
     await runResearchAgentWithModel({
       model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
       finalizationModel: recovery, message: 'Compare design skills',
-      decision: { route: 'topic_research', researchBreadth: 'comparative' }, context,
+      decision: { route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 3, requiredVideoCount }, context,
       recoveredEvidence: [transcriptAnalysisPacket()],
     });
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      warnings: expect.arrayContaining([expect.objectContaining({
-        code: 'RESEARCH_COVERAGE_SHORTFALL', message: expect.stringContaining('1 of 4'),
-      })]),
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 3, reviewedVideos: 1, ...(requiredVideoCount ? { requiredVideos: requiredVideoCount } : {}) } })]),
+      warnings: requiredVideoCount ? expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE' })]) : expect.not.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE' })]),
     }));
   });
 
@@ -928,6 +981,35 @@ describe('YouTube AgentCore loop control', () => {
     expect(lastInput.answer).not.toContain('[cite:invented]');
   });
 
+  it('repairs a finalizer unit change before persisting the answer', async () => {
+    const packet = transcriptAnalysisPacket();
+    packet.excerpts[0]!.text = 'The lab measured 54.2% protein.';
+    packet.artifacts[0]!.data = {
+      ...packet.artifacts[0]!.data as object,
+      groundingVersion: 1,
+      findings: [{ claim: 'The lab measured 54.2% protein.', excerptIds: [packet.excerpts[0]!.id], entities: [],
+        quantities: [{ metric: 'protein', value: 54.2, unit: '%', basis: null, kind: 'measured', quote: 'The lab measured 54.2% protein.' }], uncertainty: null }],
+    };
+    const context = inspectContext();
+    context.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({
+      runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(),
+    }, { userId: 'test', idempotencyKey: 'test', creditsRemaining: 100 }, input, [packet], 1));
+    let attempts = 0;
+    const recovery = new MockLanguageModelV4({ doGenerate: async call => {
+      attempts += 1;
+      if (attempts === 2) expect(JSON.stringify(call.prompt)).toContain('blocks[0] contains 54.2g without support');
+      return finalizerModelResult({ blocks: [{ text: `The lab measured 54.2${attempts === 1 ? 'g' : '%'} protein.`, evidenceIds: ['ref_1'] }], confidence: 'medium', warnings: [] });
+    } });
+    const result = await runResearchAgentWithModel({
+      model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+      finalizationModel: recovery, message: 'What did the lab report?', decision: { route: 'topic_research' }, context, recoveredEvidence: [packet],
+    });
+    expect(attempts).toBe(2);
+    expect(result.finishReason).toBe('timeout-finalized');
+    expect(context.finalize).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(context.finalize).mock.calls[0]![1].answer).toContain('54.2%');
+  });
+
   it('does not restart the finalization deadline when a citation repair stalls', async () => {
     vi.useFakeTimers();
     try {
@@ -1011,7 +1093,7 @@ describe('YouTube AgentCore loop control', () => {
     );
   });
 
-  it('surfaces the recovery failure instead of masking it with the original timeout', async () => {
+  it('returns an explicit metadata-only fallback when initial metadata succeeds but synthesis fails', async () => {
     const researchModel = new MockLanguageModelV4({
       doGenerate: async () => {
         throw new Error('The operation was aborted due to timeout');
@@ -1030,7 +1112,7 @@ describe('YouTube AgentCore loop control', () => {
       decision: { route: 'inspect_video', videoId: 'abcdefghijk' },
       context: inspectContext(),
       toolNames: ['get_video', FINALIZE_ANSWER_TOOL_NAME],
-    })).rejects.toThrow('Fallback finalizer unavailable.');
+    })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
   });
 });
 

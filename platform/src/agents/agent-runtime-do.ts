@@ -1,3 +1,4 @@
+import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
@@ -109,6 +110,7 @@ interface RouteRow {
 }
 
 export interface AgentRunView extends AgentRunReceipt {
+  transcriptDiagnostics?: TranscriptDiagnostic[];
   route?: CapabilityRouteDecision;
   result?: AgentTurnResult;
   error?: string;
@@ -229,6 +231,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const route = this.readRoute(runId);
     return {
       ...this.receipt(row),
+      transcriptDiagnostics: this.sql<{ payload_json: string }>`
+        SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'transcript.diagnostic'
+        ORDER BY id
+      `.map(event => transcriptDiagnosticSchema.parse(JSON.parse(event.payload_json))),
       ...(route ? { route } : {}),
       ...(row.result_json ? { result: agentTurnResultSchema.parse(JSON.parse(row.result_json)) } : {}),
       ...(row.error ? { error: row.error } : {}),
@@ -363,6 +369,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         modelBudget,
         modelCallPrefix,
+        onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
           this.persistRoute(runId, selected);
@@ -794,6 +801,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       SELECT COUNT(*) AS count FROM agent_tool_calls WHERE run_id = ${row.id}
     `[0]?.count ?? 0;
     return agentRunReceiptSchema.parse({
+      request: { message: row.message },
       runId: row.id,
       conversationId: row.conversation_id,
       userMessageId: row.user_message_id,
@@ -859,6 +867,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         WHERE id = ${runId}`;
     }
     await this.scheduleRunReconciliation(this.requireRun(runId));
+  }
+
+  private recordTranscriptDiagnostic(runId: string, event: TranscriptDiagnostic): void {
+    if (this.#deleted) return;
+    const diagnostic = transcriptDiagnosticSchema.parse(event);
+    this.recordEvent(runId, 'transcript.diagnostic', diagnostic);
+    // Private captures remain in owner-scoped SQLite, never ordinary logs.
+    const { videoId, modelCallId, attemptId, attempt, outcome, elapsedMs, code, finishReason,
+      modelId, inputTokens, outputTokens, cancellationReason, issueCount } = diagnostic;
+    console.log(JSON.stringify({ event: 'agent_transcript_diagnostic', runId, videoId, modelCallId,
+      attemptId, attempt, outcome, elapsedMs, code, finishReason, modelId, inputTokens,
+      outputTokens, cancellationReason, issueCount, issueCodes: diagnostic.issues?.map(issue => issue.code) }));
   }
 
   private recordEvent(runId: string, type: string, payload: Record<string, unknown>): void {
