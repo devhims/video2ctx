@@ -78,6 +78,7 @@ interface RunRow {
   assistant_message_id: string;
   turn_ordinal: number;
   message: string;
+  execution_message: string | null;
   status: RunStatus;
   phase: string;
   classification_deadline_at: number | null;
@@ -170,9 +171,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         message: 'Wait for the active run to finish, or provide a completed parentMessageId to start an explicit branch.',
       };
     }
+    const retry = this.resolveFailedRetry(parsedRequest.message, conversationId, parsedAdmission.userId, parsedRequest.parentMessageId);
     let parentMessageId: string | null;
     try {
-      parentMessageId = this.resolveParentMessageId(
+      parentMessageId = retry ? retry.parent_message_id : this.resolveParentMessageId(
         conversationId,
         parsedAdmission.userId,
         parsedRequest.parentMessageId,
@@ -194,16 +196,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sql`
       INSERT INTO agent_runs (
         id, idempotency_key, user_id, conversation_id, parent_message_id,
-        user_message_id, assistant_message_id, turn_ordinal, message, status, phase,
+        user_message_id, assistant_message_id, turn_ordinal, message, execution_message, status, phase,
         result_json, error, credits_remaining_at_admission, created_at, updated_at
       ) VALUES (
         ${runId}, ${parsedAdmission.idempotencyKey}, ${parsedAdmission.userId}, ${conversationId},
         ${parentMessageId}, ${userMessageId}, ${assistantMessageId}, ${turnOrdinal},
-        ${parsedRequest.message}, 'pending', 'admitted', null, null,
+        ${parsedRequest.message}, ${retry ? retry.execution_message ?? retry.message : null}, 'pending', 'admitted', null, null,
         ${parsedAdmission.creditsRemaining}, ${timestamp}, ${timestamp}
       )
     `;
-    this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId });
+    this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId, ...(retry ? { retryOfRunId: retry.id } : {}) });
 
     await this.startPersistedRun(this.requireRun(runId));
     return this.receipt(this.requireRun(runId));
@@ -379,7 +381,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         finalizationDeadlineAt: row.finalization_deadline_at ?? undefined,
         env: this.env,
         runId,
-        message: row.message,
+        message: row.execution_message ?? row.message,
         sessionAffinity: this.sessionAffinity,
         signal: fiber.signal,
         conversationHistory,
@@ -391,6 +393,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         modelBudget,
         modelCallPrefix,
+        onClassificationDiagnostic: event => {
+          this.recordEvent(runId, 'classification.validation', { ...event });
+          console.log(JSON.stringify({ event: 'agent_classification', runId, ...event }));
+        },
         onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
@@ -742,6 +748,33 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `[0]?.assistant_message_id ?? null;
   }
 
+  /** Resolve only an unqualified retry of the most recent failed request in scope.
+   * Snapshot its input at admission so later turns and fiber recovery cannot change it.
+   * Failed assistant output is never used as conversation memory.
+   */
+  private resolveFailedRetry(message: string, conversationId: string, userId: string, parentMessageId?: string): RunRow | undefined {
+    const isRetry = (text: string) => /^(?:please\s+)?(?:try again|retry)(?:\s+please)?[.!?]*$/i.test(text.trim());
+    if (!isRetry(message)) return undefined;
+    let beforeTurn = Number.MAX_SAFE_INTEGER;
+    let scopeParent: string | null | undefined = parentMessageId;
+    for (let depth = 0; depth < 8; depth++) {
+      const previous: RunRow | undefined = scopeParent !== undefined
+        ? this.sql<RunRow>`SELECT * FROM agent_runs
+            WHERE conversation_id = ${conversationId} AND user_id = ${userId}
+              AND parent_message_id IS ${scopeParent!} AND turn_ordinal < ${beforeTurn}
+            ORDER BY turn_ordinal DESC LIMIT 1`[0]
+        : this.sql<RunRow>`SELECT * FROM agent_runs
+            WHERE conversation_id = ${conversationId} AND user_id = ${userId} AND turn_ordinal < ${beforeTurn}
+            ORDER BY turn_ordinal DESC LIMIT 1`[0];
+      if (!previous || (previous.status !== 'failed' && previous.status !== 'cancelled')) return undefined;
+      if (!isRetry(previous.execution_message ?? previous.message)) return previous;
+      // Recover old, context-free retry runs created before execution_message existed.
+      beforeTurn = previous.turn_ordinal;
+      scopeParent = previous.parent_message_id;
+    }
+    return undefined;
+  }
+
   private hasActiveRun(conversationId: string, userId: string): boolean {
     return Boolean(this.sql<{ id: string }>`
       SELECT id FROM agent_runs
@@ -767,10 +800,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         userMessageId: parent.user_message_id,
         assistantMessageId: parent.assistant_message_id,
         parentMessageId: parent.parent_message_id,
-        user: parent.message,
+        user: parent.execution_message ?? parent.message,
         assistant: result.answer,
         resourceIds: [...new Set([
-          ...extractYouTubeVideoIds(parent.message),
+          ...extractYouTubeVideoIds(parent.execution_message ?? parent.message),
           ...result.citations.flatMap((citation) => citation.videoId ? [citation.videoId] : []),
         ])],
       } satisfies LinkedConversationTurn;
@@ -982,6 +1015,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       )
     `;
     const columns = this.sql<{ name: string }>`PRAGMA table_info(agent_runs)`;
+    if (!columns.some(column => column.name === 'execution_message')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN execution_message TEXT`;
+    }
     if (!columns.some(column => column.name === 'billing_settled')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN billing_settled INTEGER NOT NULL DEFAULT 0`;
       // Pre-billing development runs have no ledger reservation. Do not debit

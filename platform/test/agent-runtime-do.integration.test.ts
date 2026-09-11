@@ -290,3 +290,82 @@ test('persists private transcript rejection details and retrieves only this run 
   expect(second?.transcriptDiagnostics?.[0]).toMatchObject({ attemptId,
     repairFeedback: 'Unsupported entity PrivateName', rejectedOutput: 'Private rejected model content' });
 });
+
+test('retry admission preserves the failed request, original display text, and stable context', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-retry-context');
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'retry-test', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    const admission = { userId, idempotencyKey: 'retry-context', creditsRemaining: 999 };
+    const receipt = await instance.startRun({ message: 'try again', conversationId }, admission);
+    expect(receipt).not.toHaveProperty('rejected');
+    if ('rejected' in receipt) return;
+    expect(receipt.request).toEqual({ message: 'try again' });
+    expect(instance.sql`SELECT message, execution_message, parent_message_id FROM agent_runs WHERE id = ${receipt.runId}`[0])
+      .toEqual({ message: 'try again', execution_message: 'Private prompt', parent_message_id: null });
+    instance.sql`UPDATE agent_runs SET status = 'failed' WHERE id = ${receipt.runId}`;
+    const second = await instance.startRun({ message: 'Please try again.', conversationId }, { ...admission, idempotencyKey: 'retry-context-2' });
+    if ('rejected' in second) throw Error(second.message);
+    expect(instance.sql`SELECT execution_message FROM agent_runs WHERE id = ${second.runId}`[0])
+      .toEqual({ execution_message: 'Private prompt' });
+    const repeated = await instance.startRun({ message: 'try again', conversationId }, admission);
+    if ('rejected' in repeated) throw Error(repeated.message);
+    expect(repeated.runId).toBe(receipt.runId);
+    expect(instance.sql`SELECT id FROM agent_runs WHERE conversation_id = ${conversationId}`).toHaveLength(3);
+    // The original remains intact, and the failed assistant is never a memory parent.
+    expect(instance.sql`SELECT message FROM agent_runs WHERE id = ${runId}`[0]).toEqual({ message: 'Private prompt' });
+    fiber.mockRestore();
+  });
+});
+
+test('does not reinterpret a new task or a retry in another session as the failed request', async () => {
+  const { runtime, userId, conversationId } = await seed('agent-retry-isolation');
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'isolation-test', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    for (const [message, session] of [['try again with a different video', conversationId], ['try again', crypto.randomUUID()]]) {
+      const receipt = await instance.startRun({ message: message!, conversationId: session! },
+        { userId, idempotencyKey: crypto.randomUUID(), creditsRemaining: 999 });
+      if ('rejected' in receipt) throw Error(receipt.message);
+      expect(instance.sql`SELECT execution_message FROM agent_runs WHERE id = ${receipt.runId}`[0])
+        .toEqual({ execution_message: null });
+    }
+    fiber.mockRestore();
+  });
+});
+
+test('legacy retry chains keep their original branch and completed retries remember the effective request', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-legacy-retry');
+  await runInDurableObject(runtime, async instance => {
+    const parentId = crypto.randomUUID();
+    // The failed request belongs to a valid completed branch.
+    const result = JSON.stringify({ runId: crypto.randomUUID(), conversationId, userMessageId: crypto.randomUUID(),
+      assistantMessageId: parentId, intent: 'clarification', answer: 'Which comparison?',
+      confidence: 'low', citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 999 } });
+    instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,user_message_id,assistant_message_id,
+      turn_ordinal,message,status,phase,result_json,credits_remaining_at_admission,created_at,updated_at)
+      VALUES ('parent','parent',${userId},${conversationId},${crypto.randomUUID()},${parentId},0,'Earlier request','completed','completed',${result},999,0,0)`;
+    instance.sql`UPDATE agent_runs SET message = 'Summarize https://youtu.be/abcdefghijk', parent_message_id = ${parentId} WHERE id = ${runId}`;
+    const legacyId = crypto.randomUUID();
+    instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,parent_message_id,user_message_id,assistant_message_id,
+      turn_ordinal,message,status,phase,credits_remaining_at_admission,created_at,updated_at)
+      VALUES (${legacyId},${legacyId},${userId},${conversationId},${parentId},${crypto.randomUUID()},${crypto.randomUUID()},2,'try again','failed','failed',999,1,1)`;
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'legacy-retry', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    const receipt = await instance.startRun({ message: 'retry', conversationId },
+      { userId, idempotencyKey: 'legacy-retry', creditsRemaining: 999 });
+    if ('rejected' in receipt) throw Error(receipt.message);
+    const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
+    expect(row).toMatchObject({ execution_message: 'Summarize https://youtu.be/abcdefghijk', parent_message_id: parentId });
+    const saved = JSON.stringify({ ...JSON.parse(result), runId: receipt.runId, userMessageId: receipt.userMessageId,
+      assistantMessageId: receipt.assistantMessageId, answer: 'A summary.' });
+    instance.sql`UPDATE agent_runs SET status = 'completed', result_json = ${saved} WHERE id = ${receipt.runId}`;
+    const memory = instance as unknown as { readConversationHistory(row: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
+    expect(memory.readConversationHistory({ ...row, parent_message_id: receipt.assistantMessageId }).at(-1))
+      .toMatchObject({ user: 'Summarize https://youtu.be/abcdefghijk', assistant: 'A summary.', resourceIds: ['abcdefghijk'] });
+    fiber.mockRestore();
+  });
+});
