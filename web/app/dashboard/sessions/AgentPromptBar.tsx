@@ -2,7 +2,7 @@
 
 // Adapted from Beautiful UI's PromptBar, Copyright (c) 2026 Shane Levine.
 // See web/licenses/beautiful-ui.txt for the MIT license.
-import { useLayoutEffect, useRef, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, type FormEvent } from 'react';
 import { ArrowUpIcon, ArrowClockwiseIcon, CircleNotchIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 
 export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, uncertain, error }: {
@@ -25,6 +25,10 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
     observer.observe(input);
     return () => observer.disconnect();
   }, [value]);
+
+  useEffect(() => {
+    if (error && !sending) inputRef.current?.focus();
+  }, [error, sending]);
 
   return <form className={`agent-composer${sending ? ' is-sending' : ''}`} onSubmit={onSubmit}>
     <div className='agent-prompt-bar'>

@@ -18,6 +18,68 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
+  it('repairs the captured incomplete classifier response without forcing tool selection', async () => {
+    const valid = { route: 'topic_research', answerDetail: 'standard', researchVideoCount: 3,
+      researchBreadth: 'comparative', searchQuery: 'model comparison', useStoryboard: false };
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'tool-call', toolCallId: `classification-${++calls}`, toolName: 'classify_request',
+        input: JSON.stringify(calls === 1 ? { researchBreadth: 'comparative' } : valid) }],
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+      usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 40, text: 40, reasoning: undefined } }, warnings: [],
+    }) });
+    const recordUsage = vi.fn();
+    const diagnostics = vi.fn();
+    expect(await classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal,
+      modelCallId: 'classifier-test', modelBudget: { limitMicros: 10000, currentCostMicros: () => 0, recordUsage },
+      onDiagnostic: diagnostics })).toEqual(valid);
+    expect(model.doGenerateCalls.map(call => call.toolChoice)).toEqual([{ type: 'auto' }, { type: 'auto' }]);
+    expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('researchVideoCount');
+    expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['classifier-test', 'classifier-test:repair']);
+    expect(diagnostics.mock.calls[0]?.[0]).toMatchObject({ attempt: 1, outcome: 'invalid',
+      issues: expect.arrayContaining([{ path: 'route', code: 'invalid_value' }]) });
+  });
+
+  it('repairs a clarification missing its question, and stops after one unsuccessful repair', async () => {
+    const model = classifierModel({ route: 'clarification', reason: 'No earlier context.' });
+    await expect(classifyCapabilityWithModel({ message: 'try again', model, signal: new AbortController().signal }))
+      .rejects.toThrow(/Classification.*question/);
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('repairs a missing tool call without accepting ordinary model prose as a routing decision', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: 'I will compare the models.' }],
+      finishReason: { unified: 'stop', raw: 'stop' },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    }) });
+    await expect(classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal }))
+      .rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('keeps repair inside the original classification deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async () => {
+        if (++calls > 1) return new Promise(() => {});
+        await new Promise(resolve => setTimeout(resolve, 15_000));
+        return { content: [{ type: 'tool-call', toolCallId: 'invalid', toolName: 'classify_request', input: '{}' }],
+          finishReason: { unified: 'tool-calls', raw: undefined },
+          usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal })
+        .then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await result).toBe('Classification phase timeout.');
+      expect(calls).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each([1, 3, 6, 8])('persists an explicit research count of %s independently of breadth', async researchVideoCount => {
     const decision = await classifyCapabilityWithModel({ message: 'Compare model coding workflows',
       model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'coding workflows', researchVideoCount }),

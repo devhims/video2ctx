@@ -1,3 +1,4 @@
+import type { ClassificationDiagnostic } from './capability-router';
 import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research-plan';
 import { assertGroundedAnswerBlocks, transcriptSourceContext, TranscriptGroundingError } from '../runtime/transcript-grounding';
@@ -94,6 +95,7 @@ export async function executeResearchRun(options: {
   recoveredToolFailures: EvidenceToolFailure[];
   modelBudget: AgentModelCostBudget;
   modelCallPrefix: string;
+  onClassificationDiagnostic?: (event: ClassificationDiagnostic) => void;
   onTranscriptDiagnostic?: TranscriptDiagnosticSink;
   persistedRoute?: CapabilityRouteDecision;
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
@@ -118,6 +120,7 @@ export async function executeResearchRun(options: {
       signal,
       modelBudget: options.modelBudget,
       modelCallId: `${options.modelCallPrefix}:classifier`,
+      onDiagnostic: options.onClassificationDiagnostic,
     }), 'Classification phase timeout.'),
     persist: options.persistRoute,
   });
