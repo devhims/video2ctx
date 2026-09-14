@@ -32,6 +32,10 @@ export interface ExtractFramesRequest extends YouTubeClientOptions {
   ffmpegPath?: string;
   /** Prefer source resolution over progressive-format seekability. */
   preferResolution?: boolean;
+  /** Optional hosted budget. Finished frames survive expiration of this window. */
+  timeBudgetMs?: number;
+  /** Optional cap for each format probe and seek; local usage defaults to 30s. */
+  frameTimeoutMs?: number;
 }
 
 export interface ExtractedFrame {

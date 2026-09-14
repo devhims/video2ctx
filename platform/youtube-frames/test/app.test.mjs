@@ -12,12 +12,15 @@ test('validates requests before starting extraction and normalizes timestamps', 
   const app = createFrameApp(async input => { seen.push(input); return { videoId: input.videoId }; });
   for (const invalid of [{ ...request, timestampsMs: [] }, { ...request, timestampsMs: [-1] },
     { ...request, timestampsMs: [1.5] }, { ...request, timestampsMs: Array(7).fill(0) },
+    { ...request, extractionTimeoutMs: 0 }, { ...request, extractionTimeoutMs: 45001 },
     { ...request, maxWidth: 4000 }, { ...request, inputUrl: 'http://localhost' }, { ...request, videoId: '../foo' }]) {
     assert.equal((await post(app, invalid)).status, 422);
   }
   assert.equal(seen.length, 0);
   assert.equal((await post(app, { ...request, timestampsMs: [2000, 1000, 2000] })).status, 200);
   assert.deepEqual(seen, [{ ...request, timestampsMs: [1000, 2000], maxWidth: 1920 }]);
+  assert.equal((await post(app, { ...request, extractionTimeoutMs: 15000 })).status, 200);
+  assert.equal(seen[1].extractionTimeoutMs, 15000);
 });
 
 test('rejects overlapping jobs and releases capacity after failures', async () => {

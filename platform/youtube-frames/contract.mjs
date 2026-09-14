@@ -8,10 +8,13 @@ export function invalidInput(message) {
 
 export function parseFrameRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).some(key => !['videoId', 'timestampsMs', 'maxWidth'].includes(key))) {
+    || Object.keys(value).some(key => !['videoId', 'timestampsMs', 'maxWidth', 'extractionTimeoutMs'].includes(key))) {
     throw invalidInput('Supply videoId, timestampsMs, and optionally maxWidth.');
   }
-  const { videoId, timestampsMs, maxWidth = 1920 } = value;
+  const { videoId, timestampsMs, maxWidth = 1920, extractionTimeoutMs } = value;
+  if (extractionTimeoutMs !== undefined && (!Number.isSafeInteger(extractionTimeoutMs) || extractionTimeoutMs < 5000 || extractionTimeoutMs > 45000)) {
+    throw invalidInput('extractionTimeoutMs must be an integer from 5000 to 45000.');
+  }
   if (typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     throw invalidInput('videoId must be an 11-character YouTube video ID.');
   }
@@ -22,5 +25,6 @@ export function parseFrameRequest(value) {
   if (!Number.isSafeInteger(maxWidth) || maxWidth < 320 || maxWidth > 1920) {
     throw invalidInput('maxWidth must be an integer from 320 to 1920.');
   }
-  return { videoId, timestampsMs: [...new Set(timestampsMs)].sort((a, b) => a - b), maxWidth };
+  return { videoId, timestampsMs: [...new Set(timestampsMs)].sort((a, b) => a - b), maxWidth,
+    ...(extractionTimeoutMs !== undefined ? { extractionTimeoutMs } : {}) };
 }

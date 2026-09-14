@@ -8,6 +8,8 @@ import { MAX_RESPONSE_BYTES, parseFrameRequest } from './contract.mjs';
 export async function runFrameJob(input, { signal, timeoutMs = 60_000,
   jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace } = {}) {
   const request = parseFrameRequest(input);
+  // Leave time after the cooperative cutoff for FFmpeg shutdown and packaging.
+  timeoutMs = Math.min(timeoutMs, (request.extractionTimeoutMs ?? 45_000) + 3_000);
   signal?.throwIfAborted();
   const directory = await mkdtemp(join(tmpdir(), 'youtube-frames-'));
   try {

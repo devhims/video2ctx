@@ -22,6 +22,19 @@ afterAll(async () => {
 });
 
 describeFfmpeg('youtube-ctx private FFmpeg range integration', () => {
+  test('stops a stalled real FFmpeg seek at its supplied timeout', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'watch-ffmpeg-timeout-'));
+    directories.push(directory);
+    const server = createServer(() => { /* Simulate media that never sends headers. */ });
+    servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const started = Date.now();
+    await expect(extractJpeg(process.env.FFMPEG_PATH || 'ffmpeg', `http://127.0.0.1:${port}/stalled`,
+      directory, 'abcdefghijk', 1_000, 640, undefined, undefined, { timeoutMs: 200 }))
+      .rejects.toMatchObject({ code: 'FRAME_EXTRACTION_FAILED' });
+    expect(Date.now() - started).toBeLessThan(3_000);
+  }, 5_000);
   test('decodes a remote timestamp through the localhost proxy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'watch-ffmpeg-test-'));
     directories.push(directory);

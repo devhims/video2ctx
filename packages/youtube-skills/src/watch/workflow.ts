@@ -181,6 +181,30 @@ async function extractConcurrent(
 }
 
 export async function extractFrames(options: ExtractFramesRequest): Promise<FrameExtractionResult> {
+  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs]) {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 60_000)) {
+      throw new YouTubeClientError('INVALID_INPUT', 'Extraction time limits must be integers from 1 to 60000ms.');
+    }
+  }
+  if (options.timeBudgetMs === undefined) return extractFramesWithinBudget(options, Infinity);
+  const deadlineAt = Date.now() + options.timeBudgetMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeBudgetMs);
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  try {
+    return await extractFramesWithinBudget({ ...options, fetch: (input, init) => {
+      controller.signal.throwIfAborted();
+      const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+      return fetchImpl(input, { ...init, signal: signal
+        ? AbortSignal.any([signal, controller.signal]) : controller.signal });
+    } }, deadlineAt);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+async function extractFramesWithinBudget(options: ExtractFramesRequest, deadlineAt: number): Promise<FrameExtractionResult> {
   const { timestamps, maxWidth } = validateFrameRequest(options);
   const clientOptions = optionsFrom(options);
   const video = await getDetails({ videoId: options.videoId, ...clientOptions });
@@ -207,7 +231,7 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
   const frames = new Map<number, ExtractedFrame>();
   const lastErrors = new Map<number, unknown>();
 
-  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps.length; profileIndex += 1) {
+  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps.length && Date.now() < deadlineAt; profileIndex += 1) {
     const group = await loadMediaCandidateGroup(
       profileIndex,
       options.videoId,
@@ -217,19 +241,26 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
     );
     if (!group) continue;
     for (const candidate of group.candidates) {
+      if (Date.now() >= deadlineAt) break;
       const pending = timestamps.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
       const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget);
-      const run = (timestampMs: number) => extractJpeg(
-        ffmpegPath,
-        proxy.url,
-        outputDir,
-        options.videoId,
-        timestampMs,
-        maxWidth,
-        candidate.width,
-        candidate.height,
-      );
+      const run = (timestampMs: number) => {
+        if (Date.now() >= deadlineAt) throw new YouTubeClientError('FRAME_EXTRACTION_FAILED', 'Frame extraction budget exhausted.', { retryable: true });
+        const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== undefined
+          ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 30_000, deadlineAt - Date.now())) } : undefined;
+        return extractJpeg(
+          ffmpegPath,
+          proxy.url,
+          outputDir,
+          options.videoId,
+          timestampMs,
+          maxWidth,
+          candidate.width,
+          candidate.height,
+          limits,
+        );
+      };
       try {
         const firstTimestamp = pending[0]!;
         try {
@@ -261,6 +292,7 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
     .map((timestamp) => failure(timestamp, lastErrors.get(timestamp)));
   const orderedFrames = [...frames.values()].sort((a, b) => a.timestampMs - b.timestampMs);
   const warnings = failures.length ? [`${failures.length} requested frame(s) could not be extracted.`] : [];
+  if (failures.length && Date.now() >= deadlineAt) warnings.push('Extraction time budget reached; completed frames were retained.');
   if (orderedFrames.some((frame) => (frame.sourceHeight ?? 0) > 0 && (frame.sourceHeight ?? 0) < 720)) {
     warnings.push('Best-effort media fallback produced frames below 720p.');
   }

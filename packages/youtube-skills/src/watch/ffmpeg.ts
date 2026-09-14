@@ -102,6 +102,7 @@ export async function extractJpeg(
   maxWidth: number,
   sourceWidth?: number,
   sourceHeight?: number,
+  limits?: { timeoutMs: number },
 ): Promise<ExtractedFrame> {
   const directory = resolve(outputDir, 'frames');
   await mkdir(directory, { recursive: true });
@@ -122,7 +123,7 @@ export async function extractJpeg(
       '-strict', 'unofficial',
       '-y',
       path,
-    ], FRAME_TIMEOUT_MS);
+    ], limits?.timeoutMs ?? FRAME_TIMEOUT_MS);
     if (result.code !== 0) {
       throw new YouTubeClientError(
         /\b403\b|Forbidden|access denied/i.test(result.stderr)

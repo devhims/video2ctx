@@ -35,10 +35,24 @@ describe('frame transport contract', () => {
     const fetch = vi.fn(async (_request: Request) => Response.json({ value: frameFixture }));
     const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
     await expect(getVideoFrames(env, { ...request, timestampsMs: [1000, 1000] })).resolves.toEqual(frameFixture);
-    expect(await fetch.mock.calls[0]![0].json()).toEqual(request);
+    expect(await fetch.mock.calls[0]![0].json()).toEqual({ ...request, extractionTimeoutMs: 45000 });
     fetch.mockResolvedValueOnce(Response.json({ error: { code: 'MEDIA_UNAVAILABLE', message: 'Unavailable' } }, { status: 502 }));
     await expect(getVideoFrames(env, request)).rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE', status: 503 });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  test('bounds transport even when the container binding does not acknowledge cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn((_request: Request) => new Promise<Response>(() => {}));
+      const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
+      let failure: unknown;
+      const run = getVideoFrames(env, request, undefined, { extractionTimeoutMs: 5000 }).catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(failure).toMatchObject({ code: 'FRAME_TIMEOUT' });
+      await run;
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch.mock.calls[0]![0].signal.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
   test('tries the other slot only when the first is busy and did not start extraction', async () => {
     const fetch = vi.fn(async (_request: Request) => Response.json({ value: frameFixture }))
@@ -48,5 +62,17 @@ describe('frame transport contract', () => {
     await expect(getVideoFrames(env, request)).resolves.toEqual(frameFixture);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(idFromName.mock.calls[0]![0]).not.toBe(idFromName.mock.calls[1]![0]);
+  });
+  test('cancels a stalled response body when the caller cancels', async () => {
+    const cancel = vi.fn();
+    const fetch = vi.fn(async () => new Response(new ReadableStream({ cancel })));
+    const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
+    const controller = new AbortController();
+    const run = getVideoFrames(env, request, controller.signal);
+    const rejected = expect(run).rejects.toThrow('User cancelled');
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    controller.abort(new Error('User cancelled'));
+    await rejected;
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
