@@ -9,7 +9,8 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 ## Layer boundaries
 
 - `platform/` owns authentication, authorization, credit metering, cache policy, and the public HTTP contract.
-- `platform/youtube-processor/` owns every outbound YouTube call. Reach YouTube through the processor rather than calling it from the Worker.
+- `platform/youtube-processor/` owns outbound provider and storyboard calls. `platform/youtube-frames/` owns agent-only frame extraction and its media traffic. Frame extraction has no public data API route. Reach YouTube through these private containers. The Worker owns authentication, metering, and response validation.
+- For individual-frame extraction, read `reference/engineering/FRAME_EXTRACTION.md`. The new container bundles the shared watch implementation and pins the published library independently.
 - `packages/all-things-youtube/` is the extraction library. The processor installs an exact published npm version using its lockfile. Publish library changes before updating the processor dependency and deploying the Cloudflare API. The processor-directory Docker context uses an allowlist that excludes credentials, tests, and local artifacts.
 - `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both `video2ctx-platform` branches, and verify the npm tarball before releasing it.
 

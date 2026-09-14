@@ -817,6 +817,71 @@
         "x-video2ctx-audience": "consumer"
       }
     },
+    "/v1/agent/frames/{collectionId}/{assetId}": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "getAgentFramePreview",
+        "summary": "View a saved agent video frame",
+        "description": "Returns the original JPEG used for visual analysis. Read collectionId and assetId from a completed get_video_frames tool trace. Anyone with the unguessable image link can view it without a login or API key. Links do not expire automatically; images are removed on account deletion. Older runs may have no saved previews. Viewing a saved frame does not start extraction or charge credits.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "description": "64-character lowercase hexadecimal collection identifier from output.frames.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "assetId",
+            "in": "path",
+            "required": true,
+            "description": "64-character lowercase hexadecimal identifier from output.frames.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Original JPEG. Cache-Control: no-store.",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
     "/v1/agent/{sessionId}/runs/{runId}/events": {
       "get": {
         "tags": [
@@ -7276,6 +7341,48 @@
                       "type": "array",
                       "items": {
                         "type": "string"
+                      }
+                    },
+                    "frames": {
+                      "maxItems": 6,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "assetId": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "collectionId": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "timestampMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "width": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true,
+                            "maximum": 1920
+                          },
+                          "height": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true,
+                            "maximum": 16384
+                          }
+                        },
+                        "required": [
+                          "assetId",
+                          "collectionId",
+                          "timestampMs",
+                          "width",
+                          "height"
+                        ],
+                        "additionalProperties": false
                       }
                     }
                   },

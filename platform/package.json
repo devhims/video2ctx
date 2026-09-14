@@ -9,11 +9,11 @@
     "dev:local": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000",
     "dev:local:no-auth": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --local --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true",
     "build": "tsc --noEmit",
-    "test": "vitest run && npm run test:user-account && npm --prefix youtube-processor test",
+    "test": "vitest run && npm run test:user-account && npm --prefix youtube-processor test && npm --prefix youtube-frames test",
     "test:auth:integration": "vitest run --config vitest.auth.config.ts",
     "test:payments:integration": "vitest run --config vitest.auth.config.ts test/billing.integration.test.ts test/credits.integration.test.ts",
     "test:auth:e2e": "playwright test --config playwright.auth.config.ts",
-    "verify": "npm ci --prefix youtube-processor && npm run build && npm test && npm run test:auth:integration",
+    "verify": "npm ci --prefix youtube-processor && npm ci --prefix youtube-frames && npm run build && npm test && npm run test:auth:integration",
     "test:auth": "vitest run test/auth-config.test.ts test/authentication.test.ts test/cli-auth-boundary.test.ts test/account-route.test.ts",
     "test:container": "npm --prefix youtube-processor test",
     "test:agent:dashboard": "npm --prefix ../web run build -- --webpack && playwright test --config playwright.agent-dashboard.config.ts",
@@ -27,7 +27,8 @@
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
     "db:migrate:production": "wrangler d1 migrations apply DB --remote",
-    "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all"
+    "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all",
+    "test:frames": "npm --prefix youtube-frames test"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",

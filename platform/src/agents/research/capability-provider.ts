@@ -7,7 +7,7 @@ export function createCapabilityProvider(
   provider: YouTubeAgentProvider,
   decision: ExecutableRoute,
 ): YouTubeAgentProvider {
-  if (decision.useStoryboard === false) provider = { ...provider, storyboard: undefined };
+  if (decision.useStoryboard === false) provider = { ...provider, storyboard: undefined, frames: undefined };
   if (decision.route === 'topic_research') return provider;
   const requirePinnedVideo = (videoId: string) => {
     if (videoId !== decision.videoId) {
@@ -16,6 +16,11 @@ export function createCapabilityProvider(
   };
 
   return {
+    frames: async (request, signal) => {
+      requirePinnedVideo(request.videoId);
+      if (!provider.frames) throw new Error('Frame provider is unavailable.');
+      return provider.frames(request, signal);
+    },
     storyboard: async (videoId, timestampsMs, options) => {
       requirePinnedVideo(videoId);
       if (!provider.storyboard) throw new Error('Storyboard provider is unavailable.');

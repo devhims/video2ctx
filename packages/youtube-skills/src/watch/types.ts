@@ -30,6 +30,8 @@ export interface ExtractFramesRequest extends YouTubeClientOptions {
   outputDir: string;
   maxWidth?: number;
   ffmpegPath?: string;
+  /** Prefer source resolution over progressive-format seekability. */
+  preferResolution?: boolean;
 }
 
 export interface ExtractedFrame {

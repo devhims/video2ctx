@@ -1,3 +1,4 @@
+import { createGetVideoFramesTool } from './tools/get-video-frames';
 import { createAnalyzeVideoTranscriptsTool } from './tools/analyze-video-transcripts';
 import { createGetVideoStoryboardTool } from './tools/get-video-storyboard';
 import type { ToolSet } from 'ai';
@@ -21,6 +22,7 @@ const providerToolFactories = {
   search_youtube: createSearchYouTubeTool,
   browse_youtube: createBrowseYouTubeTool,
   get_video: createGetVideoTool,
+  get_video_frames: createGetVideoFramesTool,
   get_video_storyboard: createGetVideoStoryboardTool,
   get_video_tracks: createGetVideoTracksTool,
   get_video_transcript: createGetVideoTranscriptTool,

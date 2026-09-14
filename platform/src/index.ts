@@ -1,3 +1,4 @@
+export { YouTubeFramesContainer } from './youtube-frames-container';
 import app from './app';
 import { queueDigests } from './lib/digests';
 import { handleQueue } from './queues';

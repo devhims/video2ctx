@@ -54,6 +54,7 @@ jobs:
           cache-dependency-path: |
             platform/package-lock.json
             platform/youtube-processor/package-lock.json
+            platform/youtube-frames/package-lock.json
             packages/video2ctx-cli/package-lock.json
             web/package-lock.json
       - name: Install platform dependencies

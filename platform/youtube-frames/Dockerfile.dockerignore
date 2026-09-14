@@ -1,0 +1,13 @@
+**
+!platform/
+!platform/youtube-frames/
+!platform/youtube-frames/package.json
+!platform/youtube-frames/package-lock.json
+!platform/youtube-frames/*.mjs
+!packages/
+!packages/youtube-skills/
+!packages/youtube-skills/src/
+!packages/youtube-skills/src/transport.ts
+!packages/youtube-skills/src/watch/
+!packages/youtube-skills/src/watch/*.ts
+packages/youtube-skills/src/watch/*.test.ts

@@ -1,3 +1,4 @@
+import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
 import { Hono } from 'hono';
 import type { App, ImportPayload } from '../../types';
@@ -375,6 +376,7 @@ sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   await closeBillingAccount(c.env, user.id);
   await disconnectYoutube(c.env, user.id);
   await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
+  await deleteR2Prefix(c.env.RESEARCH, await framePreviewPrefix(user.id));
   const instanceId = userSearchInstanceId(user.id);
   await c.env.TASKS.send({
     type: 'delete-user-search',

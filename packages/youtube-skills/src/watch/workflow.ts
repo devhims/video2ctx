@@ -213,6 +213,7 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
       options.videoId,
       maxWidth,
       clientOptions,
+      options.preferResolution,
     );
     if (!group) continue;
     for (const candidate of group.candidates) {

@@ -21444,7 +21444,7 @@ function codecPreference(candidate) {
   if (candidate.mimeType.includes("av01")) return 2;
   return 3;
 }
-function selectCandidates(raw, maxWidth) {
+function selectCandidates(raw, maxWidth, preferResolution = false) {
   const streaming = object4(raw.streamingData);
   const all = [
     ...formats(streaming.formats, true),
@@ -21452,20 +21452,27 @@ function selectCandidates(raw, maxWidth) {
   ];
   const bounded = all.filter((candidate) => candidate.width === void 0 || candidate.width <= maxWidth);
   const pool = bounded.length ? bounded : [...all].sort((a, b) => (a.width ?? Number.MAX_SAFE_INTEGER) - (b.width ?? Number.MAX_SAFE_INTEGER));
-  return pool.sort((a, b) => {
-    if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
+  const ranked = pool.sort((a, b) => {
     const width = (b.width ?? 0) - (a.width ?? 0);
+    if (preferResolution && width) return width;
+    if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
     return width || codecPreference(a) - codecPreference(b);
   }).filter(
     (candidate, index, candidates) => candidates.findIndex((other) => other.url === candidate.url) === index
-  ).slice(0, 4);
+  );
+  const selected = ranked.slice(0, 4);
+  if (preferResolution && !selected.some((candidate) => candidate.progressive)) {
+    const fallback = ranked.find((candidate) => candidate.progressive);
+    if (fallback) selected[selected.length - 1] = fallback;
+  }
+  return selected;
 }
-async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options) {
+async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options, preferResolution = false) {
   const profile = WATCH_MEDIA_PROFILES[profileIndex];
   if (!profile) return void 0;
   try {
     const response = await callWatchPlayer(videoId, profile, options);
-    const candidates = selectCandidates(response.raw, maxWidth);
+    const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
     return candidates.length ? { profile: response.profile, candidates } : void 0;
   } catch {
     return void 0;
@@ -21794,7 +21801,8 @@ async function extractFrames(options) {
       profileIndex,
       options.videoId,
       maxWidth,
-      clientOptions
+      clientOptions,
+      options.preferResolution
     );
     if (!group) continue;
     for (const candidate of group.candidates) {
