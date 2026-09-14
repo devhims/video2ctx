@@ -154,7 +154,7 @@ The repeated request passed after that clarification. Run `a7c684ae-c469-48df-82
 
 ## Visual research deadlines
 
-Visual-enabled runs receive a persisted 120-second research window. Ordinary nonvisual research retains its 40-second window. The visual window accommodates the existing 70-second frame transport limit and 20-second frame analyst limit, with time for source selection. Finalization retains a separate 40-second budget. Recovery uses the stored deadline without resetting it, and user cancellation remains effective.
+Visual-enabled runs receive a persisted 120-second research window. Ordinary nonvisual research retains its 40-second window. The visual window accommodates frame transport and analysis with time for source selection; individual frame calls now allocate the remaining time as described below. Finalization retains a separate 40-second budget. Recovery uses the stored deadline without resetting it, and user cancellation remains effective.
 
 This fixes a production follow-up in session `af8bd853-7ede-894f-8d19-28db752b92d8`, run `ba536e1f-9ae4-47de-b223-eea74852497f`. It called `get_video_frames` after an unsuccessful storyboard lookup, but the frame operation failed after 35.842 seconds, consistent with consuming the remainder of the former 40-second research window. The finalizer reported only the earlier storyboard error because it snapshotted tool failures before the aborted frame call settled.
 
@@ -168,7 +168,7 @@ Frame calls now reserve 30 seconds of remaining research time: 20 seconds for vi
 
 The optional private `extractionTimeoutMs` request field is controlled by the Worker, not exposed in the model tool schema or data API. The container applies the budget across metadata/media requests, format fallbacks, and seeks. Shorter seeks let failed candidates release time for a fallback. Completed frames survive a later seek timeout and continue through analysis and preview saving. No completed frames still means an explicit extraction failure. The hard process deadline remains a fallback for an uncooperative process; it cannot promise partial results after a crash. Local CLI behavior retains its existing defaults.
 
-The analyst receives the original user question as well as the tool focus. Focus is a search hint, not a restriction on evidence: relevant captions, tables, nameplates and scoreboards must be considered. Names must be legible and tied to their visible context; appearance or kit color does not establish identity or team. This instruction needs live-model verification against the saved production frames. Deterministic tests do not establish visual accuracy.
+The analyst receives the original user question as well as the tool focus. Focus is a search hint, not a restriction on evidence: relevant captions, tables, nameplates and scoreboards must be considered. Names must be legible and tied to their visible context; appearance or kit color does not establish identity or team. The analyst also requests concise, literal findings without guessed name expansions or unrelated statistics. Live verification on the saved production frames found the previously missed names and reduced average analysis time from 8.14 to 4.89 seconds. See [the benchmark](FRAME_ANALYSIS_BENCHMARK.md) for all measurements and limits. This does not verify the full updated extraction pipeline in production.
 
 Successful calls log extraction and analysis durations separately, along with counts and the allocated budget. These logs contain no images, signed media URLs or credentials.
 
