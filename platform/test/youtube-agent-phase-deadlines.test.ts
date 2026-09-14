@@ -60,6 +60,30 @@ it('starts a full research window after slow classification, then a full finaliz
   expect(await run).toMatch(/Finalization phase timeout/i);
 });
 
+it('gives visual research time for extraction and analysis, while preserving its saved deadline', async () => {
+  const { options, finalizer } = setup(0, { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: true });
+  const start = Date.now();
+  const run = executeResearchRun(options).then(() => 'completed', error => error.message);
+  await vi.advanceTimersByTimeAsync(119_999);
+  expect(options.onCapabilityLoaded).toHaveBeenCalledWith('inspect_video', start + 120_000);
+  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(40_000);
+  expect(await run).toMatch(/Finalization phase timeout/i);
+
+  const resumed = setup(0);
+  const savedDeadline = Date.now() + 15_000;
+  const resume = executeResearchRun({ ...resumed.options, researchDeadlineAt: savedDeadline,
+    persistedRoute: { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: true },
+  }).then(() => 'completed', error => error.message);
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(resumed.options.onCapabilityLoaded).toHaveBeenCalledWith('inspect_video', savedDeadline);
+  expect(resumed.finalizer.doGenerateCalls).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(40_000);
+  expect(await resume).toMatch(/Finalization phase timeout/i);
+});
+
 it('still permits user cancellation during classification', async () => {
   const { options, controller, research } = setup(90_000);
   const run = executeResearchRun(options).then(() => 'completed', error => error.message);

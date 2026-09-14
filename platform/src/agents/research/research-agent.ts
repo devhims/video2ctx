@@ -11,7 +11,7 @@ import { ApiError } from '../../lib/http';
 import { renderStructuredAnswer, finalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
-import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
+import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 import { generateText, Output, NoObjectGeneratedError, type LanguageModel } from 'ai';
 import { ZodError } from 'zod';
 import { runAgentCoreWithModel } from '../agent-core';
@@ -144,7 +144,7 @@ export async function executeResearchRun(options: {
     return;
   }
 
-  const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + AGENT_RESEARCH_TIMEOUT_MS;
+  const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(decision.useStoryboard);
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
   const limiter = new ConcurrencyLimiter(MAX_CONCURRENT_EVIDENCE_REQUESTS);
   const provider = createCapabilityProvider(createYouTubeAgentProvider(options.env), decision);
@@ -256,7 +256,7 @@ export async function runResearchAgent(options: {
 export async function runResearchAgentWithModel(
   options: Omit<Parameters<typeof runResearchAgentWithModelWithinDeadline>[0], 'researchDeadlineAt'> & { researchDeadlineAt?: number },
 ): Promise<{ finishReason: string; stepCount: number }> {
-  const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + AGENT_RESEARCH_TIMEOUT_MS;
+  const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(options.decision.useStoryboard);
   return runResearchAgentWithModelWithinDeadline({
     ...options, researchDeadlineAt,
     context: { ...options.context, finalize: (id, input) => withRunDeadline(
@@ -294,6 +294,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const toolFailures = new Map(
     (options.recoveredToolFailures ?? []).map((failure) => [failure.toolCallId, failure]),
   );
+  const pendingTools = new Map<string, Pick<EvidenceToolExecution, 'toolCallId' | 'toolName' | 'operation'>>();
   const recoveredTranscriptAnalysisKeys = transcriptAnalysisKeys(
     options.recoveredEvidence ?? [],
   );
@@ -376,6 +377,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         if (searchUsed) throw new Error('The one-search budget is exhausted. Use the available evidence and other permitted tools.');
         searchUsed = true;
       }
+      pendingTools.set(execution.toolCallId, {
+        toolCallId: execution.toolCallId, toolName: execution.toolName, operation: execution.operation,
+      });
       try {
         const packet = await options.context.executeEvidenceTool(execution);
         evidence.set(packet.packetId, packet);
@@ -390,6 +394,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           message: errorMessage(error),
         });
         throw error;
+      } finally {
+        pendingTools.delete(execution.toolCallId);
       }
     },
   };
@@ -481,6 +487,13 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     return result;
   } catch (error) {
     if (errorMessage(error) === 'Persistence phase timeout.') throw error;
+    // The phase deadline wins its race before an aborted provider necessarily
+    // rejects. Snapshot interrupted tools now so the finalizer sees every gap.
+    for (const pending of pendingTools.values()) {
+      toolFailures.set(pending.toolCallId, { ...pending, message: isAgentCoreTimeout(error)
+        ? 'Research phase timeout before this tool completed.'
+        : 'Research stopped before this tool completed.' });
+    }
     if (options.context.signal.aborted || (error !== finalizationHandoff && !isAgentCoreTimeout(error) && evidence.size === 0)) throw error;
 
     if (!hasContentEvidence([...evidence.values()])

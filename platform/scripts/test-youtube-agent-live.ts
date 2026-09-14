@@ -39,14 +39,14 @@ async function main(): Promise<void> {
       const receipt = publicAgentRunReceiptSchema.parse(await response.json());
       assert.equal(receipt.request?.message, message, 'Receipt must return the original stored message');
       let complete = false;
-      while (Date.now() - started < 120_000) {
+      while (Date.now() - started < 240_000) {
         const poll = await fetch(new URL(`/v1/agent/${receipt.sessionId}/runs/${receipt.runId}?responseFormat=legacy`, base), {
           headers, signal: AbortSignal.timeout(10_000),
         });
         if (poll.status === 429) {
           const seconds = Number(poll.headers.get('Retry-After'));
           const waitMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 5000;
-          await delay(Math.min(waitMs, Math.max(0, 120_000 - (Date.now() - started))));
+          await delay(Math.min(waitMs, Math.max(0, 240_000 - (Date.now() - started))));
           continue;
         }
         assert.equal(poll.status, 200, `Polling failed: ${await poll.clone().text()}`);
