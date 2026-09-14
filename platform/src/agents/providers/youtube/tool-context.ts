@@ -21,6 +21,8 @@ export interface EvidenceToolExecution {
 }
 
 export interface AgentToolContext {
+  researchDeadlineAt?: number;
+  researchQuestion?: string;
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;

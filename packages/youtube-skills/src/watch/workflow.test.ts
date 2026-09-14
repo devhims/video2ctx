@@ -90,6 +90,33 @@ describe('youtube-ctx visual workflow', () => {
     });
   });
 
+  test('returns completed frames when the extraction budget runs out during a later seek', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.extractJpeg.mockImplementation(async (...args: unknown[]) => {
+        const timestampMs = args[4] as number;
+        if (timestampMs === 2_000) {
+          const limits = args[8] as { timeoutMs: number } | undefined;
+          await new Promise(resolve => setTimeout(resolve, limits?.timeoutMs ?? 30_000));
+          throw new YouTubeClientError('FRAME_EXTRACTION_FAILED', 'FFmpeg frame extraction timed out.');
+        }
+        return { timestampMs, path: '/tmp/frame.jpg', mimeType: 'image/jpeg', width: 640, height: 360 };
+      });
+      let completed = false;
+      const run = extractFrames({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test',
+        timestampsMs: [1_000, 2_000], timeBudgetMs: 5_000 }).then(result => { completed = true; return result; });
+      // Let the real mkdir finish before advancing the fake extraction clock.
+      await vi.waitFor(() => expect(mocks.extractJpeg).toHaveBeenCalled(), { interval: 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(completed).toBe(true);
+      const result = await run;
+      expect(result.frames.map(frame => frame.timestampMs)).toEqual([1_000]);
+      expect(result.failures).toEqual([expect.objectContaining({ timestampMs: 2_000 })]);
+      expect(result.meta.partial).toBe(true);
+      expect(mocks.loadMediaCandidateGroup).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   test('uses segment timing by default and returns contact-sheet evidence', async () => {
     const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test' });
 
@@ -147,7 +174,7 @@ describe('youtube-ctx visual workflow', () => {
     expect(JSON.stringify(result)).not.toContain('googlevideo');
     expect(mocks.extractJpeg).toHaveBeenCalledWith(
       '/usr/local/bin/ffmpeg', 'http://127.0.0.1:1234/token', expect.any(String),
-      'abcdefghijk', 1_000, 1_280, 640, 360,
+      'abcdefghijk', 1_000, 1_280, 640, 360, undefined,
     );
     expect(mocks.proxyClose).toHaveBeenCalled();
   });

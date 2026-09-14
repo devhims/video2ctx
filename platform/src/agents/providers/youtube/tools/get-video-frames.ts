@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { frameRequestSchema, validateFrameResponse } from '../../../../lib/youtube-frames';
 import { evidencePacketSchema } from '../../../contracts';
 import { framePreviewSchema } from '../../../runtime/frame-previews';
+import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../../../runtime/frame-budget';
 import type { AgentToolContext } from '../tool-context';
 import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence';
 
@@ -29,11 +30,20 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     execute: async () => {
       context.signal.throwIfAborted();
       if (!context.provider.frames || !context.analyzeFrames) throw new Error('Frame analysis is unavailable.');
-      const response = await context.provider.frames(request, context.signal);
+      const extractionTimeoutMs = frameExtractionBudget(context.researchDeadlineAt);
+      if (extractionTimeoutMs < FRAME_EXTRACTION_MIN_MS) {
+        throw new Error('Insufficient time for frame extraction and analysis. Finalize using the available evidence.');
+      }
+      const startedAt = Date.now();
+      const response = await context.provider.frames(request, context.signal, { extractionTimeoutMs });
       context.signal.throwIfAborted();
       const frames = validateFrameResponse(request, response.value);
-      const analysis = await context.analyzeFrames({ frames, focus: parsed.focus, signal: context.signal,
+      const extractedAt = Date.now();
+      const analysis = await context.analyzeFrames({ frames, focus: parsed.focus, researchQuestion: context.researchQuestion, signal: context.signal,
         modelCallId: `frame-analyst:${context.runId}:${toolCallId}` });
+      console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
+        extractionMs: extractedAt - startedAt, analysisMs: Date.now() - extractedAt,
+        extractionTimeoutMs, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:frames`;
       const packet = evidencePacketSchema.parse({

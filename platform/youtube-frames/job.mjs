@@ -11,6 +11,7 @@ try {
   const request = parseFrameRequest(JSON.parse(await readFile(join(directory, 'request.json'), 'utf8')));
   const result = await extractFrames({
     ...request, outputDir: directory, preferResolution: true,
+    timeBudgetMs: request.extractionTimeoutMs ?? 45_000, frameTimeoutMs: 10_000,
     fetch: dispatcher ? (input, init) => undiciFetch(input, { ...init, dispatcher }) : globalThis.fetch,
     retry: { policy: { maxAttempts: 2, attemptTimeoutMs: 8_000 } },
   });

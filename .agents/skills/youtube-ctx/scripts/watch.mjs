@@ -21128,7 +21128,7 @@ function conciseError(stderr) {
   if (/timed out/i.test(stderr)) return "FFmpeg frame extraction timed out.";
   return "FFmpeg could not decode the requested frame.";
 }
-async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs, maxWidth, sourceWidth, sourceHeight) {
+async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs, maxWidth, sourceWidth, sourceHeight, limits) {
   const directory = resolve2(outputDir, "frames");
   await mkdir2(directory, { recursive: true });
   const path = join2(directory, `${videoId}-${timestampMs}-${randomUUID()}.jpg`);
@@ -21158,7 +21158,7 @@ async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs
       "unofficial",
       "-y",
       path
-    ], FRAME_TIMEOUT_MS);
+    ], limits?.timeoutMs ?? FRAME_TIMEOUT_MS);
     if (result.code !== 0) {
       throw new YouTubeClientError(
         /\b403\b|Forbidden|access denied/i.test(result.stderr) ? "MEDIA_UNAVAILABLE" : "FRAME_EXTRACTION_FAILED",
@@ -21772,6 +21772,28 @@ async function extractConcurrent(timestamps2, run) {
   return results;
 }
 async function extractFrames(options) {
+  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs]) {
+    if (limit !== void 0 && (!Number.isSafeInteger(limit) || limit < 1 || limit > 6e4)) {
+      throw new YouTubeClientError("INVALID_INPUT", "Extraction time limits must be integers from 1 to 60000ms.");
+    }
+  }
+  if (options.timeBudgetMs === void 0) return extractFramesWithinBudget(options, Infinity);
+  const deadlineAt = Date.now() + options.timeBudgetMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeBudgetMs);
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  try {
+    return await extractFramesWithinBudget({ ...options, fetch: (input, init) => {
+      controller.signal.throwIfAborted();
+      const signal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
+      return fetchImpl(input, { ...init, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal });
+    } }, deadlineAt);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+async function extractFramesWithinBudget(options, deadlineAt) {
   const { timestamps: timestamps2, maxWidth } = validateFrameRequest(options);
   const clientOptions = optionsFrom2(options);
   const video = await getDetails({ videoId: options.videoId, ...clientOptions });
@@ -21796,7 +21818,7 @@ async function extractFrames(options) {
   const budget = new TransferBudget();
   const frames = /* @__PURE__ */ new Map();
   const lastErrors = /* @__PURE__ */ new Map();
-  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps2.length; profileIndex += 1) {
+  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps2.length && Date.now() < deadlineAt; profileIndex += 1) {
     const group = await loadMediaCandidateGroup(
       profileIndex,
       options.videoId,
@@ -21806,19 +21828,25 @@ async function extractFrames(options) {
     );
     if (!group) continue;
     for (const candidate of group.candidates) {
+      if (Date.now() >= deadlineAt) break;
       const pending = timestamps2.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
       const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget);
-      const run = (timestampMs) => extractJpeg(
-        ffmpegPath,
-        proxy.url,
-        outputDir,
-        options.videoId,
-        timestampMs,
-        maxWidth,
-        candidate.width,
-        candidate.height
-      );
+      const run = (timestampMs) => {
+        if (Date.now() >= deadlineAt) throw new YouTubeClientError("FRAME_EXTRACTION_FAILED", "Frame extraction budget exhausted.", { retryable: true });
+        const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== void 0 ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 3e4, deadlineAt - Date.now())) } : void 0;
+        return extractJpeg(
+          ffmpegPath,
+          proxy.url,
+          outputDir,
+          options.videoId,
+          timestampMs,
+          maxWidth,
+          candidate.width,
+          candidate.height,
+          limits
+        );
+      };
       try {
         const firstTimestamp = pending[0];
         try {
@@ -21847,6 +21875,7 @@ async function extractFrames(options) {
   const failures = timestamps2.filter((timestamp) => !frames.has(timestamp)).map((timestamp) => failure(timestamp, lastErrors.get(timestamp)));
   const orderedFrames = [...frames.values()].sort((a, b) => a.timestampMs - b.timestampMs);
   const warnings = failures.length ? [`${failures.length} requested frame(s) could not be extracted.`] : [];
+  if (failures.length && Date.now() >= deadlineAt) warnings.push("Extraction time budget reached; completed frames were retained.");
   if (orderedFrames.some((frame) => (frame.sourceHeight ?? 0) > 0 && (frame.sourceHeight ?? 0) < 720)) {
     warnings.push("Best-effort media fallback produced frames below 720p.");
   }

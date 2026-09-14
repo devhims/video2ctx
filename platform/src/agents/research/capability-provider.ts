@@ -16,10 +16,10 @@ export function createCapabilityProvider(
   };
 
   return {
-    frames: async (request, signal) => {
+    frames: async (request, signal, limits) => {
       requirePinnedVideo(request.videoId);
       if (!provider.frames) throw new Error('Frame provider is unavailable.');
-      return provider.frames(request, signal);
+      return provider.frames(request, signal, limits);
     },
     storyboard: async (videoId, timestampsMs, options) => {
       requirePinnedVideo(videoId);

@@ -1,7 +1,7 @@
 export const AGENT_CLASSIFICATION_TIMEOUT_MS = 20_000;
 export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
-// Frame transport can take 70 seconds, followed by 20 seconds of visual
-// analysis. Leave room for storyboard selection and research model calls too.
+// Visual runs include source selection, bounded frame extraction and analysis.
+// Individual frame calls allocate from this shared window before starting.
 export const AGENT_VISUAL_RESEARCH_TIMEOUT_MS = 120_000;
 export const AGENT_FINALIZATION_TIMEOUT_MS = 40_000;
 export const AGENT_PERSISTENCE_TIMEOUT_MS = 30_000;

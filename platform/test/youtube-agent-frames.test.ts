@@ -27,6 +27,23 @@ function context(): AgentToolContext {
 }
 const input = { videoId: frames.videoId, timestampsMs: [1234], focus: 'Read the chart' };
 describe('agent frame tool', () => {
+  test('reserves analysis time and forwards a bounded extraction budget', async () => {
+    const ctx = context();
+    ctx.researchDeadlineAt = Date.now() + 50_000;
+    ctx.researchQuestion = 'Confirm names from any visible text, including scoreboards.';
+    ctx.analyzeFrames = vi.fn(async () => ({ findings: [], warnings: [] }));
+    await executeGetVideoFrames(input, ctx, 'budgeted');
+    const options = vi.mocked(ctx.provider.frames!).mock.calls[0]![2];
+    expect(options?.extractionTimeoutMs).toBeGreaterThan(15_000);
+    expect(options?.extractionTimeoutMs).toBeLessThanOrEqual(20_000);
+    expect(ctx.analyzeFrames).toHaveBeenCalledWith(expect.objectContaining({ researchQuestion: ctx.researchQuestion }));
+  });
+  test('does not start extraction when there is no time left for analysis', async () => {
+    const ctx = context();
+    ctx.researchDeadlineAt = Date.now() + 20_000;
+    await expect(executeGetVideoFrames(input, ctx, 'late')).rejects.toThrow('Insufficient time');
+    expect(ctx.provider.frames).not.toHaveBeenCalled();
+  });
   test('saves the original analyzed frames and exposes only descriptors', async () => {
     const ctx = context();
     const previews = [{ assetId: 'a'.repeat(64), collectionId: 'b'.repeat(64), timestampMs: 1234, width: 1920, height: 1080 }];

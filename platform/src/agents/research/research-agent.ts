@@ -12,6 +12,7 @@ import { renderStructuredAnswer, finalizationOutputSchema, FINALIZATION_SCHEMA_V
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
+import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../runtime/frame-budget';
 import { generateText, Output, NoObjectGeneratedError, type LanguageModel } from 'ai';
 import { ZodError } from 'zod';
 import { runAgentCoreWithModel } from '../agent-core';
@@ -321,6 +322,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   };
   const trackedContext: AgentToolContext = {
     ...options.context,
+    researchDeadlineAt: options.researchDeadlineAt,
+    researchQuestion: options.message,
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {
       await startFinalization();
@@ -457,8 +460,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           ].join('\n'),
           tools: createCapabilityToolSet(phaseContext, toolNames),
           activeTools: toolNames,
-          unavailableTools: () => searchUsed || (options.decision.route === 'topic_research' && !!options.decision.channelId)
-            ? ['search_youtube'] : [],
+          unavailableTools: () => [
+            ...(searchUsed || (options.decision.route === 'topic_research' && !!options.decision.channelId) ? ['search_youtube'] : []),
+            ...(frameExtractionBudget(options.researchDeadlineAt) < FRAME_EXTRACTION_MIN_MS ? ['get_video_frames'] : []),
+          ],
           finalizationToolName: FINALIZE_ANSWER_TOOL_NAME,
           isToolBudgetExhausted: transcriptBudget?.isExhausted,
         },

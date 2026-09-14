@@ -25,7 +25,8 @@ import type { TrendReport } from '../../../lib/trends';
 import { getProvider, type ProviderAdapter } from '../../../providers';
 
 export interface YouTubeAgentProvider {
-  frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal): Promise<CachedResult<VideoFrames>>;
+  frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
+    limits?: { extractionTimeoutMs: number }): Promise<CachedResult<VideoFrames>>;
   storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions): Promise<CachedResult<Storyboard>>;
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
@@ -57,7 +58,7 @@ export function createYouTubeAgentProvider(
   provider: ProviderAdapter = getProvider('youtube'),
 ): YouTubeAgentProvider {
   return {
-    frames: async (request, signal) => ({ value: await getVideoFrames(env, request, signal), cacheStatus: 'miss' }),
+    frames: async (request, signal, limits) => ({ value: await getVideoFrames(env, request, signal, limits), cacheStatus: 'miss' }),
     storyboard: async (videoId, timestampsMs, options = {}) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options })), cacheStatus: 'miss' }),
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),

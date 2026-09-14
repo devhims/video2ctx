@@ -78,3 +78,14 @@ test('reports an interrupted frame call to the finalizer before cancellation ack
     expect.arrayContaining([expect.objectContaining({ code: 'EVIDENCE_TOOL_FAILED', message: expect.stringContaining('get_video_frames') })]) }));
   await vi.advanceTimersByTimeAsync(50);
 });
+
+test('removes frame extraction from the next model step when only completion time remains', async () => {
+  const { options, context } = setup(30_000);
+  const run = runResearchAgentWithModel({ ...options, researchDeadlineAt: Date.now() + 60_000 });
+  await vi.advanceTimersByTimeAsync(30_000);
+  await run;
+  expect(context.provider.frames).toHaveBeenCalledOnce();
+  const nextTools = options.model.doGenerateCalls[1]?.tools?.map(tool => tool.name);
+  expect(nextTools).toContain('finalize_answer');
+  expect(nextTools).not.toContain('get_video_frames');
+});
