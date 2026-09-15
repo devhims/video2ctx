@@ -6,7 +6,7 @@ const findingsSchema = z.object({ findings: z.array(z.object({
 })) });
 const safeText = (text: string) => text.replace(/\[cite:/g, '(source marker:').replace(/\s+/g, ' ').slice(0, 600);
 
-const contentKinds = new Set(['youtube_transcript', 'youtube_storyboard', 'youtube_comments']);
+const contentKinds = new Set(['youtube_transcript', 'youtube_storyboard', 'youtube_frames', 'youtube_comments']);
 
 export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean {
   return packets.some(packet => contentKinds.has(packet.kind)
