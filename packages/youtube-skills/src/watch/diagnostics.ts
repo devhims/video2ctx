@@ -9,6 +9,8 @@ export interface FrameDiagnostic {
   playabilityStatus?: string;
   reason?: string;
   elapsedMs?: number;
+  attempt?: number;
+  delayMs?: number;
   error?: unknown;
 }
 export type DiagnosticSink = (event: FrameDiagnostic) => void;

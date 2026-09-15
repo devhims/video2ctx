@@ -247,7 +247,7 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
       const pending = timestamps.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
       const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, undefined, event =>
-        diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }));
+        diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }), deadlineAt);
       const run = async (timestampMs: number) => {
         const startedAt = Date.now();
         try {

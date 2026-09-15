@@ -189,3 +189,15 @@ Fallback attempts are logged even when a later candidate succeeds. A `media_http
 Logs preserve error messages and nested causes after removing URLs, auth/cookie headers, recognized secret fields, configured proxy credentials and local paths. They do not include request/response bodies, images or signed media URLs. Text fields are limited to 4,000 characters, cause depth to four records, and child diagnostics to 100 events per job with an explicit truncation event. Oversized subprocess lines are omitted whole before redaction, avoiding secret suffixes caused by truncation. Public errors retain their existing wording.
 
 Existing Worker observability is enabled at full sampling. Container stdout/stderr uses the same Cloudflare observability integration. Deploying the updated frame image and Worker is necessary to produce the new records; these changes cannot recover diagnostics discarded by historical runs. Cloudflare log retention still applies. See [Container logging](https://developers.cloudflare.com/containers/faq/#how-do-container-logs-work).
+
+## Transient media request retries
+
+The range proxy retries a media request once before consuming its response body when YouTube returns 408, 425, 429, 500, 502, 503 or 504, or when the fetch rejects without cancellation. The retry uses the same URL and byte range. A rejected response body is cancelled before retrying. Other HTTP statuses, including 403, proceed to the existing format/client fallback.
+
+Without a valid `Retry-After`, the delay is randomized between 100 and 300 ms. `Retry-After` accepts seconds or an HTTP date. A requested delay longer than two seconds is not shortened: the retry is skipped. Retries also require enough remaining extraction time for the delay plus at least 250 ms. The existing overall extraction and FFmpeg deadlines still apply, and closing the proxy interrupts backoff. This is request-level recovery, not a replay of the whole container operation.
+
+Once a response body is handed to the streaming proxy, body-read failures are not replayed. This avoids duplicating bytes already sent to FFmpeg or exceeding the transfer allowance through hidden restarts. Completed frames remain available through existing partial-result handling.
+
+`media_retry` diagnostics record the attempt, delay, HTTP status or original network error. `media_retry_skipped` records when the requested delay or remaining budget prevents retrying. The existing extraction ID and client/candidate context connect these events to the run; signed URLs are excluded.
+
+Deploy the updated frame container image to activate this behavior for hosted extraction. No Worker API or request-contract change is required. The regenerated local watch bundle includes the same request retry behavior.

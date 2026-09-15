@@ -1,3 +1,4 @@
+import { fetchMediaWithRetry } from './media-retry';
 import { diagnose, type DiagnosticSink } from './diagnostics';
 import { randomBytes } from 'node:crypto';
 import { createServer, type ServerResponse } from 'node:http';
@@ -68,6 +69,7 @@ export async function startMediaRangeProxy(
   budget: TransferBudget,
   prefixLimit = DEFAULT_PREFIX_CACHE_BYTES,
   onDiagnostic?: DiagnosticSink,
+  deadlineAt = Infinity,
 ): Promise<MediaRangeProxy> {
   const token = randomBytes(18).toString('hex');
   let prefix = Buffer.alloc(0);
@@ -86,10 +88,10 @@ export async function startMediaRangeProxy(
     const onClose = () => controller.abort();
     res.once('close', onClose);
     try {
-      const upstream = await fetchImpl(candidate.url, {
+      const upstream = await fetchMediaWithRetry(fetchImpl, candidate.url, {
         headers: range ? { Range: range } : undefined,
         signal: controller.signal,
-      });
+      }, deadlineAt, onDiagnostic);
       if (writeHeaders) res.writeHead(upstream.status, responseHeaders(upstream));
       if (!upstream.ok || !upstream.body) {
         diagnose(onDiagnostic, { stage: 'media_http', status: upstream.status });

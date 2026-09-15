@@ -2503,9 +2503,9 @@ var require_timers = __commonJS({
        * before the specified function or code is executed.
        * @param {*} arg
        */
-      constructor(callback, delay, arg) {
+      constructor(callback, delay2, arg) {
         this._onTimeout = callback;
-        this._idleTimeout = delay;
+        this._idleTimeout = delay2;
         this._timerArg = arg;
         this.refresh();
       }
@@ -2550,8 +2550,8 @@ var require_timers = __commonJS({
        * when the timer expires.
        * @returns {NodeJS.Timeout|FastTimer}
        */
-      setTimeout(callback, delay, arg) {
-        return delay <= RESOLUTION_MS ? setTimeout(callback, delay, arg) : new FastTimer(callback, delay, arg);
+      setTimeout(callback, delay2, arg) {
+        return delay2 <= RESOLUTION_MS ? setTimeout(callback, delay2, arg) : new FastTimer(callback, delay2, arg);
       },
       /**
        * The clearTimeout method cancels an instantiated Timer previously created
@@ -2577,8 +2577,8 @@ var require_timers = __commonJS({
        * when the timer expires.
        * @returns {FastTimer}
        */
-      setFastTimeout(callback, delay, arg) {
-        return new FastTimer(callback, delay, arg);
+      setFastTimeout(callback, delay2, arg) {
+        return new FastTimer(callback, delay2, arg);
       },
       /**
        * The clearTimeout method cancels an instantiated FastTimer previously
@@ -2604,8 +2604,8 @@ var require_timers = __commonJS({
        * @deprecated
        * @param {number} [delay=0] The delay in milliseconds to add to the now value.
        */
-      tick(delay = 0) {
-        fastNow += delay - RESOLUTION_MS + 1;
+      tick(delay2 = 0) {
+        fastNow += delay2 - RESOLUTION_MS + 1;
         onTick();
         onTick();
       },
@@ -6004,21 +6004,21 @@ var require_client_h1 = __commonJS({
         this.connection = "";
         this.maxResponseSize = client[kMaxResponseSize];
       }
-      setTimeout(delay, type) {
-        if (delay !== this.timeoutValue || type & USE_FAST_TIMER ^ this.timeoutType & USE_FAST_TIMER) {
+      setTimeout(delay2, type) {
+        if (delay2 !== this.timeoutValue || type & USE_FAST_TIMER ^ this.timeoutType & USE_FAST_TIMER) {
           if (this.timeout) {
             timers.clearTimeout(this.timeout);
             this.timeout = null;
           }
-          if (delay) {
+          if (delay2) {
             if (type & USE_FAST_TIMER) {
-              this.timeout = timers.setFastTimeout(onParserTimeout, delay, new WeakRef(this));
+              this.timeout = timers.setFastTimeout(onParserTimeout, delay2, new WeakRef(this));
             } else {
-              this.timeout = setTimeout(onParserTimeout, delay, new WeakRef(this));
+              this.timeout = setTimeout(onParserTimeout, delay2, new WeakRef(this));
               this.timeout.unref();
             }
           }
-          this.timeoutValue = delay;
+          this.timeoutValue = delay2;
         } else if (this.timeout) {
           if (this.timeout.refresh) {
             this.timeout.refresh();
@@ -10906,7 +10906,7 @@ var require_mock_utils = __commonJS({
       if (mockDispatch2.data.callback) {
         mockDispatch2.data = { ...mockDispatch2.data, ...mockDispatch2.data.callback(opts) };
       }
-      const { data: { statusCode, data, headers, trailers, error }, delay, persist } = mockDispatch2;
+      const { data: { statusCode, data, headers, trailers, error }, delay: delay2, persist } = mockDispatch2;
       const { timesInvoked, times } = mockDispatch2;
       mockDispatch2.consumed = !persist && timesInvoked >= times;
       mockDispatch2.pending = timesInvoked < times;
@@ -10915,10 +10915,10 @@ var require_mock_utils = __commonJS({
         handler.onError(error);
         return true;
       }
-      if (typeof delay === "number" && delay > 0) {
+      if (typeof delay2 === "number" && delay2 > 0) {
         setTimeout(() => {
           handleReply(this[kDispatches]);
-        }, delay);
+        }, delay2);
       } else {
         handleReply(this[kDispatches]);
       }
@@ -18338,7 +18338,7 @@ var require_util8 = __commonJS({
       }
       return true;
     }
-    function delay(ms) {
+    function delay2(ms) {
       return new Promise((resolve5) => {
         setTimeout(resolve5, ms).unref();
       });
@@ -18346,7 +18346,7 @@ var require_util8 = __commonJS({
     module.exports = {
       isValidLastEventId,
       isASCIINumber,
-      delay
+      delay: delay2
     };
   }
 });
@@ -18593,7 +18593,7 @@ var require_eventsource = __commonJS({
     var { parseMIMEType } = require_data_url();
     var { createFastMessageEvent } = require_events();
     var { isNetworkError } = require_response();
-    var { delay } = require_util8();
+    var { delay: delay2 } = require_util8();
     var { kEnumerableProperty } = require_util();
     var { environmentSettingsObject } = require_util2();
     var experimentalWarned = false;
@@ -18764,7 +18764,7 @@ var require_eventsource = __commonJS({
         if (this.#readyState === CLOSED) return;
         this.#readyState = CONNECTING;
         this.dispatchEvent(new Event("error"));
-        await delay(this.#state.reconnectionTime);
+        await delay2(this.#state.reconnectionTime);
         if (this.#readyState !== CONNECTING) return;
         if (this.#state.lastEventId.length) {
           this.#request.headersList.set("last-event-id", this.#state.lastEventId, true);
@@ -21499,6 +21499,58 @@ async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options,
   }
 }
 
+// src/watch/media-retry.ts
+import { setTimeout as delay } from "node:timers/promises";
+var RETRY_STATUSES = /* @__PURE__ */ new Set([408, 425, 429, 500, 502, 503, 504]);
+var MAX_DELAY_MS = 2e3;
+var MIN_ATTEMPT_WINDOW_MS = 250;
+function retryDelay3(response) {
+  const value = response?.headers.get("retry-after")?.trim();
+  if (value) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1e3;
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
+  return 100 + Math.floor(Math.random() * 201);
+}
+async function fetchMediaWithRetry(fetchImpl, url, init, deadlineAt = Infinity, onDiagnostic) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    init.signal.throwIfAborted();
+    if (Date.now() >= deadlineAt) throw new Error("Media extraction deadline reached.");
+    let response;
+    let failure2;
+    try {
+      response = await fetchImpl(url, init);
+    } catch (error) {
+      init.signal.throwIfAborted();
+      failure2 = error;
+    }
+    if (response && !RETRY_STATUSES.has(response.status)) return response;
+    if (attempt === 2) {
+      if (response) return response;
+      throw failure2;
+    }
+    const delayMs = retryDelay3(response);
+    if (delayMs > MAX_DELAY_MS || Date.now() + delayMs + MIN_ATTEMPT_WINDOW_MS >= deadlineAt) {
+      diagnose(onDiagnostic, {
+        stage: "media_retry_skipped",
+        attempt,
+        delayMs,
+        status: response?.status,
+        reason: delayMs > MAX_DELAY_MS ? "retry_after_exceeds_limit" : "insufficient_budget",
+        error: failure2
+      });
+      if (response) return response;
+      throw failure2;
+    }
+    diagnose(onDiagnostic, { stage: "media_retry", attempt, delayMs, status: response?.status, error: failure2 });
+    if (response?.body) void response.body.cancel().catch(() => void 0);
+    await delay(delayMs, void 0, { signal: init.signal });
+  }
+  throw new Error("Media retry loop exhausted.");
+}
+
 // src/watch/range-proxy.ts
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -21552,7 +21604,7 @@ async function write(res, bytes) {
     res.once("close", close);
   });
 }
-async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic) {
+async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic, deadlineAt = Infinity) {
   const token = randomBytes(18).toString("hex");
   let prefix = Buffer.alloc(0);
   let contentType = candidate.mimeType.split(";")[0] ?? "application/octet-stream";
@@ -21564,10 +21616,10 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
     const onClose = () => controller.abort();
     res.once("close", onClose);
     try {
-      const upstream = await fetchImpl(candidate.url, {
+      const upstream = await fetchMediaWithRetry(fetchImpl, candidate.url, {
         headers: range ? { Range: range } : void 0,
         signal: controller.signal
-      });
+      }, deadlineAt, onDiagnostic);
       if (writeHeaders) res.writeHead(upstream.status, responseHeaders(upstream));
       if (!upstream.ok || !upstream.body) {
         diagnose(onDiagnostic, { stage: "media_http", status: upstream.status });
@@ -21854,7 +21906,7 @@ async function extractFramesWithinBudget(options, deadlineAt) {
       if (Date.now() >= deadlineAt) break;
       const pending = timestamps2.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
-      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, void 0, (event) => diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }));
+      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, void 0, (event) => diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }), deadlineAt);
       const run = async (timestampMs) => {
         const startedAt = Date.now();
         try {

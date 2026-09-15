@@ -35,7 +35,7 @@ describeFfmpeg('youtube-ctx private FFmpeg range integration', () => {
       .rejects.toMatchObject({ code: 'FRAME_EXTRACTION_FAILED' });
     expect(Date.now() - started).toBeLessThan(3_000);
   }, 5_000);
-  test('decodes a remote timestamp through the localhost proxy', async () => {
+  test.each([200, 503])('decodes a remote timestamp with initial upstream status %i', async initialStatus => {
     const directory = await mkdtemp(join(tmpdir(), 'watch-ffmpeg-test-'));
     directories.push(directory);
     const videoPath = join(directory, 'fixture.mp4');
@@ -50,6 +50,10 @@ describeFfmpeg('youtube-ctx private FFmpeg range integration', () => {
     const server = createServer((req, res) => {
       const range = req.headers.range ?? `bytes=0-${payload.length - 1}`;
       ranges.push(range);
+      if (initialStatus === 503 && ranges.length === 1) {
+        res.writeHead(503, { 'retry-after': '0' }).end();
+        return;
+      }
       const match = /^bytes=(\d+)-(\d*)$/.exec(range);
       const start = match ? Number(match[1]) : 0;
       const end = match?.[2] ? Number(match[2]) : payload.length - 1;
@@ -87,6 +91,7 @@ describeFfmpeg('youtube-ctx private FFmpeg range integration', () => {
       });
       expect(ranges.some((range) => range.startsWith('bytes='))).toBe(true);
       expect(budget.used).toBeGreaterThan(0);
+      if (initialStatus === 503) expect(ranges[0]).toBe(ranges[1]);
     } finally {
       await proxy.close();
     }

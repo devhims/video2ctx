@@ -72,3 +72,21 @@ test('records upstream HTTP failures before FFmpeg receives them', async () => {
     expect(JSON.stringify(events)).not.toContain('secret');
   } finally { await proxy.close(); }
 });
+
+test('retries a temporary media rate limit before forwarding bytes to FFmpeg', async () => {
+  let attempts = 0;
+  const ranges: Array<string | undefined> = [];
+  const proxy = await startMediaRangeProxy({ url: 'https://media.test/?sig=secret', mimeType: 'video/mp4', progressive: true },
+    async (_input, init) => {
+      ranges.push((init?.headers as Record<string, string>)?.Range);
+      attempts++;
+      return attempts === 1 ? new Response(null, { status: 429, headers: { 'retry-after': '0' } })
+        : new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' } });
+    }, new TransferBudget());
+  try {
+    const response = await fetch(proxy.url, { headers: { Range: 'bytes=0-2' } });
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe('abc');
+    expect(ranges).toEqual(['bytes=0-2', 'bytes=0-2']);
+  } finally { await proxy.close(); }
+});
