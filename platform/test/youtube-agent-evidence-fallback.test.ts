@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evidenceFallback } from '../src/agents/research/evidence-fallback';
+import { evidenceFallback, hasContentEvidence } from '../src/agents/research/evidence-fallback';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -11,6 +11,22 @@ const packet: EvidencePacket = {
 };
 
 describe('partial evidence fallback', () => {
+  it('retains successful frame observations when the transcript has no relevant findings', () => {
+    const frames: EvidencePacket = { ...packet, kind: 'youtube_frames',
+      sources: [{ id: 'source:1', provider: 'youtube', kind: 'frames', videoId: '0oXOOlqVu5M' }],
+      excerpts: [{ id: 'frames:60000', sourceId: 'source:1', startMs: 60000, endMs: 60000,
+        text: 'The speaker appears in a small webcam overlay in the top-right corner of the screen.' }],
+    };
+    const packets = [{ ...packet, excerpts: [] }, frames];
+    expect(hasContentEvidence(packets)).toBe(true);
+    const result = evidenceFallback(packets, 'inspect_video')!;
+    expect(result.answer).toContain(frames.excerpts[0]!.text);
+    expect(result.answer).toContain('[cite:frames:60000]');
+    expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(false);
+    expect(hasContentEvidence([{ ...frames, excerpts: [] }])).toBe(false);
+    expect(hasContentEvidence([{ ...frames, sources: [] }])).toBe(false);
+  });
+
   it('produces a validated result quoting saved evidence, with low confidence and an explicit warning', () => {
     const input = evidenceFallback([packet], 'topic_research')!;
     const result = buildAgentTurnResult({
