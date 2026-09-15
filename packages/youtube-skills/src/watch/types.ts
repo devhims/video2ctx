@@ -1,3 +1,4 @@
+import type { DiagnosticSink } from './diagnostics';
 import type {
   SourceMetadata,
   StoryboardIndex,
@@ -25,6 +26,8 @@ export interface WatchIndex {
 }
 
 export interface ExtractFramesRequest extends YouTubeClientOptions {
+  /** Optional operator diagnostics. Not included in public results. */
+  onDiagnostic?: DiagnosticSink;
   videoId: string;
   timestampsMs: number[];
   outputDir: string;

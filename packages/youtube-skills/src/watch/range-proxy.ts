@@ -1,3 +1,4 @@
+import { diagnose, type DiagnosticSink } from './diagnostics';
 import { randomBytes } from 'node:crypto';
 import { createServer, type ServerResponse } from 'node:http';
 
@@ -66,6 +67,7 @@ export async function startMediaRangeProxy(
   fetchImpl: typeof fetch,
   budget: TransferBudget,
   prefixLimit = DEFAULT_PREFIX_CACHE_BYTES,
+  onDiagnostic?: DiagnosticSink,
 ): Promise<MediaRangeProxy> {
   const token = randomBytes(18).toString('hex');
   let prefix = Buffer.alloc(0);
@@ -90,6 +92,7 @@ export async function startMediaRangeProxy(
       });
       if (writeHeaders) res.writeHead(upstream.status, responseHeaders(upstream));
       if (!upstream.ok || !upstream.body) {
+        diagnose(onDiagnostic, { stage: 'media_http', status: upstream.status });
         if (!res.destroyed) res.end();
         return;
       }
@@ -114,6 +117,7 @@ export async function startMediaRangeProxy(
       }
       if (!res.destroyed && !res.writableEnded) res.end();
     } catch (error) {
+      if (!controller.signal.aborted) diagnose(onDiagnostic, { stage: 'media_transfer', error });
       if (error instanceof Error && error.message === 'MEDIA_TRANSFER_LIMIT') {
         res.destroy();
       } else if (!controller.signal.aborted) {

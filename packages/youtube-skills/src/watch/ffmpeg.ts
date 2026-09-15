@@ -59,6 +59,8 @@ export async function resolveFfmpegExecutable(
 interface ProcessResult {
   code: number | null;
   stderr: string;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
 }
 
 function runProcess(command: string, args: string[], timeoutMs: number): Promise<ProcessResult> {
@@ -67,7 +69,7 @@ function runProcess(command: string, args: string[], timeoutMs: number): Promise
     let stderr = '';
     let timedOut = false;
     child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < 8_000) stderr += chunk.toString('utf8');
+      stderr = (stderr + chunk.toString('utf8')).slice(0, 8000);
     });
     child.once('error', reject);
     const timer = setTimeout(() => {
@@ -75,11 +77,11 @@ function runProcess(command: string, args: string[], timeoutMs: number): Promise
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 1_000).unref();
     }, timeoutMs);
-    child.once('close', (code) => {
+    child.once('close', (code, signal) => {
       clearTimeout(timer);
       resolveProcess({
-        code: timedOut ? null : code,
-        stderr: timedOut ? 'FFmpeg frame extraction timed out.' : stderr,
+        code, signal, timedOut,
+        stderr: timedOut ? `FFmpeg frame extraction timed out.\n${stderr}` : stderr,
       });
     });
   });
@@ -124,14 +126,14 @@ export async function extractJpeg(
       '-y',
       path,
     ], limits?.timeoutMs ?? FRAME_TIMEOUT_MS);
-    if (result.code !== 0) {
-      throw new YouTubeClientError(
-        /\b403\b|Forbidden|access denied/i.test(result.stderr)
+    if (result.code !== 0 || result.timedOut) {
+      throw Object.assign(new YouTubeClientError(
+        !result.timedOut && /\b403\b|Forbidden|access denied/i.test(result.stderr)
           ? 'MEDIA_UNAVAILABLE'
           : 'FRAME_EXTRACTION_FAILED',
-        conciseError(result.stderr),
+        result.timedOut ? 'FFmpeg frame extraction timed out.' : conciseError(result.stderr),
         { retryable: true },
-      );
+      ), { stderr: result.stderr, exitCode: result.code, signal: result.signal, timedOut: result.timedOut });
     }
     const bytes = await readFile(path);
     const dimensions = jpegDimensions(bytes);

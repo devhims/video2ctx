@@ -1,3 +1,4 @@
+import { diagnose, type DiagnosticSink } from './diagnostics';
 import type { YouTubeClientOptions } from 'all-things-youtube';
 import { callWatchPlayer, type JsonObject, WATCH_MEDIA_PROFILES } from './innertube';
 
@@ -90,14 +91,17 @@ export async function loadMediaCandidateGroup(
   maxWidth: number,
   options: YouTubeClientOptions,
   preferResolution = false,
+  onDiagnostic?: DiagnosticSink,
 ): Promise<MediaCandidateGroup | undefined> {
   const profile = WATCH_MEDIA_PROFILES[profileIndex];
   if (!profile) return undefined;
   try {
-    const response = await callWatchPlayer(videoId, profile, options);
+    const response = await callWatchPlayer(videoId, profile, options, onDiagnostic);
     const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
+    diagnose(onDiagnostic, { stage: 'media_candidates', profile: profile.name, candidateCount: candidates.length });
     return candidates.length ? { profile: response.profile, candidates } : undefined;
-  } catch {
+  } catch (error) {
+    diagnose(onDiagnostic, { stage: 'player', profile: profile.name, error });
     return undefined;
   }
 }

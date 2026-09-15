@@ -1,7 +1,7 @@
 import { getContainer } from '@cloudflare/containers';
 import { z } from 'zod';
 import type { YouTubeFramesContainer } from '../youtube-frames-container';
-import { ApiError } from './http';
+import { ApiError, safeErrorLog } from './http';
 
 import { frameRequestSchema, validateFrameResponse, type VideoFrames } from './youtube-frames-contract';
 export { frameRequestSchema, framesSchema, validateFrameResponse, type VideoFrames } from './youtube-frames-contract';
@@ -66,14 +66,24 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
   const input = { ...parsed.data, timestampsMs: [...new Set(parsed.data.timestampsMs)].sort((a, b) => a - b), extractionTimeoutMs };
   signal?.throwIfAborted();
   // Two fixed slots bound the pool. Do not replay expensive work after a timeout.
+  const extractionId = crypto.randomUUID();
+  const startedAt = Date.now();
+  let activeSlot: number | undefined;
+  let responseStatus: number | undefined;
+  let stage = 'container_transport';
   const slot = crypto.getRandomValues(new Uint32Array(1))[0]! % 2;
   try {
     return await withTransportDeadline(extractionTimeoutMs + 5_000, signal, async deadline => {
       for (let attempt = 0; attempt < 2; attempt++) {
         deadline.throwIfAborted();
+        activeSlot = (slot + attempt) % 2;
+        stage = 'container_transport';
+        responseStatus = undefined;
         const response = await getContainer<YouTubeFramesContainer>(env.YOUTUBE_FRAMES, `v1-${(slot + attempt) % 2}`).fetch(
-          new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json' },
+          new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId },
             body: JSON.stringify(input), signal: deadline }));
+        responseStatus = response.status;
+        stage = 'container_response';
         const payload = await boundedJson(response, deadline);
         deadline.throwIfAborted();
         if (!response.ok) {
@@ -82,7 +92,7 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
           if (attempt === 0 && response.status === 503 && failure.success && failure.data.error.code === 'PROCESSOR_BUSY') continue;
           const status = response.status === 422 ? 422 : response.status === 404 ? 404 : response.status === 429 ? 429 : 503;
           throw new ApiError(status, failure.success ? failure.data.error.code : 'FRAME_EXTRACTION_FAILED',
-            failure.success ? failure.data.error.message : 'YouTube frame extraction failed.');
+            failure.success ? failure.data.error.message : 'YouTube frame extraction failed.', { extractionId });
         }
         const envelope = z.object({ value: z.unknown() }).parse(payload);
         return validateFrameResponse(input, envelope.value);
@@ -90,8 +100,10 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
       throw new ApiError(503, 'PROCESSOR_BUSY', 'Both frame processors are busy.');
     });
   } catch (error) {
-    if (error instanceof ApiError) throw error;
+    console.error({ event: 'youtube_frames_request_failure', extractionId, videoId: input.videoId,
+      slot: activeSlot, stage, status: responseStatus, elapsedMs: Date.now() - startedAt, ...safeErrorLog(error) });
+    if (error instanceof ApiError) throw new ApiError(error.status, error.code, error.message, { extractionId });
     signal?.throwIfAborted();
-    throw new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.');
+    throw new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.', { extractionId });
   }
 }

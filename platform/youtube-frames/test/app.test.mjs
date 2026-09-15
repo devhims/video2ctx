@@ -42,3 +42,20 @@ test('rejects excessive bodies before extraction', async () => {
   const app = createFrameApp(() => { throw new Error('must not run'); });
   assert.equal((await post(app, { ...request, extra: 'a'.repeat(5000) })).status, 413);
 });
+
+test('logs the original failure with a correlation ID while keeping the response safe', async () => {
+  const logs = [];
+  const error = Object.assign(new Error('decoder failed at https://media.example/video?sig=SECRET'), {
+    code: 'MEDIA_UNAVAILABLE', cause: Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET' }),
+  });
+  const app = createFrameApp(async () => { throw error; }, { log: event => logs.push(event) });
+  const response = await post(app);
+  assert.equal(response.status, 502);
+  assert.match(response.headers.get('x-extraction-id') ?? '', /^[0-9a-f-]{36}$/);
+  assert.equal(logs[0].event, 'youtube_frames_failure');
+  assert.equal(logs[0].error.code, 'MEDIA_UNAVAILABLE');
+  assert.equal(logs[0].error.cause.code, 'ECONNRESET');
+  assert.match(logs[0].error.message, /decoder failed/);
+  assert.ok(!JSON.stringify(logs).includes('SECRET'));
+  assert.ok(!(await response.text()).includes('decoder'));
+});
