@@ -24,3 +24,9 @@ test('bounds cyclic causes and strips configured proxy credentials', () => {
     else process.env.OUTBOUND_PROXY_URL = old;
   }
 });
+
+test('retains bounded media retry context without accepting arbitrary fields', async () => {
+  const { diagnosticDetails } = await import('../diagnostics.mjs');
+  assert.deepEqual(diagnosticDetails({ stage: 'media_retry', attempt: 1, delayMs: 250, status: 429,
+    url: 'https://media.test/?sig=SECRET' }), { stage: 'media_retry', attempt: 1, delayMs: 250, status: 429 });
+});
