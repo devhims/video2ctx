@@ -173,3 +173,19 @@ The analyst receives the original user question as well as the tool focus. Focus
 Successful calls log extraction and analysis durations separately, along with counts and the allocated budget. These logs contain no images, signed media URLs or credentials.
 
 Deployment order: roll out the updated frame container to both slots before deploying the Worker, because older containers reject the new private request field. No data API, storage schema, credit price or model change is required.
+
+## Failure diagnostics
+
+Frame extraction diagnostics are operator logs, separate from the generic error returned to the agent. Each Worker request creates an `extractionId` and forwards it in the private `x-extraction-id` header. The frame container uses the same ID for child-process diagnostics and its terminal failure log. An older container can ignore the header without breaking extraction.
+
+To investigate a failed run:
+
+1. Find `agent_evidence_tool_failure` by `runId` and `toolCallId` in Worker logs. It includes the safe error code and, for frame extraction errors, `extractionId`.
+2. Find `youtube_frames_request_failure` by that ID for the selected container slot, original HTTP status, elapsed time, and whether the failure occurred during transport or response handling.
+3. Find `youtube_frames_diagnostic` and `youtube_frames_failure` by the same ID in container logs. Stages distinguish player responses, candidate availability, upstream media HTTP errors, transfer exceptions, FFmpeg errors, and terminal job failures. Player diagnostics retain the client, playback status and redacted reason; FFmpeg failures retain redacted stderr, exit code, signal, timestamp and candidate index. Subprocess failures retain exit/signal and a redacted stderr tail, including when the job is killed.
+
+Fallback attempts are logged even when a later candidate succeeds. A `media_http` 403 means YouTube rejected that media request, while a `container_response` 502 is only the enclosing service status. `FRAME_TIMEOUT` identifies the hard process deadline; individual FFmpeg timeouts have their own diagnostic. Neither a 502 nor SIGKILL alone establishes an out-of-memory failure.
+
+Logs preserve error messages and nested causes after removing URLs, auth/cookie headers, recognized secret fields, configured proxy credentials and local paths. They do not include request/response bodies, images or signed media URLs. Text fields are limited to 4,000 characters, cause depth to four records, and child diagnostics to 100 events per job with an explicit truncation event. Oversized subprocess lines are omitted whole before redaction, avoiding secret suffixes caused by truncation. Public errors retain their existing wording.
+
+Existing Worker observability is enabled at full sampling. Container stdout/stderr uses the same Cloudflare observability integration. Deploying the updated frame image and Worker is necessary to produce the new records; these changes cannot recover diagnostics discarded by historical runs. Cloudflare log retention still applies. See [Container logging](https://developers.cloudflare.com/containers/faq/#how-do-container-logs-work).

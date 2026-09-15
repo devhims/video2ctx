@@ -61,3 +61,40 @@ test('cancellation stops a running job and releases its directory', async () => 
     await assert.rejects(stat(workspace), { code: 'ENOENT' });
   });
 });
+
+test('retains subprocess exit and redacted stderr after deleting the workspace', async () => {
+  await fixture(`process.stderr.write('decoder exploded https://media.test/file?sig=HIDDEN\\n'); process.exitCode=7;`, async jobPath => {
+    await assert.rejects(runFrameJob({ videoId: 'abcdefghijk', timestampsMs: [0] }, { jobPath }), error => {
+      assert.equal(error.exitCode, 7);
+      assert.equal(error.signal, null);
+      assert.match(error.stderr, /decoder exploded/);
+      assert.ok(!error.stderr.includes('HIDDEN'));
+      return true;
+    });
+  });
+});
+
+test('forwards structured diagnostics even when fallback succeeds', async () => {
+  await fixture(`import {writeFile} from 'node:fs/promises';
+    console.error(JSON.stringify({event:'frame_diagnostic',stage:'ffmpeg',profile:'ios',
+      error:{code:'MEDIA_UNAVAILABLE',message:'range rejected',stderr:'HTTP 403 https://media.test/?sig=HIDDEN'}}));
+    await writeFile(process.argv[2]+'/result.json',JSON.stringify({value:{frames:[]}}));`, async jobPath => {
+    const logs = [];
+    await runFrameJob({ videoId: 'abcdefghijk', timestampsMs: [0] }, { jobPath, extractionId: 'test-id', log: event => logs.push(event) });
+    assert.equal(logs[0].extractionId, 'test-id');
+    assert.equal(logs[0].stage, 'ffmpeg');
+    assert.equal(logs[0].error.code, 'MEDIA_UNAVAILABLE');
+    assert.match(logs[0].error.stderr, /HTTP 403/);
+    assert.ok(!JSON.stringify(logs).includes('HIDDEN'));
+  });
+});
+
+test('does not expose secret suffixes of oversized subprocess lines', async () => {
+  await fixture(`process.stderr.write('https://media.test/?sig='+ 'x'.repeat(70000)+'HIDDEN'); process.exitCode=1;`, async jobPath => {
+    await assert.rejects(runFrameJob({ videoId: 'abcdefghijk', timestampsMs: [0] }, { jobPath }), error => {
+      assert.match(error.stderr, /oversized stderr line omitted/);
+      assert.ok(!error.stderr.includes('HIDDEN'));
+      return true;
+    });
+  });
+});

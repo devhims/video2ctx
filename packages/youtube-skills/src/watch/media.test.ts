@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { selectCandidates } from './media';
+import { loadMediaCandidateGroup, selectCandidates } from './media';
 
 describe('frame source selection', () => {
   const raw = { streamingData: {
@@ -23,4 +23,17 @@ describe('frame source selection', () => {
     expect(candidates[0]?.height).toBe(1080);
     expect(candidates.at(-1)?.height).toBe(360);
   });
+});
+
+
+test('retains the player rejection before skipping a client', async () => {
+  const events: unknown[] = [];
+  const group = await loadMediaCandidateGroup(0, 'abcdefghijk', 1920, {
+    fetch: async () => Response.json({ playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' } }),
+  }, false, event => events.push(event));
+  expect(group).toBeUndefined();
+  expect(events).toEqual([
+    expect.objectContaining({ stage: 'player_response', profile: 'ios', playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' }),
+    expect.objectContaining({ stage: 'player', error: expect.objectContaining({ code: 'AUTH_REQUIRED' }) }),
+  ]);
 });

@@ -61,3 +61,14 @@ describe('youtube-ctx private media range proxy', () => {
     }
   });
 });
+
+test('records upstream HTTP failures before FFmpeg receives them', async () => {
+  const events: unknown[] = [];
+  const proxy = await startMediaRangeProxy({ url: 'https://media.test/?sig=secret', mimeType: 'video/mp4', progressive: true },
+    async () => new Response(null, { status: 403 }), new TransferBudget(), undefined, event => events.push(event));
+  try {
+    expect((await fetch(proxy.url)).status).toBe(403);
+    expect(events).toEqual([{ stage: 'media_http', status: 403 }]);
+    expect(JSON.stringify(events)).not.toContain('secret');
+  } finally { await proxy.close(); }
+});

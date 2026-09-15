@@ -13,7 +13,7 @@ import {
   type FiberRecoveryResult,
 } from 'agents';
 import { z } from 'zod';
-import { ApiError } from '../lib/http';
+import { ApiError, safeErrorLog } from '../lib/http';
 import {
   executeResearchRun,
   extractYouTubeVideoIds,
@@ -525,6 +525,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       return packet;
     } catch (error) {
       if (this.#deleted) throw error;
+      const details = error instanceof ApiError ? error.details : undefined;
+      const extractionId = details && typeof details === 'object' && 'extractionId' in details
+        && typeof details.extractionId === 'string' && /^[0-9a-f-]{36}$/.test(details.extractionId)
+        ? details.extractionId : undefined;
+      console.error({ event: 'agent_evidence_tool_failure', runId, toolCallId: execution.toolCallId,
+        tool: execution.toolName, extractionId, ...safeErrorLog(error) });
       const message = errorMessage(error);
       this.sql`
         UPDATE agent_tool_calls

@@ -40,6 +40,24 @@ describe('frame transport contract', () => {
     await expect(getVideoFrames(env, request)).rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE', status: 503 });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+  test('correlates a container failure without logging its untrusted response message', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const fetch = vi.fn(async (_request: Request) => Response.json({ error: {
+        code: 'MEDIA_UNAVAILABLE', message: 'signed URL must not reach logs',
+      } }, { status: 502 }));
+      const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
+      let caught: unknown;
+      try { await getVideoFrames(env, request); } catch (error) { caught = error; }
+      const extractionId = fetch.mock.calls[0]![0].headers.get('x-extraction-id');
+      expect(extractionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(caught).toMatchObject({ details: { extractionId }, code: 'MEDIA_UNAVAILABLE' });
+      expect(logged).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'youtube_frames_request_failure', extractionId, status: 502, errorCode: 'MEDIA_UNAVAILABLE',
+      }));
+      expect(JSON.stringify(logged.mock.calls)).not.toContain('signed URL');
+    } finally { logged.mockRestore(); }
+  });
   test('bounds transport even when the container binding does not acknowledge cancellation', async () => {
     vi.useFakeTimers();
     try {

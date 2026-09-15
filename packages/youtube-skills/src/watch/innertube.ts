@@ -1,3 +1,4 @@
+import { diagnose, type DiagnosticSink } from './diagnostics';
 import { YouTubeClientError, type YouTubeClientOptions } from 'all-things-youtube';
 import { createSkillTransport } from '../transport';
 
@@ -74,6 +75,7 @@ export async function callWatchPlayer(
   videoId: string,
   profile: WatchProfile,
   options: YouTubeClientOptions,
+  onDiagnostic?: DiagnosticSink,
 ): Promise<WatchPlayerResponse> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
@@ -128,6 +130,9 @@ export async function callWatchPlayer(
   }
   const normalized = object(raw);
   const playability = String(object(normalized.playabilityStatus).status ?? 'UNKNOWN');
+  diagnose(onDiagnostic, { stage: 'player_response', profile: profile.name, status: response.status,
+    playabilityStatus: playability, reason: typeof object(normalized.playabilityStatus).reason === 'string'
+      ? String(object(normalized.playabilityStatus).reason) : undefined });
   if (playability !== 'OK') {
     const reason = object(normalized.playabilityStatus).reason;
     throw new YouTubeClientError(

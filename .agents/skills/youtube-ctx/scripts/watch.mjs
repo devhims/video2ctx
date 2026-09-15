@@ -21011,6 +21011,14 @@ function getDetails(options) {
   return createYouTubeClient(optionsFrom(options)).getVideo(options.videoId);
 }
 
+// src/watch/diagnostics.ts
+function diagnose(sink, event) {
+  try {
+    sink?.(event);
+  } catch {
+  }
+}
+
 // src/watch/workflow.ts
 import { mkdir as mkdir3 } from "node:fs/promises";
 import { resolve as resolve3 } from "node:path";
@@ -21104,7 +21112,7 @@ function runProcess(command, args, timeoutMs) {
     let stderr = "";
     let timedOut = false;
     child.stderr.on("data", (chunk) => {
-      if (stderr.length < 8e3) stderr += chunk.toString("utf8");
+      stderr = (stderr + chunk.toString("utf8")).slice(0, 8e3);
     });
     child.once("error", reject);
     const timer = setTimeout(() => {
@@ -21112,11 +21120,14 @@ function runProcess(command, args, timeoutMs) {
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 1e3).unref();
     }, timeoutMs);
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       clearTimeout(timer);
       resolveProcess({
-        code: timedOut ? null : code,
-        stderr: timedOut ? "FFmpeg frame extraction timed out." : stderr
+        code,
+        signal,
+        timedOut,
+        stderr: timedOut ? `FFmpeg frame extraction timed out.
+${stderr}` : stderr
       });
     });
   });
@@ -21159,12 +21170,12 @@ async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs
       "-y",
       path
     ], limits?.timeoutMs ?? FRAME_TIMEOUT_MS);
-    if (result.code !== 0) {
-      throw new YouTubeClientError(
-        /\b403\b|Forbidden|access denied/i.test(result.stderr) ? "MEDIA_UNAVAILABLE" : "FRAME_EXTRACTION_FAILED",
-        conciseError(result.stderr),
+    if (result.code !== 0 || result.timedOut) {
+      throw Object.assign(new YouTubeClientError(
+        !result.timedOut && /\b403\b|Forbidden|access denied/i.test(result.stderr) ? "MEDIA_UNAVAILABLE" : "FRAME_EXTRACTION_FAILED",
+        result.timedOut ? "FFmpeg frame extraction timed out." : conciseError(result.stderr),
         { retryable: true }
-      );
+      ), { stderr: result.stderr, exitCode: result.code, signal: result.signal, timedOut: result.timedOut });
     }
     const bytes = await readFile(path);
     const dimensions = jpegDimensions(bytes);
@@ -21345,7 +21356,7 @@ function isObject2(value) {
 function object3(value) {
   return isObject2(value) ? value : {};
 }
-async function callWatchPlayer(videoId, profile, options) {
+async function callWatchPlayer(videoId, profile, options, onDiagnostic) {
   if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
   }
@@ -21400,6 +21411,13 @@ async function callWatchPlayer(videoId, profile, options) {
   }
   const normalized = object3(raw);
   const playability = String(object3(normalized.playabilityStatus).status ?? "UNKNOWN");
+  diagnose(onDiagnostic, {
+    stage: "player_response",
+    profile: profile.name,
+    status: response.status,
+    playabilityStatus: playability,
+    reason: typeof object3(normalized.playabilityStatus).reason === "string" ? String(object3(normalized.playabilityStatus).reason) : void 0
+  });
   if (playability !== "OK") {
     const reason = object3(normalized.playabilityStatus).reason;
     throw new YouTubeClientError(
@@ -21467,14 +21485,16 @@ function selectCandidates(raw, maxWidth, preferResolution = false) {
   }
   return selected;
 }
-async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options, preferResolution = false) {
+async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options, preferResolution = false, onDiagnostic) {
   const profile = WATCH_MEDIA_PROFILES[profileIndex];
   if (!profile) return void 0;
   try {
-    const response = await callWatchPlayer(videoId, profile, options);
+    const response = await callWatchPlayer(videoId, profile, options, onDiagnostic);
     const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
+    diagnose(onDiagnostic, { stage: "media_candidates", profile: profile.name, candidateCount: candidates.length });
     return candidates.length ? { profile: response.profile, candidates } : void 0;
-  } catch {
+  } catch (error) {
+    diagnose(onDiagnostic, { stage: "player", profile: profile.name, error });
     return void 0;
   }
 }
@@ -21532,7 +21552,7 @@ async function write(res, bytes) {
     res.once("close", close);
   });
 }
-async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES) {
+async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic) {
   const token = randomBytes(18).toString("hex");
   let prefix = Buffer.alloc(0);
   let contentType = candidate.mimeType.split(";")[0] ?? "application/octet-stream";
@@ -21550,6 +21570,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
       });
       if (writeHeaders) res.writeHead(upstream.status, responseHeaders(upstream));
       if (!upstream.ok || !upstream.body) {
+        diagnose(onDiagnostic, { stage: "media_http", status: upstream.status });
         if (!res.destroyed) res.end();
         return;
       }
@@ -21574,6 +21595,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
       }
       if (!res.destroyed && !res.writableEnded) res.end();
     } catch (error) {
+      if (!controller.signal.aborted) diagnose(onDiagnostic, { stage: "media_transfer", error });
       if (error instanceof Error && error.message === "MEDIA_TRANSFER_LIMIT") {
         res.destroy();
       } else if (!controller.signal.aborted) {
@@ -21824,28 +21846,42 @@ async function extractFramesWithinBudget(options, deadlineAt) {
       options.videoId,
       maxWidth,
       clientOptions,
-      options.preferResolution
+      options.preferResolution,
+      options.onDiagnostic
     );
     if (!group) continue;
     for (const candidate of group.candidates) {
       if (Date.now() >= deadlineAt) break;
       const pending = timestamps2.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
-      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget);
-      const run = (timestampMs) => {
-        if (Date.now() >= deadlineAt) throw new YouTubeClientError("FRAME_EXTRACTION_FAILED", "Frame extraction budget exhausted.", { retryable: true });
-        const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== void 0 ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 3e4, deadlineAt - Date.now())) } : void 0;
-        return extractJpeg(
-          ffmpegPath,
-          proxy.url,
-          outputDir,
-          options.videoId,
-          timestampMs,
-          maxWidth,
-          candidate.width,
-          candidate.height,
-          limits
-        );
+      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, void 0, (event) => diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }));
+      const run = async (timestampMs) => {
+        const startedAt = Date.now();
+        try {
+          if (Date.now() >= deadlineAt) throw new YouTubeClientError("FRAME_EXTRACTION_FAILED", "Frame extraction budget exhausted.", { retryable: true });
+          const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== void 0 ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 3e4, deadlineAt - Date.now())) } : void 0;
+          return await extractJpeg(
+            ffmpegPath,
+            proxy.url,
+            outputDir,
+            options.videoId,
+            timestampMs,
+            maxWidth,
+            candidate.width,
+            candidate.height,
+            limits
+          );
+        } catch (error) {
+          diagnose(options.onDiagnostic, {
+            stage: "ffmpeg",
+            profile: group.profile,
+            candidateIndex: group.candidates.indexOf(candidate),
+            timestampMs,
+            elapsedMs: Date.now() - startedAt,
+            error
+          });
+          throw error;
+        }
       };
       try {
         const firstTimestamp = pending[0];

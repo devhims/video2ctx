@@ -90,6 +90,19 @@ describe('youtube-ctx visual workflow', () => {
     });
   });
 
+  test('preserves the exact FFmpeg failure before replacing it with aggregate media unavailability', async () => {
+    const original = Object.assign(new YouTubeClientError('MEDIA_UNAVAILABLE', 'Range rejected'), {
+      stderr: 'HTTP error 403 Forbidden', exitCode: 1,
+    });
+    mocks.extractJpeg.mockRejectedValue(original);
+    const onDiagnostic = vi.fn();
+    await expect(extractFrames({ videoId: 'abcdefghijk', timestampsMs: [1000], outputDir: '/tmp/frame-test', onDiagnostic }))
+      .rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE', message: 'No seekable YouTube media format could produce the requested frames.' });
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'ffmpeg', profile: 'ios', timestampMs: 1000, candidateIndex: 0, error: original,
+    }));
+  });
+
   test('returns completed frames when the extraction budget runs out during a later seek', async () => {
     vi.useFakeTimers();
     try {

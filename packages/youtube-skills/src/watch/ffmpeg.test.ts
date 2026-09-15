@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -7,7 +9,7 @@ const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 
-import { resolveFfmpegExecutable } from './ffmpeg';
+import { extractJpeg, resolveFfmpegExecutable } from './ffmpeg';
 
 const directories: string[] = [];
 
@@ -52,4 +54,19 @@ describe('youtube-ctx private FFmpeg executable resolution', () => {
       retryable: false,
     });
   });
+});
+
+
+test('preserves decoder stderr and exit signal on an extraction failure', async () => {
+  const fake = await executable();
+  mocks.spawn.mockImplementation(() => {
+    const child = Object.assign(new EventEmitter(), { stderr: new PassThrough(), kill: vi.fn() });
+    setImmediate(() => {
+      child.stderr.write('HTTP error 403 Forbidden');
+      child.emit('close', 1, null);
+    });
+    return child;
+  });
+  await expect(extractJpeg(fake.path, 'http://localhost/frame', fake.directory, 'abcdefghijk', 1000, 640))
+    .rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE', stderr: 'HTTP error 403 Forbidden', exitCode: 1, signal: null });
 });

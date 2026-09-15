@@ -1,3 +1,4 @@
+import { diagnosticDetails, errorDetails } from './diagnostics.mjs';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
@@ -10,6 +11,7 @@ const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
 try {
   const request = parseFrameRequest(JSON.parse(await readFile(join(directory, 'request.json'), 'utf8')));
   const result = await extractFrames({
+    onDiagnostic: event => console.error(JSON.stringify({ event: 'frame_diagnostic', ...diagnosticDetails(event) })),
     ...request, outputDir: directory, preferResolution: true,
     timeBudgetMs: request.extractionTimeoutMs ?? 45_000, frameTimeoutMs: 10_000,
     fetch: dispatcher ? (input, init) => undiciFetch(input, { ...init, dispatcher }) : globalThis.fetch,
@@ -29,6 +31,7 @@ try {
   }
   await writeFile(join(directory, 'result.json'), JSON.stringify({ value: { ...result, frames } }));
 } catch (error) {
+  console.error(JSON.stringify({ event: 'frame_diagnostic', stage: 'job', error: errorDetails(error) }));
   // No upstream messages, signed media URLs, local paths, or proxy credentials cross the boundary.
   const codes = new Set(['INVALID_INPUT', 'UNAVAILABLE', 'NOT_FOUND', 'AUTH_REQUIRED', 'RATE_LIMITED',
     'DEPENDENCY_MISSING', 'MEDIA_UNAVAILABLE', 'FRAME_EXTRACTION_FAILED']);

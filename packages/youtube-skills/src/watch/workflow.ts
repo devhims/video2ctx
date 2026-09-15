@@ -1,3 +1,4 @@
+import { diagnose } from './diagnostics';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -238,28 +239,37 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
       maxWidth,
       clientOptions,
       options.preferResolution,
+      options.onDiagnostic,
     );
     if (!group) continue;
     for (const candidate of group.candidates) {
       if (Date.now() >= deadlineAt) break;
       const pending = timestamps.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
-      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget);
-      const run = (timestampMs: number) => {
-        if (Date.now() >= deadlineAt) throw new YouTubeClientError('FRAME_EXTRACTION_FAILED', 'Frame extraction budget exhausted.', { retryable: true });
-        const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== undefined
-          ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 30_000, deadlineAt - Date.now())) } : undefined;
-        return extractJpeg(
-          ffmpegPath,
-          proxy.url,
-          outputDir,
-          options.videoId,
-          timestampMs,
-          maxWidth,
-          candidate.width,
-          candidate.height,
-          limits,
-        );
+      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, undefined, event =>
+        diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }));
+      const run = async (timestampMs: number) => {
+        const startedAt = Date.now();
+        try {
+          if (Date.now() >= deadlineAt) throw new YouTubeClientError('FRAME_EXTRACTION_FAILED', 'Frame extraction budget exhausted.', { retryable: true });
+          const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== undefined
+            ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 30_000, deadlineAt - Date.now())) } : undefined;
+          return await extractJpeg(
+            ffmpegPath,
+            proxy.url,
+            outputDir,
+            options.videoId,
+            timestampMs,
+            maxWidth,
+            candidate.width,
+            candidate.height,
+            limits,
+          );
+        } catch (error) {
+          diagnose(options.onDiagnostic, { stage: 'ffmpeg', profile: group.profile,
+            candidateIndex: group.candidates.indexOf(candidate), timestampMs, elapsedMs: Date.now() - startedAt, error });
+          throw error;
+        }
       };
       try {
         const firstTimestamp = pending[0]!;
