@@ -39,7 +39,7 @@ export function diagnosticDetails(event) {
   for (const key of ['stage', 'profile', 'playabilityStatus', 'reason', 'message']) {
     if (typeof event[key] === 'string') safe[key] = redact(event[key]);
   }
-  for (const key of ['timestampMs', 'candidateIndex', 'candidateCount', 'status', 'elapsedMs', 'exitCode', 'attempt', 'delayMs']) {
+  for (const key of ['timestampMs', 'candidateIndex', 'candidateCount', 'status', 'elapsedMs', 'exitCode', 'attempt', 'delayMs', 'width', 'height', 'sourceWidth', 'sourceHeight', 'formatId']) {
     if (Number.isFinite(event[key])) safe[key] = event[key];
   }
   if (event.error) safe.error = errorDetails(event.error);

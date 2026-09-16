@@ -68,8 +68,14 @@ jobs:
       - name: Verify published CLI package contents
         run: npm pack --dry-run
         working-directory: packages/video2ctx-cli
+      - name: Verify storyboard bundle
+        run: npm ci --prefix youtube-processor && npm --prefix youtube-processor run bundle:check
       - name: Verify platform
         run: npm run verify
+      - name: Verify processor Linux image
+        run: |
+          docker build --platform linux/amd64 -t youtube-processor:test -f youtube-processor/Dockerfile youtube-processor
+          docker run --rm --platform linux/amd64 --network none --mount type=bind,src="$PWD/youtube-processor/test",dst=/app/test,readonly youtube-processor:test sh -c 'node --test test/*.test.mjs'
       - name: Install web dependencies for auth E2E
         run: npm ci --prefix ../web
       - name: Install Chromium

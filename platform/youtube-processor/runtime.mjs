@@ -1,4 +1,7 @@
 import { loadStoryboard } from './storyboard.mjs';
+import { getStoryboardWithFallback } from './storyboard-extractor.mjs';
+import { storyboardImageFetch } from './storyboard-images.mjs';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 
@@ -87,8 +90,25 @@ export function createYouTubeRuntime(environment = process.env) {
               lang: operation.lang,
               granularity: operation.granularity,
             });
-          case 'storyboard':
-            return await loadStoryboard(operation.id, youtube.getStoryboard, { ...options, timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets, sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
+          case 'storyboard': {
+            const storyboardId = randomUUID();
+            const onDiagnostic = event => {
+              try { console.info(JSON.stringify({ event: 'youtube_storyboard_diagnostic', storyboardId, videoId: typeof operation.id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(operation.id) ? operation.id : undefined, ...event })); }
+              catch { /* Observability must not change the operation result. */ }
+            };
+            const startedAt = Date.now();
+            try {
+              return await loadStoryboard(operation.id, getStoryboardWithFallback, { ...options,
+                fetch: storyboardImageFetch(fetchImpl, onDiagnostic), onDiagnostic,
+                timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets,
+                sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
+            } catch (error) {
+              const code = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR'].includes(error?.code)
+                ? error.code : 'UNKNOWN';
+              onDiagnostic({ stage: 'request', outcome: 'error', code, elapsedMs: Date.now() - startedAt });
+              throw error;
+            }
+          }
           case 'endscreen':
             return youtube.getEndscreen({ ...options, videoId: operation.id });
           default:

@@ -80,7 +80,7 @@ describe('youtube-ctx visual workflow', () => {
       profileIndex === 0 ? {
         profile: 'ios',
         candidates: [{
-          url: 'https://signed.googlevideo.test/secret', width: 640, height: 360,
+          url: 'https://signed.googlevideo.test/secret', width: 640, height: 360, formatId: 18,
           mimeType: 'video/mp4', progressive: true, contentLength: 1_000,
         }],
       } : undefined
@@ -175,9 +175,13 @@ describe('youtube-ctx visual workflow', () => {
       };
     });
 
+    const onDiagnostic = vi.fn();
     const result = await extractFrames({
-      videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', timestampsMs: [1_000, 2_000],
+      videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', timestampsMs: [1_000, 2_000], onDiagnostic,
     });
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ stage: 'ffmpeg_success', profile: 'ios',
+      candidateIndex: 0, timestampMs: 1000, width: 640, height: 360, sourceWidth: 640, sourceHeight: 360, formatId: 18 }));
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/signed.googlevideo|127.0.0.1|frame-1000/);
 
     expect(result.frames).toHaveLength(1);
     expect(result.failures).toEqual([expect.objectContaining({

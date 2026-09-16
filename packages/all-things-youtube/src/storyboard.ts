@@ -81,28 +81,54 @@ function sheetUrl(spec: StoryboardSpec, level: StoryboardLevel, sheet: number): 
   return value;
 }
 
+export async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const oversized = () => new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an oversized storyboard response.');
+  if (Number(response.headers.get('content-length')) > maxBytes) {
+    await response.body?.cancel();
+    throw oversized();
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw oversized();
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes;
+}
+
 async function jpegResponse(response: Response): Promise<Uint8Array> {
   if (!response.ok) {
+    await response.body?.cancel();
     throw new YouTubeClientError('UPSTREAM_ERROR', `Storyboard request failed with status ${response.status}.`, {
       status: response.status, retryable: response.status === 429 || response.status >= 500,
     });
   }
   const type = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!type.startsWith('image/jpeg') && !type.startsWith('image/jpg')) {
+    await response.body?.cancel();
     throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned a non-JPEG storyboard.');
   }
-  const advertised = Number(response.headers.get('content-length'));
-  if (Number.isFinite(advertised) && advertised > MAX_SHEET_BYTES) {
-    throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an oversized storyboard.');
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readBoundedBytes(response, MAX_SHEET_BYTES);
   if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
     throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an invalid storyboard JPEG.');
   }
   return bytes;
 }
 
-function validateOptions(options: StoryboardOptions): number {
+export function validateStoryboardOptions(options: StoryboardOptions): number {
   if (!/^[A-Za-z0-9_-]{11}$/.test(options.videoId)) {
     throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
   }
@@ -179,7 +205,7 @@ export async function downloadStoryboard(
   options: StoryboardOptions,
   fetchImpl: typeof fetch,
 ): Promise<StoryboardIndex> {
-  const maxSheets = validateOptions(options);
+  const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError('NOT_FOUND', 'No storyboard is available for this video.');

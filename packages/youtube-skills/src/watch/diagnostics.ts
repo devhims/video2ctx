@@ -5,6 +5,11 @@ export interface FrameDiagnostic {
   timestampMs?: number;
   candidateIndex?: number;
   candidateCount?: number;
+  width?: number;
+  height?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  formatId?: number;
   status?: number;
   playabilityStatus?: string;
   reason?: string;

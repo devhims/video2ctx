@@ -176,3 +176,7 @@ npm --prefix sample run preview
 The fixture suite covers normalized renderers, continuations, ASR/manual/multilingual captions, word timing, unavailable/private/live state, comments, universal routing, private search isolation, citation alignment, prompt injection, and OAuth expiry. Deployment validation uses Wrangler dry runs for both Workers and an OpenNext bundle build.
 
 As of 2026-07-31, `npm audit` reports unresolved advisories in Next 16.2.12's bundled PostCSS and OpenNext's build-only glob/minimatch chain. These are the latest upstream releases; forcing the patched ESM-only `brace-expansion` breaks the OpenNext bundle. Keep build inputs trusted and update Next/OpenNext as soon as compatible fixes ship. The platform Worker's production dependency audit is clean.
+
+## Hosted storyboard extraction
+
+General provider operations use the pinned npm extraction library. The processor storyboard operation uses a committed bundle of shared source, verified against source in CI. It checks alternative player clients and the desktop watch page, normalizes WebP sheets to JPEG within byte, pixel and time limits, and logs safe source-selection diagnostics. See [storyboard recovery and diagnostics](../../platform/youtube-processor/STORYBOARDS.md) for error semantics, build commands and log fields.
