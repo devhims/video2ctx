@@ -245,7 +245,7 @@ flowchart LR
 
 The Worker owns authentication, authorization, rate limits, credit metering, caching, private research, and the public HTTP contract. Outbound YouTube work is isolated in a private Cloudflare Container. Identical cache misses are coalesced by a Durable Object before the request reaches a processor instance; cache hits never wake a container.
 
-The processor installs the published `all-things-youtube` npm package at an exact version recorded in its lockfile. Publish library changes before updating the processor dependency and deploying the Cloudflare API. The processor image does not compile the library from repository source.
+The processor installs the published `all-things-youtube` npm package at an exact version recorded in its lockfile for general provider calls. Publish library changes before updating that dependency. Storyboards use a committed, CI-checked bundle of the shared storyboard implementation so a hosted storyboard fix can deploy with the processor. The processor image consumes that bundle and does not compile library source.
 
 For the complete request path and reliability model, see [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md).
 

@@ -22,6 +22,7 @@ export interface MediaCandidate {
   width?: number;
   height?: number;
   contentLength?: number;
+  formatId?: number;
   mimeType: string;
   progressive: boolean;
 }
@@ -39,6 +40,7 @@ function formats(value: unknown, progressive: boolean): MediaCandidate[] {
     if (!url || !mimeType.startsWith('video/')) return [];
     return [{
       url,
+      formatId: finiteNumber(format.itag),
       width: finiteNumber(format.width),
       height: finiteNumber(format.height),
       contentLength: finiteNumber(format.contentLength),

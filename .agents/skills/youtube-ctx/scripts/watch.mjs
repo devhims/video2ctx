@@ -77,10 +77,10 @@ var require_he = __commonJS({
       var decodeMapNumeric = { "0": "�", "128": "€", "130": "‚", "131": "ƒ", "132": "„", "133": "…", "134": "†", "135": "‡", "136": "ˆ", "137": "‰", "138": "Š", "139": "‹", "140": "Œ", "142": "Ž", "145": "‘", "146": "’", "147": "“", "148": "”", "149": "•", "150": "–", "151": "—", "152": "˜", "153": "™", "154": "š", "155": "›", "156": "œ", "158": "ž", "159": "Ÿ" };
       var invalidReferenceCodePoints = [1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 64976, 64977, 64978, 64979, 64980, 64981, 64982, 64983, 64984, 64985, 64986, 64987, 64988, 64989, 64990, 64991, 64992, 64993, 64994, 64995, 64996, 64997, 64998, 64999, 65e3, 65001, 65002, 65003, 65004, 65005, 65006, 65007, 65534, 65535, 131070, 131071, 196606, 196607, 262142, 262143, 327678, 327679, 393214, 393215, 458750, 458751, 524286, 524287, 589822, 589823, 655358, 655359, 720894, 720895, 786430, 786431, 851966, 851967, 917502, 917503, 983038, 983039, 1048574, 1048575, 1114110, 1114111];
       var stringFromCharCode = String.fromCharCode;
-      var object5 = {};
-      var hasOwnProperty = object5.hasOwnProperty;
-      var has = function(object6, propertyName) {
-        return hasOwnProperty.call(object6, propertyName);
+      var object7 = {};
+      var hasOwnProperty = object7.hasOwnProperty;
+      var has = function(object8, propertyName) {
+        return hasOwnProperty.call(object8, propertyName);
       };
       var contains = function(array2, value) {
         var index = -1;
@@ -1200,16 +1200,16 @@ var require_util = __commonJS({
     function isStream(obj) {
       return obj && typeof obj === "object" && typeof obj.pipe === "function" && typeof obj.on === "function";
     }
-    function isBlobLike(object5) {
-      if (object5 === null) {
+    function isBlobLike(object7) {
+      if (object7 === null) {
         return false;
-      } else if (object5 instanceof Blob2) {
+      } else if (object7 instanceof Blob2) {
         return true;
-      } else if (typeof object5 !== "object") {
+      } else if (typeof object7 !== "object") {
         return false;
       } else {
-        const sTag = object5[Symbol.toStringTag];
-        return (sTag === "Blob" || sTag === "File") && ("stream" in object5 && typeof object5.stream === "function" || "arrayBuffer" in object5 && typeof object5.arrayBuffer === "function");
+        const sTag = object7[Symbol.toStringTag];
+        return (sTag === "Blob" || sTag === "File") && ("stream" in object7 && typeof object7.stream === "function" || "arrayBuffer" in object7 && typeof object7.arrayBuffer === "function");
       }
     }
     function buildURL(url, queryParams) {
@@ -1491,8 +1491,8 @@ var require_util = __commonJS({
         }
       );
     }
-    function isFormDataLike(object5) {
-      return object5 && typeof object5 === "object" && typeof object5.append === "function" && typeof object5.delete === "function" && typeof object5.get === "function" && typeof object5.getAll === "function" && typeof object5.has === "function" && typeof object5.set === "function" && object5[Symbol.toStringTag] === "FormData";
+    function isFormDataLike(object7) {
+      return object7 && typeof object7 === "object" && typeof object7.append === "function" && typeof object7.delete === "function" && typeof object7.get === "function" && typeof object7.getAll === "function" && typeof object7.has === "function" && typeof object7.set === "function" && object7[Symbol.toStringTag] === "FormData";
     }
     function addAbortListener(signal, listener) {
       if ("addEventListener" in signal) {
@@ -4261,8 +4261,8 @@ var require_util2 = __commonJS({
       }
       return "allowed";
     }
-    function isErrorLike(object5) {
-      return object5 instanceof Error || (object5?.constructor?.name === "Error" || object5?.constructor?.name === "DOMException");
+    function isErrorLike(object7) {
+      return object7 instanceof Error || (object7?.constructor?.name === "Error" || object7?.constructor?.name === "DOMException");
     }
     function isValidReasonPhrase(statusText) {
       for (let i = 0; i < statusText.length; ++i) {
@@ -4687,7 +4687,7 @@ var require_util2 = __commonJS({
         return new FastIterableIterator(target, kind);
       };
     }
-    function iteratorMixin(name, object5, kInternalIterator, keyIndex = 0, valueIndex = 1) {
+    function iteratorMixin(name, object7, kInternalIterator, keyIndex = 0, valueIndex = 1) {
       const makeIterator = createIterator(name, kInternalIterator, keyIndex, valueIndex);
       const properties = {
         keys: {
@@ -4695,7 +4695,7 @@ var require_util2 = __commonJS({
           enumerable: true,
           configurable: true,
           value: function keys() {
-            webidl.brandCheck(this, object5);
+            webidl.brandCheck(this, object7);
             return makeIterator(this, "key");
           }
         },
@@ -4704,7 +4704,7 @@ var require_util2 = __commonJS({
           enumerable: true,
           configurable: true,
           value: function values2() {
-            webidl.brandCheck(this, object5);
+            webidl.brandCheck(this, object7);
             return makeIterator(this, "value");
           }
         },
@@ -4713,7 +4713,7 @@ var require_util2 = __commonJS({
           enumerable: true,
           configurable: true,
           value: function entries() {
-            webidl.brandCheck(this, object5);
+            webidl.brandCheck(this, object7);
             return makeIterator(this, "key+value");
           }
         },
@@ -4722,7 +4722,7 @@ var require_util2 = __commonJS({
           enumerable: true,
           configurable: true,
           value: function forEach(callbackfn, thisArg = globalThis) {
-            webidl.brandCheck(this, object5);
+            webidl.brandCheck(this, object7);
             webidl.argumentLengthCheck(arguments, 1, `${name}.forEach`);
             if (typeof callbackfn !== "function") {
               throw new TypeError(
@@ -4735,7 +4735,7 @@ var require_util2 = __commonJS({
           }
         }
       };
-      return Object.defineProperties(object5.prototype, {
+      return Object.defineProperties(object7.prototype, {
         ...properties,
         [Symbol.iterator]: {
           writable: true,
@@ -5135,8 +5135,8 @@ var require_file = __commonJS({
       }
     };
     webidl.converters.Blob = webidl.interfaceConverter(Blob2);
-    function isFileLike(object5) {
-      return object5 instanceof File || object5 && (typeof object5.stream === "function" || typeof object5.arrayBuffer === "function") && object5[Symbol.toStringTag] === "File";
+    function isFileLike(object7) {
+      return object7 instanceof File || object7 && (typeof object7.stream === "function" || typeof object7.arrayBuffer === "function") && object7[Symbol.toStringTag] === "File";
     }
     module.exports = { FileLike, isFileLike };
   }
@@ -5584,12 +5584,12 @@ var require_body = __commonJS({
         }
       });
     }
-    function extractBody(object5, keepalive = false) {
+    function extractBody(object7, keepalive = false) {
       let stream = null;
-      if (object5 instanceof ReadableStream) {
-        stream = object5;
-      } else if (isBlobLike(object5)) {
-        stream = object5.stream();
+      if (object7 instanceof ReadableStream) {
+        stream = object7;
+      } else if (isBlobLike(object7)) {
+        stream = object7.stream();
       } else {
         stream = new ReadableStream({
           async pull(controller) {
@@ -5609,17 +5609,17 @@ var require_body = __commonJS({
       let source = null;
       let length = null;
       let type = null;
-      if (typeof object5 === "string") {
-        source = object5;
+      if (typeof object7 === "string") {
+        source = object7;
         type = "text/plain;charset=UTF-8";
-      } else if (object5 instanceof URLSearchParams) {
-        source = object5.toString();
+      } else if (object7 instanceof URLSearchParams) {
+        source = object7.toString();
         type = "application/x-www-form-urlencoded;charset=UTF-8";
-      } else if (isArrayBuffer(object5)) {
-        source = new Uint8Array(object5.slice());
-      } else if (ArrayBuffer.isView(object5)) {
-        source = new Uint8Array(object5.buffer.slice(object5.byteOffset, object5.byteOffset + object5.byteLength));
-      } else if (util.isFormDataLike(object5)) {
+      } else if (isArrayBuffer(object7)) {
+        source = new Uint8Array(object7.slice());
+      } else if (ArrayBuffer.isView(object7)) {
+        source = new Uint8Array(object7.buffer.slice(object7.byteOffset, object7.byteOffset + object7.byteLength));
+      } else if (util.isFormDataLike(object7)) {
         const boundary = `----formdata-undici-0${`${random(1e11)}`.padStart(11, "0")}`;
         const prefix = `--${boundary}\r
 Content-Disposition: form-data`;
@@ -5629,7 +5629,7 @@ Content-Disposition: form-data`;
         const rn = new Uint8Array([13, 10]);
         length = 0;
         let hasUnknownSizeValue = false;
-        for (const [name, value] of object5) {
+        for (const [name, value] of object7) {
           if (typeof value === "string") {
             const chunk2 = textEncoder.encode(prefix + `; name="${escape(normalizeLinefeeds(name))}"\r
 \r
@@ -5657,7 +5657,7 @@ Content-Type: ${value.type || "application/octet-stream"}\r
         if (hasUnknownSizeValue) {
           length = null;
         }
-        source = object5;
+        source = object7;
         action = async function* () {
           for (const part of blobParts) {
             if (part.stream) {
@@ -5668,22 +5668,22 @@ Content-Type: ${value.type || "application/octet-stream"}\r
           }
         };
         type = `multipart/form-data; boundary=${boundary}`;
-      } else if (isBlobLike(object5)) {
-        source = object5;
-        length = object5.size;
-        if (object5.type) {
-          type = object5.type;
+      } else if (isBlobLike(object7)) {
+        source = object7;
+        length = object7.size;
+        if (object7.type) {
+          type = object7.type;
         }
-      } else if (typeof object5[Symbol.asyncIterator] === "function") {
+      } else if (typeof object7[Symbol.asyncIterator] === "function") {
         if (keepalive) {
           throw new TypeError("keepalive");
         }
-        if (util.isDisturbed(object5) || object5.locked) {
+        if (util.isDisturbed(object7) || object7.locked) {
           throw new TypeError(
             "Response body object should not be disturbed or locked"
           );
         }
-        stream = object5 instanceof ReadableStream ? object5 : ReadableStreamFrom(object5);
+        stream = object7 instanceof ReadableStream ? object7 : ReadableStreamFrom(object7);
       }
       if (typeof source === "string" || util.isBuffer(source)) {
         length = Buffer.byteLength(source);
@@ -5692,7 +5692,7 @@ Content-Type: ${value.type || "application/octet-stream"}\r
         let iterator;
         stream = new ReadableStream({
           async start() {
-            iterator = action(object5)[Symbol.asyncIterator]();
+            iterator = action(object7)[Symbol.asyncIterator]();
           },
           async pull(controller) {
             const { value, done } = await iterator.next();
@@ -5720,12 +5720,12 @@ Content-Type: ${value.type || "application/octet-stream"}\r
       const body = { stream, source, length };
       return [body, type];
     }
-    function safelyExtractBody(object5, keepalive = false) {
-      if (object5 instanceof ReadableStream) {
-        assert(!util.isDisturbed(object5), "The body has already been consumed.");
-        assert(!object5.locked, "The stream is locked.");
+    function safelyExtractBody(object7, keepalive = false) {
+      if (object7 instanceof ReadableStream) {
+        assert(!util.isDisturbed(object7), "The body has already been consumed.");
+        assert(!object7.locked, "The stream is locked.");
       }
-      return extractBody(object5, keepalive);
+      return extractBody(object7, keepalive);
     }
     function cloneBody(instance, body) {
       const [out1, out2] = body.stream.tee();
@@ -5805,12 +5805,12 @@ Content-Type: ${value.type || "application/octet-stream"}\r
     function mixinBody(prototype) {
       Object.assign(prototype.prototype, bodyMixinMethods(prototype));
     }
-    async function consumeBody(object5, convertBytesToJSValue, instance) {
-      webidl.brandCheck(object5, instance);
-      if (bodyUnusable(object5)) {
+    async function consumeBody(object7, convertBytesToJSValue, instance) {
+      webidl.brandCheck(object7, instance);
+      if (bodyUnusable(object7)) {
         throw new TypeError("Body is unusable: Body has already been read");
       }
-      throwIfAborted(object5[kState]);
+      throwIfAborted(object7[kState]);
       const promise = createDeferredPromise();
       const errorSteps = (error) => promise.reject(error);
       const successSteps = (data) => {
@@ -5820,15 +5820,15 @@ Content-Type: ${value.type || "application/octet-stream"}\r
           errorSteps(e);
         }
       };
-      if (object5[kState].body == null) {
+      if (object7[kState].body == null) {
         successSteps(Buffer.allocUnsafe(0));
         return promise.promise;
       }
-      await fullyReadBody(object5[kState].body, successSteps, errorSteps);
+      await fullyReadBody(object7[kState].body, successSteps, errorSteps);
       return promise.promise;
     }
-    function bodyUnusable(object5) {
-      const body = object5[kState].body;
+    function bodyUnusable(object7) {
+      const body = object7[kState].body;
       return body != null && (body.stream.locked || util.isDisturbed(body.stream));
     }
     function parseJSONFromBytes(bytes) {
@@ -12009,10 +12009,10 @@ var require_headers = __commonJS({
       while (j > i && isHTTPWhiteSpaceCharCode(potentialValue.charCodeAt(i))) ++i;
       return i === 0 && j === potentialValue.length ? potentialValue : potentialValue.substring(i, j);
     }
-    function fill(headers, object5) {
-      if (Array.isArray(object5)) {
-        for (let i = 0; i < object5.length; ++i) {
-          const header = object5[i];
+    function fill(headers, object7) {
+      if (Array.isArray(object7)) {
+        for (let i = 0; i < object7.length; ++i) {
+          const header = object7[i];
           if (header.length !== 2) {
             throw webidl.errors.exception({
               header: "Headers constructor",
@@ -12021,10 +12021,10 @@ var require_headers = __commonJS({
           }
           appendHeader(headers, header[0], header[1]);
         }
-      } else if (typeof object5 === "object" && object5 !== null) {
-        const keys = Object.keys(object5);
+      } else if (typeof object7 === "object" && object7 !== null) {
+        const keys = Object.keys(object7);
         for (let i = 0; i < keys.length; ++i) {
-          appendHeader(headers, keys[i], object5[keys[i]]);
+          appendHeader(headers, keys[i], object7[keys[i]]);
         }
       } else {
         throw webidl.errors.conversionFailed({
@@ -19215,8 +19215,40 @@ function sheetUrl(spec, level, sheet) {
   }
   return value;
 }
+async function readBoundedBytes(response, maxBytes) {
+  const oversized = () => new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an oversized storyboard response.");
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    await response.body?.cancel();
+    throw oversized();
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw oversized();
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
 async function jpegResponse(response) {
   if (!response.ok) {
+    await response.body?.cancel();
     throw new YouTubeClientError("UPSTREAM_ERROR", `Storyboard request failed with status ${response.status}.`, {
       status: response.status,
       retryable: response.status === 429 || response.status >= 500
@@ -19224,19 +19256,16 @@ async function jpegResponse(response) {
   }
   const type = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!type.startsWith("image/jpeg") && !type.startsWith("image/jpg")) {
+    await response.body?.cancel();
     throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned a non-JPEG storyboard.");
   }
-  const advertised = Number(response.headers.get("content-length"));
-  if (Number.isFinite(advertised) && advertised > MAX_SHEET_BYTES) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an oversized storyboard.");
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readBoundedBytes(response, MAX_SHEET_BYTES);
   if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 255 || bytes[1] !== 216) {
     throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an invalid storyboard JPEG.");
   }
   return bytes;
 }
-function validateOptions(options) {
+function validateStoryboardOptions(options) {
   if (!/^[A-Za-z0-9_-]{11}$/.test(options.videoId)) {
     throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
   }
@@ -19300,7 +19329,7 @@ function metadata(warnings) {
   };
 }
 async function downloadStoryboard(raw, options, fetchImpl) {
-  const maxSheets = validateOptions(options);
+  const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError("NOT_FOUND", "No storyboard is available for this video.");
@@ -19359,26 +19388,10 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   };
 }
 
-// ../all-things-youtube/src/browse-contract.ts
-var BROWSE_CATEGORIES = ["music", "news", "sports", "live"];
-var BROWSE_REGIONS = ["US", "IN"];
-var BROWSE_LANGUAGES = ["en", "hi"];
-function supportedValue(value, supported, label) {
-  if (supported.includes(value)) return value;
-  throw new RangeError(`${label} must be one of: ${supported.join(", ")}.`);
+// ../all-things-youtube/src/youtube-player.ts
+function object2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
-function normalizeBrowseCategory(value) {
-  if (!value) return void 0;
-  return supportedValue(value.trim().toLowerCase(), BROWSE_CATEGORIES, "category");
-}
-function normalizeBrowseRegion(value) {
-  return supportedValue((value ?? "US").trim().toUpperCase(), BROWSE_REGIONS, "region");
-}
-function normalizeBrowseLanguage(value) {
-  return supportedValue((value ?? "en").trim().toLowerCase(), BROWSE_LANGUAGES, "language");
-}
-
-// ../all-things-youtube/src/youtube-client.ts
 var WEB_PROFILE = {
   name: "web",
   clientName: "WEB",
@@ -19426,6 +19439,234 @@ var PLAYER_PROFILES = [
     context: { platform: "MOBILE", osName: "iOS", osVersion: "17.5.1" }
   }
 ];
+function extractAssignedJson(html, markers) {
+  for (const marker of markers) {
+    const markerIndex = html.indexOf(marker);
+    if (markerIndex < 0) continue;
+    const start = html.indexOf("{", markerIndex + marker.length);
+    if (start < 0) continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < html.length; index += 1) {
+      const character = html[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}" && --depth === 0) {
+        try {
+          return object2(JSON.parse(html.slice(start, index + 1)));
+        } catch {
+          break;
+        }
+      }
+    }
+  }
+  return void 0;
+}
+function extractInitialPlayerResponse(html) {
+  return extractAssignedJson(html, ["var ytInitialPlayerResponse =", "ytInitialPlayerResponse ="]);
+}
+function extractInitialData(html) {
+  return extractAssignedJson(html, ["var ytInitialData =", "ytInitialData ="]);
+}
+
+// ../all-things-youtube/src/storyboard-client.ts
+var object3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+var statuses = /* @__PURE__ */ new Set(["OK", "LOGIN_REQUIRED", "UNPLAYABLE", "ERROR", "LIVE_STREAM_OFFLINE", "CONTENT_CHECK_REQUIRED", "AGE_CHECK_REQUIRED"]);
+async function getStoryboardWithFallback(options) {
+  validateStoryboardOptions(options);
+  const timeBudgetMs = options.timeBudgetMs ?? 3e4;
+  if (!Number.isSafeInteger(timeBudgetMs) || timeBudgetMs < 1) {
+    throw new YouTubeClientError("INVALID_INPUT", "timeBudgetMs must be a positive integer.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeBudgetMs);
+  const cleanupSignals = [];
+  const combineSignals = (signals) => {
+    const combined = new AbortController();
+    for (const source of signals) {
+      if (source.aborted) {
+        combined.abort(source.reason);
+        break;
+      }
+      const forward = () => combined.abort(source.reason);
+      source.addEventListener("abort", forward, { once: true });
+      cleanupSignals.push(() => source.removeEventListener("abort", forward));
+    }
+    return combined.signal;
+  };
+  const signal = options.signal ? combineSignals([options.signal, controller.signal]) : controller.signal;
+  const emit = (event) => {
+    try {
+      options.onDiagnostic?.(event);
+    } catch {
+    }
+  };
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const boundedFetch = (input, init) => {
+    signal.throwIfAborted();
+    const existing = init?.signal ?? (input instanceof Request ? input.signal : void 0);
+    return fetchImpl(input, { ...init, signal: existing ? combineSignals([signal, existing]) : signal });
+  };
+  const wait = (delayMs) => new Promise((resolve5, reject) => {
+    const abort = () => {
+      clearTimeout(waitTimer);
+      reject(signal.reason);
+    };
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve5();
+    };
+    const waitTimer = setTimeout(finish, delayMs);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+  const transport = createYouTubeTransport({ ...options.retry, wait, fetch: boundedFetch });
+  let uncertain = false;
+  let malformed = false;
+  let downloadError;
+  try {
+    for (const profile of [...PLAYER_PROFILES, WEB_PROFILE]) {
+      signal.throwIfAborted();
+      const startedAt = Date.now();
+      const desktop = profile === WEB_PROFILE;
+      let status;
+      let raw;
+      try {
+        const response = await transport.fetch("storyboard-player", () => ({
+          input: desktop ? `https://www.youtube.com/watch?v=${options.videoId}` : "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+          init: {
+            signal,
+            method: desktop ? "GET" : "POST",
+            headers: {
+              "User-Agent": profile.userAgent,
+              "Accept-Language": `${options.language ?? "en"}-${options.region ?? "US"}`,
+              ...desktop ? {} : {
+                "Content-Type": "application/json",
+                "X-YouTube-Client-Name": profile.clientNameHeader,
+                "X-YouTube-Client-Version": profile.clientVersion,
+                Origin: "https://www.youtube.com"
+              }
+            },
+            ...desktop ? {} : { body: JSON.stringify({
+              videoId: options.videoId,
+              contentCheckOk: true,
+              racyCheckOk: true,
+              context: {
+                client: {
+                  clientName: profile.clientName,
+                  clientVersion: profile.clientVersion,
+                  hl: options.language ?? "en",
+                  gl: options.region ?? "US",
+                  ...profile.context
+                },
+                user: { lockedSafetyMode: false },
+                request: { useSsl: true }
+              }
+            }) }
+          }
+        }), { maxAttempts: 2, attemptTimeoutMs: 4e3 });
+        status = response.status;
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new YouTubeClientError("UPSTREAM_ERROR", "Storyboard player request failed.", { status, retryable: true });
+        }
+        const text = new TextDecoder().decode(await readBoundedBytes(response, 8 * 1024 * 1024));
+        raw = object3(desktop ? extractInitialPlayerResponse(text) : JSON.parse(text));
+      } catch (error) {
+        signal.throwIfAborted();
+        uncertain = true;
+        emit({
+          stage: "player",
+          profile: profile.name,
+          status,
+          outcome: "error",
+          code: error instanceof YouTubeClientError ? error.code : "INVALID_RESPONSE",
+          elapsedMs: Date.now() - startedAt
+        });
+        continue;
+      }
+      const upstreamStatus = object3(raw.playabilityStatus).status;
+      const playabilityStatus = typeof upstreamStatus === "string" && statuses.has(upstreamStatus) ? upstreamStatus : "UNKNOWN";
+      const spec = parseStoryboardSpec(raw);
+      const specState = spec ? "valid" : object3(raw.storyboards).playerStoryboardSpecRenderer !== void 0 ? "malformed" : "missing";
+      emit({
+        stage: "player",
+        profile: profile.name,
+        status,
+        playabilityStatus,
+        specState,
+        outcome: playabilityStatus === "OK" && spec ? "selected" : "skipped",
+        elapsedMs: Date.now() - startedAt
+      });
+      if (playabilityStatus !== "OK") {
+        uncertain = true;
+        continue;
+      }
+      if (!spec) {
+        malformed ||= specState === "malformed";
+        continue;
+      }
+      const downloadStartedAt = Date.now();
+      try {
+        const result = await downloadStoryboard(raw, options, boundedFetch);
+        signal.throwIfAborted();
+        emit({ stage: "complete", profile: profile.name, outcome: "success", sheetCount: result.sheets.length, elapsedMs: Date.now() - startedAt });
+        return result;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error instanceof YouTubeClientError && error.code === "INVALID_INPUT") throw error;
+        downloadError = error instanceof YouTubeClientError ? error : new YouTubeClientError("UPSTREAM_ERROR", "Storyboard download failed.", { retryable: true });
+        emit({
+          stage: "download",
+          profile: profile.name,
+          outcome: "error",
+          code: downloadError.code,
+          status: downloadError.status,
+          elapsedMs: Date.now() - downloadStartedAt
+        });
+      }
+    }
+    if (downloadError) throw downloadError;
+    if (malformed) throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned malformed storyboard metadata.", { retryable: true });
+    if (uncertain) throw new YouTubeClientError("UNAVAILABLE", "Storyboards could not be verified across YouTube clients.", { retryable: true });
+    throw new YouTubeClientError("NOT_FOUND", "No storyboard is available on the checked YouTube clients.");
+  } catch (error) {
+    if (signal.aborted) throw new YouTubeClientError("UNAVAILABLE", "Storyboard request was cancelled or exceeded its time budget.", { retryable: true });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    for (const cleanup of cleanupSignals) cleanup();
+  }
+}
+
+// ../all-things-youtube/src/browse-contract.ts
+var BROWSE_CATEGORIES = ["music", "news", "sports", "live"];
+var BROWSE_REGIONS = ["US", "IN"];
+var BROWSE_LANGUAGES = ["en", "hi"];
+function supportedValue(value, supported, label) {
+  if (supported.includes(value)) return value;
+  throw new RangeError(`${label} must be one of: ${supported.join(", ")}.`);
+}
+function normalizeBrowseCategory(value) {
+  if (!value) return void 0;
+  return supportedValue(value.trim().toLowerCase(), BROWSE_CATEGORIES, "category");
+}
+function normalizeBrowseRegion(value) {
+  return supportedValue((value ?? "US").trim().toUpperCase(), BROWSE_REGIONS, "region");
+}
+function normalizeBrowseLanguage(value) {
+  return supportedValue((value ?? "en").trim().toLowerCase(), BROWSE_LANGUAGES, "language");
+}
+
+// ../all-things-youtube/src/youtube-client.ts
 var API_ROOT = "https://youtubei.googleapis.com/youtubei/v1";
 var SEARCH_CAPTIONS_PARAM = "EgIoAQ==";
 var BROWSE_DESTINATIONS = {
@@ -19461,7 +19702,7 @@ function browseLocale(options) {
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function object2(value) {
+function object4(value) {
   return isObject(value) ? value : {};
 }
 function array(value) {
@@ -19480,21 +19721,21 @@ function number(value) {
 }
 function rendererText(value) {
   if (typeof value === "string") return import_he.default.decode((0, import_striptags.default)(value)).trim();
-  const source = object2(value);
+  const source = object4(value);
   const content = string(source.content);
   if (content !== void 0) return import_he.default.decode((0, import_striptags.default)(content)).trim();
   const simple = string(source.simpleText);
   if (simple !== void 0) return import_he.default.decode((0, import_striptags.default)(simple)).trim();
-  const runs = array(source.runs).map((run) => string(object2(run).text) ?? "").join("");
+  const runs = array(source.runs).map((run) => string(object4(run).text) ?? "").join("");
   return runs ? import_he.default.decode((0, import_striptags.default)(runs)).trim() : void 0;
 }
 function rendererThumbnails(value) {
-  const source = object2(value);
+  const source = object4(value);
   const thumbnails = array(
-    source.thumbnails ?? object2(source.thumbnail).thumbnails ?? source.sources ?? object2(source.image).sources
+    source.thumbnails ?? object4(source.thumbnail).thumbnails ?? source.sources ?? object4(source.image).sources
   );
   return thumbnails.flatMap((item) => {
-    const thumbnail = object2(item);
+    const thumbnail = object4(item);
     const url = string(thumbnail.url);
     if (!url) return [];
     return [{
@@ -19524,17 +19765,17 @@ function continuationToken(root) {
   let token;
   walkObjects(root, (candidate) => {
     if (token) return;
-    const command = object2(object2(candidate.continuationEndpoint).continuationCommand);
+    const command = object4(object4(candidate.continuationEndpoint).continuationCommand);
     token = string(command.token);
-    if (!token) token = string(object2(candidate.continuationCommand).token);
-    if (!token) token = string(object2(candidate.nextContinuationData).continuation);
+    if (!token) token = string(object4(candidate.continuationCommand).token);
+    if (!token) token = string(object4(candidate.nextContinuationData).continuation);
   });
   return token;
 }
 function directContinuationToken(value) {
-  const renderer = object2(object2(value).continuationItemRenderer);
-  const command = object2(object2(renderer.continuationEndpoint).continuationCommand);
-  return string(command.token) ?? string(object2(renderer.nextContinuationData).continuation) ?? continuationToken(renderer);
+  const renderer = object4(object4(value).continuationItemRenderer);
+  const command = object4(object4(renderer.continuationEndpoint).continuationCommand);
+  return string(command.token) ?? string(object4(renderer.nextContinuationData).continuation) ?? continuationToken(renderer);
 }
 function commentContinuationTokens(root) {
   let continuation;
@@ -19545,7 +19786,7 @@ function commentContinuationTokens(root) {
       for (const item of array(command.continuationItems)) {
         const direct = directContinuationToken(item);
         if (direct) continuation = direct;
-        const thread = object2(object2(item).commentThreadRenderer);
+        const thread = object4(object4(item).commentThreadRenderer);
         const reply = continuationToken(thread.replies);
         if (reply) replyContinuations.add(reply);
       }
@@ -19553,7 +19794,7 @@ function commentContinuationTokens(root) {
   }
   for (const menu of findRenderers(root, "sortFilterSubMenuRenderer")) {
     for (const itemValue of array(menu.subMenuItems)) {
-      const item = object2(itemValue);
+      const item = object4(itemValue);
       const title = string(item.title) ?? rendererText(item.title);
       if (title?.toLowerCase().startsWith("newest")) {
         newestContinuation = continuationToken(item);
@@ -19645,16 +19886,16 @@ function assertPlaylistId(playlistId) {
   }
 }
 function channelFromRuns(value, navigationEndpoint) {
-  const source = object2(value);
-  const firstRun = object2(array(source.runs)[0]);
-  const commandRun = object2(array(source.commandRuns)[0]);
+  const source = object4(value);
+  const firstRun = object4(array(source.runs)[0]);
+  const commandRun = object4(array(source.commandRuns)[0]);
   const navigationCandidates = [
     firstRun.navigationEndpoint,
-    object2(object2(commandRun.onTap).innertubeCommand),
+    object4(object4(commandRun.onTap).innertubeCommand),
     navigationEndpoint,
-    object2(object2(navigationEndpoint).innertubeCommand)
+    object4(object4(navigationEndpoint).innertubeCommand)
   ];
-  const id = navigationCandidates.map((candidate) => string(object2(object2(candidate).browseEndpoint).browseId)).find(Boolean) ?? "";
+  const id = navigationCandidates.map((candidate) => string(object4(object4(candidate).browseEndpoint).browseId)).find(Boolean) ?? "";
   const rawName = string(firstRun.text) ?? rendererText(value) ?? "Unknown channel";
   const name = id ? rawName.replace(/^by\s+/i, "") : rawName;
   return { id, name, url: id ? `https://www.youtube.com/channel/${id}` : "" };
@@ -19662,8 +19903,8 @@ function channelFromRuns(value, navigationEndpoint) {
 function channelFromMetadataRows(value) {
   for (const metadata3 of findRenderers(value, "contentMetadataViewModel")) {
     for (const row of array(metadata3.metadataRows)) {
-      for (const partValue of array(object2(row).metadataParts)) {
-        const part = object2(partValue);
+      for (const partValue of array(object4(row).metadataParts)) {
+        const part = object4(partValue);
         const channel = channelFromRuns(part.text);
         if (channel.id) return channel;
       }
@@ -19689,7 +19930,7 @@ function parseVideoRenderer(renderer) {
     type: "video",
     id,
     title,
-    description: rendererText(renderer.descriptionSnippet) ?? array(renderer.detailedMetadataSnippets).map((snippet) => rendererText(object2(snippet).snippetText)).filter(Boolean).join(" "),
+    description: rendererText(renderer.descriptionSnippet) ?? array(renderer.detailedMetadataSnippets).map((snippet) => rendererText(object4(snippet).snippetText)).filter(Boolean).join(" "),
     channel: channelFromRuns(
       renderer.ownerText ?? renderer.longBylineText ?? renderer.shortBylineText
     ),
@@ -19708,7 +19949,7 @@ function parseChannelRenderer(renderer) {
   const id = string(renderer.channelId);
   const name = rendererText(renderer.title);
   if (!id || !name) return null;
-  const handle = rendererText(renderer.navigationEndpoint ? object2(renderer.navigationEndpoint).commandMetadata : void 0) ?? rendererText(renderer.subscriberCountText);
+  const handle = rendererText(renderer.navigationEndpoint ? object4(renderer.navigationEndpoint).commandMetadata : void 0) ?? rendererText(renderer.subscriberCountText);
   return {
     type: "channel",
     id,
@@ -19734,13 +19975,13 @@ function parsePlaylistRenderer(renderer) {
     channel: channelFromRuns(renderer.longBylineText ?? renderer.shortBylineText),
     thumbnails: firstRendererThumbnails(
       renderer.thumbnail,
-      object2(array(renderer.thumbnails)[0])
+      object4(array(renderer.thumbnails)[0])
     ),
     videoCount: parseCompactNumber(videoCountText),
     videoCountText,
     isPodcast: false,
     playUrl: (() => {
-      const videoId = string(object2(object2(renderer.navigationEndpoint).watchEndpoint).videoId);
+      const videoId = string(object4(object4(renderer.navigationEndpoint).watchEndpoint).videoId);
       return videoId ? `https://www.youtube.com/watch?v=${videoId}&list=${id}` : void 0;
     })(),
     url: `https://www.youtube.com/playlist?list=${id}`
@@ -19749,12 +19990,12 @@ function parsePlaylistRenderer(renderer) {
 function parseLockupViewModel(renderer, fallbackChannel) {
   const id = string(renderer.contentId);
   const contentType = string(renderer.contentType);
-  const metadata3 = object2(object2(renderer.metadata).lockupMetadataViewModel);
+  const metadata3 = object4(object4(renderer.metadata).lockupMetadataViewModel);
   const title = rendererText(metadata3.title);
   if (!id || !title) return null;
-  const contentMetadata = object2(object2(metadata3.metadata).contentMetadataViewModel);
+  const contentMetadata = object4(object4(metadata3.metadata).contentMetadataViewModel);
   const metadataRows = array(contentMetadata.metadataRows).map(
-    (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter(
+    (row) => array(object4(row).metadataParts).map((part) => rendererText(object4(part).text)).filter(
       (value) => Boolean(value)
     )
   );
@@ -19764,7 +20005,7 @@ function parseLockupViewModel(renderer, fallbackChannel) {
   const badgeTexts = findRenderers(renderer.contentImage, "thumbnailBadgeViewModel").map((badge) => rendererText(badge.text)).filter((value) => Boolean(value));
   const metadataBadgeTexts = findRenderers(metadata3, "badgeViewModel").flatMap((badge) => [
     rendererText(badge.badgeText),
-    rendererText(object2(object2(badge.rendererContext).accessibilityContext).label)
+    rendererText(object4(object4(badge.rendererContext).accessibilityContext).label)
   ]).filter((value) => Boolean(value));
   if (contentType === "LOCKUP_CONTENT_TYPE_VIDEO") {
     const statsRow = metadataRows.find((row) => row.length >= 2 && row.some((value) => /\d/.test(value)));
@@ -19793,8 +20034,8 @@ function parseLockupViewModel(renderer, fallbackChannel) {
   if (contentType === "LOCKUP_CONTENT_TYPE_PLAYLIST" || contentType === "LOCKUP_CONTENT_TYPE_PODCAST") {
     const videoCountText = badgeTexts.find((value) => /\b(?:videos?|episodes?)$/i.test(value));
     const updatedTimeText = metadataParts.find((value) => /^updated\b/i.test(value));
-    const command = object2(object2(object2(renderer.rendererContext).commandContext).onTap);
-    const firstVideoId = string(object2(object2(command.innertubeCommand).watchEndpoint).videoId);
+    const command = object4(object4(object4(renderer.rendererContext).commandContext).onTap);
+    const firstVideoId = string(object4(object4(command.innertubeCommand).watchEndpoint).videoId);
     return {
       type: "playlist",
       id,
@@ -19859,9 +20100,9 @@ function parseSearchResults(root, fallbackChannel) {
 }
 function channelTabBrowseOptions(root, suffix) {
   for (const tab of findRenderers(root, "tabRenderer")) {
-    const endpoint = object2(tab.endpoint);
-    const commandUrl = string(object2(object2(endpoint.commandMetadata).webCommandMetadata).url);
-    const browse = object2(endpoint.browseEndpoint);
+    const endpoint = object4(tab.endpoint);
+    const commandUrl = string(object4(object4(endpoint.commandMetadata).webCommandMetadata).url);
+    const browse = object4(endpoint.browseEndpoint);
     const browseId = string(browse.browseId);
     const params = string(browse.params);
     if (commandUrl?.endsWith(suffix) && browseId && params) return { browseId, params };
@@ -19872,8 +20113,8 @@ function channelVideoSortContinuation(root, sort) {
   const label = sort === "latest" ? "Latest" : sort === "popular" ? "Popular" : "Oldest";
   for (const chip of findRenderers(root, "chipViewModel")) {
     if (rendererText(chip.text) !== label) continue;
-    const command = object2(object2(chip.tapCommand).innertubeCommand);
-    const token = string(object2(command.continuationCommand).token);
+    const command = object4(object4(chip.tapCommand).innertubeCommand);
+    const token = string(object4(command.continuationCommand).token);
     if (token) return token;
   }
   return void 0;
@@ -19882,9 +20123,9 @@ function channelPlaylistSortBrowseOptions(root, sort) {
   const label = sort === "newest" ? "Date added (newest)" : "Last video added";
   for (const menu of findRenderers(root, "sortFilterSubMenuRenderer")) {
     for (const item of array(menu.subMenuItems)) {
-      const option = object2(item);
+      const option = object4(item);
       if (string(option.title) !== label) continue;
-      const browse = object2(object2(option.navigationEndpoint).browseEndpoint);
+      const browse = object4(object4(option.navigationEndpoint).browseEndpoint);
       const browseId = string(browse.browseId);
       const params = string(browse.params);
       if (browseId && params) return { browseId, params };
@@ -19916,7 +20157,7 @@ function channelHeaderCounts(root) {
   const header = findRenderers(root, "pageHeaderViewModel")[0];
   const metadata3 = header ? findRenderers(header, "contentMetadataViewModel")[0] : void 0;
   const values2 = array(metadata3?.metadataRows).flatMap(
-    (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter(
+    (row) => array(object4(row).metadataParts).map((part) => rendererText(object4(part).text)).filter(
       (value) => Boolean(value)
     )
   );
@@ -19940,11 +20181,11 @@ function directExternalUrl(value) {
 function channelExternalLinks(root) {
   return findRenderers(root, "channelExternalLinkViewModel").flatMap((renderer) => {
     const title = rendererText(renderer.title);
-    const link = object2(renderer.link);
+    const link = object4(renderer.link);
     const displayUrl = rendererText(link);
-    const commandRun = object2(array(link.commandRuns)[0]);
-    const command = object2(object2(commandRun.onTap).innertubeCommand);
-    const commandUrl = string(object2(command.urlEndpoint).url) ?? string(object2(object2(command.commandMetadata).webCommandMetadata).url);
+    const commandRun = object4(array(link.commandRuns)[0]);
+    const command = object4(object4(commandRun.onTap).innertubeCommand);
+    const commandUrl = string(object4(command.urlEndpoint).url) ?? string(object4(object4(command.commandMetadata).webCommandMetadata).url);
     const url = directExternalUrl(commandUrl);
     return title && displayUrl && url ? [{ title, displayUrl, url }] : [];
   });
@@ -20001,7 +20242,7 @@ function playlistHeaderData(root) {
   const metadataValues = [
     ...findRenderers(pageHeader, "contentMetadataViewModel").flatMap(
       (viewModel) => array(viewModel.metadataRows).flatMap(
-        (row) => array(object2(row).metadataParts).map((part) => rendererText(object2(part).text)).filter((value) => Boolean(value))
+        (row) => array(object4(row).metadataParts).map((part) => rendererText(object4(part).text)).filter((value) => Boolean(value))
       )
     ),
     ...array(primary.stats).map((stat2) => rendererText(stat2)).filter((value) => Boolean(value))
@@ -20014,7 +20255,7 @@ function playlistHeaderData(root) {
   ];
   const channel = channelCandidates.find((candidate) => candidate.id) ?? channelCandidates.find((candidate) => candidate.name !== "Unknown channel") ?? { id: "", name: "Unknown channel", url: "" };
   return {
-    title: rendererText(legacy.title) ?? string(pageHeader.pageTitle) ?? rendererText(object2(findRenderers(pageHeader, "dynamicTextViewModel")[0]).text) ?? rendererText(primary.title) ?? string(metadata3.title),
+    title: rendererText(legacy.title) ?? string(pageHeader.pageTitle) ?? rendererText(object4(findRenderers(pageHeader, "dynamicTextViewModel")[0]).text) ?? rendererText(primary.title) ?? string(metadata3.title),
     description: rendererText(legacy.descriptionText) ?? rendererText(primary.description) ?? string(metadata3.description) ?? string(microformat.description),
     channel,
     thumbnails: firstRendererThumbnails(
@@ -20072,14 +20313,14 @@ function captionTrackInfo(track, index, defaultIndex = 0) {
   };
 }
 function parseCaptionTracks(player) {
-  const renderer = object2(object2(player.captions).playerCaptionsTracklistRenderer);
-  const audioTracks = array(renderer.audioTracks).map(object2);
+  const renderer = object4(object4(player.captions).playerCaptionsTracklistRenderer);
+  const audioTracks = array(renderer.audioTracks).map(object4);
   const defaultAudioTrackIndex = number(renderer.defaultAudioTrackIndex);
   const indexedDefaultAudioTrack = defaultAudioTrackIndex !== void 0 ? audioTracks[defaultAudioTrackIndex] : void 0;
   const defaultAudioTrack = indexedDefaultAudioTrack ?? audioTracks.find((track) => track.hasDefaultTrack === true) ?? audioTracks[0] ?? {};
   const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex) ?? 0;
   const parsedTracks = array(renderer.captionTracks).flatMap((item, sourceIndex) => {
-    const track = object2(item);
+    const track = object4(item);
     const baseUrl = string(track.baseUrl);
     if (!baseUrl) return [];
     return [{
@@ -20103,7 +20344,7 @@ function parseCaptionTracks(player) {
     (track, index) => captionTrackInfo(track, index, defaultIndex)
   );
   const translations = array(renderer.translationLanguages).map((item) => {
-    const language = object2(item);
+    const language = object4(item);
     return {
       languageCode: string(language.languageCode) ?? "und",
       name: rendererText(language.languageName) ?? string(language.languageCode) ?? "Unknown"
@@ -20144,42 +20385,6 @@ function mergeCaptionCatalog(primary, desktop) {
     defaultTrackId
   };
 }
-function extractAssignedJson(html, markers) {
-  for (const marker of markers) {
-    const markerIndex = html.indexOf(marker);
-    if (markerIndex < 0) continue;
-    const start = html.indexOf("{", markerIndex + marker.length);
-    if (start < 0) continue;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let index = start; index < html.length; index += 1) {
-      const character = html[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (character === "\\") escaped = true;
-        else if (character === '"') inString = false;
-        continue;
-      }
-      if (character === '"') inString = true;
-      else if (character === "{") depth += 1;
-      else if (character === "}" && --depth === 0) {
-        try {
-          return object2(JSON.parse(html.slice(start, index + 1)));
-        } catch {
-          break;
-        }
-      }
-    }
-  }
-  return void 0;
-}
-function extractInitialPlayerResponse(html) {
-  return extractAssignedJson(html, ["var ytInitialPlayerResponse =", "ytInitialPlayerResponse ="]);
-}
-function extractInitialData(html) {
-  return extractAssignedJson(html, ["var ytInitialData =", "ytInitialData ="]);
-}
 function responseCookies(headers) {
   const values2 = headers.getSetCookie?.() ?? [];
   const combined = headers.get("set-cookie");
@@ -20201,9 +20406,9 @@ function chooseCaptionTrack(internal, language, trackId, defaultTrackId) {
 }
 function parseEndscreen(player) {
   return findRenderers(player.endscreen, "endscreenElementRenderer").map((renderer) => {
-    const endpoint = object2(renderer.endpoint);
-    const watchEndpoint = object2(endpoint.watchEndpoint);
-    const browseEndpoint = object2(endpoint.browseEndpoint);
+    const endpoint = object4(renderer.endpoint);
+    const watchEndpoint = object4(endpoint.watchEndpoint);
+    const browseEndpoint = object4(endpoint.browseEndpoint);
     const style = string(renderer.style) ?? "";
     const type = style.includes("VIDEO") ? "video" : style.includes("PLAYLIST") ? "playlist" : style.includes("CHANNEL") ? "channel" : "unknown";
     return {
@@ -20212,7 +20417,7 @@ function parseEndscreen(player) {
       metadata: rendererText(renderer.metadata),
       videoId: string(watchEndpoint.videoId),
       playlistId: string(watchEndpoint.playlistId),
-      channelId: string(browseEndpoint.browseId) ?? string(object2(renderer.hovercardButton).channelId),
+      channelId: string(browseEndpoint.browseId) ?? string(object4(renderer.hovercardButton).channelId),
       startMs: number(renderer.startMs) ?? 0,
       endMs: number(renderer.endMs) ?? 0,
       thumbnails: rendererThumbnails(renderer.image),
@@ -20226,12 +20431,12 @@ function parseEndscreen(player) {
   });
 }
 function parseComment(renderer) {
-  const commentWrapper = object2(renderer.comment);
-  const comment = object2(commentWrapper.commentRenderer ?? renderer.comment ?? renderer);
+  const commentWrapper = object4(renderer.comment);
+  const comment = object4(commentWrapper.commentRenderer ?? renderer.comment ?? renderer);
   const id = string(comment.commentId) ?? string(renderer.commentId);
   const text = rendererText(comment.contentText ?? comment.content);
   if (!id || !text) return null;
-  const authorEndpoint = object2(object2(comment.authorEndpoint).browseEndpoint);
+  const authorEndpoint = object4(object4(comment.authorEndpoint).browseEndpoint);
   return {
     id,
     author: {
@@ -20250,10 +20455,10 @@ function parseComment(renderer) {
   };
 }
 function parseCommentEntity(payload) {
-  const properties = object2(payload.properties);
-  const author = object2(payload.author);
-  const toolbar = object2(payload.toolbar);
-  const content = object2(properties.content);
+  const properties = object4(payload.properties);
+  const author = object4(payload.author);
+  const toolbar = object4(payload.toolbar);
+  const content = object4(properties.content);
   const id = string(properties.commentId);
   const text = string(content.content);
   if (!id || !text) return null;
@@ -20366,7 +20571,7 @@ function createYouTubeClient(options = {}) {
       );
     }
     try {
-      return object2(await response.json());
+      return object4(await response.json());
     } catch (cause) {
       throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned invalid JSON.", {
         cause,
@@ -20388,7 +20593,7 @@ function createYouTubeClient(options = {}) {
           profile
         );
         firstResponse ??= response;
-        const status = string(object2(response.playabilityStatus).status);
+        const status = string(object4(response.playabilityStatus).status);
         const tracks = parseCaptionTracks(response).internal;
         if (status === "OK" && (!requireCaptionTrack || tracks.length)) return response;
         attempts.push(`${profile.name}: ${status ?? "UNKNOWN"}`);
@@ -20644,8 +20849,8 @@ function createYouTubeClient(options = {}) {
     },
     async getVideo(videoId) {
       const raw = await player(videoId, false);
-      const details = object2(raw.videoDetails);
-      const status = object2(raw.playabilityStatus);
+      const details = object4(raw.videoDetails);
+      const status = object4(raw.playabilityStatus);
       const author = string(details.author) ?? "Unknown channel";
       const channelId = string(details.channelId) ?? "";
       const playability = string(status.status) ?? "UNKNOWN";
@@ -20740,7 +20945,7 @@ function createYouTubeClient(options = {}) {
             videoCountText,
             viewCount: parseCompactNumber(viewCountText),
             viewCountText,
-            businessEmailAvailable: Object.keys(object2(about.signInForBusinessEmail)).length > 0
+            businessEmailAvailable: Object.keys(object4(about.signInForBusinessEmail)).length > 0
           }
         },
         meta: meta(hasAbout ? [] : ["Channel About details are unavailable."], !hasAbout)
@@ -20924,7 +21129,7 @@ function createYouTubeClient(options = {}) {
       }
       let json;
       try {
-        json = object2(await response.json());
+        json = object4(await response.json());
       } catch (cause) {
         throw new YouTubeClientError(
           "INVALID_RESPONSE",
@@ -20934,12 +21139,12 @@ function createYouTubeClient(options = {}) {
       }
       const segments = [];
       for (const value of array(json.events)) {
-        const event = object2(value);
+        const event = object4(value);
         if (event.aAppend === 1 || !Array.isArray(event.segs)) continue;
         const startMs = number(event.tStartMs) ?? 0;
         const durationMs = number(event.dDurationMs) ?? 0;
         const words = array(event.segs).map((segmentValue) => {
-          const segment = object2(segmentValue);
+          const segment = object4(segmentValue);
           const rawText = string(segment.utf8) ?? "";
           const text2 = import_he.default.decode((0, import_striptags.default)(rawText));
           const offsetMs = number(segment.tOffsetMs) ?? 0;
@@ -20966,11 +21171,7 @@ function createYouTubeClient(options = {}) {
       };
     },
     async getStoryboard(storyboardOptions) {
-      return downloadStoryboard(
-        await player(storyboardOptions.videoId, false),
-        storyboardOptions,
-        fetchImpl
-      );
+      return getStoryboardWithFallback({ ...options, ...storyboardOptions });
     },
     getComments: getCommentsPage,
     getAllComments,
@@ -21353,7 +21554,7 @@ var API_ROOT2 = "https://youtubei.googleapis.com/youtubei/v1";
 function isObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function object3(value) {
+function object5(value) {
   return isObject2(value) ? value : {};
 }
 async function callWatchPlayer(videoId, profile, options, onDiagnostic) {
@@ -21409,17 +21610,17 @@ async function callWatchPlayer(videoId, profile, options, onDiagnostic) {
       retryable: true
     });
   }
-  const normalized = object3(raw);
-  const playability = String(object3(normalized.playabilityStatus).status ?? "UNKNOWN");
+  const normalized = object5(raw);
+  const playability = String(object5(normalized.playabilityStatus).status ?? "UNKNOWN");
   diagnose(onDiagnostic, {
     stage: "player_response",
     profile: profile.name,
     status: response.status,
     playabilityStatus: playability,
-    reason: typeof object3(normalized.playabilityStatus).reason === "string" ? String(object3(normalized.playabilityStatus).reason) : void 0
+    reason: typeof object5(normalized.playabilityStatus).reason === "string" ? String(object5(normalized.playabilityStatus).reason) : void 0
   });
   if (playability !== "OK") {
-    const reason = object3(normalized.playabilityStatus).reason;
+    const reason = object5(normalized.playabilityStatus).reason;
     throw new YouTubeClientError(
       playability === "LOGIN_REQUIRED" ? "AUTH_REQUIRED" : "UNAVAILABLE",
       typeof reason === "string" ? reason : `Video is not playable through ${profile.name}.`,
@@ -21430,7 +21631,7 @@ async function callWatchPlayer(videoId, profile, options, onDiagnostic) {
 }
 
 // src/watch/media.ts
-function object4(value) {
+function object6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
 function values(value) {
@@ -21442,12 +21643,13 @@ function finiteNumber(value) {
 }
 function formats(value, progressive) {
   return values(value).flatMap((item) => {
-    const format = object4(item);
+    const format = object6(item);
     const url = typeof format.url === "string" ? format.url : void 0;
     const mimeType = typeof format.mimeType === "string" ? format.mimeType : "";
     if (!url || !mimeType.startsWith("video/")) return [];
     return [{
       url,
+      formatId: finiteNumber(format.itag),
       width: finiteNumber(format.width),
       height: finiteNumber(format.height),
       contentLength: finiteNumber(format.contentLength),
@@ -21463,7 +21665,7 @@ function codecPreference(candidate) {
   return 3;
 }
 function selectCandidates(raw, maxWidth, preferResolution = false) {
-  const streaming = object4(raw.streamingData);
+  const streaming = object6(raw.streamingData);
   const all = [
     ...formats(streaming.formats, true),
     ...formats(streaming.adaptiveFormats, false)
@@ -21912,7 +22114,7 @@ async function extractFramesWithinBudget(options, deadlineAt) {
         try {
           if (Date.now() >= deadlineAt) throw new YouTubeClientError("FRAME_EXTRACTION_FAILED", "Frame extraction budget exhausted.", { retryable: true });
           const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== void 0 ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 3e4, deadlineAt - Date.now())) } : void 0;
-          return await extractJpeg(
+          const frame = await extractJpeg(
             ffmpegPath,
             proxy.url,
             outputDir,
@@ -21923,6 +22125,19 @@ async function extractFramesWithinBudget(options, deadlineAt) {
             candidate.height,
             limits
           );
+          diagnose(options.onDiagnostic, {
+            stage: "ffmpeg_success",
+            profile: group.profile,
+            candidateIndex: group.candidates.indexOf(candidate),
+            timestampMs,
+            elapsedMs: Date.now() - startedAt,
+            width: frame.width,
+            height: frame.height,
+            sourceWidth: candidate.width,
+            sourceHeight: candidate.height,
+            formatId: candidate.formatId
+          });
+          return frame;
         } catch (error) {
           diagnose(options.onDiagnostic, {
             stage: "ffmpeg",

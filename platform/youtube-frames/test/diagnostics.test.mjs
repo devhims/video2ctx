@@ -30,3 +30,10 @@ test('retains bounded media retry context without accepting arbitrary fields', a
   assert.deepEqual(diagnosticDetails({ stage: 'media_retry', attempt: 1, delayMs: 250, status: 429,
     url: 'https://media.test/?sig=SECRET' }), { stage: 'media_retry', attempt: 1, delayMs: 250, status: 429 });
 });
+
+test('retains successful source attribution without URLs or local files', async () => {
+  const { diagnosticDetails } = await import('../diagnostics.mjs');
+  const event = { stage: 'ffmpeg_success', profile: 'android', formatId: 18, candidateIndex: 1,
+    timestampMs: 10000, width: 640, height: 360, sourceWidth: 640, sourceHeight: 360, elapsedMs: 42 };
+  assert.deepEqual(diagnosticDetails({ ...event, url: 'https://signed.test/?sig=SECRET', path: '/tmp/frame.jpg' }), event);
+});

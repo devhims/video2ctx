@@ -254,7 +254,7 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
           if (Date.now() >= deadlineAt) throw new YouTubeClientError('FRAME_EXTRACTION_FAILED', 'Frame extraction budget exhausted.', { retryable: true });
           const limits = Number.isFinite(deadlineAt) || options.frameTimeoutMs !== undefined
             ? { timeoutMs: Math.max(1, Math.min(options.frameTimeoutMs ?? 30_000, deadlineAt - Date.now())) } : undefined;
-          return await extractJpeg(
+          const frame = await extractJpeg(
             ffmpegPath,
             proxy.url,
             outputDir,
@@ -265,6 +265,11 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
             candidate.height,
             limits,
           );
+          diagnose(options.onDiagnostic, { stage: 'ffmpeg_success', profile: group.profile,
+            candidateIndex: group.candidates.indexOf(candidate), timestampMs, elapsedMs: Date.now() - startedAt,
+            width: frame.width, height: frame.height, sourceWidth: candidate.width, sourceHeight: candidate.height,
+            formatId: candidate.formatId });
+          return frame;
         } catch (error) {
           diagnose(options.onDiagnostic, { stage: 'ffmpeg', profile: group.profile,
             candidateIndex: group.candidates.indexOf(candidate), timestampMs, elapsedMs: Date.now() - startedAt, error });
