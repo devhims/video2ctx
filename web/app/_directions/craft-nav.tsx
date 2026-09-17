@@ -59,7 +59,7 @@ export function CraftNav() {
         </nav>
 
         <div className='craft-nav-actions'>
-          <a className='craft-nav-account' href='/dashboard'>
+          <a className='craft-nav-account' href={session?.user ? '/dashboard' : '/login'}>
             {session?.user ? 'Dashboard' : 'Sign in'}
           </a>
           <a
