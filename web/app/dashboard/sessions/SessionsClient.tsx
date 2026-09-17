@@ -309,6 +309,13 @@ function phaseLabel(phase?: AgentProgress['phase']) {
 }
 
 // Compact disclosure rows follow Beautiful UI's Tool Chips pattern.
+function isStoryboardMetadata(tool: AgentProgress['tools'][number]) {
+  if (tool.name !== 'get_video_storyboard') return false;
+  if (tool.output?.storyboard) return tool.output.storyboard.mode === 'metadata';
+  return typeof tool.input.videoId === 'string' && tool.input.maxSheets === undefined
+    && tool.input.sheetIndexes === undefined && tool.input.timestampsMs === undefined;
+}
+
 function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const running = tools.some(tool => tool.status === 'running');
@@ -323,7 +330,7 @@ function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
       <details className='agent-tool-chip'><summary>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
-        <span className='agent-tool-name'>{tool.name.replaceAll('_', ' ')}</span>
+        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name.replaceAll('_', ' ')}</span>
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>
         {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}
@@ -331,6 +338,9 @@ function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
           {tool.name === 'get_video_frames' && tool.status === 'completed' && <FramePreviews frames={tool.output?.frames ?? []} />}
+          {tool.name === 'get_video_storyboard' && tool.status === 'completed' && (isStoryboardMetadata(tool)
+            ? <p className='agent-frame-note'>Metadata only. No images were downloaded or inspected.</p>
+            : <FramePreviews kind='storyboard' frames={tool.output?.storyboard?.sheets ?? []} />)}
           {tool.output && <><h4>Result</h4><p>{tool.output.sourceCount} {tool.output.sourceCount === 1 ? 'source' : 'sources'} · {tool.output.excerptCount} evidence excerpts</p>
             <ul>{tool.output.sources.map((source, index) => <li key={index}>{source.title ?? source.videoId ?? source.channelId ?? 'YouTube source'}</li>)}</ul>
             {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}

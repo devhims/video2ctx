@@ -1,6 +1,7 @@
 import type { StoredExtractionDiagnostic } from '../../../lib/extraction-diagnostics';
 import type { FrameAnalyst } from './frame-analyst';
 import type { SaveFramePreviews } from '../../runtime/frame-previews';
+import type { SaveStoryboardPreviews } from '../../runtime/storyboard-previews';
 import type { VisualAnalyst } from './visual-analyst';
 import type { AgentTurnResult, EvidenceOperation, EvidencePacket, FinalizeAnswerInput } from '../../contracts';
 import type { YouTubeAgentProvider } from './provider';
@@ -28,6 +29,7 @@ export interface AgentToolContext {
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
+  saveStoryboardPreviews?: SaveStoryboardPreviews;
   validateAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): void;
   runId: string;
   provider: YouTubeAgentProvider;

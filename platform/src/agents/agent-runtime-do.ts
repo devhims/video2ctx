@@ -2,6 +2,7 @@ import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } fro
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
 import { saveFramePreviews } from './runtime/frame-previews';
+import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
@@ -428,6 +429,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         saveFramePreviews: (frames, signal) => {
           this.assertRunActive(runId);
           return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal);
+        },
+        saveStoryboardPreviews: (storyboard, signal) => {
+          this.assertRunActive(runId);
+          return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal);
         },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });

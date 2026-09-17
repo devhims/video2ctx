@@ -691,7 +691,7 @@ export const openApiDocument = {
     '/v1/agent/frames/{collectionId}/{assetId}': {
       get: {
         tags: ['Agents'], operationId: 'getAgentFramePreview', summary: 'View a saved agent video frame',
-        description: 'Returns the original JPEG used for visual analysis. Read collectionId and assetId from a completed get_video_frames tool trace. Anyone with the unguessable image link can view it without a login or API key. Links do not expire automatically; images are removed on account deletion. Older runs may have no saved previews. Viewing a saved frame does not start extraction or charge credits.',
+        description: 'Returns the original JPEG used for visual analysis. Read collectionId and assetId from frames in a completed get_video_frames tool trace, or storyboard.sheets in a completed get_video_storyboard inspection trace. Metadata-only storyboard calls have no images. Anyone with the unguessable image link can view it without a login or API key. Links do not expire automatically; images are removed on account deletion. Older runs may have no saved previews. Viewing a saved image does not start extraction or charge credits.',
         security: [],
         parameters: [pathParameter('collectionId', '64-character lowercase hexadecimal collection identifier from output.frames.'),
           pathParameter('assetId', '64-character lowercase hexadecimal identifier from output.frames.')],
