@@ -7,7 +7,7 @@ export const MAX_CONVERSATION_MEMORY_CHARACTERS = 64_000;
 
 export interface ConversationTurn {
   userMessageId: string;
-  assistantMessageId: string;
+  agentMessageId: string;
   user: string;
   assistant: string;
   resourceIds: string[];
@@ -24,7 +24,7 @@ export type ConversationHistoryResolution =
 
 export function resolveConversationHistory(
   parentMessageId: string | null,
-  readTurn: (assistantMessageId: string) => LinkedConversationTurn | undefined,
+  readTurn: (agentMessageId: string) => LinkedConversationTurn | undefined,
 ): ConversationHistoryResolution {
   const newestFirst: ConversationTurn[] = [];
   const seen = new Set<string>();

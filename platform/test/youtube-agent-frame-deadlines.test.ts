@@ -32,7 +32,7 @@ function setup(delayMs: number) {
     },
     analyzeFrames: analyzed, executeEvidenceTool: execution => execution.execute(),
     finalize: vi.fn(async (_id, input) => ({ ...input, runId: 'frame-deadline-run', conversationId: crypto.randomUUID(),
-      userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), billing: { creditsCharged: 0, creditsRemaining: 100 } })),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), billing: { creditsCharged: 0, creditsRemaining: 100 } })),
   };
   let step = 0;
   const model = new MockLanguageModelV4({ doGenerate: async () => ({

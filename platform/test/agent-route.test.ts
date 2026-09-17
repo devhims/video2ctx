@@ -2,6 +2,7 @@ vi.mock('cloudflare:workers', () => ({ WorkflowEntrypoint: class {}, DurableObje
 
 import type { UserSessionPage, UserSessionSummary } from '../src/durable-objects/user-account';
 import type { AgentConversationPage } from '../src/agents/runtime/conversation-restoration';
+import type { AgentAdmission } from '../src/agents/contracts';
 
 const creditBalance = vi.hoisted(() => vi.fn());
 
@@ -84,18 +85,18 @@ describe('agent routes', () => {
   test('accepts sessionId for follow-ups and preserves the existing durable identity', async () => {
     const harness = agentHarness();
     const sessionId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
-    const response = await postAgent(harness.env, 'session-id-follow-up', { message: 'Continue', sessionId });
+    const response = await postAgent(harness.env, { message: 'Continue', sessionId });
     expect(response.status).toBe(202);
     expect(await response.json()).toMatchObject({ sessionId });
     expect(harness.startRun.mock.calls[0]?.[0]).toMatchObject({ conversationId: sessionId });
     expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('sessionId');
-    await postAgent(harness.env, 'legacy-id-follow-up', { message: 'Continue', conversationId: sessionId });
+    await postAgent(harness.env, { message: 'Continue', conversationId: sessionId });
     expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
   });
 
   test('rejects conflicting session aliases before admission or billing', async () => {
     const harness = agentHarness();
-    const response = await postAgent(harness.env, 'conflicting-session-ids', {
+    const response = await postAgent(harness.env, {
       message: 'Continue', sessionId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
     });
     expect(response.status).toBe(422);
@@ -106,7 +107,7 @@ describe('agent routes', () => {
   test('requires a verified email even for an allowlisted account', async () => {
     const harness = agentHarness();
     harness.adminUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 0 });
-    expect((await postAgent(harness.env, 'unverified-admin', { message: 'Research' })).status).toBe(403);
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(403);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
@@ -114,13 +115,13 @@ describe('agent routes', () => {
     const harness = agentHarness();
     Object.assign(harness.env, { ADMIN_EMAILS_SECRET: '  ADMIN@EXAMPLE.COM  ' });
     harness.adminUser.mockResolvedValue({ email: 'admin@example.com', emailVerified: 1 });
-    expect((await postAgent(harness.env, 'configured-admin', { message: 'Research' })).status).toBe(202);
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
   });
 
   test.each([undefined, 'admins', 'invalid'])('fails closed for access mode %s', async (mode) => {
     const harness = agentHarness();
     Object.assign(harness.env, { AGENT_ACCESS_MODE: mode, ADMIN_EMAILS_SECRET: '' });
-    const response = await postAgent(harness.env, 'closed-access-mode', { message: 'Research' });
+    const response = await postAgent(harness.env, { message: 'Research' });
     expect([403, 503]).toContain(response.status);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
@@ -128,29 +129,29 @@ describe('agent routes', () => {
   test('supports an explicit rollout to authenticated non-admin users', async () => {
     const harness = agentHarness();
     Object.assign(harness.env, { AGENT_ACCESS_MODE: 'all', ADMIN_EMAILS_SECRET: '' });
-    expect((await postAgent(harness.env, 'public-rollout-test', { message: 'Research' })).status).toBe(202);
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
     expect(harness.adminUser).not.toHaveBeenCalled();
   });
 
   test('fails closed when the current admin record cannot be checked', async () => {
     const harness = agentHarness();
     harness.adminUser.mockRejectedValue(new Error('Database unavailable'));
-    expect((await postAgent(harness.env, 'unavailable-admin', { message: 'Research' })).status).toBe(503);
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(503);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
   test('does not start a run when its deletion registry cannot be written', async () => {
     const harness = agentHarness();
     harness.registerConversation.mockRejectedValueOnce(new Error('Account deletion is in progress.'));
-    const response = await postAgent(harness.env, 'deleted-account-request', { message: 'Research' });
+    const response = await postAgent(harness.env, { message: 'Research' });
     expect(response.status).toBe(503);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
   test('routes independent admissions to different conversation Durable Objects', async () => {
     const harness = agentHarness();
-    const first = await postAgent(harness.env, 'independent-call-1', { message: 'Research topic one' });
-    const second = await postAgent(harness.env, 'independent-call-2', { message: 'Research topic two' });
+    const first = await postAgent(harness.env, { message: 'Research topic one' });
+    const second = await postAgent(harness.env, { message: 'Research topic two' });
 
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
@@ -162,7 +163,7 @@ describe('agent routes', () => {
 
   test('records an admitted conversation in the authenticated user account', async () => {
     const harness = agentHarness();
-    const response = await postAgent(harness.env, 'catalog-admission-1', {
+    const response = await postAgent(harness.env, {
       message: 'Research durable agent memory',
     });
 
@@ -179,7 +180,7 @@ describe('agent routes', () => {
 
   test('returns stable message identities, conversation turn, and zero execution counts at admission', async () => {
     const harness = agentHarness();
-    const response = await postAgent(harness.env, 'stable-turn-identities', {
+    const response = await postAgent(harness.env, {
       message: 'Research durable turn identities',
     });
 
@@ -187,7 +188,7 @@ describe('agent routes', () => {
     const receipt = await response.json<Record<string, unknown>>();
     expect(receipt).toMatchObject({
       userMessageId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
-      assistantMessageId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      agentMessageId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
       conversationTurn: 1,
       modelStepCount: 0,
       toolCallCount: 0,
@@ -202,12 +203,12 @@ describe('agent routes', () => {
   test('defaults to compact admission identities without changing the run request', async () => {
     const harness = agentHarness();
     const response = await app.request('/v1/agent', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'compact-admission' },
+      method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: 'Research design' }),
     }, harness.env, executionContext);
     expect(response.status).toBe(202);
     const receipt = await response.json<Record<string, unknown>>();
-    expect(Object.keys(receipt).sort()).toEqual(['assistantMessageId', 'request', 'runId', 'sessionId', 'status']);
+    expect(Object.keys(receipt).sort()).toEqual(['agentMessageId', 'request', 'runId', 'sessionId', 'status']);
     expect(receipt).toHaveProperty('request.message', 'Research design');
     expect(harness.startRun.mock.calls[0]?.[0]).not.toHaveProperty('responseFormat');
   });
@@ -215,7 +216,7 @@ describe('agent routes', () => {
   test('projects the same stored run in either format without starting work', async () => {
     const harness = agentHarness();
     const stored = { runId: '102992fd-7e50-47be-bc96-3508a2a5c9e0', conversationId: '5a04cf06-ea91-4b07-b892-ce87f63954de',
-      assistantMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553', userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac',
+      agentMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553', userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac',
       status: 'running', conversationTurn: 1, modelStepCount: 2, toolCallCount: 3, request: { message: 'Compare models' } };
     harness.getRun.mockResolvedValue(stored);
     const path = `/v1/agent/${stored.conversationId}/runs/${stored.runId}`;
@@ -296,7 +297,7 @@ describe('agent routes', () => {
     const conversationId = '5a04cf06-ea91-4b07-b892-ce87f63954de';
     const runId = '102992fd-7e50-47be-bc96-3508a2a5c9e0';
     const userMessageId = 'ca71df55-6174-42ef-9458-d4700e5e7b84';
-    const assistantMessageId = '03fab2db-c1ea-44c6-a79a-243e66d788d9';
+    const agentMessageId = '03fab2db-c1ea-44c6-a79a-243e66d788d9';
     harness.getSession.mockResolvedValue({
       conversationId,
       title: 'Research Durable Objects',
@@ -320,7 +321,7 @@ describe('agent routes', () => {
           updatedAt: 100,
         },
         {
-          messageId: assistantMessageId,
+          messageId: agentMessageId,
           runId,
           conversationTurn: 1,
           parentMessageId: userMessageId,
@@ -403,21 +404,19 @@ describe('agent routes', () => {
     expect(harness.accountGetByName).not.toHaveBeenCalled();
   });
 
-  test('asks the caller to retry the same key when catalog recording fails after admission', async () => {
+  test('returns recovery IDs after catalog failure when no retry key was supplied', async () => {
     const harness = agentHarness();
     harness.recordSession.mockRejectedValueOnce(new Error('catalog unavailable'));
-
-    const response = await postAgent(harness.env, 'catalog-failure-1', {
-      message: 'Research session catalogs',
-    });
-
+    const response = await postAgent(harness.env, { message: 'Research session catalogs' });
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({
-      error: {
-        code: 'AGENT_SESSION_CATALOG_UNAVAILABLE',
-        message: expect.stringContaining('same Idempotency-Key'),
-      },
-    });
+    const result = await response.json<{ error: { message: string; details: { sessionId: string; runId: string } } }>();
+    const admitted = await harness.startRun.mock.results[0]!.value;
+    expect(result.error.details).toEqual({ sessionId: admitted.conversationId, runId: admitted.runId });
+    expect(result.error.message).toContain('Retrieve the existing run');
+    expect(result.error.message).not.toContain('Idempotency-Key');
+    harness.getRun.mockResolvedValue(admitted);
+    const poll = await app.request(`/v1/agent/${result.error.details.sessionId}/runs/${result.error.details.runId}`, {}, harness.env, executionContext);
+    expect(poll.status).toBe(200);
     expect(harness.startRun).toHaveBeenCalledOnce();
   });
 
@@ -425,8 +424,8 @@ describe('agent routes', () => {
     const harness = agentHarness();
     const conversationId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
 
-    await postAgent(harness.env, 'conversation-call-1', { message: 'First message', conversationId });
-    await postAgent(harness.env, 'conversation-call-2', { message: 'Follow-up message', conversationId });
+    await postAgent(harness.env, { message: 'First message', conversationId });
+    await postAgent(harness.env, { message: 'Follow-up message', conversationId });
 
     expect(harness.instanceNames).toHaveLength(2);
     expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
@@ -439,7 +438,7 @@ describe('agent routes', () => {
     const conversationId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
     const parentMessageId = '8a8671bd-5387-43dc-9031-65a69af2a40e';
 
-    const response = await postAgent(harness.env, 'branched-follow-up', {
+    const response = await postAgent(harness.env, {
       message: 'Continue from that answer',
       conversationId,
       parentMessageId,
@@ -458,7 +457,7 @@ describe('agent routes', () => {
       message: 'Wait for the active run to finish.',
     } as never);
 
-    const response = await postAgent(harness.env, 'busy-follow-up', {
+    const response = await postAgent(harness.env, {
       message: 'Continue the active conversation',
       conversationId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8',
     });
@@ -469,23 +468,11 @@ describe('agent routes', () => {
     });
   });
 
-  test('derives a stable conversation and Durable Object for an idempotent retry', async () => {
-    const harness = agentHarness();
-
-    const first = await postAgent(harness.env, 'retry-admission-1', { message: 'Retry this safely' });
-    const second = await postAgent(harness.env, 'retry-admission-1', { message: 'Retry this safely' });
-
-    const firstReceipt = await first.json<{ sessionId: string }>();
-    const secondReceipt = await second.json<{ sessionId: string }>();
-    expect(firstReceipt.sessionId).toBe(secondReceipt.sessionId);
-    expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
-  });
-
   test('streams the saved terminal snapshot, isolates ownership, and never starts work', async () => {
     const harness = agentHarness();
     const sessionId = crypto.randomUUID();
     const runId = crypto.randomUUID();
-    const snapshot = { run: { sessionId, runId, assistantMessageId: crypto.randomUUID(), status: 'failed', error: 'Classification failed' }, phase: 'failed', tools: [] };
+    const snapshot = { run: { sessionId, runId, agentMessageId: crypto.randomUUID(), status: 'failed', error: 'Classification failed' }, phase: 'failed', tools: [] };
     harness.getRunProgress.mockResolvedValue(snapshot);
     const path = `/v1/agent/${sessionId}/runs/${runId}/events`;
     const response = await app.request(path, {}, harness.env, executionContext);
@@ -524,17 +511,68 @@ describe('agent routes', () => {
     expect(events).not.toContain('secret upstream');
   });
 
-  test('requires a valid idempotency key and request body', async () => {
+  test('creates separate sessions for identical submissions without an idempotency key', async () => {
     const harness = agentHarness();
-    const missingKey = await app.request('/v1/agent', {
+    const input = { message: 'Research this' };
+    const first = await postAgent(harness.env, input);
+    const second = await postAgent(harness.env, input);
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const firstReceipt = await first.json<{ sessionId: string; runId: string }>();
+    const secondReceipt = await second.json<{ sessionId: string; runId: string }>();
+    expect(firstReceipt.sessionId).not.toBe(secondReceipt.sessionId);
+    expect(firstReceipt.runId).not.toBe(secondReceipt.runId);
+    expect(harness.instanceNames[0]).not.toBe(harness.instanceNames[1]);
+    expect(harness.recordSession).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: firstReceipt.sessionId, runId: firstReceipt.runId, message: input.message,
+    }));
+  });
+
+  test('ignores the removed key header instead of deduplicating submissions', async () => {
+    const harness = agentHarness();
+    const submit = () => app.request('/v1/agent?responseFormat=legacy', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'x' },
       body: JSON.stringify({ message: 'Research this' }),
     }, harness.env, executionContext);
-    expect(missingKey.status).toBe(422);
-    await expect(missingKey.json()).resolves.toMatchObject({ error: { code: 'INVALID_IDEMPOTENCY_KEY' } });
+    const first = await submit();
+    const second = await submit();
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const a = await first.json<{ sessionId: string; runId: string }>();
+    const b = await second.json<{ sessionId: string; runId: string }>();
+    expect(a.sessionId).not.toBe(b.sessionId);
+    expect(a.runId).not.toBe(b.runId);
+    for (const call of harness.startRun.mock.calls) expect(call[1]).not.toHaveProperty('idempotencyKey');
+  });
 
-    const invalidBody = await postAgent(harness.env, 'invalid-body-key', { message: '' });
+  test('continues a session without a key and preserves active-run conflicts', async () => {
+    const harness = agentHarness();
+    const sessionId = crypto.randomUUID();
+    const first = await postAgent(harness.env, { message: 'Compare the videos', sessionId });
+    const second = await postAgent(harness.env, { message: 'Compare the videos', sessionId });
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const firstReceipt = await first.json<{ sessionId: string; runId: string }>();
+    const secondReceipt = await second.json<{ sessionId: string; runId: string }>();
+    expect(firstReceipt.sessionId).toBe(sessionId);
+    expect(secondReceipt.sessionId).toBe(sessionId);
+    expect(firstReceipt.runId).not.toBe(secondReceipt.runId);
+    expect(harness.instanceNames[0]).toBe(harness.instanceNames[1]);
+    expect(harness.enqueueAgentRun).not.toHaveBeenCalled();
+    const admissions = harness.startRun.mock.calls;
+    expect(admissions[0]?.[1]).not.toHaveProperty('idempotencyKey');
+    expect(admissions[1]?.[1]).not.toHaveProperty('idempotencyKey');
+
+    harness.pendingAgentRun.mockResolvedValue({ run: { status: 'pending' } });
+    const busy = await postAgent(harness.env, { message: 'More detail', sessionId });
+    expect(busy.status).toBe(409);
+    expect(harness.startRun).toHaveBeenCalledTimes(2);
+  });
+
+  test('validates the request body even without an idempotency key', async () => {
+    const harness = agentHarness();
+    const invalidBody = await postAgent(harness.env, { message: '' });
     expect(invalidBody.status).toBe(422);
     await expect(invalidBody.json()).resolves.toMatchObject({ error: { code: 'INVALID_AGENT_REQUEST' } });
     expect(harness.getByName).not.toHaveBeenCalled();
@@ -542,14 +580,14 @@ describe('agent routes', () => {
 
   test('honors the feature flag and available-credit admission checks', async () => {
     const disabled = agentHarness('false');
-    const disabledResponse = await postAgent(disabled.env, 'disabled-agent-key', { message: 'Research this' });
+    const disabledResponse = await postAgent(disabled.env, { message: 'Research this' });
     expect(disabledResponse.status).toBe(503);
     await expect(disabledResponse.json()).resolves.toMatchObject({ error: { code: 'AGENT_DISABLED' } });
     expect(disabled.getByName).not.toHaveBeenCalled();
 
     const enabled = agentHarness();
     creditBalance.mockResolvedValueOnce(0);
-    const noCredits = await postAgent(enabled.env, 'no-credit-agent', { message: 'Research this' });
+    const noCredits = await postAgent(enabled.env, { message: 'Research this' });
     expect(noCredits.status).toBe(402);
     await expect(noCredits.json()).resolves.toMatchObject({ error: { code: 'INSUFFICIENT_CREDITS' } });
     expect(noCredits.headers.get('X-Credits-Charged')).toBe('0');
@@ -558,20 +596,25 @@ describe('agent routes', () => {
 
   test('returns and polls a durable receipt without waiting on runtime startup', async () => {
     const harness = agentHarness();
-    const receipt = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), conversationTurn: 1, modelStepCount: 0, toolCallCount: 0, status: 'pending' };
+    const receipt = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), conversationTurn: 1, modelStepCount: 0, toolCallCount: 0, status: 'pending' };
     harness.enqueueAgentRun.mockResolvedValue({ receipt });
     harness.startRun.mockImplementation(() => new Promise(() => {}));
-    const response = await postAgent(harness.env, 'durable-admission-key', { message: 'Research' });
+    const response = await postAgent(harness.env, { message: 'Research' });
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual(withSessionId(receipt));
     expect(harness.startRun).not.toHaveBeenCalled();
     expect(harness.registerConversation).not.toHaveBeenCalled();
     expect(harness.adminUser).toHaveBeenCalledTimes(1);
+    expect(harness.enqueueAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Research' }),
+      expect.objectContaining({ userId: 'agent-user', creditsRemaining: 500 }),
+    );
+    expect(harness.enqueueAgentRun.mock.calls[0]?.[1]).not.toHaveProperty('idempotencyKey');
     harness.pendingAgentRun.mockResolvedValue({ run: receipt, message: 'Research', admittedAt: 123 });
     const poll = await app.request(`/v1/agent/${receipt.conversationId}/runs/${receipt.runId}?responseFormat=legacy`, {}, harness.env, executionContext);
     expect(await poll.json()).toEqual(withSessionId(receipt));
     expect(harness.getRun).not.toHaveBeenCalled();
-    const followup = await postAgent(harness.env, 'follow-up-admission-key', { conversationId: receipt.conversationId, message: 'More detail' });
+    const followup = await postAgent(harness.env, { conversationId: receipt.conversationId, message: 'More detail' });
     expect(followup.status).toBe(409);
   });
 
@@ -582,7 +625,7 @@ describe('agent routes', () => {
     harness.getRun.mockResolvedValueOnce({
       runId,
       conversationId,
-      assistantMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
+      agentMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
       conversationTurn: 1,
       modelStepCount: 3,
       toolCallCount: 6,
@@ -600,7 +643,7 @@ describe('agent routes', () => {
     await expect(response.json()).resolves.toEqual({
       runId,
       sessionId: conversationId,
-      assistantMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
+      agentMessageId: 'ee25e9fd-edad-468d-8941-16cfdb0ba4f2',
       status: 'running',
     });
     expect(harness.getRun).toHaveBeenCalledWith(runId);
@@ -622,12 +665,11 @@ describe('agent routes', () => {
   });
 });
 
-function postAgent(env: Env, idempotencyKey: string, input: Record<string, unknown>) {
+function postAgent(env: Env, input: Record<string, unknown>) {
   return app.request('/v1/agent?responseFormat=legacy', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'idempotency-key': idempotencyKey,
     },
     body: JSON.stringify(input),
   }, env, executionContext);
@@ -637,14 +679,14 @@ function agentHarness(enabled = 'true') {
   const adminUser = vi.fn(async () => ({ email: 'agent@example.com', emailVerified: 1 }));
   const instanceNames: string[] = [];
   let conversationTurn = 0;
-  const startRun = vi.fn(async (request: { conversationId: string; message: string }) => {
+  const startRun = vi.fn(async (request: { conversationId: string; message: string }, _admission: AgentAdmission) => {
     conversationTurn += 1;
     return {
       request: { message: request.message },
       runId: crypto.randomUUID(),
       conversationId: request.conversationId,
       userMessageId: crypto.randomUUID(),
-      assistantMessageId: crypto.randomUUID(),
+      agentMessageId: crypto.randomUUID(),
       conversationTurn,
       modelStepCount: 0,
       toolCallCount: 0,

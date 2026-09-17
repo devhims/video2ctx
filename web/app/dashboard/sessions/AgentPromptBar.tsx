@@ -34,7 +34,7 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
     <div className='agent-prompt-bar'>
       <textarea ref={inputRef} rows={1} value={value} onChange={event => onChange(event.target.value)}
         aria-label={label} aria-describedby='agent-composer-help' maxLength={10_000}
-        readOnly={sending || uncertain} placeholder={label === 'Follow-up message' ? 'Ask a follow-up…' : 'Ask about a video or YouTube channel…'}
+        readOnly={sending} placeholder={label === 'Follow-up message' ? 'Ask a follow-up…' : 'Ask about a video or YouTube channel…'}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
             event.preventDefault();

@@ -34,8 +34,10 @@ sequenceDiagram
 
 - The fast path applies when the request omits sessionId and parentMessageId.
   Follow-ups retain synchronous parent and active-run validation.
-- Retries with the original Idempotency-Key reuse the admission receipt and IDs.
-  Existing conversations admitted before this change retain the original path.
+- Each accepted HTTP submission creates a new run. Recover an admitted run using
+  its sessionId and runId, or find the session in the dashboard.
+- Queue delivery retries reuse the persisted run ID to avoid duplicate execution.
+  Existing sessions use the runtime's parent and active-run validation.
 - Polling and session restoration can read pending state before runtime startup.
   A follow-up while its first turn is queued returns HTTP 409.
 - Each alarm delivers up to four admissions concurrently. Startup RPCs have a

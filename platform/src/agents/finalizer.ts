@@ -14,7 +14,7 @@ export interface FinalizationIdentity {
   runId: string;
   conversationId: string;
   userMessageId: string;
-  assistantMessageId: string;
+  agentMessageId: string;
 }
 
 export function buildAgentTurnResult(

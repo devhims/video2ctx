@@ -46,7 +46,7 @@ export const agentProgressSchema = z.object({
   })),
 });
 export type AgentProgress = z.infer<typeof agentProgressSchema>;
-const admissionSchema = agentRunSchema.extend({ assistantMessageId: z.string().uuid(),
+const admissionSchema = agentRunSchema.extend({ agentMessageId: z.string().uuid(),
   diagnostics: z.object({ userMessageId: z.string().uuid(), conversationTurn: z.number() }),
 });
 export type AgentAdmission = z.infer<typeof admissionSchema>;
@@ -56,11 +56,11 @@ export class AgentSendError extends Error {
   constructor(message: string, retryable: boolean) { super(message); this.retryable = retryable; }
 }
 
-export async function sendAgentMessage(message: string, idempotencyKey: string, sessionId?: string): Promise<AgentAdmission> {
+export async function sendAgentMessage(message: string, sessionId?: string): Promise<AgentAdmission> {
   try {
     const response = await fetch('/api/platform/v1/agent?include=diagnostics', {
       method: 'POST', credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(15_000),
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }),
     });
     if (!response.ok) {
@@ -71,12 +71,12 @@ export async function sendAgentMessage(message: string, idempotencyKey: string, 
         422: 'This message could not be accepted. Check the request and try again.',
         429: 'Too many requests. Wait a moment, then retry.',
       };
-      throw new AgentSendError(messages[response.status] ?? 'Sending could not be confirmed. Retry to check the same request.', response.status >= 500 || response.status === 429);
+      throw new AgentSendError(messages[response.status] ?? 'Sending could not be confirmed. Check Sessions before sending again; another submission starts a new run.', response.status >= 500 || response.status === 429);
     }
     return admissionSchema.parse(await response.json());
   } catch (cause) {
     if (cause instanceof AgentSendError) throw cause;
-    throw new AgentSendError('Sending could not be confirmed. Retry to check the same request without starting it twice.', true);
+    throw new AgentSendError('Sending could not be confirmed. Check Sessions before sending again; another submission starts a new run.', true);
   }
 }
 

@@ -4,6 +4,7 @@ import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
 import { saveFramePreviews } from './runtime/frame-previews';
 import { compactAgentRun } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
+import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
@@ -73,12 +74,11 @@ interface AgentRuntimeState {
 
 interface RunRow {
   id: string;
-  idempotency_key: string;
   user_id: string;
   conversation_id: string;
   parent_message_id: string | null;
   user_message_id: string;
-  assistant_message_id: string;
+  agent_message_id: string;
   turn_ordinal: number;
   message: string;
   execution_message: string | null;
@@ -156,15 +156,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (this.#deleted) throw new Error('Account deletion is in progress.');
     const parsedRequest = agentRequestSchema.parse(request);
     const parsedAdmission = agentAdmissionSchema.parse(admission);
-    const existing = this.sql<RunRow>`
-      SELECT * FROM agent_runs WHERE idempotency_key = ${parsedAdmission.idempotencyKey} LIMIT 1
-    `[0];
+    const identity = queuedIdentity ? queuedRunIdentitySchema.parse(queuedIdentity) : undefined;
+    const existing = identity ? this.readRun(identity.runId) : undefined;
     if (existing) {
       if (existing.status === 'pending') await this.startPersistedRun(existing);
       return this.receipt(this.requireRun(existing.id));
     }
 
-    const identity = queuedIdentity ? queuedRunIdentitySchema.parse(queuedIdentity) : undefined;
     const timestamp = identity?.admittedAt ?? Date.now();
     const runId = identity?.runId ?? crypto.randomUUID();
     const conversationId = parsedRequest.conversationId ?? crypto.randomUUID();
@@ -196,16 +194,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       throw error;
     }
     const userMessageId = identity?.userMessageId ?? crypto.randomUUID();
-    const assistantMessageId = identity?.assistantMessageId ?? crypto.randomUUID();
+    const agentMessageId = identity?.agentMessageId ?? crypto.randomUUID();
     const turnOrdinal = this.nextTurnOrdinal(conversationId, parsedAdmission.userId);
     this.sql`
       INSERT INTO agent_runs (
-        id, idempotency_key, user_id, conversation_id, parent_message_id,
-        user_message_id, assistant_message_id, turn_ordinal, message, execution_message, status, phase,
+        id, user_id, conversation_id, parent_message_id,
+        user_message_id, agent_message_id, turn_ordinal, message, execution_message, status, phase,
         result_json, error, credits_remaining_at_admission, created_at, updated_at
       ) VALUES (
-        ${runId}, ${parsedAdmission.idempotencyKey}, ${parsedAdmission.userId}, ${conversationId},
-        ${parentMessageId}, ${userMessageId}, ${assistantMessageId}, ${turnOrdinal},
+        ${runId}, ${parsedAdmission.userId}, ${conversationId},
+        ${parentMessageId}, ${userMessageId}, ${agentMessageId}, ${turnOrdinal},
         ${parsedRequest.message}, ${retry ? retry.execution_message ?? retry.message : null}, 'pending', 'admitted', null, null,
         ${parsedAdmission.creditsRemaining}, ${timestamp}, ${timestamp}
       )
@@ -225,7 +223,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     await this.scheduleRunReconciliation(row);
     if (this.#deleted) throw new Error('Account deletion is in progress.');
     await this.startFiber(FIBER_NAME, async fiber => { await this.executeRun(row.id, fiber); }, {
-      fiberId: row.id, idempotencyKey: row.idempotency_key, metadata: { runId: row.id }, waitForCompletion: false,
+      fiberId: row.id, metadata: { runId: row.id }, waitForCompletion: false,
     });
   }
 
@@ -583,7 +581,6 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     const admission = agentAdmissionSchema.parse({
       userId: run.user_id,
-      idempotencyKey: run.idempotency_key,
       creditsRemaining: run.credits_remaining_at_admission,
     });
     const creditsCharged = this.sql<{ credits: number }>`
@@ -595,7 +592,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       runId,
       conversationId: run.conversation_id,
       userMessageId: run.user_message_id,
-      assistantMessageId: run.assistant_message_id,
+      agentMessageId: run.agent_message_id,
     }, admission, parsedInput,
     evidenceWithConversationMetadata(this.readEvidencePackets(runId), this.readConversationHistory(run)), creditsCharged);
     const serialized = JSON.stringify(result);
@@ -739,7 +736,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (requestedParentMessageId) {
       const parent = this.sql<RunRow>`
         SELECT * FROM agent_runs
-        WHERE assistant_message_id = ${requestedParentMessageId}
+        WHERE agent_message_id = ${requestedParentMessageId}
           AND conversation_id = ${conversationId}
           AND user_id = ${userId}
         LIMIT 1
@@ -758,18 +755,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           'The parent agent run must complete before it can be used as conversation memory.',
         );
       }
-      return parent.assistant_message_id;
+      return parent.agent_message_id;
     }
 
-    return this.sql<Pick<RunRow, 'assistant_message_id'>>`
-      SELECT assistant_message_id FROM agent_runs
+    return this.sql<Pick<RunRow, 'agent_message_id'>>`
+      SELECT agent_message_id FROM agent_runs
       WHERE conversation_id = ${conversationId}
         AND user_id = ${userId}
         AND status = 'completed'
         AND result_json IS NOT NULL
       ORDER BY updated_at DESC, created_at DESC, id DESC
       LIMIT 1
-    `[0]?.assistant_message_id ?? null;
+    `[0]?.agent_message_id ?? null;
   }
 
   /** Resolve only an unqualified retry of the most recent failed request in scope.
@@ -813,7 +810,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const resolution = resolveConversationHistory(run.parent_message_id, (parentMessageId) => {
       const parent = this.sql<RunRow>`
         SELECT * FROM agent_runs
-        WHERE assistant_message_id = ${parentMessageId}
+        WHERE agent_message_id = ${parentMessageId}
           AND conversation_id = ${run.conversation_id}
           AND user_id = ${run.user_id}
         LIMIT 1
@@ -827,7 +824,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       `.map(record => ({ packet: evidencePacketSchema.parse(JSON.parse(record.packet_json)), recordedAt: record.created_at })));
       return {
         userMessageId: parent.user_message_id,
-        assistantMessageId: parent.assistant_message_id,
+        agentMessageId: parent.agent_message_id,
         parentMessageId: parent.parent_message_id,
         user: parent.execution_message ?? parent.message,
         assistant: result.answer,
@@ -891,7 +888,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       runId: row.id,
       conversationId: row.conversation_id,
       userMessageId: row.user_message_id,
-      assistantMessageId: row.assistant_message_id,
+      agentMessageId: row.agent_message_id,
       conversationTurn: row.turn_ordinal,
       modelStepCount,
       toolCallCount,
@@ -924,7 +921,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         updatedAt: row.created_at,
       },
       {
-        messageId: row.assistant_message_id,
+        messageId: row.agent_message_id,
         runId: row.id,
         conversationTurn: row.turn_ordinal,
         parentMessageId: row.user_message_id,
@@ -1046,12 +1043,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_runs (
         id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
         user_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         parent_message_id TEXT,
         user_message_id TEXT NOT NULL,
-        assistant_message_id TEXT NOT NULL,
+        agent_message_id TEXT NOT NULL,
         turn_ordinal INTEGER NOT NULL,
         message TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -1063,7 +1059,27 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         updated_at INTEGER NOT NULL
       )
     `;
+    removeIdempotencyColumn(this.ctx.storage, 'agent_runs');
     const columns = this.sql<{ name: string }>`PRAGMA table_info(agent_runs)`;
+    // Keep existing message identities and parent links while renaming stored results.
+    if (columns.some(column => column.name === 'assistant_message_id')) {
+      this.ctx.storage.transactionSync(() => {
+        this.sql`ALTER TABLE agent_runs RENAME COLUMN assistant_message_id TO agent_message_id`;
+        this.sql`UPDATE agent_runs SET result_json = json_remove(
+          json_set(result_json, '$.agentMessageId', json_extract(result_json, '$.assistantMessageId')),
+          '$.assistantMessageId')
+          WHERE result_json IS NOT NULL AND json_type(result_json, '$.assistantMessageId') IS NOT NULL`;
+        if (this.sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_tool_calls'`.length) {
+          this.sql`UPDATE agent_tool_calls SET result_json = json_remove(
+            json_set(result_json, '$.agentMessageId', json_extract(result_json, '$.assistantMessageId')),
+            '$.assistantMessageId')
+            WHERE tool_name = 'finalize_answer' AND result_json IS NOT NULL
+              AND json_type(result_json, '$.assistantMessageId') IS NOT NULL`;
+        }
+        this.sql`DROP INDEX IF EXISTS agent_runs_assistant_message_idx`;
+      });
+    }
+
     if (!columns.some(column => column.name === 'execution_message')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN execution_message TEXT`;
     }
@@ -1127,8 +1143,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ON agent_tool_calls (run_id, semantic_key, status)
     `;
     this.sql`
-      CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_assistant_message_idx
-      ON agent_runs (assistant_message_id)
+      CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_agent_message_idx
+      ON agent_runs (agent_message_id)
     `;
     this.sql`
       CREATE INDEX IF NOT EXISTS agent_runs_conversation_history_idx

@@ -402,7 +402,7 @@ function classifierModel(output: Record<string, unknown>): MockLanguageModelV4 {
 function conversationTurn(overrides: Pick<ConversationTurn, 'user' | 'assistant' | 'resourceIds'>): ConversationTurn {
   return {
     userMessageId: crypto.randomUUID(),
-    assistantMessageId: crypto.randomUUID(),
+    agentMessageId: crypto.randomUUID(),
     ...overrides,
   };
 }
@@ -445,7 +445,7 @@ function inspectContext(): AgentToolContext {
       runId,
       conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(),
-      assistantMessageId: crypto.randomUUID(),
+      agentMessageId: crypto.randomUUID(),
       answer: 'Please clarify the requested aspect of the video.',
       intent: 'clarification' as const,
       confidence: 'low' as const,

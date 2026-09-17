@@ -48,16 +48,16 @@ test('interrupted streams are not confused with completed answers', async () => 
   await assert.rejects(consumeAgentStream(response('event: snapshot\ndata: {"bad":true}\n\n'), () => {}));
 });
 
-test('follow-ups send the session and a stable idempotency key, preserving ambiguous retry semantics', async t => {
+test('follow-ups send only the message and session and explain unconfirmed submissions', async t => {
   const { sendAgentMessage, AgentSendError } = await import('./agent-sessions.ts');
   const requests: RequestInit[] = [];
   t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
     requests.push(init);
     return new Response('{}', { status: requests.length === 1 ? 503 : 409 });
   });
-  await assert.rejects(sendAgentMessage('More detail', 'same-request-key', 'existing-session'), (error: unknown) => error instanceof AgentSendError && error.retryable);
-  await assert.rejects(sendAgentMessage('More detail', 'same-request-key', 'existing-session'), (error: unknown) => error instanceof AgentSendError && !error.retryable);
+  await assert.rejects(sendAgentMessage('More detail', 'existing-session'), (error: unknown) => error instanceof AgentSendError && error.retryable && /Check Sessions/.test(error.message));
+  await assert.rejects(sendAgentMessage('More detail', 'existing-session'), (error: unknown) => error instanceof AgentSendError && !error.retryable);
   assert.equal(requests[0].body, requests[1].body);
   assert.deepEqual(JSON.parse(requests[0].body as string), { message: 'More detail', sessionId: 'existing-session' });
-  assert.equal(new Headers(requests[1].headers).get('Idempotency-Key'), 'same-request-key');
+  assert.equal(new Headers(requests[1].headers).get('Idempotency-Key'), null);
 });

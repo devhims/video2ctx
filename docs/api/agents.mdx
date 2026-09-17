@@ -17,10 +17,41 @@ Install the hosted CLI with `npm i -g @video2ctx/cli`. It keeps its revocable se
 Use the platform skill's data branch only for stateless provider reads, usage, and account identity. Projects, trends, research, and other composite workflows are outside its contract. Use its monitoring branch only for monitors, notifications, and delivery preferences.
 
 
+## Submit a message
+
+`POST /v1/agent` requires a message and your usual authorization. For a new session, send:
+
+```json
+{ "message": "Research five videos about durable agents" }
+```
+
+For a follow-up, include the `sessionId` returned by the previous request:
+
+```json
+{
+  "message": "Compare the first two videos",
+  "sessionId": "a54e2d7b-bc42-4c4f-b81d-6b64e92836d8"
+}
+```
+
+Each accepted submission starts a new run, even if the
+message is identical. Save the `sessionId` and `runId` from the `202` receipt to
+retrieve existing work. If the receipt is lost, check **Dashboard → Sessions** or
+`GET /v1/agent/sessions` before resubmitting. Sending the message again may create
+another run and incur another charge.
+
+Internal queue retries reuse the saved run ID to avoid duplicate execution.
+
+If a session catalog update fails after admission, the error includes
+`error.details.sessionId` and `error.details.runId`. Use those IDs to retrieve the
+admitted run.
+
 ## Session identifiers and dashboard
 
 Agent receipts, run results, session lists, and session details return `sessionId`.
 Continue an existing session by sending `sessionId` in `POST /v1/agent`.
+Agent responses expose `agentMessageId`, replacing `assistantMessageId`. The ID value
+stays the same for existing runs. Use it as `parentMessageId` to branch from that answer.
 The older `conversationId` request field remains a deprecated alias; if both fields
 are supplied they must match. Responses no longer return `conversationId`, including
 `responseFormat=legacy`. Update clients that read that response field. Existing UUIDs,
@@ -39,8 +70,8 @@ not grant access to another account's sessions.
 Accounts that pass the agent access check can start sessions and send follow-up
 messages from **Dashboard → Sessions**. Follow-ups use the same session and the
 existing conversation history. The composer waits for the active run to finish.
-Admission retries reuse the same message and idempotency key when the outcome is
-uncertain.
+If sending cannot be confirmed, the composer links to Sessions to find the submitted
+run. Choosing **Send as new run** submits another message and may incur another charge.
 
 Follow-up memory includes source-linked video metadata from completed ancestor turns, even when the earlier answer did not mention it. Snapshots can include the title, channel, view count, duration, availability, caption status, and keywords. Memory keeps up to eight videos and 8,000 serialized metadata characters per turn, within the existing eight-turn and 64,000-character model-memory limits. It excludes bot challenges and private provider payloads, and stays within the selected session branch.
 

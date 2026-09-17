@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import { agentAdmissionSchema, agentRequestSchema, agentRunReceiptSchema, type AgentAdmission, type AgentRequest } from '../contracts';
 import { agentInstanceName } from './identity';
+import { removeIdempotencyColumn } from './remove-idempotency-column';
 
-export const queuedRunIdentitySchema = agentRunReceiptSchema.pick({ runId: true, userMessageId: true, assistantMessageId: true })
+export const queuedRunIdentitySchema = agentRunReceiptSchema.pick({ runId: true, userMessageId: true, agentMessageId: true })
   .extend({ admittedAt: z.number().int().nonnegative() });
 export type QueuedRunIdentity = z.infer<typeof queuedRunIdentitySchema>;
 const storedSchema = z.object({ request: agentRequestSchema.required({ conversationId: true }), admission: agentAdmissionSchema,
   receipt: agentRunReceiptSchema, admittedAt: z.number().int().nonnegative() });
 interface Row extends Record<string, SqlStorageValue> {
-  run_id: string; conversation_id: string; idempotency_key: string; payload: string;
+  run_id: string; conversation_id: string; payload: string;
   status: string; attempts: number; next_attempt_at: number; error: string | null;
 }
 
@@ -20,9 +21,15 @@ export class AgentAdmissionQueue {
 
   initialize(): void {
     this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS agent_admissions (
-      run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, idempotency_key TEXT NOT NULL,
+      run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE,
       payload TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       next_attempt_at INTEGER NOT NULL, error TEXT)`);
+    removeIdempotencyColumn(this.ctx.storage, 'agent_admissions');
+    // Pending admissions retain their reserved message ID across this field rename.
+    this.ctx.storage.sql.exec(`UPDATE agent_admissions SET payload = json_remove(
+      json_set(payload, '$.receipt.agentMessageId', json_extract(payload, '$.receipt.assistantMessageId')),
+      '$.receipt.assistantMessageId')
+      WHERE json_type(payload, '$.receipt.assistantMessageId') IS NOT NULL`);
   }
 
   async enqueue(request: AgentRequest, admission: AgentAdmission) {
@@ -32,13 +39,7 @@ export class AgentAdmissionQueue {
     const result = await this.ctx.blockConcurrencyWhile(async () => {
       try {
         this.hooks.assertActive();
-        const existing = this.row(parsed.conversationId);
-        if (existing) {
-          if (existing.idempotency_key !== owner.idempotencyKey) return { legacy: true as const };
-          const stored = storedSchema.parse(JSON.parse(existing.payload));
-          return { receipt: { ...stored.receipt, request: { message: stored.request.message } } };
-        }
-        // Preserve pre-outbox idempotency, including interrupted legacy admissions.
+        // Existing sessions use runtime parent and active-run validation.
         if (this.ctx.storage.sql.exec('SELECT conversation_id FROM agent_conversations WHERE conversation_id = ?', parsed.conversationId).toArray().length) {
           return { legacy: true as const };
         }
@@ -50,14 +51,14 @@ export class AgentAdmissionQueue {
         this.hooks.assertActive();
         const admittedAt = Date.now();
         const receipt = agentRunReceiptSchema.parse({ runId: crypto.randomUUID(), conversationId: parsed.conversationId,
-          userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), conversationTurn: 1,
+          userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), conversationTurn: 1,
           modelStepCount: 0, toolCallCount: 0, status: 'pending', request: { message: parsed.message } });
         this.ctx.storage.transactionSync(() => {
           this.hooks.register(parsed.conversationId);
           this.hooks.record({ conversationId: parsed.conversationId, runId: receipt.runId, message: parsed.message, updatedAt: admittedAt });
           this.ctx.storage.sql.exec(`INSERT INTO agent_admissions
-            (run_id, conversation_id, idempotency_key, payload, status, next_attempt_at) VALUES (?, ?, ?, ?, 'pending', ?)`,
-            receipt.runId, parsed.conversationId, owner.idempotencyKey,
+            (run_id, conversation_id, payload, status, next_attempt_at) VALUES (?, ?, ?, 'pending', ?)`,
+            receipt.runId, parsed.conversationId,
             JSON.stringify({ request: parsed, admission: owner, receipt, admittedAt }), admittedAt);
         });
         return { receipt };
@@ -101,13 +102,13 @@ export class AgentAdmissionQueue {
       this.hooks.assertActive();
       const delivery = this.env.AGENT_RUNTIME.getByName(name).startRun(stored.request, stored.admission,
         { runId: stored.receipt.runId, userMessageId: stored.receipt.userMessageId,
-          assistantMessageId: stored.receipt.assistantMessageId, admittedAt: stored.admittedAt });
+          agentMessageId: stored.receipt.agentMessageId, admittedAt: stored.admittedAt });
       const receipt = await boundedDelivery((async () => await delivery)());
       this.hooks.assertActive();
       if ('rejected' in receipt) {
         this.ctx.storage.sql.exec("UPDATE agent_admissions SET status = 'failed', error = ? WHERE run_id = ?", receipt.message, row.run_id);
       } else {
-        if (receipt.runId !== stored.receipt.runId || receipt.userMessageId !== stored.receipt.userMessageId || receipt.assistantMessageId !== stored.receipt.assistantMessageId) {
+        if (receipt.runId !== stored.receipt.runId || receipt.userMessageId !== stored.receipt.userMessageId || receipt.agentMessageId !== stored.receipt.agentMessageId) {
           throw new Error('Admission identities do not match the runtime.');
         }
         this.ctx.storage.sql.exec("UPDATE agent_admissions SET status = 'delivered', error = NULL WHERE run_id = ?", row.run_id);
@@ -128,7 +129,7 @@ export class AgentAdmissionQueue {
 }
 
 // A hung RPC must not hold the account's only alarm indefinitely. The original
-// RPC can still finish, so every retry carries the same runtime idempotency key.
+// RPC can still finish, so every retry carries the same persisted run identity.
 async function boundedDelivery<T>(delivery: PromiseLike<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

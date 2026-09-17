@@ -165,7 +165,7 @@ export const agentTurnResultSchema = z.object({
   runId: z.string().uuid(),
   conversationId: z.string().uuid(),
   userMessageId: z.string().uuid(),
-  assistantMessageId: z.string().uuid(),
+  agentMessageId: z.string().uuid(),
   answer: z.string(),
   intent: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),
@@ -186,7 +186,6 @@ export const agentRequestSchema = z.object({
 
 export const agentAdmissionSchema = z.object({
   userId: z.string().min(1).max(200),
-  idempotencyKey: z.string().min(8).max(200),
   creditsRemaining: z.number().int().nonnegative(),
 });
 
@@ -195,7 +194,7 @@ export const agentRunReceiptSchema = z.object({
   runId: z.string().uuid(),
   conversationId: z.string().uuid(),
   userMessageId: z.string().uuid(),
-  assistantMessageId: z.string().uuid(),
+  agentMessageId: z.string().uuid(),
   conversationTurn: z.number().int().positive(),
   modelStepCount: z.number().int().nonnegative(),
   toolCallCount: z.number().int().nonnegative(),

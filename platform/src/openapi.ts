@@ -13,7 +13,7 @@ import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
 type Schema = Record<string, unknown>;
 
 const agentResponseParameters = [
-  { name: 'responseFormat', in: 'query', required: false, description: 'Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'compact' } },
+  { name: 'responseFormat', in: 'query', required: false, description: 'Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'compact' } },
   { name: 'include', in: 'query', required: false, description: 'Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.', schema: { type: 'string', maxLength: 100, example: 'evidence,diagnostics' } },
 ];
 
@@ -613,15 +613,9 @@ export const openApiDocument = {
         tags: ['Agents'],
         operationId: 'startAgentRun',
         summary: 'Start a durable agent run',
-        description: 'Starts a new conversation when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.',
+        description: 'Starts a new session when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.',
         security: dataSecurity,
-        parameters: [...agentResponseParameters, {
-          name: 'Idempotency-Key',
-          in: 'header',
-          required: true,
-          description: 'Stable key for retrying this admission without creating another run.',
-          schema: { type: 'string', minLength: 8, maxLength: 200 },
-        }],
+        parameters: agentResponseParameters,
         requestBody: jsonBody(schemaRef('AgentRequest')),
         responses: {
           '202': meteredJsonResponse('Agent run admitted. Compact receipts omit execution metadata unless diagnostics is requested.', { oneOf: [schemaRef('AgentRunReceipt'), schemaRef('CompactAgentRun')] }),
@@ -2050,12 +2044,12 @@ export const openApiDocument = {
       CompactAgentRun: z.toJSONSchema(compactAgentRunSchema, { target: 'openapi-3.0' }),
       AgentRunReceipt: {
         type: 'object',
-        required: ['runId', 'sessionId', 'userMessageId', 'assistantMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
+        required: ['runId', 'sessionId', 'userMessageId', 'agentMessageId', 'conversationTurn', 'modelStepCount', 'toolCallCount', 'status'],
         properties: {
           runId: { type: 'string', format: 'uuid' },
           sessionId: { type: 'string', format: 'uuid' },
           userMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier assigned to the admitted user message.' },
-          assistantMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier reserved for the assistant response.' },
+          agentMessageId: { type: 'string', format: 'uuid', description: 'Stable identifier reserved for the agent response.' },
           conversationTurn: { type: 'integer', minimum: 1, description: 'One-based position of this user and assistant turn within the conversation.' },
           modelStepCount: { type: 'integer', minimum: 0, description: 'Completed model steps in the main Agent Core loop. Classifier, transcript analyst, repair, and timeout-finalizer calls are excluded.' },
           toolCallCount: { type: 'integer', minimum: 0, description: 'Persisted tool calls for this run, including completed, failed, and finalization calls.' },
@@ -2150,10 +2144,10 @@ export const openApiDocument = {
       },
       AgentTurnResult: {
         type: 'object',
-        required: ['runId', 'sessionId', 'userMessageId', 'assistantMessageId', 'answer', 'intent', 'confidence', 'citations', 'artifacts', 'warnings', 'billing'],
+        required: ['runId', 'sessionId', 'userMessageId', 'agentMessageId', 'answer', 'intent', 'confidence', 'citations', 'artifacts', 'warnings', 'billing'],
         properties: {
           runId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' },
-          userMessageId: { type: 'string', format: 'uuid' }, assistantMessageId: { type: 'string', format: 'uuid' },
+          userMessageId: { type: 'string', format: 'uuid' }, agentMessageId: { type: 'string', format: 'uuid' },
           answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification', 'rejected'] },
           confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           citations: { type: 'array', items: schemaRef('AgentCitation') },

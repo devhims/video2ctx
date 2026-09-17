@@ -4,7 +4,7 @@ import type { AgentRunView } from '../src/agents/agent-runtime-do';
 
 function completedRun(): AgentRunView {
   const identity = { runId: '102992fd-7e50-47be-bc96-3508a2a5c9e0', conversationId: '5a04cf06-ea91-4b07-b892-ce87f63954de',
-    userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac', assistantMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553' };
+    userMessageId: 'f1611a8b-cb84-4305-a365-328bd06bedac', agentMessageId: 'cd056140-7d4c-4516-bb9e-c97914439553' };
   return { ...identity, status: 'completed', conversationTurn: 1, modelStepCount: 2, toolCallCount: 5,
     route: { route: 'topic_research', researchBreadth: 'comparative' },
     result: { ...identity, answer: 'First [cite:b] [cite:a][cite:c]. Again [cite:b].', intent: 'topic_research', confidence: 'high',
@@ -173,10 +173,14 @@ it('returns sessionId in both response formats and nested legacy results without
   const run = completedRun();
   const before = structuredClone(run);
   for (const response of [compactAgentRun(run), legacyAgentRun(run)]) {
+    expect(response.agentMessageId).toBe(run.agentMessageId);
+    expect(response).not.toHaveProperty('assistantMessageId');
+    expect(response.result).not.toHaveProperty('assistantMessageId');
     expect(response.sessionId).toBe(run.conversationId);
     expect(response).not.toHaveProperty('conversationId');
     expect(response.result).not.toHaveProperty('conversationId');
   }
   expect(legacyAgentRun(run).result?.sessionId).toBe(run.conversationId);
+  expect(legacyAgentRun(run).result?.agentMessageId).toBe(run.agentMessageId);
   expect(run).toEqual(before);
 });

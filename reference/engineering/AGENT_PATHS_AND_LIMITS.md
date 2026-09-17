@@ -4,7 +4,7 @@ Implementation reference updated on 2026-09-11. This describes implemented behav
 
 ## Shared architecture
 
-Both paths enter through POST /v1/agent. The request contains a message and optional conversation/parent identifiers; an Idempotency-Key header identifies an admission retry. Authentication and the credit balance check happen before durable admission. Local testing uses an explicitly enabled loopback authentication bypass.
+Both paths enter through POST /v1/agent. The request contains a message and optional session/parent identifiers; each accepted HTTP submission creates a new run. Internal queue retries reuse the saved run ID. Authentication and the credit balance check happen before durable admission. Local testing uses an explicitly enabled loopback authentication bypass.
 
 The HTTP Worker checks access and admits the run into an AgentRuntimeDO, one durable runtime per user-scoped conversation. UserAccountDO maintains the user's session catalog. D1 stores identity, entitlements, and the credit ledger. AgentRuntimeDO SQLite stores runs, routes, evidence, tool calls, model usage, and events. The Agents SDK fiber handles execution and recovery. Recovery preserves each phase's persisted deadline, without granting a new window.
 
@@ -26,7 +26,7 @@ sequenceDiagram
     participant R as Local API and durable runtime
     participant M as Workers AI
     participant Y as Provider stack and YouTube processor
-    P->>R: POST message and idempotency key
+    P->>R: POST message, optional sessionId
     R-->>P: 202 with sessionId and runId
     R->>M: Classify request
     M-->>R: topic_research

@@ -32,7 +32,7 @@ async function main(): Promise<void> {
     try {
       const started = Date.now();
       const response = await fetch(new URL('/v1/agent?responseFormat=legacy', base), {
-        method: 'POST', headers: { ...headers, 'Idempotency-Key': `smoke-${crypto.randomUUID()}` },
+        method: 'POST', headers: headers,
         body: JSON.stringify({ message }), signal: AbortSignal.timeout(15_000),
       });
       assert.equal(response.status, 202, `Admission failed: ${await response.clone().text()}`);

@@ -67,12 +67,12 @@ describe('YouTube agent conversation memory', () => {
 
   it('reconstructs only the selected parent chain', () => {
     const root = linkedTurn('root', 'root-answer', null);
-    const branchA = linkedTurn('branch-a', 'answer-a', root.assistantMessageId);
-    const branchB = linkedTurn('branch-b', 'answer-b', root.assistantMessageId);
-    const records = new Map([root, branchA, branchB].map((record) => [record.assistantMessageId, record]));
+    const branchA = linkedTurn('branch-a', 'answer-a', root.agentMessageId);
+    const branchB = linkedTurn('branch-b', 'answer-b', root.agentMessageId);
+    const records = new Map([root, branchA, branchB].map((record) => [record.agentMessageId, record]));
 
     const resolution = resolveConversationHistory(
-      branchA.assistantMessageId,
+      branchA.agentMessageId,
       (messageId) => records.get(messageId),
     );
 
@@ -90,7 +90,7 @@ describe('YouTube agent conversation memory', () => {
     });
 
     const cycle = linkedTurn('cycle', 'cycle-answer', 'cycle-id');
-    cycle.assistantMessageId = 'cycle-id';
+    cycle.agentMessageId = 'cycle-id';
     expect(resolveConversationHistory('cycle-id', () => cycle)).toEqual({
       ok: false,
       issue: 'cycle',
@@ -114,7 +114,7 @@ describe('YouTube agent conversation memory', () => {
 function turn(user: string, assistant: string): ConversationTurn {
   return {
     userMessageId: crypto.randomUUID(),
-    assistantMessageId: crypto.randomUUID(),
+    agentMessageId: crypto.randomUUID(),
     user,
     assistant,
     resourceIds: [],

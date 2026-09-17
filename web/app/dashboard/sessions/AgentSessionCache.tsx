@@ -46,7 +46,7 @@ function createSessionCache() {
       previews.delete(receipt.sessionId);
       previews.set(receipt.sessionId, { ...row, nextCursor: null, messages: [
         { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: message },
-        { ...shared, messageId: receipt.assistantMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
+        { ...shared, messageId: receipt.agentMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
       ] });
       if (previews.size > 10) previews.delete(previews.keys().next().value!);
       if (!previous) return;
