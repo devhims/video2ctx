@@ -19,50 +19,71 @@ test('signed-out dashboard visits redirect to login and preserve the destination
   await expect(page).toHaveURL('/dashboard');
 });
 
-test('login form sits on the right, fits mobile, and handles email success and failures', async ({ page }, testInfo) => {
-  await page.goto('/login?returnTo=%2Fdashboard%2Fdeveloper');
-  const form = page.getByRole('form', { name: 'Email sign-in' });
-  expect((await form.boundingBox())!.x).toBeGreaterThan(page.viewportSize()!.width / 2);
+test('social sign-in sits on the right and fits mobile without email signup', async ({ page }, testInfo) => {
+  await page.goto('/login');
+  const options = page.getByRole('group', { name: 'Sign-in options' });
+  expect((await options.boundingBox())!.x).toBeGreaterThan(page.viewportSize()!.width / 2);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue with email' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue with GitHub' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('login-desktop.png'), fullPage: true });
-  let attempt = 0;
-  await page.route('**/api/auth/sign-in/magic-link', async route => {
-    const payload = route.request().postDataJSON();
-    expect(new URL(payload.callbackURL).pathname).toBe('/dashboard/developer');
-    expect(new URL(payload.errorCallbackURL).pathname).toBe('/login');
-    expect(payload.email).toBe('researcher@example.test');
-    await route.fulfill({ status: ++attempt === 1 ? 503 : 200, json: attempt === 1 ? {} : { status: true } });
-  });
-  await page.getByLabel('Email address', { exact: true }).fill('researcher@example.test');
-  await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-  await expect(page.getByRole('main').getByRole('alert')).toContainText('Please try again');
-  await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('researcher@example.test');
-  await expect(page.getByRole('main').getByRole('alert')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Use a different email or try again' }).click();
-  await expect(form).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel('Email address', { exact: true }).scrollIntoViewIfNeeded();
+  await options.scrollIntoViewIfNeeded();
   expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
-  await expect(page.getByRole('button', { name: 'Continue with email', exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Continue with GitHub' })).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath('login-mobile.png'), fullPage: true });
 });
 
-test('Google sign-in keeps the return destination and reports connection errors', async ({ page }) => {
-  await page.goto('/login?returnTo=%2Fdashboard%3Fsection%3Dsettings&error=expired');
-  await expect(page.getByRole('main').getByRole('alert')).toBeVisible();
-  let attempt = 0;
-  await page.route('**/api/auth/sign-in/social', async route => {
-    const payload = route.request().postDataJSON();
-    expect(payload.provider).toBe('google');
-    expect(new URL(payload.callbackURL).search).toBe('?section=settings');
-    if (++attempt === 1) await route.abort('failed');
-    else await route.fulfill({ json: { url: new URL('/login?google=accepted', page.url()).href } });
+for (const provider of ['google', 'github'] as const) {
+  const label = provider === 'google' ? 'Google' : 'GitHub';
+  test(`${label} sign-in preserves redirects and recovers from failures`, async ({ page }) => {
+    await page.goto('/login?returnTo=%2Fdashboard%3Fsection%3Dsettings&error=expired');
+    await expect(page.getByRole('main').getByRole('alert')).toBeVisible();
+    let attempt = 0;
+    await page.route('**/api/auth/sign-in/social', async route => {
+      const payload = route.request().postDataJSON();
+      expect(payload.provider).toBe(provider);
+      expect(new URL(payload.callbackURL).pathname).toBe('/dashboard');
+      expect(new URL(payload.callbackURL).search).toBe('?section=settings');
+      expect(new URL(payload.errorCallbackURL).pathname).toBe('/login');
+      expect(new URL(payload.errorCallbackURL).searchParams.get('returnTo')).toBe('/dashboard?section=settings');
+      attempt++;
+      if (attempt === 1) await route.abort('failed');
+      else if (attempt === 2) await route.fulfill({ status: 429, json: {} });
+      else if (attempt === 3) await route.fulfill({ json: {} });
+      else await route.fulfill({ json: { url: new URL(`/login?${provider}=accepted`, page.url()).href } });
+    });
+    const button = page.getByRole('button', { name: `Continue with ${label}`, exact: true });
+    await button.click();
+    await expect(page.getByRole('main').getByRole('alert')).toContainText('Check your connection');
+    await button.click();
+    await expect(page.getByRole('main').getByRole('alert')).toContainText('Too many attempts');
+    await button.click();
+    await expect(page.getByRole('main').getByRole('alert')).toContainText(`Could not connect to ${label}`);
+    await button.click();
+    await expect(page).toHaveURL(`/login?${provider}=accepted`);
   });
-  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
-  await expect(page.getByRole('main').getByRole('alert')).toContainText('Check your connection');
-  await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
-  await expect(page).toHaveURL('/login?google=accepted');
-});
+
+  test(`${label} disables both providers while connecting`, async ({ page }) => {
+    await page.goto('/login');
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/auth/sign-in/social', async route => {
+      await pending;
+      await route.fulfill({ status: 503, json: {} });
+    });
+    try {
+      await page.getByRole('button', { name: `Continue with ${label}` }).click();
+      await expect(page.getByRole('status')).toContainText(`Redirecting to ${label}`);
+      for (const button of await page.getByRole('group', { name: 'Sign-in options' }).getByRole('button').all()) {
+        await expect(button).toBeDisabled();
+      }
+    } finally { release(); }
+    await expect(page.getByRole('main').getByRole('alert')).toContainText('Please try again');
+    await expect(page.getByRole('button', { name: `Continue with ${label}` })).toBeEnabled();
+  });
+}
 
 for (const retryMenuState of ['open', 'closed'] as const) {
   test(`logout preserves the dashboard during failure and goes directly home on success with the retry menu ${retryMenuState}`, async ({ page, context }) => {

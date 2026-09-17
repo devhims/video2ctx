@@ -69,6 +69,8 @@ describe('Better Auth API-key configuration', () => {
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+      GITHUB_CLIENT_ID: 'github-client',
+      GITHUB_CLIENT_SECRET: 'github-secret',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
       POLAR_ACCESS_TOKEN: 'polar-token',
@@ -91,6 +93,10 @@ describe('Better Auth API-key configuration', () => {
       permissions: { defaultPermissions: { data: ['read'], account: ['access'] } },
     });
     expect(captured.apiKey?.disableKeyHashing).not.toBe(true);
+    expect(captured.auth?.socialProviders).toEqual({
+      google: { clientId: 'google-client', clientSecret: 'google-secret', scope: ['openid', 'email', 'profile'] },
+      github: { clientId: 'github-client', clientSecret: 'github-secret' },
+    });
     expect(captured.auth?.account).toEqual({ encryptOAuthTokens: true });
     expect(captured.auth?.session).toEqual({
       cookieCache: { enabled: true, maxAge: 60 * 5 },

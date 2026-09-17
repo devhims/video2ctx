@@ -9,6 +9,8 @@
     "APP_ORIGIN": "http://auth.test",
     "AUTH_BASE_URL": "http://auth.test",
     "BETTER_AUTH_SECRET": "test-only-better-auth-secret-000000000000",
+    "GITHUB_CLIENT_ID": "test-github-client",
+    "GITHUB_CLIENT_SECRET": "test-github-secret",
     "GOOGLE_CLIENT_ID": "test-google-client",
     "GOOGLE_CLIENT_SECRET": "test-google-secret",
     "AGENT_RUNTIME_ENABLED": "true",
