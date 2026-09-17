@@ -64,27 +64,43 @@ test('Google sign-in keeps the return destination and reports connection errors'
   await expect(page).toHaveURL('/login?google=accepted');
 });
 
-test('logout preserves the dashboard during failure and goes directly home on success', async ({ page, context }) => {
-  await context.addCookies([signedIn]);
-  await page.goto('/dashboard/developer');
-  await page.getByRole('complementary', { name: 'Workspace sidebar' }).getByLabel('Account: Fixture account', { exact: true }).click();
-  await page.route('**/api/auth/sign-out', route => route.fulfill({ status: 503, json: { message: 'Unavailable' } }), { times: 1 });
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('alert').filter({ hasText: 'Could not sign out' })).toBeVisible();
-  await expect(page).toHaveURL('/dashboard/developer');
-  await page.getByRole('complementary', { name: 'Workspace sidebar' }).getByLabel('Account: Fixture account', { exact: true }).click();
-  const destinations: string[] = [];
-  page.on('framenavigated', frame => { if (frame === page.mainFrame()) destinations.push(new URL(frame.url()).pathname); });
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/auth/sign-out', async route => { await pending; await route.continue(); });
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('complementary', { name: 'Workspace sidebar' }).getByRole('button', { name: 'Sign out', exact: true, includeHidden: true })).toBeDisabled();
-  await expect(page.getByRole('heading', { name: 'API keys', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Sign in|Welcome to video2ctx/ })).toHaveCount(0);
-  release();
-  await expect(page).toHaveURL('/');
-  expect([...new Set(destinations)]).toEqual(['/']);
-  await page.goto('/dashboard/developer');
-  await expect(page).toHaveURL('/login?returnTo=%2Fdashboard%2Fdeveloper');
-});
+for (const retryMenuState of ['open', 'closed'] as const) {
+  test(`logout preserves the dashboard during failure and goes directly home on success with the retry menu ${retryMenuState}`, async ({ page, context }) => {
+    await context.addCookies([signedIn]);
+    await page.goto('/dashboard/developer');
+    const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
+    const accountSummary = sidebar.getByLabel('Account: Fixture account', { exact: true });
+    const accountMenu = sidebar.locator('details').filter({ has: page.getByLabel('Account: Fixture account', { exact: true }) });
+    const signOutButton = sidebar.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true });
+    await accountSummary.click();
+    await page.route('**/api/auth/sign-out', route => route.fulfill({ status: 503, json: { message: 'Unavailable' } }), { times: 1 });
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Could not sign out' })).toBeVisible();
+    await expect(page).toHaveURL('/dashboard/developer');
+    await expect(signOutButton).toBeEnabled();
+    // Disabling the focused button can leave the disclosure open or closed,
+    // depending on browser focus behavior. Exercise both states before retrying.
+    await accountSummary.focus();
+    if ((await accountMenu.getAttribute('open') !== null) !== (retryMenuState === 'open')) {
+      await accountSummary.press('Enter');
+    }
+    await expect(accountMenu).toHaveJSProperty('open', retryMenuState === 'open');
+    if (await accountMenu.getAttribute('open') === null) await accountSummary.click();
+    await expect(signOutButton).toBeVisible();
+    const destinations: string[] = [];
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) destinations.push(new URL(frame.url()).pathname); });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/auth/sign-out', async route => { await pending; await route.continue(); });
+    try {
+      await signOutButton.click();
+      await expect(signOutButton).toBeDisabled();
+      await expect(page.getByRole('heading', { name: 'API keys', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Sign in|Welcome to video2ctx/ })).toHaveCount(0);
+    } finally { release(); }
+    await expect(page).toHaveURL('/');
+    expect([...new Set(destinations)]).toEqual(['/']);
+    await page.goto('/dashboard/developer');
+    await expect(page).toHaveURL('/login?returnTo=%2Fdashboard%2Fdeveloper');
+  });
+}
