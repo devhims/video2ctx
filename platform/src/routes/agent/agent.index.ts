@@ -300,24 +300,27 @@ async function requireAgentAccess(c: Context<App>): Promise<void> {
   if (String(c.env.AGENT_RUNTIME_ENABLED) !== 'true') {
     throw new ApiError(503, 'AGENT_DISABLED', 'The agent endpoint is not enabled.');
   }
-  const accessMode = String(c.env.AGENT_ACCESS_MODE ?? 'admins');
+  const accessMode = String(c.env.AGENT_ACCESS_MODE ?? 'allowlist');
   if (accessMode === 'all') return; // Authentication and credential scopes still apply.
-  if (accessMode !== 'admins') {
+  // Keep the old rollout spelling usable, but never consult the admin allowlist.
+  if (accessMode !== 'allowlist' && accessMode !== 'admins') {
     throw new ApiError(503, 'AGENT_DISABLED', 'The agent access configuration is invalid.');
   }
-  const allowed = new Set(String(c.env.ADMIN_EMAILS_SECRET ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean));
-  if (!allowed.size) throw new ApiError(403, 'ADMIN_REQUIRED', 'Agent access is currently restricted to admins.');
   // Read Better Auth's current user record, not cached session fields or request-supplied email.
   // This also covers API keys: requireUser resolves their authenticated account owner.
+  // Query D1 on every request so allowlist additions and removals need no new login.
   let user;
   try {
-    user = await timeAgentAdmission(c, 'admin_check', () => c.env.DB.prepare('SELECT email, emailVerified FROM user WHERE id = ?')
-      .bind(requireUser(c).id).first<{ email: string; emailVerified: number }>());
+    user = await timeAgentAdmission(c, 'agent_access_check', () => c.env.DB.prepare(`
+      SELECT email, emailVerified,
+        EXISTS (SELECT 1 FROM agent_access_allowlist a WHERE lower(trim(a.email)) = lower(trim(user.email))) AS agentAllowed
+      FROM user WHERE id = ?
+    `).bind(requireUser(c).id).first<{ email: string; emailVerified: number; agentAllowed: number }>());
   } catch {
-    throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Admin access could not be verified.');
+    throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Agent access could not be verified.');
   }
-  if (!user || user.emailVerified !== 1 || !allowed.has(user.email.trim().toLowerCase())) {
-    throw new ApiError(403, 'ADMIN_REQUIRED', 'Agent access is currently restricted to admins.');
+  if (!user || user.emailVerified !== 1 || user.agentAllowed !== 1) {
+    throw new ApiError(403, 'AGENT_ACCESS_REQUIRED', 'Agent access is currently restricted to approved testers.');
   }
 }
 

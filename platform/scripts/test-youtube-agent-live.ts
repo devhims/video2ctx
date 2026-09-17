@@ -7,22 +7,22 @@ import { publicAgentRunReceiptSchema, publicAgentTurnResultSchema } from '../src
 // from a source file or use a separate model implementation for the smoke test.
 async function main(): Promise<void> {
   if (process.argv.includes('--help')) {
-    console.log('AGENT_TEST_BASE_URL=http://127.0.0.1:8787 AGENT_TEST_TOKEN=<admin token> npm run test:agent:live\nOptional: AGENT_TEST_NON_ADMIN_TOKEN to verify admin denial; AGENT_TEST_MESSAGE to replace the research prompt.\nUse a running local Worker configured with GLM, agent access enabled, and an authenticated test account.');
+    console.log('AGENT_TEST_BASE_URL=http://127.0.0.1:8787 AGENT_TEST_TOKEN=<approved tester token> npm run test:agent:live\nOptional: AGENT_TEST_UNLISTED_TOKEN to verify unlisted-account denial; AGENT_TEST_MESSAGE to replace the research prompt.\nUse a running local Worker configured with GLM, agent access enabled, and an authenticated test account.');
     return;
   }
   const base = new URL(process.env.AGENT_TEST_BASE_URL ?? 'http://127.0.0.1:8787');
   assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname), 'The live smoke test must target a local Worker.');
   const token = process.env.AGENT_TEST_TOKEN;
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-  const nonAdminToken = process.env.AGENT_TEST_NON_ADMIN_TOKEN;
-  if (nonAdminToken) {
+  const unlistedToken = process.env.AGENT_TEST_UNLISTED_TOKEN;
+  if (unlistedToken) {
     const response = await fetch(new URL('/v1/agent/sessions', base), {
-      headers: { Authorization: `Bearer ${nonAdminToken}` }, signal: AbortSignal.timeout(10_000),
+      headers: { Authorization: `Bearer ${unlistedToken}` }, signal: AbortSignal.timeout(10_000),
     });
-    assert.equal(response.status, 403, 'A non-admin token must be denied in admins mode');
-    console.log('PASS non-admin access denied');
+    assert.equal(response.status, 403, 'An unlisted token must be denied in allowlist mode');
+    console.log('PASS unlisted account access denied');
   } else {
-    console.log('SKIP non-admin live check: set AGENT_TEST_NON_ADMIN_TOKEN to enable it.');
+    console.log('SKIP unlisted account live check: set AGENT_TEST_UNLISTED_TOKEN to enable it.');
   }
   const failures: string[] = [];
   for (const [route, message] of [

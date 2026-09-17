@@ -10,7 +10,9 @@
     "AUTH_BASE_URL": "http://auth.test",
     "BETTER_AUTH_SECRET": "test-only-better-auth-secret-000000000000",
     "GOOGLE_CLIENT_ID": "test-google-client",
-    "GOOGLE_CLIENT_SECRET": "test-google-secret"
+    "GOOGLE_CLIENT_SECRET": "test-google-secret",
+    "AGENT_RUNTIME_ENABLED": "true",
+    "AGENT_ACCESS_MODE": "allowlist"
   },
   "d1_databases": [
     {

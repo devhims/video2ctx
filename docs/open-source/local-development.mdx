@@ -59,7 +59,7 @@ npm --prefix platform run test:agent:live
 
 The smoke test explicitly requests the legacy format to inspect detailed evidence, and calls the real Worker API for research and video inspection, using the shared GLM configuration for the agent and its analysts. For the default recommendation query, it requires comparative routing and completed transcript analyses for four distinct videos. It requires full answers without `PARTIAL_EVIDENCE`, citations, evidence charges, and storyboard citations and analysis in the inspect result. It polls every three seconds and backs off on rate limits without creating another run. Each run reserves 22 available credits and refunds unused credits after completion, failure, or cancellation. Successful evidence operations remain chargeable if the run fails.
 
-For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the admin gate, run the local Worker in `AGENT_ACCESS_MODE:admins`, configure its local `ADMIN_EMAILS_SECRET`, and also provide `AGENT_TEST_NON_ADMIN_TOKEN`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
+For authenticated testing, provide `AGENT_TEST_TOKEN`. To test the Agent allowlist, apply local D1 migrations, run the local Worker in `AGENT_ACCESS_MODE:allowlist`, add the verified tester email to `agent_access_allowlist`, and also provide `AGENT_TEST_UNLISTED_TOKEN` for an account absent from the allowlist. Agent access is separate from `ADMIN_EMAILS_SECRET`. The test reports the denial check as skipped when that second token is absent. Keep tokens in environment variables, outside source control.
 
 ```bash
 npm --prefix platform run test:agent:live -- --help

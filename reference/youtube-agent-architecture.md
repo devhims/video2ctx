@@ -96,7 +96,7 @@ Production model calls use Workers AI through the configured AI Gateway. Tool im
 | Durable run admission and polling | Public routes implemented behind `AGENT_RUNTIME_ENABLED` |
 | Cancellation, checkpoints, recovery | Cancellation is available through Durable Object RPC; checkpoints and recovery are internal |
 | GLM live smoke test | Calls the local Worker HTTP API for research and transcript/storyboard inspection |
-| `AGENT_RUNTIME_ENABLED` | Enabled in configuration, with `AGENT_ACCESS_MODE=admins` |
+| `AGENT_RUNTIME_ENABLED` | Enabled in configuration, with `AGENT_ACCESS_MODE=allowlist` |
 | Public agent admission and run retrieval | Implemented behind `AGENT_RUNTIME_ENABLED` |
 | Per-user session list and lexical search | Implemented in `UserAccountDO` behind `AGENT_RUNTIME_ENABLED` |
 | Conversation restoration | Implemented as a catalog-authorized, cursor-paginated message projection |

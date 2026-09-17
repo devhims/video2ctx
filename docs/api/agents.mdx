@@ -62,8 +62,10 @@ own sessions and read messages, answers, cited sources, warnings, and run failur
 The menu and page use `GET /v1/agent/access`, which applies the same runtime flag,
 access mode, and current verified-email allowlist as the agent API. A successful check
 returns `{ "enabled": true }`; denied accounts receive 403 and disabled or unavailable
-checks receive 503. Every session and run read checks access again. Admin access does
-not grant access to another account's sessions.
+checks receive 503. Restricted access requires a verified email in the Agent-only
+D1 allowlist. Operator access is separate. The dashboard checks
+access again on login, page refresh, navigation, and window focus. Every session and
+run read checks access again, and accounts can only read their own sessions.
 
 ## Dashboard chat and live activity
 
