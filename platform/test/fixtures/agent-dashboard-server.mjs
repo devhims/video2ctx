@@ -10,6 +10,7 @@ const summaries = [summary, { ...summary, sessionId: failedId, title: 'A compari
 const message = (role, turn, id, status = 'completed') => ({ messageId: role === 'user' ? (turn === 1 ? '8a8671bd-5387-43dc-9031-65a69af2a40e' : otherId) : id, runId: id, conversationTurn: turn, parentMessageId: role === 'user' ? null : otherId, role, status, content: role === 'user' ? 'Summarise the key takeaways from this video.' : status === 'completed' ? '## Saved video analysis\n\nThe speaker compares **Fable and Astra** using practical examples.\n\n- Compare the claims against the transcript.\n- Treat personal experience as anecdotal evidence. [1]' : '', createdAt: stamp, updatedAt: stamp });
 const success = id => ({ sessionId: id, runId: id, status: 'completed', request: { message: 'Summarise the key takeaways from this video.' }, result: { outcome: 'answered', answer: 'The speaker prefers Fable for coding and Astra for broader tasks. [1]\n\nUse Astra to prototype 3D scenes, then refine interactions with Fable. [1]', sources: [{ id: '1', title: 'Fable Vs Astra Debate Is Over', url: 'https://www.youtube.com/watch?v=P7bxbDSnZRM' }], warnings: [{ code: 'SOURCE_CAVEAT', message: 'These are the speaker’s experiences, not independent measurements.' }], coverage: { reviewedVideos: 1, targetVideos: 1 } }, billing: { creditsCharged: 2, creditsRemaining: 679 } });
 const turns = new Map();
+const agentEmails = new Map([['first@example.test', stamp], ['second@example.test', stamp]]);
 const tool = { toolCallId: 'transcript-1', name: 'get_video_transcript', operation: 'transcript', status: 'running', startedAt: stamp,
   input: { videoId: 'P7bxbDSnZRM', language: 'en' } };
 const finishedTool = { ...tool, status: 'completed', finishedAt: stamp + 3800,
@@ -19,9 +20,26 @@ createServer(async (req, res) => {
   const cookie = req.headers.cookie ?? '';
   const allowed = cookie.includes('agent-ui=allowed');
   const signedIn = /agent-ui=(allowed|denied|unavailable)/.test(cookie);
+  const admin = cookie.includes('admin-ui=allowed');
   const reply = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
   if (url.pathname === '/health') return reply(200, { ok: true });
   if (url.pathname === '/api/auth/get-session') return reply(200, signedIn ? { user: { id: 'fixture-user', name: 'Fixture account', email: 'fixture@example.test' }, session: { id: 'fixture-auth-session' } } : null);
+  if (url.pathname.startsWith('/v1/admin/')) {
+    if (!signedIn || !admin) return reply(signedIn ? 403 : 401, { error: { code: 'ADMIN_REQUIRED', message: 'Admin access required.' } });
+    if (url.pathname === '/v1/admin/access') return reply(200, { enabled: true });
+    if (url.pathname === '/v1/admin/agent-access') {
+      if (req.method === 'GET') {
+        const q = url.searchParams.get('q') ?? '', limit = Number(url.searchParams.get('limit') ?? 50), offset = Number(url.searchParams.get('offset') ?? 0);
+        const entries = [...agentEmails].map(([email, createdAt]) => ({ email, createdAt })).filter(row => row.email.includes(q.toLowerCase()));
+        return reply(200, { entries: entries.slice(offset, offset + limit), total: entries.length, limit, offset });
+      }
+      let raw = ''; for await (const chunk of req) raw += chunk;
+      const email = JSON.parse(raw).email.trim().toLowerCase();
+      if (req.method === 'POST') agentEmails.set(email, Date.now());
+      if (req.method === 'DELETE') agentEmails.delete(email);
+      return reply(200, { email, enabled: req.method === 'POST' });
+    }
+  }
   if (url.pathname.startsWith('/v1/agent')) {
     if (cookie.includes('agent-ui=unavailable')) return reply(503, { error: { code: 'AUTH_UNAVAILABLE' } });
     if (!allowed) return reply(signedIn ? 403 : 401, { error: { code: 'AGENT_ACCESS_REQUIRED' } });

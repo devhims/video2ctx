@@ -65,18 +65,26 @@ export async function fetchServerAgentAccess(
   requestHeaders: Headers,
   options: ServerSessionOptions = {},
 ): Promise<boolean> {
+  return fetchServerAccess(requestHeaders, '/v1/agent/access', options);
+}
+
+export async function fetchServerAdminAccess(requestHeaders: Headers, options: ServerSessionOptions = {}): Promise<boolean> {
+  return fetchServerAccess(requestHeaders, '/v1/admin/access', options);
+}
+
+async function fetchServerAccess(requestHeaders: Headers, path: string, options: ServerSessionOptions): Promise<boolean> {
   const cookie = requestHeaders.get('cookie');
   if (!cookie) return false;
   const platformBaseUrl = options.platformBaseUrl ?? process.env.PLATFORM_API_BASE_URL ??
     (process.env.NODE_ENV === 'production' ? 'https://api.video2ctx.dev' : 'http://localhost:8787');
   const origin = getRequestOrigin(requestHeaders);
-  const response = await (options.fetch ?? fetch)(new URL('/v1/agent/access', platformBaseUrl), {
+  const response = await (options.fetch ?? fetch)(new URL(path, platformBaseUrl), {
     cache: 'no-store',
     headers: { accept: 'application/json', cookie, ...(origin ? { origin } : {}) },
     signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 401 || response.status === 403) return false;
-  if (!response.ok) throw new Error('Agent access could not be checked. Please try again.');
+  if (!response.ok) throw new Error('Access could not be checked. Please try again.');
   const result = await response.json() as { enabled?: unknown };
   return result.enabled === true;
 }

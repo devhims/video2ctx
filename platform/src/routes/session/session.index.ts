@@ -45,7 +45,6 @@ export const SESSION_ONLY_ROUTE_PATTERNS = [
   '/oauth/youtube/connect',
   '/oauth/youtube',
   '/billing',
-  '/admin/*',
 ] as const;
 
 for (const path of ACCOUNT_ROUTE_PATTERNS) sessionRoutes.use(path, requireAccountPrincipal);
@@ -359,15 +358,6 @@ sessionRoutes.delete('/oauth/youtube', async (c) => {
 
 sessionRoutes.get('/billing', async (c) => {
   return c.json(await getBillingSummary(c.env, requireUser(c).id));
-});
-
-sessionRoutes.get('/admin/jobs', async (c) => {
-  const user = requireUser(c);
-  if (!String(c.env.ADMIN_EMAILS_SECRET ?? '').split(',').map((value) => value.trim()).includes(user.email)) {
-    throw new ApiError(403, 'ADMIN_REQUIRED', 'Admin access required.');
-  }
-  const jobs = await c.env.DB.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 200').all();
-  return c.json({ jobs: jobs.results });
 });
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {

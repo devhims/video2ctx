@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './test/e2e', testMatch: 'agent-sessions.spec.ts', workers: 1,
+  testDir: './test/e2e', testMatch: ['agent-sessions.spec.ts', 'admin-access.spec.ts'], workers: 1,
   timeout: 45_000, expect: { timeout: 10_000 }, reporter: 'line',
   outputDir: '../.scratch/agent-sessions-dashboard/playwright-results',
   use: { baseURL: 'http://127.0.0.1:3021', trace: 'retain-on-failure', ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) },

@@ -1428,12 +1428,51 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/admin/access': {
+      get: {
+        tags: ['Administration'], operationId: 'getAdminAccess', summary: 'Check dashboard admin access',
+        description: 'Requires a live, verified browser session with a Better Auth admin role or an existing operator email. Agent tester membership never grants admin access.',
+        security: [{ sessionCookie: [] }],
+        responses: { '200': jsonResponse('Admin access is enabled.', { type: 'object', properties: { enabled: { const: true } }, required: ['enabled'] }), ...standardErrors },
+      },
+    },
+    '/v1/admin/agent-access': {
+      get: {
+        tags: ['Administration'], operationId: 'listAgentAccess', summary: 'List approved Agent tester emails',
+        security: [{ sessionCookie: [] }],
+        parameters: [
+          { name: 'q', in: 'query', schema: { type: 'string', maxLength: 320 }, description: 'Email substring.' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 1000000, default: 0 } },
+        ],
+        responses: { '200': jsonResponse('A page of approved emails.', {
+          type: 'object', required: ['entries', 'total', 'limit', 'offset'], properties: {
+            entries: { type: 'array', items: { type: 'object', required: ['email', 'createdAt'], properties: { email: { type: 'string', format: 'email' }, createdAt: { type: 'integer', description: 'Unix milliseconds.' } } } },
+            total: { type: 'integer' }, limit: { type: 'integer' }, offset: { type: 'integer' },
+          },
+        }), ...standardErrors },
+      },
+      post: {
+        tags: ['Administration'], operationId: 'grantAgentAccess', summary: 'Grant Agent testing access to an email',
+        description: 'Idempotently adds a normalized email to D1. Does not grant admin privileges. Requires the dashboard Origin header.',
+        security: [{ sessionCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email', maxLength: 320 } } } } } },
+        responses: { '200': jsonResponse('Agent access granted.', { type: 'object', properties: { email: { type: 'string' }, enabled: { const: true } }, required: ['email', 'enabled'] }), ...standardErrors },
+      },
+      delete: {
+        tags: ['Administration'], operationId: 'revokeAgentAccess', summary: 'Remove an Agent tester email',
+        description: 'Idempotently removes the D1 grant. Existing runs are not cancelled. Requires the dashboard Origin header.',
+        security: [{ sessionCookie: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email', maxLength: 320 } } } } } },
+        responses: { '200': jsonResponse('Agent access removed.', { type: 'object', properties: { email: { type: 'string' }, enabled: { const: false } }, required: ['email', 'enabled'] }), ...standardErrors },
+      },
+    },
     '/v1/admin/jobs': {
       get: {
         tags: ['Administration'],
         operationId: 'listAdminJobs',
         summary: 'List recent jobs across users',
-        security: privateSecurity,
+        security: [{ sessionCookie: [] }],
         responses: {
           '200': jsonResponse('Up to 200 recent jobs.', {
             type: 'object', required: ['jobs'], properties: { jobs: { type: 'array', items: schemaRef('Job') } },

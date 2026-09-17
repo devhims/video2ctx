@@ -50,4 +50,8 @@ Reserved for authorized video2ctx platform administration.
 
 | Method | Path | Operation ID | Summary | Declared access | Safety notes |
 | --- | --- | --- | --- | --- | --- |
-| `GET` | `/v1/admin/jobs` | `listAdminJobs` | List recent jobs across users | `sessionCookie` or `demoUser` | May expose cross-account operational metadata; restrict it to authorized operators. |
+| `GET` | `/v1/admin/access` | `getAdminAccess` | Check dashboard admin access | `sessionCookie` | Checks current operator authorization using a live browser session; does not grant Agent access. |
+| `DELETE` | `/v1/admin/agent-access` | `revokeAgentAccess` | Remove an Agent tester email | `sessionCookie` | Removes Agent access on subsequent requests; requires an explicit operator action and trusted Origin. |
+| `GET` | `/v1/admin/agent-access` | `listAgentAccess` | List approved Agent tester emails | `sessionCookie` | Exposes tester email addresses; restrict to authorized operators. |
+| `POST` | `/v1/admin/agent-access` | `grantAgentAccess` | Grant Agent testing access to an email | `sessionCookie` | Grants Agent testing access only; requires an authorized browser session and trusted Origin. |
+| `GET` | `/v1/admin/jobs` | `listAdminJobs` | List recent jobs across users | `sessionCookie` | May expose cross-account operational metadata; restrict it to authorized operators. |

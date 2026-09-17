@@ -12,7 +12,8 @@
     "GOOGLE_CLIENT_ID": "test-google-client",
     "GOOGLE_CLIENT_SECRET": "test-google-secret",
     "AGENT_RUNTIME_ENABLED": "true",
-    "AGENT_ACCESS_MODE": "allowlist"
+    "AGENT_ACCESS_MODE": "allowlist",
+    "ADMIN_EMAILS_SECRET": "bootstrap-admin@example.test"
   },
   "d1_databases": [
     {

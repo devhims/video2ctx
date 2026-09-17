@@ -26,6 +26,7 @@ vi.mock('better-auth', async (importOriginal) => {
   };
 });
 vi.mock('better-auth/plugins', () => ({
+  admin: vi.fn((options?: Record<string, any>) => ({ id: 'admin', options })),
   bearer: vi.fn((options?: Record<string, any>) => {
     captured.bearer = options ?? {};
     return { id: 'bearer' };
@@ -129,6 +130,7 @@ describe('Better Auth API-key configuration', () => {
     });
     expect(captured.bearer).toEqual({});
     expect(captured.auth?.plugins).toEqual(expect.arrayContaining([
+      { id: 'admin', options: { adminUserIds: [] } },
       { id: 'api-key' },
       { id: 'bearer' },
       { id: 'device-authorization' },

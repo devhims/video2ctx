@@ -52,3 +52,9 @@ The Redis quota allows five distinct YouTube video IDs per HMAC-hashed visitor I
 5. Check `https://www.video2ctx.dev` and `https://api.video2ctx.dev/health`.
 
 Direct pushes to `main` follow the same production flow, though pull requests are preferred.
+
+## Admin dashboard rollout
+
+Migration `0016_better_auth_admin.sql` adds Better Auth admin fields to `user` and `session`. It leaves the existing Agent allowlist intact. The normal production deployment applies the migration before deploying the Worker.
+
+Sign in with a verified email already in `ADMIN_EMAILS_SECRET`, or an account assigned the Better Auth `admin` role, then open `/dashboard/admin`. Agent allowlist membership does not grant admin access. See [admin dashboard operations](./ADMIN_DASHBOARD.md).
