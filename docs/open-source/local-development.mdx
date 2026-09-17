@@ -41,6 +41,16 @@ npm run docs:dev
 </Warning>
 
 
+## Google and GitHub sign-in
+
+The login page offers Google and GitHub for both registration and returning users. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` in the untracked `platform/.dev.vars` file. These credentials belong to the platform, never the browser bundle.
+
+Create a GitHub OAuth App with homepage `http://localhost:3000` and authorization callback `http://localhost:3000/api/auth/callback/github`. Register `http://localhost:3000/api/auth/callback/google` with your Google OAuth web client. Better Auth requests GitHub's `read:user` and `user:email` scopes, including access to private email addresses for sign-in.
+
+For production, use separate provider credentials and replace the local origin in each callback URL with the configured `AUTH_BASE_URL`. Store the credentials as Worker secrets. The login page preserves the requested dashboard destination after authentication.
+
+The existing magic-link endpoint remains available for the CLI device authorization page and previously issued email links. It is no longer offered on `/login`.
+
 ## Agent smoke test
 
 Start the local Worker with Docker running and local database migrations applied. To use the local demo account for this test:

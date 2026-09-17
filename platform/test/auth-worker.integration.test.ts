@@ -4,6 +4,28 @@ import { describe, expect, test } from 'vitest';
 const worker = exports.default;
 const baseUrl = 'http://auth.test';
 
+describe('social sign-in on the Worker runtime', () => {
+  for (const provider of ['google', 'github']) {
+    test(`starts ${provider} OAuth with the configured callback and identity scopes`, async () => {
+      const response = await request('/api/auth/sign-in/social', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ provider, callbackURL: `${baseUrl}/dashboard`, errorCallbackURL: `${baseUrl}/login` }),
+      });
+      expect(response.status).toBe(200);
+      const { url } = await response.json() as { url: string };
+      const authorization = new URL(url);
+      expect(authorization.hostname).toBe(provider === 'github' ? 'github.com' : 'accounts.google.com');
+      expect(authorization.searchParams.get('client_id')).toBe(`test-${provider}-client`);
+      expect(authorization.searchParams.get('redirect_uri')).toBe(`${baseUrl}/api/auth/callback/${provider}`);
+      expect(authorization.searchParams.get('state')).toBeTruthy();
+      const scopes = authorization.searchParams.get('scope')?.split(' ');
+      expect(scopes).toEqual(expect.arrayContaining(provider === 'github' ? ['read:user', 'user:email'] : ['openid', 'email', 'profile']));
+      expect(scopes).not.toContain('repo');
+    });
+  }
+});
+
 describe('Agent tester access with real D1 and browser sessions', () => {
   test('checks D1 changes on refresh without a new login and keeps admin jobs private', async () => {
     const browser = await createBrowserSession();

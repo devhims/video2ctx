@@ -1,5 +1,7 @@
 interface Env {
   BETTER_AUTH_SECRET: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   YOUTUBE_OAUTH_ENCRYPTION_KEY: string;
