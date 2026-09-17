@@ -71,3 +71,38 @@ not add a run charge.
 Progress and tool results stream during execution. The answer is delivered after
 finalization and validation, in the terminal snapshot. This endpoint does not
 stream unvalidated model tokens.
+
+
+## Stored extraction diagnostics
+
+To inspect storyboard and frame extraction attempts for a run you own, request:
+
+```http
+GET /v1/agent/{sessionId}/runs/{runId}?include=diagnostics
+```
+
+`diagnostics.extractions` contains attempt summaries linked by `toolCallId` and
+`extractionId`. Each summary records the container slot, attempt number, duration,
+HTTP status when available, outcome, and safe stage details such as player profile,
+media format and resolution, WebP conversion, retries, and FFmpeg exit code.
+These records remain available when extraction or subsequent visual analysis fails.
+
+The `capture` field explains how much detail reached the Worker:
+
+- `available`: a valid diagnostic envelope was received. Invalid individual events are dropped.
+- `missing`: a decoded response omitted diagnostics, such as an older container or a busy response.
+- `invalid`: the diagnostic envelope or fallback response could not be decoded or validated.
+- `unavailable`: no decodable diagnostic response was captured, including transport timeouts.
+
+Each attempt retains at most 64 events, prioritizing the first 16 and latest 48;
+`droppedEvents` counts omitted events. Storage is capped at 64 attempts or 256 KiB per
+run. `diagnostics.extractionDiagnosticsTruncated` is true if another attempt could
+not be stored. Normal compact responses, live activity, evidence, and model inputs
+exclude these records. Legacy responses expose the equivalent `extractionDiagnostics`
+and `extractionDiagnosticsTruncated` fields.
+
+Stored summaries exclude raw error messages, stderr, URLs, headers, credentials,
+and image bytes. Capture is best effort: a container crash or lost response can leave
+only a Worker attempt summary. Both the Worker and container images must be deployed
+for full detail. Historical runs cannot be backfilled. The dashboard does not yet
+have a dedicated extraction-diagnostics panel; use the authenticated run endpoint.

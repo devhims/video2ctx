@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
@@ -27,6 +28,18 @@ function context(): AgentToolContext {
 }
 const input = { videoId: frames.videoId, timestampsMs: [1234], focus: 'Read the chart' };
 describe('agent frame tool', () => {
+  test('correlates diagnostics through capability scoping before analysis can fail', async () => {
+    const ctx = context();
+    ctx.onExtractionDiagnostic = vi.fn();
+    ctx.provider.frames = async (_request, _signal, _limits, onDiagnostic) => {
+      onDiagnostic?.({ ...extractionFixture, kind: 'frames' });
+      return { value: frames, cacheStatus: 'miss' };
+    };
+    ctx.provider = createCapabilityProvider(ctx.provider, { route: 'inspect_video', videoId: frames.videoId });
+    ctx.analyzeFrames = async () => { throw new Error('analysis failed'); };
+    await expect(executeGetVideoFrames(input, ctx, 'frame-call')).rejects.toThrow('analysis failed');
+    expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...extractionFixture, kind: 'frames', toolCallId: 'frame-call' });
+  });
   test('reserves analysis time and forwards a bounded extraction budget', async () => {
     const ctx = context();
     ctx.researchDeadlineAt = Date.now() + 50_000;

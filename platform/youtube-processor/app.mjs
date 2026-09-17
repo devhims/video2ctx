@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 
 export const OPERATION_KINDS = new Set([
   'search',
@@ -100,8 +101,18 @@ export function createProcessorApp(runtime, options = {}) {
       } }, 400);
     }
 
+    const diagnostics = { version: 1, events: [], droppedEvents: 0 };
+    const suppliedId = c.req.header('x-extraction-id');
+    const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
+    const onDiagnostic = event => {
+      // Runtime events contain only scalar diagnostic fields. Bound the private envelope.
+      if (JSON.stringify(event).length > 1024) { diagnostics.droppedEvents++; return; }
+      if (diagnostics.events.length === 64) { diagnostics.events.splice(16, 1); diagnostics.droppedEvents++; }
+      diagnostics.events.push(event);
+    };
+    const envelope = () => operation.kind === 'storyboard' ? { diagnostics } : {};
     try {
-      return c.json({ value: await runtime.run(operation) });
+      return c.json({ value: await runtime.run(operation, { extractionId, onDiagnostic }), ...envelope() });
     } catch (error) {
       const normalized = normalizeProcessorError(error);
       console.error(JSON.stringify({
@@ -110,7 +121,7 @@ export function createProcessorApp(runtime, options = {}) {
         code: normalized.error.code,
         retryable: normalized.error.retryable,
       }));
-      return c.json({ error: normalized.error }, normalized.responseStatus);
+      return c.json({ error: normalized.error, ...envelope() }, normalized.responseStatus);
     }
   });
 

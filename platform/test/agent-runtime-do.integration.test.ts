@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import { reserveAgentCredits, settleAgentCredits } from '../src/agents/runtime/billing';
@@ -26,6 +27,62 @@ async function seed(name: string, status = 'failed') {
   });
   return { runtime, userId, runId, conversationId };
 }
+
+test('persists extraction diagnostics across RPCs, isolates owners, and bounds run storage', async () => {
+  const { runtime, runId } = await seed('extraction-diagnostics-owner');
+  const other = await seed('extraction-diagnostics-other');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as { recordExtractionDiagnostic(runId: string, event: unknown): void };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const event = { ...extractionFixture, toolCallId: 'storyboard-call', url: 'SECRET' };
+      writer.recordExtractionDiagnostic(runId, event);
+      writer.recordExtractionDiagnostic(other.runId, event);
+      writer.recordExtractionDiagnostic(runId, { ...event, events: [{ stage: 'https://SECRET' }] });
+      expect(instance.sql`SELECT * FROM agent_events WHERE type = 'extraction.diagnostic'`).toHaveLength(1);
+      expect(JSON.stringify(log.mock.calls)).not.toContain('SECRET');
+    } finally { log.mockRestore(); }
+  });
+  const first = await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null;
+  expect(first?.extractionDiagnostics).toEqual([{ ...extractionFixture, toolCallId: 'storyboard-call' }]);
+  expect((await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null)?.extractionDiagnostics).toEqual(first?.extractionDiagnostics);
+  expect(await other.runtime.getRun(runId)).toBeNull();
+  expect(JSON.stringify(await runtime.getRunProgress(runId))).not.toContain('extractionId');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as { recordExtractionDiagnostic(runId: string, event: unknown): void };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 70; i++) writer.recordExtractionDiagnostic(runId, { ...extractionFixture, toolCallId: `call-${i}` });
+    } finally { log.mockRestore(); }
+    expect(instance.sql`SELECT * FROM agent_events WHERE type = 'extraction.truncated'`).toHaveLength(1);
+  });
+  const bounded = await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null;
+  expect(bounded?.extractionDiagnostics).toHaveLength(64);
+  expect(bounded?.extractionDiagnosticsTruncated).toBe(true);
+});
+
+test('enforces the diagnostic byte limit before the attempt count limit', async () => {
+  const { runtime, runId } = await seed('extraction-diagnostics-byte-limit');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as { recordExtractionDiagnostic(runId: string, event: unknown): void };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const event = { ...extractionFixture, toolCallId: 'large-call', events: Array.from({ length: 64 }, () => ({
+      stage: 'media_transfer', profile: 'android', timestampMs: 123456, candidateIndex: 3, candidateCount: 4,
+      attempt: 2, delayMs: 100, elapsedMs: 1000, sourceWidth: 1920, sourceHeight: 1080,
+      formatId: 137, inputBytes: 100000, outputBytes: 200000, outcome: 'success',
+    })) };
+    try {
+      for (let i = 0; i < 64; i++) writer.recordExtractionDiagnostic(runId, event);
+    } finally { log.mockRestore(); }
+    const rows = instance.sql<{ payload_json: string }>`SELECT payload_json FROM agent_events WHERE type = 'extraction.diagnostic'`;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(64);
+    const bytes = rows.reduce((total, row) => total + new TextEncoder().encode(row.payload_json).byteLength, 0);
+    expect(bytes).toBeLessThanOrEqual(256 * 1024);
+    expect(bytes + new TextEncoder().encode(JSON.stringify(event)).byteLength).toBeGreaterThan(256 * 1024);
+    expect(instance.sql`SELECT * FROM agent_events WHERE type = 'extraction.truncated'`).toHaveLength(1);
+  });
+});
 
 test('restores provider metadata for follow-ups and validates historical citations without another evidence charge', async () => {
   const { runtime, userId, runId, conversationId } = await seed('agent-metadata-memory', 'completed');

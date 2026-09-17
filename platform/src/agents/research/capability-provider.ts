@@ -16,15 +16,15 @@ export function createCapabilityProvider(
   };
 
   return {
-    frames: async (request, signal, limits) => {
+    frames: async (request, signal, limits, onDiagnostic) => {
       requirePinnedVideo(request.videoId);
       if (!provider.frames) throw new Error('Frame provider is unavailable.');
-      return provider.frames(request, signal, limits);
+      return provider.frames(request, signal, limits, onDiagnostic);
     },
-    storyboard: async (videoId, timestampsMs, options) => {
+    storyboard: async (videoId, timestampsMs, options, onDiagnostic) => {
       requirePinnedVideo(videoId);
       if (!provider.storyboard) throw new Error('Storyboard provider is unavailable.');
-      return provider.storyboard(videoId, timestampsMs, options);
+      return provider.storyboard(videoId, timestampsMs, options, onDiagnostic);
     },
     search: (query, filters) => provider.search(query, filters),
     browse: (options) => provider.browse(options),

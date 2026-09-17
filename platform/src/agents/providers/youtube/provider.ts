@@ -1,3 +1,4 @@
+import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnostics';
 import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
@@ -26,8 +27,8 @@ import { getProvider, type ProviderAdapter } from '../../../providers';
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-    limits?: { extractionTimeoutMs: number }): Promise<CachedResult<VideoFrames>>;
-  storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions): Promise<CachedResult<Storyboard>>;
+    limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<VideoFrames>>;
+  storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<Storyboard>>;
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
@@ -58,8 +59,8 @@ export function createYouTubeAgentProvider(
   provider: ProviderAdapter = getProvider('youtube'),
 ): YouTubeAgentProvider {
   return {
-    frames: async (request, signal, limits) => ({ value: await getVideoFrames(env, request, signal, limits), cacheStatus: 'miss' }),
-    storyboard: async (videoId, timestampsMs, options = {}) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options })), cacheStatus: 'miss' }),
+    frames: async (request, signal, limits, onDiagnostic) => ({ value: await getVideoFrames(env, request, signal, limits, onDiagnostic), cacheStatus: 'miss' }),
+    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options }, onDiagnostic)), cacheStatus: 'miss' }),
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),
     trends: async (query, limit, includeAiInsights) => ({

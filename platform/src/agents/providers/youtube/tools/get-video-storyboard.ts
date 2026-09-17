@@ -38,7 +38,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       if ((!metadataOnly && !context.analyzeStoryboard) || !context.provider.storyboard) throw new Error('Storyboard analysis is unavailable.');
       const response = await context.provider.storyboard(parsed.videoId, parsed.timestampsMs, {
         maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
-      });
+      }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
       context.signal.throwIfAborted();
       const storyboard = storyboardSchema.parse(response.value);
       if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');

@@ -29,6 +29,63 @@ function environment(responses: Array<Response | Error>): { env: Env; requested:
 }
 
 describe('YouTube processor client', () => {
+  test('returns unchanged results and captures diagnostics on both fallback and successful attempts', async () => {
+    const onDiagnostic = vi.fn();
+    const { env } = environment([
+      Response.json({ error: { code: 'UNAVAILABLE' }, diagnostics: { version: 1, droppedEvents: 0,
+        events: [{ stage: 'player', profile: 'IOS', specState: 'missing', outcome: 'skipped' }] } }, { status: 503 }),
+      Response.json({ value: { sheets: [] }, diagnostics: { version: 1, droppedEvents: 0,
+        events: [{ stage: 'image_normalized', inputFormat: 'webp', outputFormat: 'jpeg', width: 800, height: 450 }] } }),
+    ]);
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' }, onDiagnostic)).resolves.toEqual({ sheets: [] });
+    expect(onDiagnostic).toHaveBeenCalledTimes(2);
+    const [first, second] = onDiagnostic.mock.calls.map(call => call[0]);
+    expect(first).toMatchObject({ kind: 'storyboard', attempt: 1, outcome: 'fallback', status: 503, capture: 'available' });
+    expect(second).toMatchObject({ attempt: 2, outcome: 'success', extractionId: first.extractionId,
+      events: [{ stage: 'image_normalized', inputFormat: 'webp' }] });
+    expect(first.slot).not.toBe(second.slot);
+  });
+
+  test('captures terminal failures and preserves the original error', async () => {
+    const onDiagnostic = vi.fn();
+    const { env } = environment([Response.json({ error: { code: 'NOT_FOUND', message: 'Missing' },
+      diagnostics: { version: 1, events: [{ stage: 'request', code: 'NOT_FOUND', outcome: 'error' }], droppedEvents: 0 } }, { status: 404 })]);
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' }, onDiagnostic)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', status: 404, capture: 'available' }));
+  });
+
+  test('invalid diagnostics and throwing sinks do not fail a successful extraction', async () => {
+    const { env, requested } = environment([Response.json({ value: { sheets: [] }, diagnostics: { version: 99 } })]);
+    const sink = vi.fn(() => { throw new Error('persistence unavailable'); });
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' }, sink)).resolves.toEqual({ sheets: [] });
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ capture: 'invalid' }));
+    expect(requested).toHaveLength(1);
+  });
+  test('records timeout diagnostics when the binding ignores cancellation', async () => {
+    const { env } = environment([]);
+    Object.assign(env, { YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '1' });
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    let signalStarted!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    vi.spyOn(env.YOUTUBE_PROCESSOR, 'get').mockReturnValue({ fetch: () => {
+      signalStarted();
+      return new Promise<Response>(() => {});
+    } } as never);
+    const sink = vi.fn();
+    try {
+      const pending = runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' }, sink);
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'PROCESSOR_UNAVAILABLE' });
+      await started;
+      controller.abort(new DOMException('Timed out', 'TimeoutError'));
+      await rejected;
+      expect(sink).toHaveBeenCalledTimes(1);
+      expect(sink).toHaveBeenCalledWith(expect.objectContaining({
+        outcome: 'transport_error', capture: 'unavailable', failureKind: 'timeout',
+      }));
+    } finally { timeout.mockRestore(); }
+  });
+
   const blockedVideo = {
     id: 'abcdefghijk',
     availability: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' },
