@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -27,6 +27,71 @@ function rawSpec() {
 }
 
 describe('storyboard contact sheets', () => {
+  const fixture = (name: string) => readFile(join(__dirname, 'fixtures', `storyboard-${name}.webp`));
+  async function downloadImage(response: Response) {
+    const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-image-'));
+    directories.push(outputDir);
+    return downloadStoryboard(rawSpec(), { videoId: 'abcdefghijk', outputDir, maxSheets: 1 },
+      vi.fn(async () => response));
+  }
+
+  test.each(['lossy', 'lossless', 'alpha'])('preserves native %s WebP bytes and tile mappings at a .jpg source URL', async name => {
+    const bytes = await fixture(name);
+    const result = await downloadImage(new Response(bytes, { headers: { 'content-type': 'image/webp' } }));
+    expect(result.sheets[0]).toMatchObject({ firstFrameIndex: 0, frameCount: 25, columns: 5,
+      rows: 5, tileWidth: 160, tileHeight: 90, intervalMs: 10000 });
+    expect(result.sheets[0]!.path).toMatch(/-sheet-0\.webp$/);
+    expect(await readFile(result.sheets[0]!.path)).toEqual(bytes);
+  });
+
+  test.each(['image/jpeg', 'image/jpg', 'IMAGE/WEBP; charset=binary'])('uses WebP bytes to select the extension with %s headers', async type => {
+    const result = await downloadImage(new Response(await fixture('lossy'), { headers: { 'content-type': type } }));
+    expect(result.sheets[0]!.path).toMatch(/\.webp$/);
+  });
+
+  test('keeps JPEG bytes and filenames when the allowed image header is inaccurate', async () => {
+    const bytes = Uint8Array.from([255, 216, 255, 217]);
+    const result = await downloadImage(new Response(bytes, { headers: { 'content-type': 'image/webp' } }));
+    expect(result.sheets[0]!.path).toMatch(/\.jpg$/);
+    expect(await readFile(result.sheets[0]!.path)).toEqual(Buffer.from(bytes));
+  });
+
+  test('rejects malformed, truncated, animated and header-only WebP without writing a sheet', async () => {
+    const valid = await fixture('lossy');
+    const badSize = Buffer.from(valid); badSize.writeUInt32LE(valid.length, 4);
+    const badChunk = Buffer.from(valid); badChunk.writeUInt32LE(valid.length, 16);
+    const noImage = Buffer.from(valid); noImage.write('JUNK', 12);
+    const badVp8 = Buffer.from(valid); badVp8[23] = 0;
+    const animated = await fixture('alpha'); animated[20] = animated[20]! | 0x02;
+    const headerOnly = (await fixture('alpha')).subarray(0, 30); headerOnly.writeUInt32LE(22, 4);
+    for (const bytes of [Buffer.from('not an image'), valid.subarray(0, 11), valid.subarray(0, -1),
+      badSize, badChunk, noImage, badVp8, animated, headerOnly]) {
+      await expect(downloadImage(new Response(bytes, { headers: { 'content-type': 'image/webp' } })))
+        .rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+      expect(await readdir(join(directories.at(-1)!, 'storyboards'))).toEqual([]);
+    }
+  });
+
+  test.each(['text/html', 'image/png', 'image/jpeg-malformed', ''])('rejects unsupported content type %s and cancels the body', async type => {
+    const cancel = vi.fn();
+    const body = new ReadableStream({ cancel });
+    await expect(downloadImage(new Response(body, { headers: { 'content-type': type } })))
+      .rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  test.each([true, false])('bounds WebP downloads and cancels oversized bodies, content-length=%s', async withLength => {
+    const cancel = vi.fn();
+    const body = new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024)); }, cancel,
+    });
+    await expect(downloadImage(new Response(body, { headers: {
+      'content-type': 'image/webp', ...(withLength ? { 'content-length': String(4 * 1024 * 1024 + 1) } : {}),
+    } }))).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(await readdir(join(directories.at(-1)!, 'storyboards'))).toEqual([]);
+  });
+
   async function selected(options: { selection?: 'spread'; timestampsMs?: number[]; maxSheets?: number; metadataOnly?: boolean; sheetIndexes?: number[] }) {
     const directory = await mkdtemp(join(tmpdir(), 'storyboard-selection-'));
     directories.push(directory);

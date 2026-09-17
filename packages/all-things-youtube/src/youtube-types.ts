@@ -171,6 +171,7 @@ export interface Transcript {
 }
 
 export interface StoryboardContactSheet {
+  /** Absolute path to a native JPEG (.jpg) or WebP (.webp) contact sheet. */
   path: string;
   tileWidth: number;
   tileHeight: number;

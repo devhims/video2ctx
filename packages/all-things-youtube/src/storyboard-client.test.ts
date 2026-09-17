@@ -1,8 +1,9 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createYouTubeClient } from './youtube-client';
+import { getStoryboard } from './index';
 
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -47,4 +48,21 @@ test('does not contact YouTube for invalid selection options', async () => {
   const { result, fetch } = await run([], { maxSheets: 0 });
   await expect(result).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   expect(fetch).not.toHaveBeenCalled();
+});
+
+test('public API recovers from missing mobile storyboards and downloads desktop WebP', async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-public-webp-'));
+  dirs.push(outputDir);
+  const bytes = await readFile(join(__dirname, 'fixtures', 'storyboard-lossy.webp'));
+  const fetch = vi.fn(async (input: any) => {
+    const url = String(input);
+    if (url.includes('/sb/')) return new Response(bytes, { headers: { 'content-type': 'image/webp' } });
+    if (url.includes('/watch?')) return new Response(`var ytInitialPlayerResponse = ${JSON.stringify(withSpec)};`);
+    return Response.json({ playabilityStatus: { status: 'OK' } });
+  });
+  const result = await getStoryboard({ videoId: 'abcdefghijk', outputDir, maxSheets: 1, fetch });
+  expect(fetch).toHaveBeenCalledTimes(5);
+  expect(result.sheets[0]!.path).toMatch(/\.webp$/);
+  expect(await readFile(result.sheets[0]!.path)).toEqual(bytes);
+  expect(result.sheets[0]).toMatchObject({ firstFrameIndex: 0, intervalMs: 10000 });
 });
