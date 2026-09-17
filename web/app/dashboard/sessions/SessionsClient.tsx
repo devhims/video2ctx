@@ -10,6 +10,7 @@ import { SessionLoading } from './SessionLoading';
 import { FramePreviews } from './FramePreviews';
 import type { DashboardProject } from '../../../lib/dashboard-data';
 import { useRouter } from 'next/navigation';
+import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import {
@@ -48,7 +49,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
-      <header className='topbar'><div><span className='topbar-context'>Research workspace</span><h1>Agent</h1></div><Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></header>
+      <DashboardHeader title='Agent'><Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></DashboardHeader>
       {children}
     </div>
   </main>;
@@ -70,7 +71,7 @@ function SessionList() {
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
   return <>
-    {!pendingMessage && <header className='agent-welcome'><h2>What would you like to learn?</h2><p>Explore a video, research a channel, or connect the dots across sources.</p></header>}
+    {!pendingMessage && <header className='agent-welcome'><h2>Ask about a video or topic</h2></header>}
     {pendingMessage && <div className='agent-messages'><PendingUserMessage message={pendingMessage} /></div>}
     <MessageComposer onSendAction={showPendingMessage} onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
     <div hidden={!!pendingMessage}><form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
@@ -182,7 +183,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
       <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {session && <header className='agent-heading'><div><h2>{session.title}</h2>
-      <details className='agent-session-info'><summary>Session details</summary><p className='agent-id'>Session ID: {sessionId}</p></details></div></header>}
+      <p className='agent-id'>Session ID: {sessionId}</p></div></header>}
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}
@@ -226,7 +227,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
       {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{phaseLabel(progress?.phase)}</p>}
-      {progress && <ToolTrace tools={progress.tools} />}
+      {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
       {result && <>
@@ -238,8 +239,11 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
         })}</ul></section>}
         {!!result.warnings.length && <details className='agent-caveats'><summary>Source notes and limitations ({result.warnings.length})</summary><ul>{result.warnings.map((warning, index) => <li key={index}>{warning.message}</li>)}</ul></details>}
       </>}
-      <div className='agent-answer-actions'>{result && <CopyAnswer answer={result.answer} />}<details><summary>Run details</summary><p className='agent-id'>Run ID: {message.runId}</p></details></div>
     </div>}
+    <div className='agent-answer-actions'>
+      {(result?.answer || message.content) && <CopyAnswer answer={result?.answer || message.content} />}
+      <p className='agent-id'>Run ID: {message.runId}</p>
+    </div>
   </article>;
 }
 
@@ -316,18 +320,25 @@ function isStoryboardMetadata(tool: AgentProgress['tools'][number]) {
     && tool.input.sheetIndexes === undefined && tool.input.timestampsMs === undefined;
 }
 
-function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
-  const [expanded, setExpanded] = useState<boolean | null>(null);
-  const running = tools.some(tool => tool.status === 'running');
-  const open = expanded ?? running;
+function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: AgentMessage['status'] }) {
+  const [expanded, setExpanded] = useState(status !== 'completed');
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const running = isActiveAgentRun(status);
+  // Tool calls can finish between research steps. Only the run's completion
+  // closes the trace, after which it remains available for manual inspection.
+  useEffect(() => { if (status === 'completed') setExpanded(false); }, [status]);
+  const open = running || expanded;
   if (!tools.length) return null;
   return <div className='agent-trace'>
-    <button className='agent-trace-toggle' aria-expanded={open} onClick={() => setExpanded(!open)}>
+    <button className='agent-trace-toggle' aria-expanded={open} aria-disabled={running} title={running ? 'Tool activity stays open until the answer is finalized' : undefined} onClick={() => { if (!running) setExpanded(!open); }}>
       <CaretRightIcon size={13} className={open ? 'is-open' : ''} aria-hidden='true' />
       Tool activity ({tools.length})<span>{running ? 'In progress' : `${tools.filter(tool => tool.status === 'completed').length} completed`}</span>
     </button>
     {open && <ol>{tools.map(tool => <li key={tool.toolCallId}>
-      <details className='agent-tool-chip'><summary>
+      <details className='agent-tool-chip' open={!!expandedTools[tool.toolCallId]}><summary onClick={event => {
+        event.preventDefault();
+        setExpandedTools(current => ({ ...current, [tool.toolCallId]: !current[tool.toolCallId] }));
+      }}>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
         <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name.replaceAll('_', ' ')}</span>
@@ -355,9 +366,10 @@ function ToolTrace({ tools }: { tools: AgentProgress['tools'] }) {
 function CopyAnswer({ answer }: { answer: string }) {
   const [status, setStatus] = useState('');
   useEffect(() => { if (!status) return; const timer = setTimeout(() => setStatus(''), 2_000); return () => clearTimeout(timer); }, [status]);
-  return <button className='agent-copy-answer' onClick={() => {
-    void navigator.clipboard.writeText(answer).then(() => setStatus('Copied'), () => setStatus('Could not copy'));
-  }}><CopyIcon size={14} aria-hidden='true' /><span aria-live='polite'>{status || 'Copy answer'}</span></button>;
+  return <button className='agent-copy-answer' aria-label={status || 'Copy answer'} title={status || 'Copy answer'} onClick={async () => {
+    try { await navigator.clipboard.writeText(answer); setStatus('Copied'); }
+    catch { setStatus('Could not copy'); }
+  }}>{status === 'Copied' ? <CheckIcon size={16} aria-hidden='true' /> : status ? <WarningCircleIcon size={16} aria-hidden='true' /> : <CopyIcon size={16} aria-hidden='true' />}<span className='sr-only' aria-live='polite'>{status}</span></button>;
 }
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }

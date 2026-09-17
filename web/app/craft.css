@@ -16,6 +16,7 @@ html:has(.craft) body {
 }
 
 .craft {
+  --radius-home-control: .375rem;
   --paper: oklch(15.5% 0.006 75);
   --paper-raised: oklch(19% 0.007 75);
   --ink: oklch(95% 0.006 83);
@@ -77,7 +78,7 @@ html:has(.craft) body {
   min-height: 3.25rem;
   padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-home-pill);
+  border-radius: calc(var(--radius-home-control) + var(--space-2xs));
   background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
   backdrop-filter: blur(0.75rem);
   display: grid;
@@ -144,7 +145,7 @@ html:has(.craft) body {
   min-height: 2.25rem;
   padding: 0;
   border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--rule-strong));
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: color-mix(in oklch, var(--accent) 8%, transparent);
   color: var(--ink-soft);
   display: inline-flex;
@@ -161,7 +162,7 @@ html:has(.craft) body {
 .craft-nav-account {
   min-height: 2.25rem;
   padding-inline: var(--space-lg);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--ink);
   color: var(--paper);
   display: inline-flex;
@@ -178,7 +179,7 @@ html:has(.craft) body {
   min-height: 2.25rem;
   padding: 0;
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: transparent;
   color: var(--ink);
   cursor: pointer;
@@ -504,7 +505,7 @@ html:has(.craft) body {
   margin-bottom: var(--space-xl);
   padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -551,7 +552,7 @@ html:has(.craft) body {
 .craft-build-cta-icon {
   width: 1.55rem;
   height: 1.55rem;
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--ink);
   color: var(--paper);
   display: grid;
@@ -664,7 +665,7 @@ html:has(.craft) body {
 .craft-form {
   padding: var(--space-2xs);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: calc(var(--radius-home-control) + var(--space-2xs));
   background: var(--paper-raised);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -684,7 +685,7 @@ html:has(.craft) body {
   min-height: 3rem;
   padding-inline: var(--space-lg);
   border: 0;
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: transparent;
   color: var(--ink);
   font-size: 0.9rem;
@@ -704,7 +705,7 @@ html:has(.craft) body {
   min-width: 8.5rem;
   padding-inline: var(--space-lg);
   border: 0;
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--accent);
   color: var(--accent-ink);
   display: inline-flex;
@@ -782,7 +783,7 @@ html:has(.craft) body {
 .craft-limit-message a {
   min-height: 2.35rem;
   padding-inline: var(--space-md);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--accent);
   color: var(--accent-ink);
   display: inline-flex;
@@ -956,7 +957,7 @@ html:has(.craft) body {
   min-height: 2.5rem;
   padding-inline: var(--space-lg);
   border: 1px solid oklch(95% 0.006 83 / 0.32);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: oklch(15.5% 0.006 75 / 0.82);
   backdrop-filter: blur(0.5rem);
   display: inline-flex;
@@ -1109,7 +1110,7 @@ html:has(.craft) body {
   --clip-right: 66%;
   padding: var(--space-3xs);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--paper-raised);
   display: inline-grid;
   grid-auto-flow: column;
@@ -1122,7 +1123,7 @@ html:has(.craft) body {
   min-height: 2.25rem;
   padding-inline: var(--space-lg);
   border: 0;
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: transparent;
   display: inline-flex;
   align-items: center;
@@ -1151,7 +1152,7 @@ html:has(.craft) body {
   z-index: 1;
   inset: 0;
   clip-path: inset(
-    0 var(--clip-right) 0 var(--clip-left) round var(--radius-home-pill)
+    0 var(--clip-right) 0 var(--clip-left) round var(--radius-home-control)
   );
   background: var(--ink);
   color: var(--paper);
@@ -1195,7 +1196,7 @@ html:has(.craft) body {
   min-height: 2.35rem;
   padding: 0;
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--paper-raised);
   color: var(--ink-soft);
   cursor: pointer;
@@ -1376,7 +1377,7 @@ html:has(.craft) body {
   min-height: 2.35rem;
   padding-inline: var(--space-md);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--paper-raised);
   color: var(--ink-soft);
   cursor: pointer;
@@ -1558,7 +1559,7 @@ html:has(.craft) body {
 .craft-secondary {
   min-height: 2.75rem;
   padding-inline: var(--space-xl);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   display: inline-flex;
   align-items: center;
   font-size: 0.85rem;
@@ -1683,7 +1684,7 @@ html:has(.craft) body {
   min-height: 2.25rem;
   padding: 0;
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--paper-raised);
   color: var(--ink-soft);
   cursor: pointer;
@@ -1908,7 +1909,7 @@ html:has(.craft) body {
   margin-top: auto;
   padding-inline: var(--space-lg);
   border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: transparent;
   color: var(--ink);
   display: inline-flex;
@@ -1974,7 +1975,7 @@ html:has(.craft) body {
   inset: var(--space-md) var(--space-md) auto auto;
   padding: 0;
   border: 1px solid var(--rule);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: transparent;
   color: var(--ink-soft);
   cursor: pointer;
@@ -2114,7 +2115,7 @@ html:has(.craft) body {
   min-height: 2.75rem;
   padding-inline: var(--space-lg);
   border: 1px solid var(--accent);
-  border-radius: var(--radius-home-pill);
+  border-radius: var(--radius-home-control);
   background: var(--accent);
   color: var(--accent-ink);
   cursor: pointer;
@@ -2265,7 +2266,7 @@ html:has(.craft) body {
   .craft-nav-links {
     padding: var(--space-sm);
     border: 1px solid var(--rule);
-    border-radius: var(--radius-home-lg);
+    border-radius: calc(var(--radius-home-control) + var(--space-2xs));
     position: absolute;
     inset: calc(100% + var(--space-xs)) 0 auto;
     background: var(--paper-raised);
@@ -2380,12 +2381,11 @@ html:has(.craft) body {
 
   .craft-form {
     grid-template-columns: minmax(0, 1fr);
-    border-radius: var(--radius-home-lg);
   }
 
   .craft-form input,
   .craft-form button {
-    border-radius: calc(var(--radius-home-lg) - 0.25rem);
+    border-radius: var(--radius-home-control);
   }
 
   .craft-tablist {
@@ -2405,7 +2405,7 @@ html:has(.craft) body {
     width: 100%;
     min-width: 0;
     padding-inline: var(--space-sm);
-    border-radius: var(--radius-home-md);
+    border-radius: var(--radius-home-control);
   }
 
   /* The clipped duplicate assumes a horizontal row; on a stacked list it would
