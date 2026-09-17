@@ -12,6 +12,7 @@ import { agentRoutes } from './routes/agent/agent.index';
 import { dataRoutes } from './routes/data/data.index';
 import { publicRoutes } from './routes/public/public.index';
 import { sessionRoutes } from './routes/session/session.index';
+import { adminRoutes } from './routes/admin/admin.index';
 
 export const app = createApp();
 
@@ -26,6 +27,7 @@ app.on(['GET', 'POST'], '/api/auth/*', (c) => c.get('auth')!.handler(c.req.raw))
 app.use('/v1/*', applicationCors);
 app.route('/v1', publicRoutes);
 app.route('/v1', agentFramePreviewRoutes);
+app.route('/v1', adminRoutes);
 app.use('/v1/*', establishPrincipal);
 
 app.route('/v1', agentRoutes);

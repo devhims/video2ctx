@@ -237,11 +237,13 @@ Agent execution, access discovery, session reads, and run reads require the exis
 - `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=allowlist`: require a current, verified Better Auth email present in D1 `agent_access_allowlist`. Otherwise return `403 AGENT_ACCESS_REQUIRED`.
 - `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=all`: allow authenticated users with the required credential scope. Account ownership and credit checks still apply.
 
-Missing access mode defaults to `allowlist`. The legacy spelling `admins` remains an alias for this Agent-only allowlist; it never reads `ADMIN_EMAILS_SECRET`. Invalid modes or unavailable database reads fail closed. No Agent grant confers operator privileges, and operator membership alone does not grant Agent access. `ADMIN_EMAILS_SECRET` continues to control `/v1/admin/jobs` independently.
+Missing access mode defaults to `allowlist`. The legacy spelling `admins` remains an alias for this Agent-only allowlist; it never reads `ADMIN_EMAILS_SECRET`. Invalid modes or unavailable database reads fail closed. No Agent grant confers operator privileges, and operator membership alone does not grant Agent access. Verified operators in `ADMIN_EMAILS_SECRET` and accounts with the Better Auth `admin` role can use `/v1/admin/*` independently. See [admin dashboard](./ADMIN_DASHBOARD.md).
 
 The authenticated account ID resolves the current email, verification status, and D1 membership on every restricted request. The gate does not trust request-supplied email headers, cached session emails, or stored admin claims. Browser sessions, CLI sessions, and API keys use the same gate. The dashboard checks `/v1/agent/access` without caching on login/page load, navigation, and window focus, so a page refresh picks up grants or revocations without signing out.
 
 ### Manage testers in D1
+
+Operators can also add and remove these same rows in **Dashboard → Admin** at `/dashboard/admin`. Existing D1 entries appear automatically; there is no second tester list.
 
 Apply migration `0015_agent_access_allowlist.sql` before deploying the new gate. In the target database's D1 console, add one row per email, even before the person signs up:
 

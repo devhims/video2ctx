@@ -7,7 +7,7 @@ import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, Caret
 import styles from './DashboardSidebar.module.css';
 
 export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
-export type DashboardSidebarSection = DashboardSection | 'developer' | 'sessions';
+export type DashboardSidebarSection = DashboardSection | 'developer' | 'sessions' | 'admin';
 export type SidebarProject = { id: string; name: string };
 
 type IconName = 'trend' | 'search' | 'folder' | 'monitor' | 'user' | 'spark' | 'plus' | 'settings' | 'trash' | 'bell';
@@ -44,7 +44,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
 const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
-  const { agentAccess } = useDashboardSession();
+  const { agentAccess, adminAccess } = useDashboardSession();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -93,6 +93,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
           <p className={styles.groupLabel}>Manage</p>
           <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span></Link>
           {navButton('settings', 'Settings', 'settings')}
+          {adminAccess && <Link aria-label='Admin' title={collapsed ? 'Admin' : undefined} data-tooltip='Admin' aria-current={activeSection === 'admin' ? 'page' : undefined} className={styles.item} href='/dashboard/admin' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='user' /></span><span className={styles.label}>Admin</span></Link>}
         </div>
       </nav>
       <section className={styles.projects} aria-label='Recent projects'>

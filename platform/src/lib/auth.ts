@@ -2,7 +2,7 @@ import { APIError, betterAuth } from 'better-auth';
 import type { BetterAuthOptions } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
-import { bearer, deviceAuthorization, magicLink } from 'better-auth/plugins';
+import { admin, bearer, deviceAuthorization, magicLink } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
@@ -17,11 +17,13 @@ import {
 export const DEVICE_AUTH_CLIENT_ID = 'video2ctx-cli';
 export const DEVICE_AUTH_SCOPE = 'data:read account:access';
 
-export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
+export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }, adminUserIds: string[] = []) {
   return {
     appName: 'video2ctx',
     baseURL: env.AUTH_BASE_URL,
     basePath: '/api/auth',
+    // User deletion must run our billing, durable-state and storage cleanup.
+    disabledPaths: ['/admin/remove-user'],
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
     trustedOrigins: [env.APP_ORIGIN],
@@ -41,6 +43,7 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
     },
     verification: { storeIdentifier: 'hashed' },
     plugins: [
+      admin({ adminUserIds }),
       apiKey({
         apiKeyHeaders: 'x-api-key',
         defaultPrefix: 'aty_',
@@ -124,8 +127,8 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
   } satisfies BetterAuthOptions;
 }
 
-export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }) {
-  return betterAuth(createAuthOptions(env, executionCtx));
+export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }, adminUserIds: string[] = []) {
+  return betterAuth(createAuthOptions(env, executionCtx, adminUserIds));
 }
 
 async function digest(value: string): Promise<string> {

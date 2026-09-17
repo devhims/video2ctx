@@ -1,6 +1,6 @@
 import { headers } from 'next/headers';
 import { DashboardSessionProvider } from './DashboardSessionProvider';
-import { fetchServerSession, fetchServerAgentAccess, isLocalDashboardDemoEnabled } from '../../lib/server-session';
+import { fetchServerSession, fetchServerAgentAccess, fetchServerAdminAccess, isLocalDashboardDemoEnabled } from '../../lib/server-session';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const requestHeaders = await headers();
@@ -13,9 +13,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
     if (process.env.NODE_ENV === 'production') throw cause;
   }
 
-  const agentAccess = session ? await fetchServerAgentAccess(requestHeaders).catch(() => false) : false;
+  const [agentAccess, adminAccess] = session ? await Promise.all([
+    fetchServerAgentAccess(requestHeaders).catch(() => false),
+    fetchServerAdminAccess(requestHeaders).catch(() => false),
+  ]) : [false, false];
 
-  return <DashboardSessionProvider initialAgentAccess={agentAccess} initialUser={session?.user ?? null} demoEnabled={demoEnabled}>
+  return <DashboardSessionProvider initialAdminAccess={adminAccess} initialAgentAccess={agentAccess} initialUser={session?.user ?? null} demoEnabled={demoEnabled}>
     {children}
   </DashboardSessionProvider>;
 }

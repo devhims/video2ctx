@@ -7,6 +7,7 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     exclude: ['test/admission-queue.integration.test.ts',
       'test/auth-worker.integration.test.ts',
+      'test/admin-access.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',
       'test/user-account-do.integration.test.ts',

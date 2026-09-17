@@ -7,6 +7,7 @@ export default {
   async fetch(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'POST' && url.pathname === '/__test/session') {
+      const input = await request.json().catch(() => ({})) as { email?: string };
       const options = createAuthOptions(env, executionCtx);
       const auth = betterAuth({
         ...options,
@@ -14,7 +15,7 @@ export default {
       });
       const context = await auth.$context;
       const user = context.test.createUser({
-        email: `auth-${crypto.randomUUID()}@example.test`,
+        email: input.email ?? `auth-${crypto.randomUUID()}@example.test`,
         name: 'Auth Test User',
         emailVerified: true,
       });

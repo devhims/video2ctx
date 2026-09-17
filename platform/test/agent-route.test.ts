@@ -154,15 +154,6 @@ describe('agent routes', () => {
     expect(await response.json()).toMatchObject({ error: { code: 'AGENT_ACCESS_REQUIRED' } });
   });
 
-  test('Agent access does not grant administrative job access', async () => {
-    const harness = agentHarness();
-    Object.assign(harness.env, { ADMIN_EMAILS_SECRET: 'operator@example.com' });
-    expect((await app.request('/v1/agent/access', {}, harness.env, executionContext)).status).toBe(200);
-    const response = await app.request('/v1/admin/jobs', {}, harness.env, executionContext);
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ error: { code: 'ADMIN_REQUIRED' } });
-  });
-
   test('D1 membership still requires a verified current email', async () => {
     const harness = agentHarness();
     harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 0, agentAllowed: 1 });

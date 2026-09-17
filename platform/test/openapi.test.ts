@@ -54,6 +54,7 @@ describe('OpenAPI and Scalar documentation', () => {
       ['dataRoutes', '../src/routes/data/data.index.ts', '/v1'],
       ['publicRoutes', '../src/routes/public/public.index.ts', '/v1'],
       ['sessionRoutes', '../src/routes/session/session.index.ts', '/v1'],
+      ['adminRoutes', '../src/routes/admin/admin.index.ts', '/v1'],
     ] as const;
     const declared = files.flatMap(([router, file, prefix]) => {
       const source = readFileSync(new URL(file, import.meta.url), 'utf8');
