@@ -109,23 +109,58 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
   return bytes;
 }
 
-async function jpegResponse(response: Response): Promise<Uint8Array> {
+// Validate the RIFF envelope and chunk boundaries without decoding/re-encoding pixels.
+// https://developers.google.com/speed/webp/docs/riff_container
+function isWebP(bytes: Uint8Array): boolean {
+  if (bytes.length < 20) return false;
+  const fourCC = (offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (fourCC(0) !== 'RIFF' || fourCC(8) !== 'WEBP' || view.getUint32(4, true) !== bytes.length - 8
+    || !['VP8 ', 'VP8L', 'VP8X'].includes(fourCC(12))) return false;
+  let hasImage = false;
+  let offset = 12;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) return false;
+    const kind = fourCC(offset);
+    const size = view.getUint32(offset + 4, true);
+    const start = offset + 8;
+    const end = start + size;
+    const paddedEnd = end + (size % 2);
+    if (paddedEnd > bytes.length || (size % 2 && bytes[end] !== 0)) return false;
+    if (kind === 'VP8 ') {
+      if (size < 10 || (bytes[start]! & 1) !== 0 || bytes[start + 3] !== 0x9d
+        || bytes[start + 4] !== 0x01 || bytes[start + 5] !== 0x2a) return false;
+      hasImage = true;
+    } else if (kind === 'VP8L') {
+      if (size < 5 || bytes[start] !== 0x2f) return false;
+      hasImage = true;
+    } else if (kind === 'VP8X') {
+      if (offset !== 12 || size !== 10 || (bytes[start]! & 0x02) !== 0) return false;
+    } else if (kind === 'ANIM' || kind === 'ANMF') {
+      return false; // A contact sheet must be a still image.
+    }
+    offset = paddedEnd;
+  }
+  return hasImage;
+}
+
+async function imageResponse(response: Response): Promise<{ bytes: Uint8Array; extension: 'jpg' | 'webp' }> {
   if (!response.ok) {
     await response.body?.cancel();
     throw new YouTubeClientError('UPSTREAM_ERROR', `Storyboard request failed with status ${response.status}.`, {
       status: response.status, retryable: response.status === 429 || response.status >= 500,
     });
   }
-  const type = response.headers.get('content-type')?.toLowerCase() ?? '';
-  if (!type.startsWith('image/jpeg') && !type.startsWith('image/jpg')) {
+  const type = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!['image/jpeg', 'image/jpg', 'image/webp'].includes(type)) {
     await response.body?.cancel();
-    throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned a non-JPEG storyboard.');
+    throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an unsupported storyboard image type.');
   }
   const bytes = await readBoundedBytes(response, MAX_SHEET_BYTES);
-  if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
-    throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an invalid storyboard JPEG.');
-  }
-  return bytes;
+  // YouTube can serve WebP at a .jpg URL. Choose the filename from the bytes.
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return { bytes, extension: 'jpg' };
+  if (isWebP(bytes)) return { bytes, extension: 'webp' };
+  throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an invalid storyboard JPEG or WebP.');
 }
 
 export function validateStoryboardOptions(options: StoryboardOptions): number {
@@ -224,8 +259,8 @@ export async function downloadStoryboard(
   const sheets: StoryboardContactSheet[] = [];
   for (const sheet of selectedSheets) {
     const response = await fetchImpl(sheetUrl(spec, level, sheet));
-    const bytes = await jpegResponse(response);
-    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.jpg`);
+    const { bytes, extension } = await imageResponse(response);
+    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
     await writeFile(path, bytes);
     const firstFrameIndex = sheet * capacity;
     sheets.push({

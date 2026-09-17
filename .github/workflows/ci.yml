@@ -38,6 +38,7 @@ jobs:
       - run: test -x ../../.agents/skills/youtube-ctx/scripts/watch.mjs
       - run: node ../../.agents/skills/youtube-ctx/scripts/watch.mjs --help
       - run: npm pack --dry-run
+      - run: npm run test:packed
 
   platform:
     name: Platform + Auth E2E

@@ -19246,7 +19246,37 @@ async function readBoundedBytes(response, maxBytes) {
   }
   return bytes;
 }
-async function jpegResponse(response) {
+function isWebP(bytes) {
+  if (bytes.length < 20) return false;
+  const fourCC = (offset2) => String.fromCharCode(...bytes.subarray(offset2, offset2 + 4));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (fourCC(0) !== "RIFF" || fourCC(8) !== "WEBP" || view.getUint32(4, true) !== bytes.length - 8 || !["VP8 ", "VP8L", "VP8X"].includes(fourCC(12))) return false;
+  let hasImage = false;
+  let offset = 12;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) return false;
+    const kind = fourCC(offset);
+    const size = view.getUint32(offset + 4, true);
+    const start = offset + 8;
+    const end = start + size;
+    const paddedEnd = end + size % 2;
+    if (paddedEnd > bytes.length || size % 2 && bytes[end] !== 0) return false;
+    if (kind === "VP8 ") {
+      if (size < 10 || (bytes[start] & 1) !== 0 || bytes[start + 3] !== 157 || bytes[start + 4] !== 1 || bytes[start + 5] !== 42) return false;
+      hasImage = true;
+    } else if (kind === "VP8L") {
+      if (size < 5 || bytes[start] !== 47) return false;
+      hasImage = true;
+    } else if (kind === "VP8X") {
+      if (offset !== 12 || size !== 10 || (bytes[start] & 2) !== 0) return false;
+    } else if (kind === "ANIM" || kind === "ANMF") {
+      return false;
+    }
+    offset = paddedEnd;
+  }
+  return hasImage;
+}
+async function imageResponse(response) {
   if (!response.ok) {
     await response.body?.cancel();
     throw new YouTubeClientError("UPSTREAM_ERROR", `Storyboard request failed with status ${response.status}.`, {
@@ -19254,16 +19284,15 @@ async function jpegResponse(response) {
       retryable: response.status === 429 || response.status >= 500
     });
   }
-  const type = response.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!type.startsWith("image/jpeg") && !type.startsWith("image/jpg")) {
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!["image/jpeg", "image/jpg", "image/webp"].includes(type)) {
     await response.body?.cancel();
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned a non-JPEG storyboard.");
+    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an unsupported storyboard image type.");
   }
   const bytes = await readBoundedBytes(response, MAX_SHEET_BYTES);
-  if (bytes.length > MAX_SHEET_BYTES || bytes[0] !== 255 || bytes[1] !== 216) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an invalid storyboard JPEG.");
-  }
-  return bytes;
+  if (bytes[0] === 255 && bytes[1] === 216) return { bytes, extension: "jpg" };
+  if (isWebP(bytes)) return { bytes, extension: "webp" };
+  throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned an invalid storyboard JPEG or WebP.");
 }
 function validateStoryboardOptions(options) {
   if (!/^[A-Za-z0-9_-]{11}$/.test(options.videoId)) {
@@ -19348,8 +19377,8 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   const sheets = [];
   for (const sheet of selectedSheets) {
     const response = await fetchImpl(sheetUrl(spec, level, sheet));
-    const bytes = await jpegResponse(response);
-    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.jpg`);
+    const { bytes, extension } = await imageResponse(response);
+    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
     await writeFile(path, bytes);
     const firstFrameIndex = sheet * capacity;
     sheets.push({

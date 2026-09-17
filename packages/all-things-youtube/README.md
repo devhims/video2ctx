@@ -35,7 +35,7 @@ npm install all-things-youtube
 
 Requires Node.js 18 or newer. The package uses the runtime's standard `fetch`; you can supply your own implementation when needed.
 
-Storyboard contact sheets are downloaded as JPEG files beneath a caller-owned output directory. The package does not require FFmpeg.
+Storyboard contact sheets are saved as native JPEG (`.jpg`) or WebP (`.webp`) files beneath a caller-owned output directory. The package does not require FFmpeg or an image-conversion dependency.
 
 > Keep calls server-side. Direct browser calls are commonly blocked by CORS and make every user's browser responsible for upstream rate limits.
 
@@ -131,6 +131,10 @@ for (const sheet of storyboard.sheets) {
 
 The returned sheet paths are absolute. A tile's timestamp is
 `(firstFrameIndex + row * columns + column) * intervalMs`. The package downloads at most 12 sheets by default; `maxSheets` accepts 1–20. Storyboard URLs remain internal and are never returned.
+
+Since 0.6.0, use the returned `sheet.path` rather than assuming a `.jpg` extension. YouTube sometimes serves WebP bytes from a `.jpg` URL; the package validates the image container and saves the original bytes with the matching extension. It accepts still JPEG/WebP images up to 4 MiB per sheet, without decoding their pixels. Tile coordinates and timestamps are unchanged.
+
+Storyboard discovery checks alternate YouTube clients and the desktop watch page when a playable response lacks usable storyboards. These attempts share a 30-second budget. A missing storyboard is reported only when all checked clients are playable and omit it; blocked or uncertain responses are reported as unavailable.
 
 ## Working with responses
 
@@ -648,6 +652,8 @@ YOUTUBE_LIVE=1 npm test
 ```
 
 Live tests are best treated as integration checks: upstream availability, localization, and rate limiting can vary by network and time.
+
+Before a release, `npm run test:packed` builds the library, installs its tarball in a temporary directory, and tests both module entry points and desktop-to-WebP recovery through the public API. It also checks that the tarball excludes test fixtures. Add `-- --live` to fetch the original regression video's storyboards; add `-- --live --decode` to also verify every downloaded image with a locally installed FFmpeg. FFmpeg is only needed for this optional verification, not library use.
 
 ## Scope and stability
 
