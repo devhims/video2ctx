@@ -50,6 +50,40 @@ describe('storyboard agent tool', () => {
     await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'storyboard-call')).rejects.toThrow('extraction failed');
     expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...extractionFixture, outcome: 'failed', toolCallId: 'storyboard-call' });
   });
+  it('saves inspected sheets and exposes their previews in the persisted tool trace', async () => {
+    const preview = { assetId: 'a'.repeat(64), collectionId: 'b'.repeat(64),
+      timestampMs: 50000, endTimestampMs: 55000, width: 200, height: 100,
+      frameCount: 2, columns: 2, rows: 1, intervalMs: 5000 };
+    const saveStoryboardPreviews = vi.fn(async () => [preview]);
+    const ctx = Object.assign(context(), { saveStoryboardPreviews });
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'preview');
+    expect(saveStoryboardPreviews).toHaveBeenCalledWith(storyboard, ctx.signal);
+    expect(packet.artifacts[0]!.data.previews).toEqual([preview]);
+    const { toolTrace } = await import('../src/agents/runtime/run-progress');
+    const trace = toolTrace({ tool_call_id: 'preview', tool_name: 'get_video_storyboard', operation: 'storyboard',
+      semantic_key: `storyboard:${JSON.stringify({ videoId: storyboard.videoId, maxSheets: 1 })}`,
+      status: 'completed', created_at: 100, updated_at: 200, result_json: JSON.stringify(packet) }, true);
+    expect(trace.output?.storyboard).toEqual({ mode: 'inspection', sheets: [preview] });
+    expect(JSON.stringify(trace)).not.toContain('/9j/');
+    const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
+    expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('assetId');
+  });
+  it('preserves findings and charges when preview storage fails without leaking storage errors', async () => {
+    const ctx = context();
+    ctx.saveStoryboardPreviews = async () => { throw new Error('private storage failure'); };
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'failed-save');
+    expect(packet.excerpts[0]!.text).toContain('two boxes');
+    expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE' }));
+    expect(packet.usage[0]!.credits).toBe(1);
+    expect(JSON.stringify(packet)).not.toContain('private storage failure');
+  });
+  it('propagates cancellation during preview saving', async () => {
+    const ctx = context();
+    const controller = new AbortController();
+    ctx.signal = controller.signal;
+    ctx.saveStoryboardPreviews = async () => { controller.abort(); return []; };
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'cancel-save')).rejects.toThrow();
+  });
   it('exposes metadata to the research model before downloading or analyzing images', async () => {
     const ctx = context();
     const manifest = { totalSheets: 6, framesPerSheet: 2, tileWidth: 100, tileHeight: 100,
@@ -58,14 +92,21 @@ describe('storyboard agent tool', () => {
       ...storyboard, selection: { mode: 'metadata' as const }, manifest, sheets: [], meta: { partial: false, warnings: [] },
     } }));
     ctx.analyzeStoryboard = vi.fn();
+    ctx.saveStoryboardPreviews = vi.fn();
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata');
     expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
       { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+    expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
     expect(packet.excerpts).toEqual([]);
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage).toMatchObject({ manifest, sampledFrames: 0 });
     expect(JSON.stringify(packet)).not.toContain('/9j/');
+    const { toolTrace } = await import('../src/agents/runtime/run-progress');
+    expect(toolTrace({ tool_call_id: 'metadata', tool_name: 'get_video_storyboard', operation: 'storyboard',
+      semantic_key: `storyboard:${JSON.stringify({ videoId: storyboard.videoId })}`, status: 'completed',
+      created_at: 100, updated_at: 200, result_json: JSON.stringify(packet) }, true).output?.storyboard)
+      .toEqual({ mode: 'metadata', sheets: [] });
   });
   it('passes the agent-selected sheets through scope and retains all coverage', async () => {
     const ctx = context();
@@ -137,8 +178,10 @@ describe('storyboard agent tool', () => {
   it('does not start analysis after provider failure', async () => {
     const ctx = context(); ctx.provider.storyboard = vi.fn(async () => { throw new Error('No storyboard'); });
     ctx.analyzeStoryboard = vi.fn();
+    ctx.saveStoryboardPreviews = vi.fn();
     await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'call')).rejects.toThrow('No storyboard');
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+    expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
   });
   it('honors cancellation before fetching images', async () => {
     const ctx = context(); ctx.signal = AbortSignal.abort();

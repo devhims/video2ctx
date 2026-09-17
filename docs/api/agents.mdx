@@ -90,6 +90,17 @@ status. Each tool includes its name, status, start/end times, public input
 arguments, and an evidence summary when available. Raw provider payloads,
 continuation tokens, diagnostic captures, and model reasoning are excluded.
 
+Completed visual tools can include saved image previews. Frame calls expose
+`tools[].output.frames`; storyboard inspection calls expose
+`tools[].output.storyboard.sheets`. Each preview includes `collectionId` and
+`assetId` for `GET /v1/agent/frames/{collectionId}/{assetId}`. Storyboard sheets
+also include the first and last sampled timestamps, grid dimensions, sample count,
+and interval. The dashboard displays these images in an expandable gallery.
+Metadata-only storyboard calls report `storyboard.mode: "metadata"` with no
+images and appear as **Storyboard metadata**. Older inspection calls may have
+no saved previews. Preview links work without authentication, remain available
+until account deletion, and do not trigger extraction or additional credits.
+
 Replace the previous snapshot instead of appending it. The first snapshot on
 any connection restores the saved state, so completed sessions retain their tool
 trace. Active connections rotate after roughly 25 seconds; reconnect on EOF

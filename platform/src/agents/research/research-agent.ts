@@ -107,6 +107,7 @@ export async function executeResearchRun(options: {
   onFinalizing: (deadlineAt: number) => void | Promise<void>;
   executeEvidenceTool: (execution: EvidenceToolExecution) => Promise<EvidencePacket>;
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
+  saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
 }): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
@@ -166,6 +167,7 @@ export async function executeResearchRun(options: {
     provider,
     saveFramePreviews: options.saveFramePreviews,
     onExtractionDiagnostic: options.onExtractionDiagnostic,
+    saveStoryboardPreviews: options.saveStoryboardPreviews,
     analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
       createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,

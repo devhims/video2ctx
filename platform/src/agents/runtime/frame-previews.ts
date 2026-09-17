@@ -35,18 +35,27 @@ export function packetFramePreviews(packet: EvidencePacket): FramePreview[] {
 export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal): Promise<FramePreview[]> {
   signal.throwIfAborted();
   const frames = framesSchema.parse(value).frames;
+  return saveImagePreviews(bucket, userId, frames.map(frame => ({ imageBase64: frame.imageBase64,
+    metadata: { timestampMs: frame.timestampMs, width: frame.width, height: frame.height } })), signal);
+}
+
+// Both visual tools share the existing collection, serving route and account cleanup.
+export async function saveImagePreviews<T extends { width: number; height: number }>(
+  bucket: R2Bucket, userId: string, images: { imageBase64: string; metadata: T }[], signal: AbortSignal,
+): Promise<(T & { assetId: string; collectionId: string })[]> {
+  signal.throwIfAborted();
   const collectionId = await frameCollectionId(userId);
-  const saved: { key: string; preview: FramePreview }[] = [];
+  const saved: { key: string; preview: T & { assetId: string; collectionId: string } }[] = [];
   try {
-    // At most six writes, each bounded by the extraction contract. Sequential
+    // Callers validate their bounded image contracts before any writes. Sequential
     // writes keep cancellation and rollback from racing outstanding uploads.
-    for (const frame of frames) {
+    for (const image of images) {
       signal.throwIfAborted();
       const assetId = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('');
       const key = framePreviewKey(collectionId, assetId);
-      const preview = { assetId, collectionId, timestampMs: frame.timestampMs, width: frame.width, height: frame.height };
+      const preview = { ...image.metadata, assetId, collectionId };
       saved.push({ key, preview });
-      await bucket.put(key, Uint8Array.from(atob(frame.imageBase64), value => value.charCodeAt(0)), {
+      await bucket.put(key, Uint8Array.from(atob(image.imageBase64), value => value.charCodeAt(0)), {
         httpMetadata: { contentType: 'image/jpeg', cacheControl: 'no-store' },
       });
       signal.throwIfAborted();

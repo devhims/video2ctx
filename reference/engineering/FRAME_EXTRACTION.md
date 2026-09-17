@@ -134,11 +134,15 @@ The automated tests cover agent-only exposure, agent credit usage, request valid
 
 Cloudflare references: [Container class](https://developers.cloudflare.com/containers/reference/container-class/) and [Worker best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/).
 
-## Dashboard frame previews
+## Dashboard frame and storyboard previews
 
 New frame calls save the exact JPEGs sent to the visual analyst after analysis succeeds. The expanded dashboard tool trace shows a thumbnail grid with timestamps and dimensions, plus an enlarged viewer. The trace contains only preview descriptors, never base64 image data. Historical calls without saved images explain that previews were not saved.
 
+Storyboard inspection calls also save the exact analyzed sheet JPEGs, up to 20 sheets and 8 MiB per call. The trace exposes `storyboard.mode` and `storyboard.sheets`, including each sheet's first and last sampled timestamps, grid dimensions, sample count, and interval. The shared viewer shows the selected sheets and their sampled ranges. A call with no sheet or timestamp selector retrieves metadata only, skips analysis and preview storage, and displays as "Storyboard metadata" with an explicit explanation. Saved descriptors are excluded from model evidence projections. Preview storage failures preserve visual findings and add `STORYBOARD_PREVIEW_UNAVAILABLE`. Existing sessions can show the metadata label, but past inspection calls without saved images cannot gain previews retroactively.
+
 Objects live under `agent-frames/{collectionId}/{assetId}.jpg` in the existing RESEARCH bucket. Collection IDs are derived from the account ID; each asset ID has 256 random bits. URLs contain no session IDs, run IDs, prompts, or raw account IDs. Images remain available until account deletion. The deletion flow drains active agent work before deleting both private research data and the account’s frame collection. Failed or cancelled uploads roll back their batch; storage failures leave successful visual evidence usable with a `FRAME_PREVIEW_UNAVAILABLE` warning.
+
+Storyboard sheets share that collection, public image route, and deletion flow. The namespace keeps its existing name for compatibility. No container changes or migrations are required; the platform Worker and dashboard both need the preview update for new inspection calls to display sheets.
 
 `GET /v1/agent/frames/{collectionId}/{assetId}` is public. Anyone with the unguessable URL can view the JPEG without a login or API key. The handler is mounted before authentication and can read only JPEG keys in the frame namespace. The R2 bucket itself is not public. There is no listing route or data API frame endpoint. Session reads and new extraction requests still require authentication. Responses use `image/jpeg`, `no-store`, `nosniff`, and `noindex, nofollow`. The dashboard loads original images through its existing API proxy with Next.js image optimization disabled.
 

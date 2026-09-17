@@ -42,6 +42,16 @@ export const agentProgressSchema = z.object({
         assetId: z.string().regex(/^[a-f0-9]{64}$/), collectionId: z.string().regex(/^[a-f0-9]{64}$/), timestampMs: z.number().int().nonnegative(),
         width: z.number().int().positive(), height: z.number().int().positive(),
       })).max(6).optional(),
+      storyboard: z.object({
+        mode: z.enum(['metadata', 'inspection']),
+        sheets: z.array(z.object({
+          assetId: z.string().regex(/^[a-f0-9]{64}$/), collectionId: z.string().regex(/^[a-f0-9]{64}$/),
+          timestampMs: z.number().int().nonnegative(), endTimestampMs: z.number().int().nonnegative(),
+          width: z.number().int().positive().max(16384), height: z.number().int().positive().max(16384),
+          frameCount: z.number().int().positive(), columns: z.number().int().positive(), rows: z.number().int().positive(),
+          intervalMs: z.number().int().positive(),
+        })).max(20),
+      }).optional(),
     }).optional(),
   })),
 });

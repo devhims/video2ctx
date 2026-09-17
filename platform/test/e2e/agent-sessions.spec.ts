@@ -335,6 +335,80 @@ test('keeps an admitted new message visible while session history is still loadi
   await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
 });
 
+test('storyboard traces distinguish metadata and show saved sheets across reloads and mobile', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  const sheets = [0, 60000, 120000].map((timestampMs, index) => ({ assetId: String(index + 1).repeat(64),
+    collectionId: 'c'.repeat(64), timestampMs, endTimestampMs: timestampMs + 55000,
+    width: 2400, height: 900, frameCount: 12, columns: 4, rows: 3, intervalMs: 5000 }));
+  const jpeg = await page.evaluate<string>(`(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 2400; canvas.height = 900;
+    const ctx = canvas.getContext('2d');
+    for (let i = 0; i < 12; i++) {
+      const x = (i % 4) * 600, y = Math.floor(i / 4) * 300;
+      ctx.fillStyle = i % 2 ? '#24384b' : '#385c50'; ctx.fillRect(x, y, 600, 300);
+      ctx.fillStyle = '#fff'; ctx.font = '36px sans-serif'; ctx.fillText('Sample ' + (i + 1), x + 40, y + 80);
+      ctx.fillStyle = '#77c4a3'; ctx.fillRect(x + 40, y + 140, 120 + i * 20, 80);
+      ctx.strokeStyle = '#ccc'; ctx.strokeRect(x, y, 600, 300);
+    }
+    return canvas.toDataURL('image/jpeg').split(',')[1];
+  })()`);
+  const missingId = sheets[2]!.assetId;
+  await page.route('**/api/platform/v1/agent/frames/*/*', route => route.fulfill(route.request().url().endsWith(missingId)
+    ? { status: 404, body: '' } : { status: 200, contentType: 'image/jpeg', body: Buffer.from(jpeg, 'base64') }));
+  let legacy = false;
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+    run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed', result: {
+      outcome: 'answered', answer: 'The storyboard shows the diagram changes.', sources: [], warnings: [] } }, phase: 'completed',
+    tools: [
+      { toolCallId: 'metadata', name: 'get_video_storyboard', operation: 'storyboard', status: 'completed', startedAt: 100, finishedAt: 200,
+        input: { videoId: 'abcdefghijk' }, output: { sourceCount: 1, excerptCount: 0, sources: [], warningCodes: [],
+          ...(!legacy ? { storyboard: { mode: 'metadata', sheets: [] } } : {}) } },
+      { toolCallId: 'storyboard', name: 'get_video_storyboard', operation: 'storyboard', status: 'completed', startedAt: 200, finishedAt: 900,
+        input: { videoId: 'abcdefghijk', maxSheets: 3, focus: 'Diagram changes' }, output: { sourceCount: 1, excerptCount: 14, sources: [], warningCodes: [],
+          ...(!legacy ? { storyboard: { mode: 'inspection', sheets } } : {}) } },
+    ],
+  })}\n\n` }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const latest = page.locator('.agent-assistant-message').last();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await latest.getByText('Storyboard metadata', { exact: true }).click();
+  await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
+  await expect(latest.locator('details').filter({ hasText: 'Metadata only. No images were downloaded or inspected.' }).locator('img')).toHaveCount(0);
+  await latest.getByText('get video storyboard', { exact: true }).click();
+  const first = latest.getByRole('button', { name: 'Open sheet at 0:00 to 0:55', exact: true });
+  await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
+  await expect(latest.getByRole('button', { name: 'Open sheet at 2:00 to 2:55', exact: true })).toBeDisabled();
+  await first.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('storyboard-gallery-desktop.png') });
+  await first.click();
+  const modal = page.getByRole('dialog');
+  await expect(modal).toHaveAttribute('aria-label', 'Storyboard sheet at 0:00 to 0:55');
+  await expect(modal.getByRole('button', { name: 'Previous sheet' })).toBeDisabled();
+  await modal.getByRole('button', { name: 'Next sheet' }).click();
+  await expect(modal).toHaveAttribute('aria-label', 'Storyboard sheet at 1:00 to 1:55');
+  await page.screenshot({ path: testInfo.outputPath('storyboard-viewer-desktop.png') });
+  await page.keyboard.press('Escape');
+  await expect(modal).not.toBeVisible();
+  await expect(first).toBeFocused();
+  await page.reload();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await latest.getByText('get video storyboard', { exact: true }).click();
+  await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await first.click();
+  await expect(modal).toBeVisible();
+  expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('storyboard-viewer-mobile.png') });
+  await modal.getByRole('button', { name: 'Close sheet preview' }).click();
+  legacy = true;
+  await page.reload();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await latest.getByText('Storyboard metadata', { exact: true }).click();
+  await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
+  await latest.getByText('get video storyboard', { exact: true }).click();
+  await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
+});
+
 test('frame traces show original images, enlarge, navigate, and handle missing previews', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   const collectionId = 'a'.repeat(64);

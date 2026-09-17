@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 import { storyboardSchema } from '../storyboard';
+import { storyboardPreviewsSchema } from '../../../runtime/storyboard-previews';
 import { safeIdPart, videoIdSchema, youtubeVideoUrl, meteredCredits } from './provider-evidence';
 
 export const getVideoStoryboardInputSchema = z.object({
@@ -47,7 +48,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
         modelCallId: `visual-analyst:${context.runId}:${toolCallId}` });
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:storyboard`;
-      return evidencePacketSchema.parse({
+      const packet = evidencePacketSchema.parse({
         packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
         sources: [{ id: sourceId, provider: 'youtube', kind: 'storyboard', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
         excerpts: analysis.findings.flatMap((finding, findingIndex) => [...new Set(finding.frameIndexes)].map(frame => {
@@ -72,6 +73,19 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
         ],
         usage: [{ operation: 'storyboard', credits: meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
+      if (!metadataOnly && context.saveStoryboardPreviews) {
+        try {
+          packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
+            await context.saveStoryboardPreviews(storyboard, context.signal),
+          );
+        } catch {
+          context.signal.throwIfAborted();
+          packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
+            message: 'The storyboard was analyzed, but its image previews could not be saved.' });
+        }
+      }
+      context.signal.throwIfAborted();
+      return packet;
     },
   });
 }
