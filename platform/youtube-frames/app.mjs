@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { errorDetails, logDiagnostic } from './diagnostics.mjs';
+import { diagnosticDetails, errorDetails, logDiagnostic } from './diagnostics.mjs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { parseFrameRequest } from './contract.mjs';
@@ -22,17 +22,29 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
     const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
     c.header('x-extraction-id', extractionId);
     const startedAt = Date.now();
+    const diagnostics = { version: 1, events: [], droppedEvents: 0 };
+    const safeLog = event => { try { log(event); } catch { /* Operator logging cannot fail extraction. */ } };
+    const capture = event => {
+      const { error, reason, message, ...fields } = diagnosticDetails(event);
+      const code = error?.code;
+      if (typeof code === 'string' && /^[A-Z_]{1,64}$/.test(code)) fields.code = code;
+      if (JSON.stringify(fields).length > 1024) { diagnostics.droppedEvents++; return; }
+      if (diagnostics.events.length === 64) { diagnostics.events.splice(16, 1); diagnostics.droppedEvents++; }
+      diagnostics.events.push(fields);
+    };
     active = true;
     try {
-      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log }) });
+      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log: safeLog, onDiagnostic: capture }), diagnostics });
     } catch (error) {
       const code = typeof error.code === 'string' ? error.code : 'FRAME_EXTRACTION_FAILED';
       const status = code === 'INVALID_INPUT' ? 422 : code === 'NOT_FOUND' ? 404 : code === 'RATE_LIMITED' ? 429
         : code === 'FRAME_TIMEOUT' || code === 'FRAME_CANCELLED' ? 503 : 502;
-      log({ event: 'youtube_frames_failure', extractionId, videoId: request.videoId,
-        timestampsMs: request.timestampsMs, elapsedMs: Date.now() - startedAt, status, error: errorDetails(error) });
+      const failure = { event: 'youtube_frames_failure', stage: 'request', extractionId, videoId: request.videoId,
+        timestampsMs: request.timestampsMs, elapsedMs: Date.now() - startedAt, status, error: errorDetails(error) };
+      safeLog(failure);
+      capture(failure);
       return c.json({ error: { code, message: code === 'INVALID_INPUT' ? error.message : 'YouTube frame extraction failed.',
-        retryable: error.retryable === true } }, status);
+        retryable: error.retryable === true }, diagnostics }, status);
     } finally { active = false; }
   });
   return app;

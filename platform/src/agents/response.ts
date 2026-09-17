@@ -1,3 +1,4 @@
+import { storedExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research/research-plan';
 import { z } from 'zod';
@@ -46,7 +47,8 @@ export const compactAgentRunSchema = agentRunReceiptSchema.pick({
   error: z.string().optional(),
   diagnostics: agentRunReceiptSchema.pick({
     userMessageId: true, conversationTurn: true, modelStepCount: true, toolCallCount: true,
-  }).extend({ route: capabilityRouteDecisionSchema.optional(), transcriptAnalysis: z.array(transcriptDiagnosticSchema).optional() }).optional(),
+  }).extend({ route: capabilityRouteDecisionSchema.optional(), transcriptAnalysis: z.array(transcriptDiagnosticSchema).optional(),
+    extractions: z.array(storedExtractionDiagnosticSchema).max(64).optional(), extractionDiagnosticsTruncated: z.boolean().optional() }).optional(),
 });
 
 /** Presentation only: never mutate persisted evidence, billing, or conversation memory. */
@@ -62,6 +64,7 @@ export function compactAgentRun(run: AgentRunView, include: AgentResponseOptions
     ...(include.includes('diagnostics') ? { diagnostics: {
       userMessageId: run.userMessageId, conversationTurn: run.conversationTurn,
       modelStepCount: run.modelStepCount, toolCallCount: run.toolCallCount, route: run.route, transcriptAnalysis: run.transcriptDiagnostics,
+      extractions: run.extractionDiagnostics, extractionDiagnosticsTruncated: run.extractionDiagnosticsTruncated,
     } } : {}),
   });
 }

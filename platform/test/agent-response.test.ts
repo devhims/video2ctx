@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
 import type { AgentRunView } from '../src/agents/agent-runtime-do';
 
@@ -16,6 +17,18 @@ function completedRun(): AgentRunView {
 }
 
 describe('compact agent response', () => {
+  it('exposes stored extractions only on explicit diagnostics reads, including failed runs', () => {
+    const run = completedRun();
+    run.status = 'failed';
+    run.extractionDiagnostics = [{ ...extractionFixture, toolCallId: 'frame-call', outcome: 'failed' }];
+    run.extractionDiagnosticsTruncated = true;
+    expect(compactAgentRun(run)).not.toHaveProperty('diagnostics');
+    const response = compactAgentRun(run, ['diagnostics']);
+    expect(response.diagnostics?.extractions).toEqual(run.extractionDiagnostics);
+    expect(response.diagnostics?.extractionDiagnosticsTruncated).toBe(true);
+    expect(JSON.stringify(response.result)).not.toContain('extractionId');
+    expect(legacyAgentRun(run)).toHaveProperty('extractionDiagnostics', run.extractionDiagnostics);
+  });
   it('exposes the stored request for every run state without regenerating it', () => {
     for (const status of ['pending', 'running', 'completed', 'failed', 'cancelled'] as const) {
       const run = completedRun();

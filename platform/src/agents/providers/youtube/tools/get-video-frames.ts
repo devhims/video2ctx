@@ -35,7 +35,8 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         throw new Error('Insufficient time for frame extraction and analysis. Finalize using the available evidence.');
       }
       const startedAt = Date.now();
-      const response = await context.provider.frames(request, context.signal, { extractionTimeoutMs });
+      const response = await context.provider.frames(request, context.signal, { extractionTimeoutMs },
+        event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
       context.signal.throwIfAborted();
       const frames = validateFrameResponse(request, response.value);
       const extractedAt = Date.now();

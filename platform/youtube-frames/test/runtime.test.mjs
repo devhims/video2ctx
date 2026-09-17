@@ -12,6 +12,23 @@ async function fixture(source, work) {
   try { await work(jobPath); } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
+test('delivers final source details to capture even after operator logs reach their limit', async () => {
+  await fixture(`import {writeFile} from 'node:fs/promises';
+    for(let i=0;i<105;i++) console.error(JSON.stringify({event:'frame_diagnostic',stage:'media_http',status:403}));
+    console.error(JSON.stringify({event:'frame_diagnostic',stage:'ffmpeg_success',profile:'ios',formatId:18,width:640,height:360}));
+    await writeFile(process.argv[2]+'/result.json', JSON.stringify({value:{frames:[]}}));`, async jobPath => {
+    const events = [], logs = [];
+    await runFrameJob({ videoId: 'abcdefghijk', timestampsMs: [0] }, {
+      jobPath, onDiagnostic: event => events.push(event), log: event => logs.push(event),
+    });
+    assert.equal(events.length, 106);
+    assert.equal(events.at(-1).stage, 'ffmpeg_success');
+    assert.equal(events.at(-1).formatId, 18);
+    assert.equal(logs.length, 101);
+    assert.equal(logs.at(-1).droppedEvents, 6);
+  });
+});
+
 test('reads completed results and removes the temporary workspace', async () => {
   await fixture(`import {writeFile} from 'node:fs/promises';
     await writeFile(process.argv[2]+'/result.json', JSON.stringify({value:{frames:[]}}));`, async jobPath => {

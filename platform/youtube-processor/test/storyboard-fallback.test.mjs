@@ -107,7 +107,11 @@ test('processor runtime wires recovery and correlates safe success and failure d
     return Response.json(calls === 1 ? { playabilityStatus: { status: 'OK' } } : spec);
   });
   const runtime = createYouTubeRuntime({});
-  const result = await runtime.run({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true });
+  const captured = [];
+  const result = await runtime.run({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true },
+    { onDiagnostic: event => captured.push(event), extractionId: '00000000-0000-4000-8000-000000000001' });
+  assert.equal(events[0].storyboardId, '00000000-0000-4000-8000-000000000001');
+  assert.ok(captured.some(event => event.stage === 'complete'));
   assert.equal(result.manifest.totalSheets, 1);
   assert.equal(new Set(events.map(event => event.storyboardId)).size, 1);
   assert.ok(events.every(event => event.event === 'youtube_storyboard_diagnostic' && event.videoId === 'abcdefghijk'));

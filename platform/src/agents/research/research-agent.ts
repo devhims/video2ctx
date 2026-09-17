@@ -100,6 +100,7 @@ export async function executeResearchRun(options: {
   modelCallPrefix: string;
   onClassificationDiagnostic?: (event: ClassificationDiagnostic) => void;
   onTranscriptDiagnostic?: TranscriptDiagnosticSink;
+  onExtractionDiagnostic?: AgentToolContext['onExtractionDiagnostic'];
   persistedRoute?: CapabilityRouteDecision;
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
   onCapabilityLoaded: (capability: ExecutableRoute['route'], researchDeadlineAt: number) => void | Promise<void>;
@@ -164,6 +165,7 @@ export async function executeResearchRun(options: {
     runId: options.runId,
     provider,
     saveFramePreviews: options.saveFramePreviews,
+    onExtractionDiagnostic: options.onExtractionDiagnostic,
     analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
       createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,

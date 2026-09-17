@@ -3,6 +3,39 @@ import test from 'node:test';
 import { createProcessorApp, OPERATION_KINDS } from '../app.mjs';
 import { createYouTubeRuntime, redactProxyError } from '../runtime.mjs';
 
+test('returns bounded storyboard diagnostics on success and error', async () => {
+  for (const fail of [false, true]) {
+    const app = createProcessorApp({ run: async (_operation, { onDiagnostic, extractionId }) => {
+      assert.equal(extractionId, '00000000-0000-4000-8000-000000000001');
+      for (let index = 0; index < 80; index++) onDiagnostic({ stage: 'player', elapsedMs: index });
+      onDiagnostic({ stage: 'complete', outcome: 'success' });
+      if (fail) throw Object.assign(new Error('Unavailable'), { code: 'UNAVAILABLE' });
+      return { sheets: [] };
+    } });
+    const response = await app.request('/operations', { method: 'POST', headers: {
+      'content-type': 'application/json', 'x-extraction-id': '00000000-0000-4000-8000-000000000001',
+    }, body: JSON.stringify({ kind: 'storyboard', id: 'abcdefghijk' }) });
+    const payload = await response.json();
+    assert.equal(response.status, fail ? 503 : 200);
+    assert.equal(payload.diagnostics.events.length, 64);
+    assert.equal(payload.diagnostics.droppedEvents, 17);
+    assert.equal(payload.diagnostics.events[0].elapsedMs, 0);
+    assert.equal(payload.diagnostics.events.at(-1).stage, 'complete');
+  }
+});
+
+test('concurrent storyboard operations cannot share diagnostics', async () => {
+  const app = createProcessorApp({ run: async (operation, { onDiagnostic }) => {
+    onDiagnostic({ stage: 'player', elapsedMs: operation.marker });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return {};
+  } });
+  const results = await Promise.all([1, 2].map(async marker => (await app.request('/operations', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'storyboard', marker }),
+  })).json()));
+  assert.deepEqual(results.map(result => result.diagnostics.events), [[{ stage: 'player', elapsedMs: 1 }], [{ stage: 'player', elapsedMs: 2 }]]);
+});
+
 test('accepts every internal YouTube operation kind', async () => {
   const seen = [];
   const app = createProcessorApp({
@@ -20,7 +53,8 @@ test('accepts every internal YouTube operation kind', async () => {
       body: JSON.stringify({ kind }),
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { value: { operation: kind } });
+    assert.deepEqual(await response.json(), { value: { operation: kind },
+      ...(kind === 'storyboard' ? { diagnostics: { version: 1, events: [], droppedEvents: 0 } } : {}) });
   }
 
   assert.deepEqual(seen, [...OPERATION_KINDS]);

@@ -39,7 +39,7 @@ export function createYouTubeRuntime(environment = process.env) {
 
   return {
     proxyConfigured: proxyUrl.length > 0,
-    async run(operation) {
+    async run(operation, diagnostics = {}) {
       try {
         switch (operation.kind) {
           case 'search':
@@ -91,8 +91,9 @@ export function createYouTubeRuntime(environment = process.env) {
               granularity: operation.granularity,
             });
           case 'storyboard': {
-            const storyboardId = randomUUID();
+            const storyboardId = diagnostics.extractionId ?? randomUUID();
             const onDiagnostic = event => {
+              try { diagnostics.onDiagnostic?.(event); } catch { /* Capture cannot affect extraction. */ }
               try { console.info(JSON.stringify({ event: 'youtube_storyboard_diagnostic', storyboardId, videoId: typeof operation.id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(operation.id) ? operation.id : undefined, ...event })); }
               catch { /* Observability must not change the operation result. */ }
             };

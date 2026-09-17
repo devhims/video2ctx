@@ -8,6 +8,17 @@ export const frameFixture = {
 };
 
 describe('frame transport contract', () => {
+  test('reports safe successful extraction details without adding them to frame evidence', async () => {
+    const onDiagnostic = vi.fn();
+    const fetch = vi.fn(async () => Response.json({ value: frameFixture, diagnostics: { version: 1, droppedEvents: 0,
+      events: [{ stage: 'ffmpeg_success', profile: 'ios', timestampMs: 1000, width: 1920, height: 1080,
+        sourceWidth: 1920, sourceHeight: 1080, formatId: 137, message: 'SECRET' }] } }));
+    const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
+    await expect(getVideoFrames(env, request, undefined, undefined, onDiagnostic)).resolves.toEqual(frameFixture);
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ kind: 'frames', outcome: 'success', capture: 'available' }));
+    expect(onDiagnostic.mock.calls[0]![0].events[0]).toMatchObject({ formatId: 137, sourceWidth: 1920 });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain('SECRET');
+  });
   test('rejects seconds fractions, empty selections, extra controls and excessive frames', () => {
     for (const input of [{ ...request, timestampsMs: [1.5] }, { ...request, timestampsMs: [] },
       { ...request, timestampsMs: Array(7).fill(1) }, { ...request, inputUrl: 'http://localhost' }]) {
@@ -64,11 +75,14 @@ describe('frame transport contract', () => {
       const fetch = vi.fn((_request: Request) => new Promise<Response>(() => {}));
       const env = { YOUTUBE_FRAMES: { idFromName: vi.fn(name => name), get: vi.fn(() => ({ fetch })) } } as unknown as Env;
       let failure: unknown;
-      const run = getVideoFrames(env, request, undefined, { extractionTimeoutMs: 5000 }).catch(error => { failure = error; });
+      const onDiagnostic = vi.fn();
+      const run = getVideoFrames(env, request, undefined, { extractionTimeoutMs: 5000 }, onDiagnostic).catch(error => { failure = error; });
       await vi.advanceTimersByTimeAsync(10_000);
       expect(failure).toMatchObject({ code: 'FRAME_TIMEOUT' });
       await run;
       expect(fetch).toHaveBeenCalledOnce();
+      expect(onDiagnostic).toHaveBeenCalledOnce();
+      expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'transport_error', capture: 'unavailable', failureKind: 'timeout' }));
       expect(fetch.mock.calls[0]![0].signal.aborted).toBe(true);
     } finally { vi.useRealTimers(); }
   });
@@ -77,7 +91,12 @@ describe('frame transport contract', () => {
       .mockResolvedValueOnce(Response.json({ error: { code: 'PROCESSOR_BUSY', message: 'Busy' } }, { status: 503 }));
     const idFromName = vi.fn(name => name);
     const env = { YOUTUBE_FRAMES: { idFromName, get: vi.fn(() => ({ fetch })) } } as unknown as Env;
-    await expect(getVideoFrames(env, request)).resolves.toEqual(frameFixture);
+    const onDiagnostic = vi.fn();
+    await expect(getVideoFrames(env, request, undefined, undefined, onDiagnostic)).resolves.toEqual(frameFixture);
+    expect(onDiagnostic).toHaveBeenCalledTimes(2);
+    expect(onDiagnostic.mock.calls[0]![0]).toMatchObject({ attempt: 1, outcome: 'fallback', capture: 'missing' });
+    expect(onDiagnostic.mock.calls[1]![0]).toMatchObject({ attempt: 2, outcome: 'success', capture: 'missing' });
+    expect(onDiagnostic.mock.calls[0]![0].extractionId).toBe(onDiagnostic.mock.calls[1]![0].extractionId);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(idFromName.mock.calls[0]![0]).not.toBe(idFromName.mock.calls[1]![0]);
   });

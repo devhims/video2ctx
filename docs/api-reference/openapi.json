@@ -7229,6 +7229,305 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "extractions": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "number",
+                          "enum": [
+                            1
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "storyboard",
+                            "frames"
+                          ]
+                        },
+                        "videoId": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        },
+                        "extractionId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 4
+                        },
+                        "slot": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 3
+                        },
+                        "recordedAt": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "elapsedMs": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "status": {
+                          "type": "integer",
+                          "minimum": 100,
+                          "maximum": 599
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "failed",
+                            "fallback",
+                            "transport_error"
+                          ]
+                        },
+                        "failureKind": {
+                          "type": "string",
+                          "enum": [
+                            "timeout",
+                            "canceled",
+                            "transport",
+                            "invalid_response",
+                            "upstream"
+                          ]
+                        },
+                        "capture": {
+                          "type": "string",
+                          "enum": [
+                            "available",
+                            "missing",
+                            "invalid",
+                            "unavailable"
+                          ]
+                        },
+                        "events": {
+                          "maxItems": 64,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "stage": {
+                                "type": "string",
+                                "enum": [
+                                  "player",
+                                  "player_response",
+                                  "download",
+                                  "complete",
+                                  "request",
+                                  "image_normalized",
+                                  "media_candidates",
+                                  "media_http",
+                                  "media_transfer",
+                                  "media_retry",
+                                  "media_retry_skipped",
+                                  "ffmpeg",
+                                  "ffmpeg_success"
+                                ]
+                              },
+                              "profile": {
+                                "type": "string",
+                                "enum": [
+                                  "IOS",
+                                  "ANDROID_VR",
+                                  "MWEB",
+                                  "WEB",
+                                  "ios",
+                                  "android",
+                                  "android_vr",
+                                  "mweb",
+                                  "web"
+                                ]
+                              },
+                              "outcome": {
+                                "type": "string",
+                                "enum": [
+                                  "selected",
+                                  "skipped",
+                                  "error",
+                                  "success"
+                                ]
+                              },
+                              "playabilityStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "OK",
+                                  "LOGIN_REQUIRED",
+                                  "UNPLAYABLE",
+                                  "ERROR",
+                                  "LIVE_STREAM_OFFLINE",
+                                  "CONTENT_CHECK_REQUIRED",
+                                  "AGE_CHECK_REQUIRED",
+                                  "UNKNOWN"
+                                ]
+                              },
+                              "specState": {
+                                "type": "string",
+                                "enum": [
+                                  "valid",
+                                  "missing",
+                                  "malformed"
+                                ]
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "INVALID_INPUT",
+                                  "INVALID_RESPONSE",
+                                  "NOT_FOUND",
+                                  "UNAVAILABLE",
+                                  "UPSTREAM_ERROR",
+                                  "AUTH_REQUIRED",
+                                  "RATE_LIMITED",
+                                  "FRAME_EXTRACTION_FAILED",
+                                  "FRAME_TIMEOUT",
+                                  "FRAME_CANCELLED",
+                                  "MEDIA_UNAVAILABLE",
+                                  "UNKNOWN"
+                                ]
+                              },
+                              "inputFormat": {
+                                "type": "string",
+                                "enum": [
+                                  "webp",
+                                  "jpeg"
+                                ]
+                              },
+                              "outputFormat": {
+                                "type": "string",
+                                "enum": [
+                                  "webp",
+                                  "jpeg"
+                                ]
+                              },
+                              "status": {
+                                "type": "integer",
+                                "minimum": 100,
+                                "maximum": 599
+                              },
+                              "elapsedMs": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "timestampMs": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "candidateIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "candidateCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "attempt": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "delayMs": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sheetCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "width": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "height": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sourceWidth": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sourceHeight": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "formatId": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "inputBytes": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "outputBytes": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "exitCode": {
+                                "type": "integer",
+                                "minimum": -255,
+                                "maximum": 255
+                              }
+                            },
+                            "required": [
+                              "stage"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "droppedEvents": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "kind",
+                        "videoId",
+                        "extractionId",
+                        "attempt",
+                        "slot",
+                        "recordedAt",
+                        "elapsedMs",
+                        "outcome",
+                        "capture",
+                        "events",
+                        "droppedEvents",
+                        "toolCallId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "extractionDiagnosticsTruncated": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -8068,6 +8367,305 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "extractions": {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "storyboard",
+                        "frames"
+                      ]
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{11}$"
+                    },
+                    "extractionId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "attempt": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4
+                    },
+                    "slot": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "recordedAt": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "elapsedMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 599
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "success",
+                        "failed",
+                        "fallback",
+                        "transport_error"
+                      ]
+                    },
+                    "failureKind": {
+                      "type": "string",
+                      "enum": [
+                        "timeout",
+                        "canceled",
+                        "transport",
+                        "invalid_response",
+                        "upstream"
+                      ]
+                    },
+                    "capture": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "missing",
+                        "invalid",
+                        "unavailable"
+                      ]
+                    },
+                    "events": {
+                      "maxItems": 64,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "stage": {
+                            "type": "string",
+                            "enum": [
+                              "player",
+                              "player_response",
+                              "download",
+                              "complete",
+                              "request",
+                              "image_normalized",
+                              "media_candidates",
+                              "media_http",
+                              "media_transfer",
+                              "media_retry",
+                              "media_retry_skipped",
+                              "ffmpeg",
+                              "ffmpeg_success"
+                            ]
+                          },
+                          "profile": {
+                            "type": "string",
+                            "enum": [
+                              "IOS",
+                              "ANDROID_VR",
+                              "MWEB",
+                              "WEB",
+                              "ios",
+                              "android",
+                              "android_vr",
+                              "mweb",
+                              "web"
+                            ]
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "selected",
+                              "skipped",
+                              "error",
+                              "success"
+                            ]
+                          },
+                          "playabilityStatus": {
+                            "type": "string",
+                            "enum": [
+                              "OK",
+                              "LOGIN_REQUIRED",
+                              "UNPLAYABLE",
+                              "ERROR",
+                              "LIVE_STREAM_OFFLINE",
+                              "CONTENT_CHECK_REQUIRED",
+                              "AGE_CHECK_REQUIRED",
+                              "UNKNOWN"
+                            ]
+                          },
+                          "specState": {
+                            "type": "string",
+                            "enum": [
+                              "valid",
+                              "missing",
+                              "malformed"
+                            ]
+                          },
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "INVALID_INPUT",
+                              "INVALID_RESPONSE",
+                              "NOT_FOUND",
+                              "UNAVAILABLE",
+                              "UPSTREAM_ERROR",
+                              "AUTH_REQUIRED",
+                              "RATE_LIMITED",
+                              "FRAME_EXTRACTION_FAILED",
+                              "FRAME_TIMEOUT",
+                              "FRAME_CANCELLED",
+                              "MEDIA_UNAVAILABLE",
+                              "UNKNOWN"
+                            ]
+                          },
+                          "inputFormat": {
+                            "type": "string",
+                            "enum": [
+                              "webp",
+                              "jpeg"
+                            ]
+                          },
+                          "outputFormat": {
+                            "type": "string",
+                            "enum": [
+                              "webp",
+                              "jpeg"
+                            ]
+                          },
+                          "status": {
+                            "type": "integer",
+                            "minimum": 100,
+                            "maximum": 599
+                          },
+                          "elapsedMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "timestampMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "candidateIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "candidateCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "attempt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "delayMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sheetCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "width": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "height": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sourceWidth": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sourceHeight": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "formatId": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "inputBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "outputBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "exitCode": {
+                            "type": "integer",
+                            "minimum": -255,
+                            "maximum": 255
+                          }
+                        },
+                        "required": [
+                          "stage"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "droppedEvents": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "toolCallId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "kind",
+                    "videoId",
+                    "extractionId",
+                    "attempt",
+                    "slot",
+                    "recordedAt",
+                    "elapsedMs",
+                    "outcome",
+                    "capture",
+                    "events",
+                    "droppedEvents",
+                    "toolCallId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "extractionDiagnosticsTruncated": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -8580,6 +9178,305 @@
               },
               "error": {
                 "type": "string"
+              },
+              "extractionDiagnostics": {
+                "type": "array",
+                "maxItems": 64,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "storyboard",
+                        "frames"
+                      ]
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{11}$"
+                    },
+                    "extractionId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "attempt": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4
+                    },
+                    "slot": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "recordedAt": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "elapsedMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 599
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "success",
+                        "failed",
+                        "fallback",
+                        "transport_error"
+                      ]
+                    },
+                    "failureKind": {
+                      "type": "string",
+                      "enum": [
+                        "timeout",
+                        "canceled",
+                        "transport",
+                        "invalid_response",
+                        "upstream"
+                      ]
+                    },
+                    "capture": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "missing",
+                        "invalid",
+                        "unavailable"
+                      ]
+                    },
+                    "events": {
+                      "maxItems": 64,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "stage": {
+                            "type": "string",
+                            "enum": [
+                              "player",
+                              "player_response",
+                              "download",
+                              "complete",
+                              "request",
+                              "image_normalized",
+                              "media_candidates",
+                              "media_http",
+                              "media_transfer",
+                              "media_retry",
+                              "media_retry_skipped",
+                              "ffmpeg",
+                              "ffmpeg_success"
+                            ]
+                          },
+                          "profile": {
+                            "type": "string",
+                            "enum": [
+                              "IOS",
+                              "ANDROID_VR",
+                              "MWEB",
+                              "WEB",
+                              "ios",
+                              "android",
+                              "android_vr",
+                              "mweb",
+                              "web"
+                            ]
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "selected",
+                              "skipped",
+                              "error",
+                              "success"
+                            ]
+                          },
+                          "playabilityStatus": {
+                            "type": "string",
+                            "enum": [
+                              "OK",
+                              "LOGIN_REQUIRED",
+                              "UNPLAYABLE",
+                              "ERROR",
+                              "LIVE_STREAM_OFFLINE",
+                              "CONTENT_CHECK_REQUIRED",
+                              "AGE_CHECK_REQUIRED",
+                              "UNKNOWN"
+                            ]
+                          },
+                          "specState": {
+                            "type": "string",
+                            "enum": [
+                              "valid",
+                              "missing",
+                              "malformed"
+                            ]
+                          },
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "INVALID_INPUT",
+                              "INVALID_RESPONSE",
+                              "NOT_FOUND",
+                              "UNAVAILABLE",
+                              "UPSTREAM_ERROR",
+                              "AUTH_REQUIRED",
+                              "RATE_LIMITED",
+                              "FRAME_EXTRACTION_FAILED",
+                              "FRAME_TIMEOUT",
+                              "FRAME_CANCELLED",
+                              "MEDIA_UNAVAILABLE",
+                              "UNKNOWN"
+                            ]
+                          },
+                          "inputFormat": {
+                            "type": "string",
+                            "enum": [
+                              "webp",
+                              "jpeg"
+                            ]
+                          },
+                          "outputFormat": {
+                            "type": "string",
+                            "enum": [
+                              "webp",
+                              "jpeg"
+                            ]
+                          },
+                          "status": {
+                            "type": "integer",
+                            "minimum": 100,
+                            "maximum": 599
+                          },
+                          "elapsedMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "timestampMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "candidateIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "candidateCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "attempt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "delayMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sheetCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "width": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "height": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sourceWidth": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sourceHeight": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "formatId": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "inputBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "outputBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "exitCode": {
+                            "type": "integer",
+                            "minimum": -255,
+                            "maximum": 255
+                          }
+                        },
+                        "required": [
+                          "stage"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "droppedEvents": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "toolCallId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "kind",
+                    "videoId",
+                    "extractionId",
+                    "attempt",
+                    "slot",
+                    "recordedAt",
+                    "elapsedMs",
+                    "outcome",
+                    "capture",
+                    "events",
+                    "droppedEvents",
+                    "toolCallId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "extractionDiagnosticsTruncated": {
+                "type": "boolean"
               },
               "transcriptDiagnostics": {
                 "type": "array",

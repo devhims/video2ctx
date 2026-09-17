@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it, vi } from 'vitest';
@@ -38,6 +39,17 @@ function context(): AgentToolContext {
   };
 }
 describe('storyboard agent tool', () => {
+  it('correlates failed extraction diagnostics through the pinned provider', async () => {
+    const ctx = context();
+    ctx.onExtractionDiagnostic = vi.fn();
+    ctx.provider.storyboard = async (_videoId, _timestamps, _options, onDiagnostic) => {
+      onDiagnostic?.({ ...extractionFixture, outcome: 'failed' });
+      throw new Error('extraction failed');
+    };
+    ctx.provider = createCapabilityProvider(ctx.provider, { route: 'inspect_video', videoId: storyboard.videoId });
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'storyboard-call')).rejects.toThrow('extraction failed');
+    expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...extractionFixture, outcome: 'failed', toolCallId: 'storyboard-call' });
+  });
   it('exposes metadata to the research model before downloading or analyzing images', async () => {
     const ctx = context();
     const manifest = { totalSheets: 6, framesPerSheet: 2, tileWidth: 100, tileHeight: 100,
@@ -48,7 +60,7 @@ describe('storyboard agent tool', () => {
     ctx.analyzeStoryboard = vi.fn();
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata');
     expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined });
+      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     expect(packet.excerpts).toEqual([]);
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
@@ -67,7 +79,7 @@ describe('storyboard agent tool', () => {
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Charts',
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false });
+      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false }, expect.any(Function));
     expect(ctx.analyzeStoryboard).toHaveBeenCalledWith(expect.objectContaining({ storyboard: expect.objectContaining({ sheets }) }));
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
@@ -86,7 +98,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [50000] }, ctx, 'first');
     const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [55000] }, ctx, 'second');
-    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false });
+    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false }, expect.any(Function));
     expect(keys[0]).not.toBe(keys[1]);
     expect(result.artifacts[0]!.data).toMatchObject({ sampledRanges: [{ startMs: 50000, endMs: 55000 }] });
   });

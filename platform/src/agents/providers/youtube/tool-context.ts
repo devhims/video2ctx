@@ -1,3 +1,4 @@
+import type { StoredExtractionDiagnostic } from '../../../lib/extraction-diagnostics';
 import type { FrameAnalyst } from './frame-analyst';
 import type { SaveFramePreviews } from '../../runtime/frame-previews';
 import type { VisualAnalyst } from './visual-analyst';
@@ -21,6 +22,7 @@ export interface EvidenceToolExecution {
 }
 
 export interface AgentToolContext {
+  onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;
   analyzeStoryboard?: VisualAnalyst;

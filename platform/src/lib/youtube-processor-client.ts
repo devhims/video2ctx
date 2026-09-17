@@ -1,3 +1,5 @@
+import { abortableContainerFetch, boundedContainerJson } from './bounded-container-json';
+import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import type { Storyboard } from '../agents/providers/youtube/storyboard';
 import { getContainer } from '@cloudflare/containers';
 import type {
@@ -168,10 +170,11 @@ function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcesso
   return operation.kind === 'transcript' && error.code === 'NOT_FOUND';
 }
 
-async function resultFrom<T>(response: Response): Promise<T> {
+async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload?: (payload: unknown) => void): Promise<T> {
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = signal ? await boundedContainerJson(response, signal) : await response.json();
+    onPayload?.(payload);
   } catch {
     throw new YouTubeProcessorError(
       'INVALID_PROCESSOR_RESPONSE',
@@ -205,8 +208,10 @@ async function resultFrom<T>(response: Response): Promise<T> {
 export async function runYouTubeOperation<T extends YouTubeOperation>(
   env: Env,
   operation: T,
+  onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
   const body = JSON.stringify(operation);
+  const extractionId = crypto.randomUUID();
   const count = instanceCount(env);
   const slots = processorSlotOrder(count, randomProcessorSlot(count)).slice(0, maxAttempts(env, count));
   let lastFailure: unknown;
@@ -216,22 +221,35 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     const startedAt = Date.now();
     const hasFallback = index < slots.length - 1;
     let failureReason: 'YOUTUBE_BOT_CHALLENGE' | undefined;
+    let diagnosticOutcome: ExtractionAttempt['outcome'] = 'transport_error';
+    let diagnosticCapture: Pick<ExtractionAttempt, 'capture' | 'events' | 'droppedEvents'> = { capture: 'unavailable', events: [], droppedEvents: 0 };
+    let diagnosticStatus: number | undefined;
+    let diagnosticFailureKind: ExtractionAttempt['failureKind'];
+    const deadline = AbortSignal.timeout(processorTimeoutMs(env));
     try {
-      const response = await processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
+      const response = await abortableContainerFetch(deadline, () => processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(operation.kind === 'storyboard' ? { 'x-extraction-id': extractionId } : {}) },
         body,
-        signal: AbortSignal.timeout(processorTimeoutMs(env)),
-      }));
+        signal: deadline,
+      })));
 
+      diagnosticStatus = response.status;
+      diagnosticOutcome = 'failed';
       if (hasFallback && RETRYABLE_CONTAINER_STATUSES.has(response.status)) {
+        diagnosticOutcome = 'fallback';
+        if (operation.kind === 'storyboard') {
+          try { diagnosticCapture = extractionCapture(await boundedContainerJson(response, deadline)); }
+          catch { diagnosticCapture.capture = 'invalid'; }
+        }
         logProcessorAttempt(operation.kind, slot, index, response.status, 'fallback', startedAt);
         if (response.body) await response.body.cancel().catch(() => undefined);
         await waitBeforeFallback(env, index);
         continue;
       }
 
-      const result = await resultFrom<YouTubeOperationResult<T>>(response);
+      const result = await resultFrom<YouTubeOperationResult<T>>(response, operation.kind === 'storyboard' ? deadline : undefined,
+        payload => { diagnosticCapture = extractionCapture(payload); });
       if (operation.kind === 'video' && isVideoMetadataBotChallenge(result)) {
         failureReason = 'YOUTUBE_BOT_CHALLENGE';
         if (hasFallback) {
@@ -247,9 +265,11 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
         await waitBeforeFallback(env, index);
         continue;
       }
+      diagnosticOutcome = 'success';
       logProcessorAttempt(operation.kind, slot, index, response.status, 'success', startedAt);
       return result;
     } catch (error) {
+      diagnosticFailureKind = extractionFailureKind(error, deadline);
       if (error instanceof YouTubeProcessorError) {
         if (hasFallback && shouldFallbackError(operation, error)) {
           logProcessorAttempt(operation.kind, slot, index, error.status, 'fallback', startedAt);
@@ -263,6 +283,12 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       logProcessorAttempt(operation.kind, slot, index, undefined, 'transport-error', startedAt);
       if (index === slots.length - 1) break;
       await waitBeforeFallback(env, index);
+    } finally {
+      if (operation.kind === 'storyboard') emitExtractionDiagnostic(onDiagnostic, {
+        version: 1, kind: 'storyboard', videoId: operation.id, extractionId, attempt: index + 1, slot,
+        recordedAt: Date.now(), elapsedMs: Date.now() - startedAt, status: diagnosticStatus,
+        outcome: diagnosticOutcome, failureKind: diagnosticFailureKind, ...diagnosticCapture,
+      });
     }
   }
 

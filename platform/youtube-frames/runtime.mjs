@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { MAX_RESPONSE_BYTES, parseFrameRequest } from './contract.mjs';
 
 export async function runFrameJob(input, { signal, timeoutMs = 60_000,
-  extractionId = randomUUID(), log = logDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace } = {}) {
+  extractionId = randomUUID(), log = logDiagnostic, onDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace } = {}) {
   const request = parseFrameRequest(input);
   // Leave time after the cooperative cutoff for FFmpeg shutdown and packaging.
   timeoutMs = Math.min(timeoutMs, (request.extractionTimeoutMs ?? 45_000) + 3_000);
@@ -33,10 +33,10 @@ export async function runFrameJob(input, { signal, timeoutMs = 60_000,
         try {
           const event = JSON.parse(line);
           if (event.event !== 'frame_diagnostic') return;
+          const detail = { event: 'youtube_frames_diagnostic', extractionId, videoId: request.videoId, ...diagnosticDetails(event) };
+          try { onDiagnostic?.(detail); } catch { /* Capture cannot fail extraction. */ }
           if (count++ < 100) {
-            log({ event: 'youtube_frames_diagnostic', extractionId, videoId: request.videoId, ...diagnosticDetails(event) });
-          } else if (count === 101) {
-            log({ event: 'youtube_frames_diagnostics_truncated', extractionId, videoId: request.videoId, limit: 100 });
+            log(detail);
           }
         } catch { /* Unexpected output is retained only after redaction. */ }
       };
@@ -72,6 +72,7 @@ export async function runFrameJob(input, { signal, timeoutMs = 60_000,
         readStderr(decoder.end());
         if (pending || droppingLine) emitLine(droppingLine ? '[oversized stderr line omitted]' : pending);
         cleanup();
+        if (count > 100) log({ event: 'youtube_frames_diagnostics_truncated', extractionId, videoId: request.videoId, limit: 100, droppedEvents: count - 100 });
         if (failure) reject(Object.assign(failure, { exitCode: code, signal, stderr: redact(stderr) }));
         else if (code !== 0) reject(Object.assign(new Error('Frame extraction process failed.'), { code: 'FRAME_EXTRACTION_FAILED', exitCode: code, signal, stderr: redact(stderr) }));
         else resolve();

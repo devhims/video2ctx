@@ -176,7 +176,7 @@ Deployment order: roll out the updated frame container to both slots before depl
 
 ## Failure diagnostics
 
-Frame extraction diagnostics are operator logs, separate from the generic error returned to the agent. Each Worker request creates an `extractionId` and forwards it in the private `x-extraction-id` header. The frame container uses the same ID for child-process diagnostics and its terminal failure log. An older container can ignore the header without breaking extraction.
+Detailed frame extraction diagnostics remain operator logs, separate from the generic error returned to the agent. Bounded, strictly allowlisted summaries are also persisted with the run as described below. Each Worker request creates an `extractionId` and forwards it in the private `x-extraction-id` header. The frame container uses the same ID for child-process diagnostics and its terminal failure log. An older container can ignore the header without breaking extraction.
 
 To investigate a failed run:
 
@@ -203,3 +203,48 @@ Once a response body is handed to the streaming proxy, body-read failures are no
 `media_retry` diagnostics record the attempt, delay, HTTP status or original network error. `media_retry_skipped` records when the requested delay or remaining budget prevents retrying. The existing extraction ID and client/candidate context connect these events to the run; signed URLs are excluded.
 
 Deploy the updated frame container image to activate this behavior for hosted extraction. No Worker API or request-contract change is required. The regenerated local watch bundle includes the same request retry behavior.
+
+
+## Stored storyboard and frame diagnostics
+
+The application stores safe extraction summaries in the owning account's existing
+Durable Object SQLite `agent_events` table. This does not depend on Cloudflare log
+retrieval. Cloudflare remains responsible for container stdout/stderr collection;
+the application receives a private diagnostic envelope in each extraction response.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "activationBkgColor": "#334155", "activationBorderColor": "#334155"}}}%%
+sequenceDiagram
+    autonumber
+    participant Agent as Agent tool
+    participant Worker as Worker transport
+    participant Container as Extraction container
+    participant Store as Owner's run storage
+    Agent->>Worker: Extract storyboard or frames
+    Worker->>Container: Request with extraction ID
+    Container-->>Worker: Result or error plus bounded diagnostics
+    Worker->>Store: Validated attempt summary and tool call ID
+    Worker-->>Agent: Extraction result or error
+    Note over Worker,Store: A missing response records transport outcome only
+```
+
+Each HTTP attempt is recorded separately, including slot fallback. Storage happens
+before visual analysis, so analyst failures do not erase extraction diagnostics.
+The container retains up to 64 events (the first 16 and newest 48), with a dropped
+count. Frame capture is independent of the 100-event operator-log limit, preserving
+late successful-source attribution. The Worker validates a fixed schema and strips
+unrecognized fields before persistence or its `agent_extraction_diagnostic` log.
+Raw messages, stderr, signed URLs, headers, credentials, and images are excluded.
+
+Per-run persistence stops at 64 attempts or 256 KiB of serialized summaries and
+records one truncation marker. Diagnostic sink failures cannot retry, charge for,
+or fail extraction. Run storage follows existing account ownership and deletion
+behavior; no additional table or migration is required. Summaries remain accessible
+on failed runs and are excluded from evidence, model history, and progress snapshots.
+
+Read them through `GET /v1/agent/{sessionId}/runs/{runId}?include=diagnostics`, under
+`diagnostics.extractions`. See [the API guide](../../docs/api/agents.mdx#stored-extraction-diagnostics)
+for capture states and truncation fields. There is no dashboard panel in this change.
+Deploy the Worker and both container images together. Older containers remain
+compatible but report missing capture. Container crashes or response loss may leave
+only a Worker summary; historical diagnostics cannot be recovered.

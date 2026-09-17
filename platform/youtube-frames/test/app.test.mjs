@@ -3,6 +3,26 @@ import { test } from 'node:test';
 import { createFrameApp } from '../app.mjs';
 
 const request = { videoId: 'abcdefghijk', timestampsMs: [1000] };
+
+test('captures frame details on success and failure without persisting stderr or messages', async () => {
+  for (const fail of [false, true]) {
+    const app = createFrameApp(async (_input, { onDiagnostic }) => {
+      for (let i = 0; i < 80; i++) onDiagnostic({ stage: 'media_http', status: 403 });
+      onDiagnostic({ stage: 'ffmpeg_success', profile: 'ios', formatId: 18, width: 640, height: 360, message: 'PRIVATE',
+        error: { message: 'PRIVATE', stderr: 'PRIVATE', code: 'MEDIA_UNAVAILABLE' } });
+      if (fail) throw Object.assign(new Error('PRIVATE'), { code: 'MEDIA_UNAVAILABLE' });
+      return { frames: [] };
+    }, { log: () => { throw new Error('log sink unavailable'); } });
+    const response = await post(app);
+    const body = await response.json();
+    assert.equal(response.status, fail ? 502 : 200);
+    assert.equal(body.diagnostics.events.length, 64);
+    assert.equal(body.diagnostics.droppedEvents, fail ? 18 : 17);
+    assert.ok(body.diagnostics.events.some(event => event.stage === 'ffmpeg_success' && event.formatId === 18));
+    assert.ok(!JSON.stringify(body.diagnostics).includes('PRIVATE'));
+    if (fail) assert.equal(body.diagnostics.events.at(-1).stage, 'request');
+  }
+});
 const post = (app, input = request) => app.request('/frames', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
 });

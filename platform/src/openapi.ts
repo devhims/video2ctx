@@ -1,3 +1,4 @@
+import { storedExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
 import { compactAgentRunSchema } from './agents/response';
@@ -2165,6 +2166,8 @@ export const openApiDocument = {
         allOf: [schemaRef('AgentRunReceipt'), {
           type: 'object', properties: {
             route: schemaRef('AgentRouteDecision'), result: schemaRef('AgentTurnResult'), error: { type: 'string' },
+            extractionDiagnostics: { type: 'array', maxItems: 64, items: z.toJSONSchema(storedExtractionDiagnosticSchema, { target: 'openapi-3.0' }) },
+            extractionDiagnosticsTruncated: { type: 'boolean' },
             transcriptDiagnostics: { type: 'array', items: z.toJSONSchema(transcriptDiagnosticSchema, { target: 'openapi-3.0' }) },
           },
         }],

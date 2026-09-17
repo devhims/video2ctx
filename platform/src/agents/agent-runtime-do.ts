@@ -1,3 +1,4 @@
+import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
 import { saveFramePreviews } from './runtime/frame-previews';
@@ -116,6 +117,8 @@ interface RouteRow {
 
 export interface AgentRunView extends AgentRunReceipt {
   transcriptDiagnostics?: TranscriptDiagnostic[];
+  extractionDiagnostics?: StoredExtractionDiagnostic[];
+  extractionDiagnosticsTruncated?: boolean;
   route?: CapabilityRouteDecision;
   result?: AgentTurnResult;
   error?: string;
@@ -237,6 +240,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const route = this.readRoute(runId);
     return {
       ...this.receipt(row),
+      extractionDiagnostics: this.sql<{ payload_json: string }>`
+        SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'extraction.diagnostic'
+        ORDER BY id LIMIT 64
+      `.map(event => storedExtractionDiagnosticSchema.parse(JSON.parse(event.payload_json))),
+      extractionDiagnosticsTruncated: this.sql<{ count: number }>`
+        SELECT COUNT(*) AS count FROM agent_events WHERE run_id = ${runId} AND type = 'extraction.truncated'
+      `[0]!.count > 0,
       transcriptDiagnostics: this.sql<{ payload_json: string }>`
         SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'transcript.diagnostic'
         ORDER BY id
@@ -399,6 +409,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           this.recordEvent(runId, 'classification.validation', { ...event });
           console.log(JSON.stringify({ event: 'agent_classification', runId, ...event }));
         },
+        onExtractionDiagnostic: event => this.recordExtractionDiagnostic(runId, event),
         onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
@@ -942,6 +953,24 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         WHERE id = ${runId}`;
     }
     await this.scheduleRunReconciliation(this.requireRun(runId));
+  }
+
+  private recordExtractionDiagnostic(runId: string, event: StoredExtractionDiagnostic): void {
+    if (this.#deleted || !this.readRun(runId)) return;
+    const parsed = storedExtractionDiagnosticSchema.safeParse(event);
+    if (!parsed.success) return;
+    const diagnostic = parsed.data;
+    const usage = this.sql<{ count: number; bytes: number }>`
+      SELECT COUNT(*) AS count, COALESCE(SUM(length(CAST(payload_json AS BLOB))), 0) AS bytes
+      FROM agent_events WHERE run_id = ${runId} AND type = 'extraction.diagnostic'
+    `[0]!;
+    if (usage.count >= 64 || usage.bytes + new TextEncoder().encode(JSON.stringify(diagnostic)).byteLength > 256 * 1024) {
+      if (!this.sql`SELECT id FROM agent_events WHERE run_id = ${runId} AND type = 'extraction.truncated' LIMIT 1`.length)
+        this.recordEvent(runId, 'extraction.truncated', { limit: true });
+      return;
+    }
+    this.recordEvent(runId, 'extraction.diagnostic', diagnostic);
+    console.log(JSON.stringify({ event: 'agent_extraction_diagnostic', runId, ...diagnostic }));
   }
 
   private recordTranscriptDiagnostic(runId: string, event: TranscriptDiagnostic): void {
