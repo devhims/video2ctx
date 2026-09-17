@@ -340,7 +340,7 @@
         ],
         "operationId": "startAgentRun",
         "summary": "Start a durable agent run",
-        "description": "Starts a new conversation when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt.",
+        "description": "Starts a new session when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.",
         "security": [
           {
             "bearerApiKey": []
@@ -363,7 +363,7 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution.",
             "schema": {
               "type": "string",
               "enum": [
@@ -382,17 +382,6 @@
               "type": "string",
               "maxLength": 100,
               "example": "evidence,diagnostics"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "description": "Stable key for retrying this admission without creating another run.",
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 200
             }
           }
         ],
@@ -755,7 +744,7 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution.",
             "schema": {
               "type": "string",
               "enum": [
@@ -2900,7 +2889,7 @@
             "name": "responseFormat",
             "in": "query",
             "required": false,
-            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution or idempotency.",
+            "description": "Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution.",
             "schema": {
               "type": "string",
               "enum": [
@@ -6583,7 +6572,7 @@
                 "format": "uuid",
                 "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
               },
-              "assistantMessageId": {
+              "agentMessageId": {
                 "type": "string",
                 "format": "uuid",
                 "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
@@ -7541,7 +7530,7 @@
             },
             "required": [
               "runId",
-              "assistantMessageId",
+              "agentMessageId",
               "status",
               "sessionId"
             ],
@@ -7721,7 +7710,7 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "assistantMessageId": {
+          "agentMessageId": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
@@ -8679,7 +8668,7 @@
         },
         "required": [
           "runId",
-          "assistantMessageId",
+          "agentMessageId",
           "status",
           "sessionId"
         ],
@@ -8691,7 +8680,7 @@
           "runId",
           "sessionId",
           "userMessageId",
-          "assistantMessageId",
+          "agentMessageId",
           "conversationTurn",
           "modelStepCount",
           "toolCallCount",
@@ -8711,10 +8700,10 @@
             "format": "uuid",
             "description": "Stable identifier assigned to the admitted user message."
           },
-          "assistantMessageId": {
+          "agentMessageId": {
             "type": "string",
             "format": "uuid",
-            "description": "Stable identifier reserved for the assistant response."
+            "description": "Stable identifier reserved for the agent response."
           },
           "conversationTurn": {
             "type": "integer",
@@ -9051,7 +9040,7 @@
           "runId",
           "sessionId",
           "userMessageId",
-          "assistantMessageId",
+          "agentMessageId",
           "answer",
           "intent",
           "confidence",
@@ -9073,7 +9062,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "assistantMessageId": {
+          "agentMessageId": {
             "type": "string",
             "format": "uuid"
           },

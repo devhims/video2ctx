@@ -50,8 +50,8 @@ export default {
           executeEvidenceTool: async () => { throw new Error('Evidence is already supplied'); },
           finalize: async (_id, output) => {
             answer = buildAgentTurnResult({ runId, conversationId: crypto.randomUUID(),
-              userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID() },
-            { userId: 'local-finalizer-test', idempotencyKey: runId, creditsRemaining: 100 },
+              userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+            { userId: 'local-finalizer-test', creditsRemaining: 100 },
             output, input.evidence, 0);
             return answer;
           },

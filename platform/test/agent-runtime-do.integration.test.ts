@@ -17,10 +17,10 @@ async function seed(name: string, status = 'failed') {
   await runInDurableObject(runtime, async (instance) => {
     // Public reads initialize the real Agent SDK and SQLite schema without inference.
     await instance.getRun(runId);
-    instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,
-      user_message_id,assistant_message_id,turn_ordinal,message,status,phase,
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,
+      user_message_id,agent_message_id,turn_ordinal,message,status,phase,
       credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
-      VALUES (${runId},${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},
+      VALUES (${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},
       1,'Private prompt',${status},'executing',1000,0,0,0)`;
     instance.sql`INSERT INTO agent_tool_calls (run_id,tool_call_id,semantic_key,tool_name,operation,status,credits,created_at,updated_at)
       VALUES (${runId},'tool','meaning','get_video','video','completed',1,0,0)`;
@@ -84,12 +84,57 @@ test('enforces the diagnostic byte limit before the attempt count limit', async 
   });
 });
 
+test('migrates stored agent message IDs without changing answers, history, or parent links', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-message-id-migration', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    const agentMessageId = String(row.agent_message_id);
+    const saved = JSON.stringify({ runId, conversationId, userMessageId: row.user_message_id,
+      assistantMessageId: agentMessageId, intent: 'inspect_video', answer: 'The saved answer.',
+      confidence: 'medium', citations: [], artifacts: [], warnings: [],
+      billing: { creditsCharged: 1, creditsRemaining: 999 } });
+    instance.sql`UPDATE agent_runs SET result_json = ${saved}, billing_settled = 1 WHERE id = ${runId}`;
+    instance.sql`INSERT INTO agent_tool_calls
+      (run_id,tool_call_id,semantic_key,tool_name,operation,status,result_json,credits,created_at,updated_at)
+      VALUES (${runId},'final','finalize','finalize_answer','finalize','completed',${saved},0,0,0)`;
+    instance.sql`DROP INDEX agent_runs_agent_message_idx`;
+    instance.sql`ALTER TABLE agent_runs RENAME COLUMN agent_message_id TO assistant_message_id`;
+    instance.sql`CREATE UNIQUE INDEX agent_runs_assistant_message_idx ON agent_runs (assistant_message_id)`;
+
+    const restored = await instance.getRun(runId);
+    expect(restored).toMatchObject({ agentMessageId, result: { agentMessageId, answer: 'The saved answer.' } });
+    expect(restored).not.toHaveProperty('assistantMessageId');
+    expect(restored?.result).not.toHaveProperty('assistantMessageId');
+    const finalOutput = JSON.parse(String(instance.sql`SELECT result_json FROM agent_tool_calls
+      WHERE run_id = ${runId} AND tool_call_id = 'final'`[0]!.result_json));
+    expect(finalOutput).toEqual(restored?.result);
+    expect(await instance.getRun(runId)).toEqual(restored);
+    const history = await instance.getConversation(conversationId, userId);
+    expect(history?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: agentMessageId, content: 'The saved answer.' }),
+    ]));
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'migration-followup', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    const followup = await instance.startRun({ message: 'Explain that answer', conversationId, parentMessageId: agentMessageId },
+      { userId, creditsRemaining: 999 });
+    if ('rejected' in followup) throw Error(followup.message);
+    expect(followup.agentMessageId).not.toBe(agentMessageId);
+    expect(instance.sql`SELECT parent_message_id FROM agent_runs WHERE id = ${followup.runId}`[0])
+      .toEqual({ parent_message_id: agentMessageId });
+    expect(instance.sql`PRAGMA table_info(agent_runs)`).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'assistant_message_id' }),
+    ]));
+    fiber.mockRestore();
+  });
+});
+
 test('restores provider metadata for follow-ups and validates historical citations without another evidence charge', async () => {
   const { runtime, userId, runId, conversationId } = await seed('agent-metadata-memory', 'completed');
   await runInDurableObject(runtime, async instance => {
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
     const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
-      assistantMessageId: parent.assistant_message_id, intent: 'inspect_video', answer: 'A summary.',
+      agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'A summary.',
       confidence: 'medium', citations: [], artifacts: [{ type: 'youtube_video_metadata', data: { id: 'abcdefghijk', viewCount: 999999 } }],
       warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } });
     instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
@@ -103,7 +148,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({ fiberId: 'metadata-test', name: 'agent-runtime-run',
       status: 'running', createdAt: Date.now(), accepted: true });
     const receipt = await instance.startRun({ message: 'How many views did it have?', conversationId },
-      { userId, idempotencyKey: 'metadata-followup', creditsRemaining: 999 });
+      { userId, creditsRemaining: 999 });
     if ('rejected' in receipt) throw Error(receipt.message);
     await reserveAgentCredits(env, userId, receipt.runId);
     const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
@@ -197,7 +242,7 @@ test('completed responses use the settled ledger balance, not their admission sn
   const { runtime, userId, runId, conversationId } = await seed('agent-completed-runtime', 'completed');
   await runInDurableObject(runtime, async instance => {
     const result = JSON.stringify({ runId, conversationId, userMessageId: crypto.randomUUID(),
-      assistantMessageId: crypto.randomUUID(), intent: 'clarification', answer: 'Which topic?',
+      agentMessageId: crypto.randomUUID(), intent: 'clarification', answer: 'Which topic?',
       confidence: 'low', citations: [], artifacts: [], warnings: [],
       billing: { creditsCharged: 0, creditsRemaining: 12 } });
     instance.sql`UPDATE agent_runs SET result_json = ${result} WHERE id = ${runId}`;
@@ -224,7 +269,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   expect(await creditBalance(env, userId)).toBe(999);
   await runInDurableObject(runtime, async instance => {
   await expect(instance.startRun({ message: 'A delayed request', conversationId }, {
-    userId, idempotencyKey: 'delayed-request', creditsRemaining: 999,
+    userId, creditsRemaining: 999,
   })).rejects.toThrow('deletion');
   });
   await runtime.deleteAccountData();
@@ -239,13 +284,13 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
 test('queued admissions retain their IDs and do not expire before classification starts', async () => {
   const { runtime, userId } = await seed('queued-expired-admission');
   const request = { conversationId: crypto.randomUUID(), message: 'A delayed request' };
-  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() - 81_000 };
+  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), admittedAt: Date.now() - 81_000 };
   await runInDurableObject(runtime, async instance => {
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
       fiberId: identity.runId, name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
-    const receipt = await instance.startRun(request, { userId, idempotencyKey: 'expired-queued-request', creditsRemaining: 1000 }, identity);
-    expect(receipt).toMatchObject({ request: { message: request.message }, runId: identity.runId, userMessageId: identity.userMessageId, assistantMessageId: identity.assistantMessageId, status: 'pending' });
+    const receipt = await instance.startRun(request, { userId, creditsRemaining: 1000 }, identity);
+    expect(receipt).toMatchObject({ request: { message: request.message }, runId: identity.runId, userMessageId: identity.userMessageId, agentMessageId: identity.agentMessageId, status: 'pending' });
     expect(fiber).toHaveBeenCalledOnce();
     fiber.mockRestore();
   });
@@ -254,19 +299,43 @@ test('queued admissions retain their IDs and do not expire before classification
 test('an interrupted pending admission retries startup without inserting a duplicate run', async () => {
   const { runtime, userId } = await seed('queued-interrupted-admission');
   const request = { conversationId: crypto.randomUUID(), message: 'An interrupted request' };
-  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), admittedAt: Date.now() };
+  const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), admittedAt: Date.now() };
   await runInDurableObject(runtime, async instance => {
     const fiber = vi.spyOn(instance, 'startFiber').mockRejectedValue(new Error('startup interrupted'));
-    const admission = { userId, idempotencyKey: 'interrupted-queued-request', creditsRemaining: 1000 };
+    const admission = { userId, creditsRemaining: 1000 };
     await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
     await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
     expect(fiber).toHaveBeenCalledTimes(2);
     expect(instance.sql`SELECT id FROM agent_runs WHERE conversation_id = ${request.conversationId}`).toEqual([{ id: identity.runId }]);
+    expect(fiber.mock.calls[0]?.[2]).not.toHaveProperty('idempotencyKey');
+    expect(fiber.mock.calls[0]?.[2]?.fiberId).toBe(identity.runId);
     fiber.mockRestore();
   });
 });
 
-test('saves a ready answer after the model deadline and settles it idempotently', async () => {
+test('keyless follow-ups create new runs while an active session still rejects overlapping work', async () => {
+  const { runtime, userId, conversationId } = await seed('keyless-followups');
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'stub', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    const request = { conversationId, message: 'Research five videos' };
+    const admission = { userId, creditsRemaining: 1000 };
+    const first = await instance.startRun(request, admission);
+    if ('rejected' in first) throw new Error(first.message);
+    expect(await instance.startRun(request, admission)).toMatchObject({ rejected: true, code: 'AGENT_CONVERSATION_BUSY' });
+    instance.sql`UPDATE agent_runs SET status = 'failed', billing_settled = 1 WHERE id = ${first.runId}`;
+    const second = await instance.startRun(request, admission);
+    if ('rejected' in second) throw new Error(second.message);
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(fiber).toHaveBeenCalledTimes(2);
+    for (const call of fiber.mock.calls) expect(call[2]).not.toHaveProperty('idempotencyKey');
+    fiber.mockRestore();
+  });
+});
+
+test('saves a ready answer and settles it idempotently', async () => {
   const { runtime, runId, userId } = await seed('agent-save-outside-model-window', 'running');
   await runInDurableObject(runtime, async instance => {
     const decision = JSON.stringify({ route: 'clarification', question: 'Which topic?' });
@@ -402,7 +471,7 @@ test('retry admission preserves the failed request, original display text, and s
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
       fiberId: 'retry-test', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
-    const admission = { userId, idempotencyKey: 'retry-context', creditsRemaining: 999 };
+    const admission = { userId, creditsRemaining: 999 };
     const receipt = await instance.startRun({ message: 'try again', conversationId }, admission);
     expect(receipt).not.toHaveProperty('rejected');
     if ('rejected' in receipt) return;
@@ -410,13 +479,12 @@ test('retry admission preserves the failed request, original display text, and s
     expect(instance.sql`SELECT message, execution_message, parent_message_id FROM agent_runs WHERE id = ${receipt.runId}`[0])
       .toEqual({ message: 'try again', execution_message: 'Private prompt', parent_message_id: null });
     instance.sql`UPDATE agent_runs SET status = 'failed' WHERE id = ${receipt.runId}`;
-    const second = await instance.startRun({ message: 'Please try again.', conversationId }, { ...admission, idempotencyKey: 'retry-context-2' });
+    const second = await instance.startRun({ message: 'Please try again.', conversationId }, admission);
     if ('rejected' in second) throw Error(second.message);
     expect(instance.sql`SELECT execution_message FROM agent_runs WHERE id = ${second.runId}`[0])
       .toEqual({ execution_message: 'Private prompt' });
     const repeated = await instance.startRun({ message: 'try again', conversationId }, admission);
-    if ('rejected' in repeated) throw Error(repeated.message);
-    expect(repeated.runId).toBe(receipt.runId);
+    expect(repeated).toMatchObject({ rejected: true, code: 'AGENT_CONVERSATION_BUSY' });
     expect(instance.sql`SELECT id FROM agent_runs WHERE conversation_id = ${conversationId}`).toHaveLength(3);
     // The original remains intact, and the failed assistant is never a memory parent.
     expect(instance.sql`SELECT message FROM agent_runs WHERE id = ${runId}`[0]).toEqual({ message: 'Private prompt' });
@@ -432,7 +500,7 @@ test('does not reinterpret a new task or a retry in another session as the faile
     });
     for (const [message, session] of [['try again with a different video', conversationId], ['try again', crypto.randomUUID()]]) {
       const receipt = await instance.startRun({ message: message!, conversationId: session! },
-        { userId, idempotencyKey: crypto.randomUUID(), creditsRemaining: 999 });
+        { userId, creditsRemaining: 999 });
       if ('rejected' in receipt) throw Error(receipt.message);
       expect(instance.sql`SELECT execution_message FROM agent_runs WHERE id = ${receipt.runId}`[0])
         .toEqual({ execution_message: null });
@@ -447,29 +515,29 @@ test('legacy retry chains keep their original branch and completed retries remem
     const parentId = crypto.randomUUID();
     // The failed request belongs to a valid completed branch.
     const result = JSON.stringify({ runId: crypto.randomUUID(), conversationId, userMessageId: crypto.randomUUID(),
-      assistantMessageId: parentId, intent: 'clarification', answer: 'Which comparison?',
+      agentMessageId: parentId, intent: 'clarification', answer: 'Which comparison?',
       confidence: 'low', citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 999 } });
-    instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,user_message_id,assistant_message_id,
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,
       turn_ordinal,message,status,phase,result_json,credits_remaining_at_admission,created_at,updated_at)
-      VALUES ('parent','parent',${userId},${conversationId},${crypto.randomUUID()},${parentId},0,'Earlier request','completed','completed',${result},999,0,0)`;
+      VALUES ('parent',${userId},${conversationId},${crypto.randomUUID()},${parentId},0,'Earlier request','completed','completed',${result},999,0,0)`;
     instance.sql`UPDATE agent_runs SET message = 'Summarize https://youtu.be/abcdefghijk', parent_message_id = ${parentId} WHERE id = ${runId}`;
     const legacyId = crypto.randomUUID();
-    instance.sql`INSERT INTO agent_runs (id,idempotency_key,user_id,conversation_id,parent_message_id,user_message_id,assistant_message_id,
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,parent_message_id,user_message_id,agent_message_id,
       turn_ordinal,message,status,phase,credits_remaining_at_admission,created_at,updated_at)
-      VALUES (${legacyId},${legacyId},${userId},${conversationId},${parentId},${crypto.randomUUID()},${crypto.randomUUID()},2,'try again','failed','failed',999,1,1)`;
+      VALUES (${legacyId},${userId},${conversationId},${parentId},${crypto.randomUUID()},${crypto.randomUUID()},2,'try again','failed','failed',999,1,1)`;
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
       fiberId: 'legacy-retry', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const receipt = await instance.startRun({ message: 'retry', conversationId },
-      { userId, idempotencyKey: 'legacy-retry', creditsRemaining: 999 });
+      { userId, creditsRemaining: 999 });
     if ('rejected' in receipt) throw Error(receipt.message);
     const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
     expect(row).toMatchObject({ execution_message: 'Summarize https://youtu.be/abcdefghijk', parent_message_id: parentId });
     const saved = JSON.stringify({ ...JSON.parse(result), runId: receipt.runId, userMessageId: receipt.userMessageId,
-      assistantMessageId: receipt.assistantMessageId, answer: 'A summary.' });
+      agentMessageId: receipt.agentMessageId, answer: 'A summary.' });
     instance.sql`UPDATE agent_runs SET status = 'completed', result_json = ${saved} WHERE id = ${receipt.runId}`;
     const memory = instance as unknown as { readConversationHistory(row: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
-    expect(memory.readConversationHistory({ ...row, parent_message_id: receipt.assistantMessageId }).at(-1))
+    expect(memory.readConversationHistory({ ...row, parent_message_id: receipt.agentMessageId }).at(-1))
       .toMatchObject({ user: 'Summarize https://youtu.be/abcdefghijk', assistant: 'A summary.', resourceIds: ['abcdefghijk'] });
     fiber.mockRestore();
   });

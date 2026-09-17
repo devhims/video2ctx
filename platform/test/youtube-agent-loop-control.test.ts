@@ -45,7 +45,7 @@ describe('YouTube AgentCore loop control', () => {
     } });
     await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'Refresh the view count now.',
       decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
-      conversationHistory: [{ userMessageId: 'u', assistantMessageId: 'a', user: 'Summarize', assistant: 'A summary.', resourceIds: ['abcdefghijk'], metadata }] });
+      conversationHistory: [{ userMessageId: 'u', agentMessageId: 'a', user: 'Summarize', assistant: 'A summary.', resourceIds: ['abcdefghijk'], metadata }] });
     expect(context.provider.video).toHaveBeenCalledTimes(1);
     expect(finalizer.doGenerateCalls).toHaveLength(1);
   });
@@ -75,7 +75,7 @@ describe('YouTube AgentCore loop control', () => {
     vi.spyOn(context, 'executeEvidenceTool');
     await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'How many views did it have?',
       decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
-      conversationHistory: [{ userMessageId: 'u', assistantMessageId: 'a', user: 'Summarize the video',
+      conversationHistory: [{ userMessageId: 'u', agentMessageId: 'a', user: 'Summarize the video',
         assistant: 'A summary.', resourceIds: ['abcdefghijk'], metadata }] });
     expect(context.provider.video).not.toHaveBeenCalled();
     expect(context.executeEvidenceTool).not.toHaveBeenCalled();
@@ -976,7 +976,7 @@ describe('YouTube AgentCore loop control', () => {
         runId: context.runId,
         conversationId: crypto.randomUUID(),
         userMessageId: crypto.randomUUID(),
-        assistantMessageId: crypto.randomUUID(),
+        agentMessageId: crypto.randomUUID(),
         answer: 'The repaired answer uses persisted evidence.',
         intent: 'topic_research' as const,
         confidence: 'medium' as const,
@@ -1011,8 +1011,8 @@ describe('YouTube AgentCore loop control', () => {
     const context = inspectContext();
     context.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({
       runId: context.runId, conversationId: crypto.randomUUID(),
-      userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(),
-    }, { userId: 'test', idempotencyKey: 'test', creditsRemaining: 100 }, input, [packet], 1));
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(),
+    }, { userId: 'test', creditsRemaining: 100 }, input, [packet], 1));
     let attempts = 0;
     const recovery = new MockLanguageModelV4({ doGenerate: async (call) => {
       attempts += 1;
@@ -1058,8 +1058,8 @@ describe('YouTube AgentCore loop control', () => {
     };
     const context = inspectContext();
     context.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({
-      runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(),
-    }, { userId: 'test', idempotencyKey: 'test', creditsRemaining: 100 }, input, [packet], 1));
+      runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(),
+    }, { userId: 'test', creditsRemaining: 100 }, input, [packet], 1));
     let attempts = 0;
     const recovery = new MockLanguageModelV4({ doGenerate: async call => {
       attempts += 1;
@@ -1232,7 +1232,7 @@ function inspectContext(): AgentToolContext {
       runId,
       conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(),
-      assistantMessageId: crypto.randomUUID(),
+      agentMessageId: crypto.randomUUID(),
       answer: 'The available metadata identifies the video.',
       intent: 'inspect_video' as const,
       confidence: 'low' as const,
@@ -1318,7 +1318,7 @@ function transcriptResearchContext(): AgentToolContext {
     runId,
     conversationId: crypto.randomUUID(),
     userMessageId: crypto.randomUUID(),
-    assistantMessageId: crypto.randomUUID(),
+    agentMessageId: crypto.randomUUID(),
     answer: 'Two transcript analyses provide enough evidence.',
     intent: 'topic_research' as const,
     confidence: 'medium' as const,

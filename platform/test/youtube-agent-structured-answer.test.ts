@@ -14,8 +14,8 @@ const packet: EvidencePacket = {
 const base = { intent: 'inspect_video' as const, confidence: 'medium' as const, artifacts: [], warnings: [] };
 function finalize(evidenceIds: string[], text = 'Supported finding without manually written citations.') {
   return buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
-    userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID() },
-  { userId: 'test', idempotencyKey: 'test', creditsRemaining: 10 },
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+  { userId: 'test', creditsRemaining: 10 },
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {

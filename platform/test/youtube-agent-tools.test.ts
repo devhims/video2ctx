@@ -576,14 +576,14 @@ function identity() {
     runId: crypto.randomUUID(),
     conversationId: crypto.randomUUID(),
     userMessageId: crypto.randomUUID(),
-    assistantMessageId: crypto.randomUUID(),
+    agentMessageId: crypto.randomUUID(),
   };
 }
 
 function admission() {
   return {
     userId: 'user-1',
-    idempotencyKey: 'idempotency-key-1',
+
     creditsRemaining: 100,
   };
 }

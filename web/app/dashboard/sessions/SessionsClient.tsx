@@ -143,7 +143,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     setSession(current => current ? { ...current, lastRunId: receipt.runId, updatedAt: now, runCount: current.runCount + 1,
       messages: mergeAgentMessages(current.messages, [
         { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content },
-        { ...shared, messageId: receipt.assistantMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
+        { ...shared, messageId: receipt.agentMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
       ]) } : current);
   };
   useEffect(() => {
@@ -267,37 +267,36 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, o
   const [error, setError] = useState('');
   const [uncertain, setUncertain] = useState(false);
   const inFlight = useRef(false);
-  const attempt = useRef<(PendingMessage & { draft: string }) | null>(null);
+  const submissionCount = useRef(0);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (disabled || inFlight.current || sending || !draft.trim()) return;
-    // Keep the exact body and key when admission may have succeeded upstream.
-    const request = attempt.current ?? { message: draft.trim(), draft, key: crypto.randomUUID() };
-    attempt.current = request;
+    const request = { message: draft.trim(), draft, key: String(++submissionCount.current) };
     inFlight.current = true;
     setDraft(''); setError(''); onSending?.(true);
     startTransition(async () => {
       onSendAction(request);
       try {
-        const receipt = await sendAgentMessage(request.message, request.key, sessionId);
+        const receipt = await sendAgentMessage(request.message, sessionId);
         // Commit the server messages and remove the optimistic message together.
         startTransition(() => {
           cache.recordAdmission(receipt, request.message);
           onAdmitted(receipt, request.message);
         });
-        attempt.current = null; setUncertain(false);
+        setUncertain(false);
       } catch (cause) {
         const retryable = cause instanceof AgentSendError && cause.retryable;
         setDraft(request.draft);
         setError(errorMessage(cause)); setUncertain(retryable);
-        if (!retryable) attempt.current = null;
       } finally { inFlight.current = false; onSending?.(false); }
     });
   };
-  return <AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
+  return <><AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
     label={sessionId ? 'Follow-up message' : 'Start a new session'}
-    sendLabel={sending ? 'Sending…' : uncertain ? 'Retry sending' : sessionId ? 'Send follow-up' : 'Start session'}
-    disabled={disabled} sending={sending} uncertain={uncertain} error={error} />;
+    sendLabel={sending ? 'Sending…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
+    disabled={disabled} sending={sending} uncertain={uncertain} error={error} />
+    {uncertain && <Link href='/dashboard/sessions'>Check Sessions for the submitted run</Link>}
+  </>;
 }
 
 function phaseLabel(phase?: AgentProgress['phase']) {

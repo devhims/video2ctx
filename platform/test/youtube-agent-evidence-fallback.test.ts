@@ -31,8 +31,8 @@ describe('partial evidence fallback', () => {
     const input = evidenceFallback([packet], 'topic_research')!;
     const result = buildAgentTurnResult({
       runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
-      userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(),
-    }, { userId: 'user', idempotencyKey: 'test-key', creditsRemaining: 10 }, input, [packet], 1);
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(),
+    }, { userId: 'user', creditsRemaining: 10 }, input, [packet], 1);
     expect(result.citations[0]).toMatchObject({ excerpt: packet.excerpts[0]!.text, startMs: 1000 });
     expect(result.answer).toContain('not a completed comparison or recommendation');
     expect(result.confidence).toBe('low');

@@ -114,8 +114,8 @@ describe('storyboard agent tool', () => {
     expect(JSON.stringify(result)).not.toContain('/9j/');
     expect(result.usage).toEqual([{ operation: 'storyboard', credits: 1, cacheStatus: 'miss' }]);
     const finalized = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
-      userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID() },
-      { userId: 'test', idempotencyKey: 'storyboard-test', creditsRemaining: 100 },
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'test', creditsRemaining: 100 },
       { answer: `A diagram is visible [cite:${result.excerpts[0]!.id}]`, intent: 'inspect_video', confidence: 'low',
         citations: [], artifacts: [], warnings: [] }, [result], 1);
     expect(finalized.citations[0]).toMatchObject({ videoId: storyboard.videoId, startMs: 55000, endMs: 55000 });

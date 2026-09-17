@@ -149,7 +149,7 @@ test('missing sessions and access outages do not expose private content', async 
 });
 
 
-test('follow-up uses the same session, restores a disconnected stream, and persists its trace', async ({ page, context }, testInfo) => {
+test('follow-up recovers a lost receipt from the session without resubmitting and restores its stream', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.goto(`/dashboard/sessions/${sessionId}`);
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
@@ -157,9 +157,10 @@ test('follow-up uses the same session, restores a disconnected stream, and persi
   page.on('request', request => { if (request.method() === 'POST' && request.url().includes('/v1/agent?')) posts.push({ key: request.headers()['idempotency-key'], body: request.postDataJSON() }); });
   await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Retry this follow-up: explain the differences.');
   await page.getByRole('button', { name: 'Send follow-up' }).click();
-  await expect(page.getByText('Sending could not be confirmed. Retry to check the same request.')).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Follow-up message' })).toHaveAttribute('readonly');
-  await page.getByRole('button', { name: 'Retry sending' }).click();
+  await expect(page.getByText('Sending could not be confirmed. Check Sessions before sending again; another submission starts a new run.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Send as new run' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Check Sessions for the submitted run' })).toBeVisible();
+  await page.reload();
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   const latest = page.locator('.agent-assistant-message').last();
   await expect(latest.getByText('get video transcript', { exact: true })).toBeVisible();
@@ -168,8 +169,8 @@ test('follow-up uses the same session, restores a disconnected stream, and persi
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('follow-up-streaming.png'), fullPage: true });
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
-  expect(posts).toHaveLength(2);
-  expect(posts[0]).toEqual(posts[1]);
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.key).toBeUndefined();
   expect(posts[0]!.body.sessionId).toBe(sessionId);
   expect(posts[0]!.body).not.toHaveProperty('parentMessageId');
   await page.reload();

@@ -1,6 +1,6 @@
 import { timeAgentAdmission } from '../../lib/agent-admission-timing';
-import { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
-export { agentInstanceName, userAccountInstanceName, deterministicConversationId } from '../../agents/runtime/identity';
+import { agentInstanceName, userAccountInstanceName } from '../../agents/runtime/identity';
+export { agentInstanceName, userAccountInstanceName } from '../../agents/runtime/identity';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { agentResponseOptionsSchema, compactAgentRun, legacyAgentRun, withSessionId } from '../../agents/response';
@@ -143,7 +143,7 @@ agentRoutes.get('/agent/sessions/:sessionId', async (c) => {
       const common = { runId: pending.run.runId, conversationTurn: 1, createdAt: pending.admittedAt, updatedAt: pending.admittedAt };
       return c.json({ ...withSessionId(session), messages: cursor ? [] : [
         { ...common, messageId: pending.run.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: pending.message },
-        { ...common, messageId: pending.run.assistantMessageId, parentMessageId: pending.run.userMessageId, role: 'assistant', status: pending.run.status, content: '' },
+        { ...common, messageId: pending.run.agentMessageId, parentMessageId: pending.run.userMessageId, role: 'assistant', status: pending.run.status, content: '' },
       ], nextCursor: null });
     }
     page = await agent.getConversation(path.data.sessionId, principal.id, {
@@ -167,10 +167,9 @@ agentRoutes.post('/agent', async (c) => {
   const startedAt = c.get('requestStartedAt');
   if (startedAt !== undefined) c.get('agentAdmissionTimings')?.push({ stage: 'preflight', durationMs: Date.now() - startedAt });
   const responseOptions = parseResponseOptions(c);
-  const idempotencyKey = requireIdempotencyKey(c.req.header('idempotency-key'));
   const parsedRequest = parseAgentRequest(await body<unknown>(c.req.raw));
   const conversationId = parsedRequest.conversationId
-    ?? await deterministicConversationId(principal.id, idempotencyKey);
+    ?? crypto.randomUUID();
   const request: AgentRequest = { ...parsedRequest, conversationId };
   const creditsRemaining = await timeAgentAdmission(c, 'credits', () => creditBalance(c.env, principal.id));
 
@@ -185,7 +184,7 @@ agentRoutes.post('/agent', async (c) => {
   try {
     const account = await userAccountForUser(c.env, principal.id);
     if (!parsedRequest.conversationId && !parsedRequest.parentMessageId) {
-      const queued = await timeAgentAdmission(c, 'enqueue', async () => await account.enqueueAgentRun(request, { userId: principal.id, idempotencyKey, creditsRemaining }));
+      const queued = await timeAgentAdmission(c, 'enqueue', async () => await account.enqueueAgentRun(request, { userId: principal.id, creditsRemaining }));
       if (queued.receipt) return c.json(responseOptions.responseFormat === 'compact'
         ? compactAgentRun(queued.receipt, responseOptions.include) : withSessionId(agentRunReceiptSchema.parse(queued.receipt)), 202);
     }
@@ -195,7 +194,6 @@ agentRoutes.post('/agent', async (c) => {
     await timeAgentAdmission(c, 'register', () => account.registerConversation(conversationId));
     const receipt = await timeAgentAdmission(c, 'start_run', async () => await agent.startRun(request, {
       userId: principal.id,
-      idempotencyKey,
       creditsRemaining,
     }));
     if ('rejected' in receipt) {
@@ -212,7 +210,8 @@ agentRoutes.post('/agent', async (c) => {
       throw new ApiError(
         503,
         'AGENT_SESSION_CATALOG_UNAVAILABLE',
-        'The run was admitted, but its session catalog entry could not be recorded. Retry with the same Idempotency-Key.',
+        'The run was admitted, but its session catalog entry could not be recorded. Retrieve the existing run using the sessionId and runId in error.details. Sending the message again may create another run.',
+        { sessionId: receipt.conversationId, runId: receipt.runId },
       );
     }
     return c.json(responseOptions.responseFormat === 'compact'
@@ -320,18 +319,6 @@ async function requireAgentAccess(c: Context<App>): Promise<void> {
   if (!user || user.emailVerified !== 1 || !allowed.has(user.email.trim().toLowerCase())) {
     throw new ApiError(403, 'ADMIN_REQUIRED', 'Agent access is currently restricted to admins.');
   }
-}
-
-function requireIdempotencyKey(value: string | undefined): string {
-  const key = value?.trim() ?? '';
-  if (key.length < 8 || key.length > 200) {
-    throw new ApiError(
-      422,
-      'INVALID_IDEMPOTENCY_KEY',
-      'Idempotency-Key must contain between 8 and 200 characters.',
-    );
-  }
-  return key;
 }
 
 const publicAgentRequestSchema = agentRequestSchema.extend({

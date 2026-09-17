@@ -39,7 +39,7 @@ export const compactAgentResultSchema = z.object({
   evidence: z.array(agentCitationSchema).optional().describe('Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.'),
 });
 export const compactAgentRunSchema = agentRunReceiptSchema.pick({
-  runId: true, assistantMessageId: true, status: true, request: true,
+  runId: true, agentMessageId: true, status: true, request: true,
 }).extend({
   sessionId: z.string().uuid(),
   result: compactAgentResultSchema.optional(),
@@ -57,7 +57,7 @@ export function compactAgentRun(run: AgentRunView, include: AgentResponseOptions
     request: run.request,
     runId: run.runId,
     sessionId: run.conversationId,
-    assistantMessageId: run.assistantMessageId,
+    agentMessageId: run.agentMessageId,
     status: run.status,
     ...(run.result ? { result: compactResult(run.result, include, run.route), billing: run.result.billing } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),

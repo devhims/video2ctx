@@ -51,8 +51,8 @@ test('newer history supersedes older snapshots and current evidence supersedes h
 
 test('remembered metadata is valid cited answer evidence without repeating the prior charge', () => {
   const memory = metadataForConversation([{ packet: packet(), recordedAt: 2000 }]);
-  const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID() },
-    { userId: 'user', idempotencyKey: 'key-2', creditsRemaining: 100 },
+  const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 },
     { intent: 'inspect_video', confidence: 'medium', answer: `It had 404433 views as of the earlier lookup. [cite:${memory[0]!.excerpts[0]!.id}]`, citations: [], artifacts: [], warnings: [] }, memory, 0);
   expect(result.citations[0]).toMatchObject({ videoId: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk' });
   expect(result.billing.creditsCharged).toBe(0);
