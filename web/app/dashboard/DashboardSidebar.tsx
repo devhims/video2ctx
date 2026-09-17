@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useDashboardSession } from './DashboardSessionProvider';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon } from '@phosphor-icons/react';
+import styles from './DashboardSidebar.module.css';
 
 export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
 export type DashboardSidebarSection = DashboardSection | 'developer' | 'sessions';
@@ -39,31 +41,84 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
   onSignOut: () => void;
 };
 
+const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
+
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
   const { agentAccess } = useDashboardSession();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === 'true'); } catch { /* Storage may be disabled. */ }
+    const desktop = window.matchMedia('(min-width: 701px)');
+    const closeOnDesktop = () => { if (desktop.matches) dialog.current?.close(); };
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, []);
+
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* Keep the toggle usable without storage. */ }
+  };
+  const run = (action: () => void) => { dialog.current?.close(); action(); };
   const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
-    <button aria-current={activeSection === section ? 'page' : undefined} className={activeSection === section ? 'active' : ''} onClick={() => onNavigate(section)}>
-      <span aria-hidden='true'><Icon name={icon} /></span>{label}{suffix}
+    <button type='button' aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => run(() => onNavigate(section))}>
+      <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}
     </button>
   );
+  const brand = <><img src='/brand/logo-120.png' alt='' width='28' height='28' /><span className={styles.wordmark}>video2<span>ctx</span></span></>;
+  const content = (mobile = false) => <>
+    <div className={styles.header}>
+      {(mobile || !collapsed) && <Link className={styles.brand} aria-label='video2ctx home' href='/'>{brand}</Link>}
+      <button type='button' className={!mobile && collapsed ? styles.expand : styles.toggle} aria-label={mobile ? 'Close navigation' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={mobile ? true : !collapsed} data-tooltip={!mobile && collapsed ? 'Expand sidebar' : undefined} onClick={mobile ? () => dialog.current?.close() : toggleCollapsed}>
+        {!mobile && collapsed && <img src='/brand/logo-120.png' alt='' width='28' height='28' />}
+        {mobile ? <XIcon size={18} aria-hidden='true' /> : <SidebarSimpleIcon size={18} aria-hidden='true' />}
+      </button>
+    </div>
+    <div className={styles.scrollArea}>
+      <nav aria-label='Dashboard navigation' className={styles.navigation}>
+        <div className={styles.group}>
+          {navButton('trends', 'Trend Lab', 'trend')}
+          {navButton('discover', 'Sources', 'search')}
+          {agentAccess && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
+        </div>
+        <div className={styles.group}>
+          <p className={styles.groupLabel}>Workspace</p>
+          {navButton('projects', 'Projects', 'folder', <span className={styles.count}>{projects.length}</span>)}
+          {navButton('monitors', 'Monitors', 'monitor')}
+        </div>
+        <div className={styles.group}>
+          <p className={styles.groupLabel}>Manage</p>
+          <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span></Link>
+          {navButton('settings', 'Settings', 'settings')}
+        </div>
+      </nav>
+      <section className={styles.projects} aria-label='Recent projects'>
+        <div className={styles.projectHeading}><span>Recent projects</span><button type='button' aria-label='Create a new project' onClick={() => run(onNewProject)}><Icon name='plus' size={15} /></button></div>
+        {projects.slice(0, 5).map(project => <button type='button' className={styles.project} key={project.id} title={project.name} onClick={() => run(() => onOpenProject(project))}><span className={styles.projectDot} /><span>{project.name}</span></button>)}
+        {!projects.length && <p>Save a source to start a project.</p>}
+      </section>
+      <button type='button' className={styles.item + ' ' + styles.quickCreate} aria-label='Create a new project' title='New project' data-tooltip='New project' onClick={() => run(onNewProject)}><span className={styles.iconTile}><Icon name='plus' /></span></button>
+    </div>
+    <div className={styles.footer}>
+      <a className={styles.item} href='https://docs.video2ctx.dev/' target='_blank' rel='noreferrer' aria-label='Documentation (opens in a new tab)' data-tooltip='Documentation'><span className={styles.footerIcon}><BookOpenIcon size={18} aria-hidden='true' /></span><span className={styles.label}>Documentation</span></a>
+      {accountName ? <>
+        <button type='button' className={styles.item + ' ' + styles.balance} aria-label={credits === undefined ? 'Credit balance loading' : credits.toLocaleString() + ' credits remaining'} data-tooltip={credits === undefined ? 'Credit balance loading' : credits.toLocaleString() + ' credits'} onClick={() => run(() => onNavigate('settings'))}>
+          <span className={styles.footerIcon}><CoinsIcon size={18} aria-hidden='true' /></span><span className={styles.label}>Credits</span><span className={styles.creditAmount}>{credits === undefined ? '…' : credits.toLocaleString()}</span>
+        </button>
+        <details className={styles.account} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.stopPropagation(); event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}>
+          <summary className={styles.item} aria-label={'Account: ' + accountName} data-tooltip={accountName}><span className={styles.avatar}>{accountName.trim().slice(0, 2).toUpperCase()}</span><span className={styles.label}>{accountName}</span><CaretDownIcon className={styles.accountCaret} size={14} aria-hidden='true' /></summary>
+          <div className={styles.accountMenu}><strong>{accountName}</strong><button type='button' aria-label='Account settings' className={styles.item} onClick={() => run(() => onNavigate('settings'))}><Icon name='settings' size={16} />Account settings</button><button type='button' aria-label='Sign out' className={styles.item} onClick={() => run(onSignOut)}><SignOutIcon size={16} aria-hidden='true' />Sign out</button></div>
+        </details>
+      </> : <button type='button' className={styles.item} aria-label='Sign in' data-tooltip='Sign in' onClick={() => run(onSignIn)}><span className={styles.avatar}><Icon name='user' size={16} /></span><span className={styles.label}>Sign in</span></button>}
+    </div>
+  </>;
 
-  return <aside className='sidebar'>
-    <Link className='brand workspace-brand' aria-label='video2ctx home' href='/'>
-      <img src='/brand/logo-120.png' alt='' width='36' height='36' />
-      <span className='workspace-wordmark'>video2<span>ctx</span></span>
-    </Link>
-    <nav aria-label='Dashboard navigation'>
-      {navButton('trends', 'Trend Lab', 'trend')}
-      {navButton('discover', 'Sources', 'search')}
-      {navButton('projects', 'Projects', 'folder', <em>{projects.length}</em>)}
-      {navButton('monitors', 'Monitors', 'monitor')}
-      <Link aria-current={activeSection === 'developer' ? 'page' : undefined} className={activeSection === 'developer' ? 'active' : ''} href='/dashboard/developer'><span aria-hidden='true'>⌘</span>API keys</Link>
-      {agentAccess && <Link aria-label='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={activeSection === 'sessions' ? 'active' : ''} href='/dashboard/sessions'><Icon name='spark' />Agent</Link>}
-      {navButton('settings', 'Settings', 'settings')}
-    </nav>
-    <div className='sidebar-rule' />
-    <div className='sidebar-label'><span>RECENT PROJECTS</span><button aria-label='Create a new project' onClick={onNewProject}>＋</button></div>
-    <div className='project-links'>{projects.slice(0, 5).map((project, index) => <button key={project.id} onClick={() => onOpenProject(project)}><span aria-hidden='true' className={`project-color c${index % 4}`} />{project.name}</button>)}{!projects.length && <p>Save a source to start.</p>}</div>
-    <div className='account-card'>{accountName ? <><strong>{accountName}</strong><p>{credits === undefined ? 'Loading credit balance…' : `${credits} credits remaining`}</p><button onClick={onSignOut}><Icon name='user' size={15} />Sign out</button></> : <><strong>Keep your research private</strong><p>Sign in to sync projects and monitors across devices.</p><button onClick={onSignIn}><Icon name='user' size={15} />Sign in</button></>}</div>
-  </aside>;
+  return <>
+    <aside className={styles.sidebar} data-dashboard-sidebar data-collapsed={collapsed} aria-label='Workspace sidebar'>{content()}</aside>
+    <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' aria-label='video2ctx home'>{brand}</Link></div>
+    <dialog ref={dialog} className={styles.drawer} aria-label='Dashboard navigation' onClose={() => setMobileOpen(false)} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}><div className={styles.drawerContent}>{content(true)}</div></dialog>
+  </>;
 }

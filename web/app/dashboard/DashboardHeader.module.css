@@ -1,0 +1,38 @@
+.header.header {
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: auto;
+  height: auto;
+  min-height: 3.5rem;
+  margin: 0;
+  padding: .75rem 1.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.header.header h1 {
+  margin: 0;
+  color: var(--color-dashboard-ink);
+  font: 500 .875rem/1.5 var(--font-dashboard-body);
+  letter-spacing: 0;
+}
+
+.actions.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .75rem;
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .header.header { padding: .625rem 1.25rem; }
+  .actions.actions { gap: .5rem; }
+}

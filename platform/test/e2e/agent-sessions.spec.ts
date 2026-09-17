@@ -26,7 +26,9 @@ test('returning to all sessions shows the remembered list without waiting for an
   const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
   await expect(title).toBeVisible();
   const header = (await page.locator('.topbar').boundingBox())!;
-  const welcome = (await page.getByRole('heading', { name: 'What would you like to learn?' }).boundingBox())!;
+  const welcomeHeading = page.locator('.agent-welcome').getByRole('heading', { level: 2 });
+  await expect(welcomeHeading).toBeVisible();
+  const welcome = (await welcomeHeading.boundingBox())!;
   expect(welcome.y - header.y - header.height).toBeLessThan(55);
   await expect(page.locator('.agent-welcome-mark')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('recent-sessions.png') });
@@ -238,8 +240,10 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.getByRole('link', { name: 'Unsafe link' })).toHaveCount(0);
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
   expect(imageRequests).toHaveLength(0);
-  await page.getByRole('button', { name: 'Copy answer' }).click();
-  await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+  const latestAnswer = page.locator('.agent-assistant-message').last();
+  await expect(page.locator('.agent-assistant-message').first().getByRole('button', { name: 'Copy answer', exact: true })).toBeVisible();
+  await latestAnswer.getByRole('button', { name: 'Copy answer', exact: true }).click();
+  await expect(latestAnswer.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
   expect(await page.evaluate('navigator.clipboard.readText()')).toBe(answer);
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('markdown-desktop.png'), fullPage: true });
@@ -249,8 +253,8 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeInViewport();
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   const sendBounds = (await page.getByRole('button', { name: 'Send follow-up' }).boundingBox())!;
-  const navigationBounds = (await page.getByRole('navigation', { name: 'Dashboard navigation' }).boundingBox())!;
-  expect(sendBounds.y + sendBounds.height).toBeLessThan(navigationBounds.y);
+  expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await expect(page.getByRole('navigation', { name: 'Dashboard navigation' })).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath('markdown-mobile.png') });
 });
 

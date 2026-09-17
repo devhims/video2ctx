@@ -18,6 +18,8 @@ import {
   type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
+import { DashboardHeader } from './DashboardHeader';
+import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 
@@ -563,31 +565,23 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   return (
     <main className='workspace-shell'>
       <DashboardSidebar activeSection={section} onNavigate={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} accountName={user?.name ?? (demoEnabled ? 'Local demo' : undefined)} credits={usage?.creditBalance} onSignOut={() => void signOut()} />
-      <div className='workspace-main'>
-        <header className='topbar'>
-          <div><span className='topbar-context'>Research workspace</span><h1>{section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}</h1></div>
-          <div className='topbar-actions'>
-            <span className={`sync-state ${platformHealth}`} role='status' aria-live='polite'><i />{platformHealth === 'healthy' ? 'Platform online' : platformHealth === 'checking' ? 'Checking platform' : 'Platform unavailable'}</span>
-            {usage && <span className='credit-balance'>{usage.creditBalance} credits</span>}
-            <NotificationMenu
-              notifications={notifications}
-              enabled={notificationPreferences.inApp}
-              onOpen={(notification) => void openNotification(notification)}
-              onMarkAll={() => void markAllNotificationsRead()}
-              onSettings={() => navigateTo('settings')}
-            />
-          </div>
-        </header>
+      <div className={`workspace-main ${pageStyles.pages}`}>
+        <DashboardHeader title={section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}>
+          <span className={`sync-state ${platformHealth}`} role='status' aria-live='polite'><i />{platformHealth === 'healthy' ? 'Platform online' : platformHealth === 'checking' ? 'Checking platform' : 'Platform unavailable'}</span>
+          <NotificationMenu
+            notifications={notifications}
+            enabled={notificationPreferences.inApp}
+            onOpen={(notification) => void openNotification(notification)}
+            onMarkAll={() => void markAllNotificationsRead()}
+            onSettings={() => navigateTo('settings')}
+          />
+        </DashboardHeader>
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
         <div className='workspace-view' hidden={section !== 'discover'}>
           <>
             <section className='source-studio' aria-labelledby='source-studio-title'>
-              <header className='source-studio-intro'>
-                <p className='panel-label'>YouTube data studio</p>
-                <h2 id='source-studio-title'>{playlistInput ? 'Open a playlist. Review every video.' : 'Find a video. Choose the data you need.'}</h2>
-                <p>{playlistInput ? 'Playlist details and its video index are included. Open any video when you are ready to fetch deeper data.' : 'Use a title, topic, video URL, or playlist URL. Video details are included; the additional datasets are up to you.'}</p>
-              </header>
+              <header className={pageStyles.intro}><h2 id='source-studio-title'>Find a video or playlist</h2><p>Search YouTube or paste a link to inspect its data.</p></header>
               <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
@@ -595,20 +589,19 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
                   <button disabled={loading || !query.trim()}>{loading ? 'Working…' : playlistInput ? 'Open playlist' : 'Search videos'} <span aria-hidden='true'>→</span></button>
                 </div>
                 <fieldset className='source-data-picker'>
-                  <legend>{playlistInput ? 'Include when you open a video from this playlist' : 'Include when a video opens'}</legend>
+                  <legend>Include with each video</legend>
                   <div className='source-data-options'>
                     {(Object.keys(SOURCE_DATA_OPTIONS) as SourceDataOption[]).map((option) => {
                       const selected = selectedData.includes(option);
                       const isOnlySelection = selected && selectedData.length === 1;
-                      return <label key={option} data-selected={selected} data-locked={isOnlySelection} title={isOnlySelection ? 'Choose another dataset before removing this one' : undefined}>
+                      return <label key={option} data-selected={selected} data-locked={isOnlySelection} title={isOnlySelection ? 'Choose another dataset before removing this one' : SOURCE_DATA_OPTIONS[option].description}>
                         <input type='checkbox' checked={selected} disabled={isOnlySelection} onChange={() => toggleSelectedData(option)} />
                         <span aria-hidden='true'>{selected ? '✓' : '+'}</span>
                         <b>{SOURCE_DATA_OPTIONS[option].shortLabel}</b>
-                        <small>{SOURCE_DATA_OPTIONS[option].description}</small>
                       </label>;
                     })}
                   </div>
-                  <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span> Select one or more datasets for any video you open.</p>
+                  <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span></p>
                 </fieldset>
               </form>
             </section>
@@ -815,10 +808,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
     }
   };
 
-  return <section className='content-section standalone max-w-6xl'>
-    <div className='section-heading'>
-      <div><h2>Settings</h2><p>Manage billing, monitor updates, and your account.</p></div>
-    </div>
+  return <section className='content-section standalone settings-page'><header className={pageStyles.intro}><h2>Workspace settings</h2><p>Manage your plan, notifications, and account.</p></header>
     <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
       <div>
         <span className='panel-label'>Billing</span>
@@ -840,9 +830,8 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
     </article>
     <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
       <div className='settings-notification-intro'>
-        <span className='panel-label'>Monitor updates</span>
         <h3 className='settings-card-title' id='notification-settings-heading'>Notifications</h3>
-        <p className='settings-card-copy'>Control each delivery channel independently. Changes apply to every monitor.</p>
+        <p className='settings-card-copy'>Updates from your monitors.</p>
       </div>
       <div className='settings-toggle-list'>
         {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
@@ -865,12 +854,12 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
           <i aria-hidden='true' />
         </label>
         {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
-        {isDemo && <p className='settings-demo-note'>Email is disabled for the local demo identity so development checks cannot send to a placeholder address.</p>}
+        {isDemo && <p className='settings-demo-note'>Email delivery is unavailable in local preview.</p>}
         {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
       </div>
     </article>
     <article className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1'>
-      <div><span className='panel-label'>Signed-in account</span><h3 className='settings-card-title mt-2 mb-0'>{email ?? 'Local demo account'}</h3><p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>Personal API keys are managed separately from your account profile.</p></div>
+      <div><span className='panel-label'>Signed-in account</span><h3 className='settings-card-title mt-2 mb-0'>{email ?? 'Local demo account'}</h3></div>
       <Link className='button secondary no-underline max-[43.75rem]:w-full' href='/dashboard/developer'>Manage API keys</Link>
     </article>
     <article className='mt-6 grid grid-cols-[minmax(0,1fr)_minmax(17rem,24rem)] items-start gap-10 rounded-[var(--radius-dashboard-md)] border border-[color-mix(in_srgb,var(--color-dashboard-danger)_45%,var(--color-dashboard-rule))] bg-[color-mix(in_srgb,var(--color-dashboard-danger)_4%,var(--color-dashboard-surface))] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='delete-account-heading'>
@@ -960,37 +949,36 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
   const maxVelocity = Math.max(...(report?.videos.map((video) => video.viewsPerHour ?? 0) ?? [1]), 1);
   const maxDurationCount = Math.max(...(report?.durationMix.map((bucket) => bucket.videos) ?? [1]), 1);
 
-  return <section className='trend-lab'>
+  return <section className='trend-lab' data-report={Boolean(report)}>
     <header className='trend-command'>
-      <div><h2>Compare topic momentum</h2><p>Scan fresh videos, inspect the strongest signals, and turn the evidence into a brief.</p></div>
+      <div className={pageStyles.intro}><h2>Explore a topic</h2><p>Compare video performance and find patterns in a fresh sample.</p></div>
       <form className='trend-search' onSubmit={(event) => { event.preventDefault(); void runTopic(topic); }}>
         <label htmlFor='trend-topic'>Topic or niche</label><div><input id='trend-topic' value={topic} onChange={(event) => setTopic(event.target.value)} placeholder='e.g. AI coding agents' /><button disabled={loading}>{loading ? 'Scanning…' : 'Research topic'} <span aria-hidden='true'>→</span></button></div>
-        <small>Public signals only · no official YouTube API</small>
       </form>
     </header>
     <div className='trend-presets'><span>Quick scans</span>{['AI agents','Claude Code','faceless YouTube','personal finance'].map((preset) => <button key={preset} onClick={() => void runTopic(preset)}>{preset}</button>)}</div>
 
     {error && <div className='trend-alert' role='alert'><span>{error}</span><button onClick={() => void runTopic(topic)}>Retry scan</button></div>}
     {loading && !report && <TrendLoading onCancel={cancelTrend} />}
-    {!loading && !report && !error && <div className='trend-empty'><div><span aria-hidden='true'><Icon name='trend' size={21} /></span><h3>Start with a topic you want to understand.</h3><p>We’ll compare a fresh public sample, surface momentum patterns, and keep the evidence attached.</p><button onClick={() => void runTopic(topic)}>Research “{topic}”</button></div></div>}
+    {!loading && !report && !error && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='trend' size={21} /></span><div><h3>Your research starts here</h3><p>Choose a topic above to see its latest video signals.</p></div></div>}
     {report && <>
       {loading && <div className='trend-refresh-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>Refreshing the topic sample…</strong><small>The previous report remains visible.</small></div><button onClick={cancelTrend}>Cancel</button></div>}
-      <div className='trend-report-head'><div><p className='panel-label'>Live sample · {report.sampleSize} videos</p><h3>Momentum around “{report.query}”</h3></div><span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
+      <div className='trend-report-head'><div><p className='panel-label'>Live sample · {report.sampleSize} videos</p><h3>{report.query}</h3></div><span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
       <div className='trend-kpis'>
-        <article><span>MEDIAN PUBLISH-ADJUSTED REACH</span><strong>{formatNumber(report.summary.medianViewsPerHour)}</strong><small>average views/hour</small></article>
-        <article><span>FRESH THIS WEEK</span><strong>{report.summary.publishedLast7Days}/{report.sampleSize}</strong><small>sampled videos</small></article>
-        <article><span>BREAKOUT SIGNALS</span><strong>{report.summary.breakoutCount}</strong><small>relative to sample</small></article>
-        <article><span>SAMPLE REACH</span><strong>{formatNumber(report.summary.totalViews)}</strong><small>current public views</small></article>
+        <article><span>Median views/hour</span><strong>{formatNumber(report.summary.medianViewsPerHour)}</strong><small>average views/hour</small></article>
+        <article><span>Published this week</span><strong>{report.summary.publishedLast7Days}/{report.sampleSize}</strong><small>sampled videos</small></article>
+        <article><span>Breakout signals</span><strong>{report.summary.breakoutCount}</strong><small>relative to sample</small></article>
+        <article><span>Total views</span><strong>{formatNumber(report.summary.totalViews)}</strong><small>current public views</small></article>
       </div>
 
       <div className='trend-dashboard-grid'>
         <article className='trend-card velocity-card'>
-          <div className='trend-card-head'><div><p className='panel-label'>Momentum</p><h4>Average views/hour since publish</h4></div><span>First-scan estimate</span></div>
+          <div className='trend-card-head'><div><h4>Average views/hour since publish</h4></div><span>First-scan estimate</span></div>
           <div className='velocity-chart'>{report.videos.slice(0,6).map((video) => <button key={video.id} onClick={() => onInspect(video.id)} title={video.title}><span>{video.title}</span><i><b style={{width:`${Math.max(4,((video.viewsPerHour ?? 0)/maxVelocity)*100)}%`}} /></i><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong></button>)}</div>
         </article>
 
         <article className='trend-card scatter-card'>
-          <div className='trend-card-head'><div><p className='panel-label'>Opportunity map</p><h4>Freshness × relative momentum</h4></div><span>Select a point to inspect</span></div>
+          <div className='trend-card-head'><div><h4>Freshness × relative momentum</h4></div><span>Select a point to inspect</span></div>
           <div className='scatter-plot'><span className='axis-y'>More momentum</span><span className='axis-x'>Fresher →</span>{report.videos.map((video) => {
             const freshness = video.ageHours === undefined ? 10 : Math.max(5, 96 - Math.log10(video.ageHours + 1) * 29);
             const size = Math.max(12, Math.min(28, 12 + Math.log10(video.viewCount + 1) * 2.2));
@@ -1000,25 +988,25 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
         </article>
 
         <article className='trend-card pattern-card'>
-          <div className='trend-card-head'><div><p className='panel-label'>Format signal</p><h4>Which lengths are surfacing</h4></div><span>{report.sampleSize} videos</span></div>
+          <div className='trend-card-head'><div><h4>Video lengths</h4></div><span>{report.sampleSize} videos</span></div>
           <div className='duration-chart'>{report.durationMix.map((bucket) => <div key={bucket.label}><span>{bucket.label}</span><i><b style={{height:`${Math.max(4,(bucket.videos/maxDurationCount)*100)}%`}} /></i><strong>{bucket.videos}</strong><small>{formatNumber(bucket.averageViewsPerHour)}/h avg</small></div>)}</div>
         </article>
 
         <article className='trend-card hashtag-card'>
-          <div className='trend-card-head'><div><p className='panel-label'>Discovery language</p><h4>Observed hashtags & title terms</h4></div><span>Correlation, not causation</span></div>
-          {report.hashtags.length ? <div className='hashtag-list'>{report.hashtags.slice(0,6).map((item) => <div key={item.tag}><strong>{item.tag}</strong><span>{item.videos} video{item.videos === 1 ? '' : 's'}</span><b>{item.lift ? `${item.lift.toFixed(1)}×` : '—'} velocity</b></div>)}</div> : <p className='no-hashtags'>No repeated visible hashtags appeared in this sample. Don’t force them—the topic and title pattern are stronger signals here.</p>}
+          <div className='trend-card-head'><div><h4>Observed hashtags & title terms</h4></div><span>Correlation, not causation</span></div>
+          {report.hashtags.length ? <div className='hashtag-list'>{report.hashtags.slice(0,6).map((item) => <div key={item.tag}><strong>{item.tag}</strong><span>{item.videos} video{item.videos === 1 ? '' : 's'}</span><b>{item.lift ? `${item.lift.toFixed(1)}×` : '—'} velocity</b></div>)}</div> : <p className='no-hashtags'>No repeated hashtags in this sample.</p>}
           <div className='term-cloud'>{report.titlePatterns.slice(0,7).map((item, index) => <span key={item.term} style={{fontSize:`${11 + Math.max(0,4-index)}px`}}>{item.term}<small>{item.videos}</small></span>)}</div>
         </article>
       </div>
 
       <div className='trend-bottom-grid'>
         <article className='trend-leaders'>
-          <div className='trend-card-head'><div><p className='panel-label'>Videos to study</p><h4>Current sample leaders</h4></div><span>Open any source</span></div>
+          <div className='trend-card-head'><div><h4>Top videos in this sample</h4></div><span>Open any source</span></div>
           <div className='leader-list'>{report.videos.slice(0,5).map((video, index) => <button key={video.id} onClick={() => onInspect(video.id)}><span className='leader-rank'>{String(index+1).padStart(2,'0')}</span><div className='leader-thumb'>{video.thumbnails[0]?.url ? <img src={video.thumbnails[0].url} alt='' /> : <span>YT</span>}</div><div><strong>{video.title}</strong><small>{video.channel.name} · {video.publishedTimeText ?? video.publishDate ?? 'Published recently'}</small></div><span className={`signal-pill ${video.trendBand.toLowerCase()}`}>{video.trendBand}</span><div className='leader-metric'><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong><small>{formatNumber(video.viewCount)} views</small></div></button>)}</div>
         </article>
 
         <aside className={`video-plan ${aiPlan ? 'ai-ready' : ''}`}>
-          <div className='plan-head'><div><p className='panel-label'>Your video plan</p><h3>{aiPlan ? 'An AI-shaped brief, grounded in this sample.' : 'Turn these signals into a sharper brief.'}</h3></div>{aiPlan && <span>GPT-OSS 120B</span>}</div>
+          <div className='plan-head'><h3>Video brief</h3>{aiPlan && <span>AI generated</span>}</div>
           {aiPlan ? <>
             <blockquote>{aiPlan.angle}</blockquote>
             <div className='plan-pair'><div className='plan-detail'><span>AUDIENCE</span><strong>{aiPlan.audience}</strong></div><div className='plan-detail'><span>RECOMMENDED LENGTH</span><strong>{formatDuration(aiPlan.recommendedDurationSeconds)}</strong></div></div>
@@ -1031,31 +1019,31 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
             <button className='plan-regenerate' disabled={aiLoading} onClick={() => void generatePlan()}>{aiLoading ? 'Thinking…' : 'Regenerate plan'}</button>
           </> : <>
             <blockquote>{report.plan.angle}</blockquote>
-            <p className='plan-explainer'>The charts above are calculated. GPT-OSS 120B can now reason across those signals to choose an audience, hook, story arc, titles, and differentiation—with source IDs attached.</p>
-            <button className='plan-generate' disabled={aiLoading} onClick={() => void generatePlan()}><span>✦</span>{aiLoading ? 'Building your plan…' : 'Generate with GPT-OSS 120B'}</button>
+            <p className='plan-explainer'>Generate an audience, hook, outline, and title ideas using this sample.</p>
+            <button className='plan-generate' disabled={aiLoading} onClick={() => void generatePlan()}><span>✦</span>{aiLoading ? 'Building your plan…' : 'Generate brief'}</button>
             <div className='plan-detail'><span>SIGNAL-BASED LENGTH</span><strong>{report.plan.recommendedDurationSeconds ? formatDuration(report.plan.recommendedDurationSeconds) : 'Test 8–12 min'}</strong></div>
             <div className='plan-tags'><span>OBSERVED REPEATED HASHTAGS</span><div>{report.plan.observedHashtags.length ? report.plan.observedHashtags.map((tag) => <b key={tag}>{tag}</b>) : <small>No repeated hashtag signal</small>}</div></div>
           </>}
           {aiError && <p className='plan-error'>{aiError}</p>}
         </aside>
       </div>
-      <p className='trend-method'><strong>How to read this:</strong> {report.methodology}</p>
+      <details className={pageStyles.disclosure}><summary>Methodology</summary><p>{report.methodology}</p></details>
     </>}
   </section>;
 }
 
 function TrendLoading({ onCancel }: { onCancel: () => void }) {
-  return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Searching, enriching, and comparing public video signals. This stops automatically if the source takes too long.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
+  return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Comparing public video signals.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
 function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
   return <section className='source-results' aria-labelledby='source-results-title'>
-    <header>
-      <div><p className='panel-label'>Search results</p><h2 id='source-results-title'>{items.length ? 'Choose a video to inspect' : hasSearched ? 'No matching videos' : 'Search results will appear here'}</h2></div>
+    <header className={!items.length && !hasSearched ? 'sr-only' : undefined}>
+      <h2 id='source-results-title'>{items.length ? 'Results' : hasSearched ? 'No matching videos' : 'Search results'}</h2>
       {items.length ? <span>{items.length} videos{loading ? ' · refreshing' : ''}</span> : null}
     </header>
     {loading && !items.length ? <div className='source-result-skeletons' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : null}
-    {!items.length && !loading ? <div className='source-results-empty'><span aria-hidden='true'><Icon name='search' size={22} /></span><div><strong>{hasSearched ? 'Try a broader title or topic.' : 'One field handles search and direct URLs.'}</strong><p>{hasSearched ? 'You can also paste the exact YouTube video URL.' : 'Search by title or topic, then select a result to fetch only the datasets checked above.'}</p></div><button onClick={onStart}>{hasSearched ? 'Edit search' : 'Start searching'}</button></div> : null}
+    {!items.length && !loading ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>{hasSearched ? 'Try another search' : 'Your sources will appear here'}</h3><p>{hasSearched ? 'Try another topic or paste a YouTube URL.' : 'Open a result to view your selected datasets.'}</p>{hasSearched && <button className={pageStyles.textAction} onClick={onStart}>Edit search →</button>}</div></div> : null}
     {items.length ? <div className='source-result-list'>{items.map((item) => {
       const thumbnail = bestThumbnail(item.thumbnails);
       return <button key={`${item.provider ?? 'youtube'}-${item.id}`} onClick={() => onInspect(item.id, item.provider)}>
@@ -1166,10 +1154,10 @@ function PlaylistInspector({ inspector, onClose, onSave, onOpenVideo }: { inspec
       {inspector.data.continuation ? <p className='playlist-continuation'>More videos are available through the continuation returned by the API.</p> : null}
     </section>
 
-    <aside className='source-api-guide playlist-api-guide' aria-labelledby='playlist-api-title'>
-      <div><p className='panel-label'>Continue with the API</p><h3 id='playlist-api-title'>Use the playlist endpoint in production</h3><p>The response includes playlist metadata, its current video page, and a continuation when more videos are available. Open a video ID with the separate transcript, comments, or channel endpoints.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+    <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide playlist-api-guide'>
+      <div><p>Playlist details include a video page and a continuation token for more results.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
       <div className='source-api-endpoints'><div data-selected='true'><span>Playlist details and videos<b>selected</b></span><code>GET /v1/providers/youtube/playlists/{inspector.id}</code></div><div><span>Then open a video</span><code>GET /v1/providers/youtube/videos/{'{videoId}'}</code></div></div>
-    </aside>
+    </div></details>
   </section>;
 }
 
@@ -1251,10 +1239,10 @@ function SourceApiGuide({ inspector, channelId }: { inspector: Inspector; channe
     { option: 'comments' as const, label: 'Paginated comments', path: `/v1/providers/youtube/videos/${inspector.id}/comments` },
     ...(channelId ? [{ option: 'channel' as const, label: 'Channel About data', path: `/v1/providers/youtube/channels/${channelId}` }] : []),
   ];
-  return <aside className='source-api-guide' aria-labelledby='source-api-title'>
-    <div><p className='panel-label'>Continue with the API</p><h3 id='source-api-title'>Use this data in your workflow</h3><p>The dashboard follows the same continuation tokens as the API for comments. Transcript and channel requests return their complete endpoint responses.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+  return <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide'>
+    <div><p>Comments use continuation tokens for pagination. Transcript and channel endpoints return complete responses.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
     <div className='source-api-endpoints'>{endpoints.map((endpoint) => <div key={endpoint.path} data-selected={endpoint.option === null || inspector.requestedData.includes(endpoint.option)}><span>{endpoint.label}{endpoint.option && inspector.requestedData.includes(endpoint.option) ? <b>selected</b> : null}</span><code>GET {endpoint.path}</code></div>)}</div>
-  </aside>;
+  </div></details>;
 }
 
 function CatalogEntity({ inspector }: { inspector: Inspector }) {
@@ -1264,25 +1252,45 @@ function CatalogEntity({ inspector }: { inspector: Inspector }) {
 }
 
 function ProjectsView({ projects, selectedProject, loading, error, onCreate, onOpen, onBack, onFindSources, onOpenItem }: { projects: Project[]; selectedProject: ProjectDetail | null; loading: boolean; error: string; onCreate:()=>void; onOpen:(project:Project)=>void; onBack:()=>void; onFindSources:()=>void; onOpenItem:(item:ProjectItem)=>void }) {
-  if (selectedProject) return <section className='content-section standalone project-detail'><div className='section-heading'><div><button className='back' onClick={onBack}>← All projects</button><h2>{selectedProject.name}</h2></div><button className='button primary' onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></div><p className='project-description'>{selectedProject.description || 'Saved sources, transcript moments, and evidence for this line of inquiry.'}</p><div className='project-item-list'>{selectedProject.items.map((item)=><article key={item.id}><span className={`type-pill ${item.entity_type}`}>{item.entity_type}</span><div><h3>{item.title || item.entity_id}</h3><p>{item.note || (item.start_ms != null ? `Saved moment at ${formatTime(item.start_ms)}` : 'Saved source')}</p></div><button onClick={() => onOpenItem(item)}>Open evidence →</button></article>)}{!selectedProject.items.length&&<div className='big-empty'><strong>This project is ready for evidence</strong><p>Find a video, channel, or playlist and save it here.</p><button className='button primary' onClick={onFindSources}>Find sources</button></div>}</div></section>;
-  return <section className='content-section standalone'><div className='section-heading'><div><h2>Projects turn watching into research</h2><p>Group sources, transcript moments, and notes around one line of inquiry.</p></div>{projects.length>0&&<button className='button primary' onClick={onCreate}><Icon name='plus' size={15} />New project</button>}</div>{loading&&<div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}{error&&<div className='alert error' role='alert'>{error}</div>}<div className='project-grid'>{projects.map((project,index)=><article key={project.id}><span className={`project-color c${index%4}`}/><h3>{project.name}</h3><p>{project.description || 'Videos, transcript moments, notes, and cited intelligence.'}</p><footer><b>{project.item_count ?? 0} sources</b><button onClick={() => onOpen(project)}>Open project →</button></footer></article>)}{!projects.length&&<div className='big-empty'><strong>No projects yet</strong><p>Create a project, then collect videos, channels, playlists, and exact transcript moments.</p><button className='button primary' onClick={onCreate}>Create first project</button></div>}</div></section>;
+  if (selectedProject) return <section className='content-section standalone project-detail'>
+    <button className='back' onClick={onBack}>← All projects</button>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>{selectedProject.name}</h2>{selectedProject.description && <p>{selectedProject.description}</p>}</div><button className={pageStyles.primaryAction} onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></header>
+    <div className={pageStyles.listHeading}><h3>Saved sources <span>{selectedProject.items.length}</span></h3></div>
+    <div className={pageStyles.recordList}>{selectedProject.items.map(item => <button className={pageStyles.projectRow} key={item.id} onClick={() => onOpenItem(item)}>
+      <span className={pageStyles.rowIcon}><Icon name='search' size={19} /></span><span className={pageStyles.recordCopy}><strong>{item.title || item.entity_id}</strong><small>{item.note || (item.start_ms != null ? `Saved moment at ${formatTime(item.start_ms)}` : item.entity_type)}</small></span><span className={pageStyles.rowArrow} aria-hidden='true'>↗</span>
+    </button>)}</div>
+    {!selectedProject.items.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='folder' size={21} /></span><div><h3>No sources yet</h3><p>Add videos, channels, or playlists to this project.</p></div></div>}
+  </section>;
+  return <section className='content-section standalone'>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Your projects</h2><p>Keep related sources and saved moments together.</p></div><button className={pageStyles.primaryAction} onClick={onCreate}><Icon name='plus' size={15} />New project</button></header>
+    {loading && <div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}
+    {error && <div className='alert error' role='alert'>{error}</div>}
+    <div className={pageStyles.listHeading}><h3>Projects <span>{projects.length}</span></h3></div>
+    <div className={pageStyles.recordList}>{projects.map(project => <button className={pageStyles.projectRow} key={project.id} onClick={() => onOpen(project)}>
+      <span className={pageStyles.rowIcon}><Icon name='folder' size={19} /></span><span className={pageStyles.recordCopy}><strong>{project.name}</strong>{project.description && <small>{project.description}</small>}</span><span className={pageStyles.recordMeta}>{project.item_count ?? 0} sources <span aria-hidden='true'>↗</span></span>
+    </button>)}</div>
+    {!projects.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='folder' size={21} /></span><div><h3>No projects yet</h3><p>Create your first project to start collecting sources.</p></div></div>}
+  </section>;
 }
 
 function MonitorsView({ monitors, knownChannel, savingId, onFindSource, onOpenTarget, onSchedule, onRemove }: { monitors: Monitor[]; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onFindSource:()=>void; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
-  const activeCount = monitors.filter((monitor) => monitor.enabled).length;
-  return <section className='content-section standalone monitor-section'><div className='section-heading'><div><h2>Monitor new videos</h2><p>We compare the latest public upload with the previous check and notify you when a new video appears.</p></div><span>{activeCount} active</span></div><div className='monitor-list'>{monitors.map((monitor) => {
-    const details = monitorDetails(monitor, knownChannel);
-    const channelWatch = monitor.kind === 'channel' || isYouTubeChannelId(monitor.target);
-    const intervalMinutes = monitor.interval_minutes ?? 1440;
-    return <article className='monitor-card' key={monitor.id}>
-      <span className='pulse'/>
-      <div className='monitor-copy'><div className='monitor-kicker'><small>{channelWatch ? 'Channel monitor' : 'Search monitor'}</small><span>{monitor.enabled ? 'Active' : 'Paused'}</span></div><h3>{details.label}</h3><p>{details.handle ? `${details.handle} · ` : ''}{channelWatch ? 'Checks the channel’s latest public upload.' : 'Checks the newest public search result.'} {monitorStatusText(monitor)}</p></div>
-      <div className='monitor-controls'>
-        <label><span>{channelWatch ? 'Check latest upload every' : 'Check search every'}</span><select aria-label={`Monitoring frequency for ${details.label}`} value={intervalMinutes} disabled={savingId === monitor.id} onChange={(event) => onSchedule(monitor.id, Number(event.target.value))}>{MONITOR_INTERVAL_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}</select></label>
-        <span className='monitor-actions'><button className='monitor-source-action' onClick={() => onOpenTarget(details.label)}>Open in Sources</button>{channelWatch ? <a className='monitor-channel-action' href={`https://www.youtube.com/channel/${encodeURIComponent(monitor.target)}`} target='_blank' rel='noreferrer'>View on YouTube <span aria-hidden='true'>↗</span></a> : null}<button className='monitor-delete-action' aria-label={`Delete monitor for ${details.label}`} title='Delete monitor' onClick={() => onRemove(monitor.id)}><Icon name='trash' size={15}/></button></span>
-      </div>
-    </article>;
-  })}{!monitors.length&&<div className='big-empty'><strong>No channels watched yet</strong><p>Open any video, then choose Monitor channel to watch for new uploads.</p><button className='button primary' onClick={onFindSource}>Find a video</button></div>}</div></section>;
+  const activeCount = monitors.filter(monitor => monitor.enabled).length;
+  return <section className='content-section standalone monitor-section'>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Get updates from channels and searches you follow.</p></div><button className={pageStyles.primaryAction} onClick={onFindSource}><Icon name='plus' size={15} />Find a source</button></header>
+    <div className={pageStyles.listHeading}><h3>Monitors <span>{monitors.length}</span></h3><span>{activeCount} active</span></div>
+    <div className={pageStyles.recordList}>{monitors.map(monitor => {
+      const details = monitorDetails(monitor, knownChannel);
+      const channelWatch = monitor.kind === 'channel' || isYouTubeChannelId(monitor.target);
+      return <article className={pageStyles.monitorRow} key={monitor.id}>
+        <span className={pageStyles.rowIcon}><Icon name={channelWatch ? 'monitor' : 'search'} size={19} /></span>
+        <div className={pageStyles.recordCopy}><div className={pageStyles.monitorTitle}><h3>{details.label}</h3><span data-active={Boolean(monitor.enabled)}>{monitor.enabled ? 'Active' : 'Paused'}</span></div><small>{[channelWatch ? 'Channel' : 'Search', details.handle].filter(Boolean).join(' · ')}</small><p>{monitorStatusText(monitor)}</p>
+          <div className={pageStyles.rowActions}><button className={pageStyles.textAction} onClick={() => onOpenTarget(details.label)}>Open in Sources ↗</button>{channelWatch && <a href={`https://www.youtube.com/channel/${encodeURIComponent(monitor.target)}`} target='_blank' rel='noreferrer'>YouTube ↗</a>}</div>
+        </div>
+        <div className={pageStyles.monitorSchedule}><label><span>Check every</span><select aria-label={`Monitoring frequency for ${details.label}`} value={monitor.interval_minutes ?? 1440} disabled={savingId === monitor.id} onChange={event => onSchedule(monitor.id, Number(event.target.value))}>{MONITOR_INTERVAL_OPTIONS.map(option => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}</select></label><button className={pageStyles.deleteMonitor} aria-label={`Delete monitor for ${details.label}`} title='Delete monitor' onClick={() => onRemove(monitor.id)}><Icon name='trash' size={16} /></button></div>
+      </article>;
+    })}</div>
+    {!monitors.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='monitor' size={21} /></span><div><h3>No monitors yet</h3><p>Open a video and select Monitor channel to get new upload alerts.</p></div></div>}
+  </section>;
 }
 
 function monitorIntervalLabel(intervalMinutes: number): string {

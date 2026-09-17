@@ -550,7 +550,7 @@ html:has(.developer-page) body {
 .sidebar nav a,
 .project-links button {
   border: 1px solid transparent;
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   transition:
     background-color var(--control) var(--out),
     border-color var(--control) var(--out),
@@ -611,7 +611,7 @@ html:has(.developer-page) body {
 
 .account-card button,
 .signin-button {
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-ink);
   color: var(--color-dashboard-paper);
 }
@@ -718,7 +718,7 @@ html:has(.developer-page) body {
 .trend-search > div {
   min-height: 3.5rem;
   border-color: var(--color-dashboard-rule-strong);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-md);
   background: var(--color-dashboard-paper);
 }
 
@@ -759,7 +759,7 @@ html:has(.developer-page) body {
 .dialog form > button,
 .developer-key-form button,
 .developer-secret button {
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   transition:
     background-color var(--control) var(--out),
     transform var(--press) var(--out);
@@ -777,12 +777,14 @@ html:has(.developer-page) body {
   color: var(--color-dashboard-ink-soft);
 }
 
+.trend-presets button,
+.prompt-starters button,
 .mode-tabs button,
 .button.secondary,
 .inspector-actions button,
 .new-chat-button,
 .chat-empty button {
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
 }
 
 .mode-tabs button.active,
@@ -1050,7 +1052,7 @@ html:has(.developer-page) body {
 
 .developer-key-list article > button {
   border-color: var(--color-dashboard-rule-strong);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   color: var(--color-dashboard-danger);
 }
 
@@ -1347,7 +1349,7 @@ html:has(.developer-page) body {
   min-height: 3.6rem;
   padding-inline: var(--space-xl);
   border: 0;
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-accent);
   color: var(--color-dashboard-accent-ink);
   cursor: pointer;
@@ -1520,7 +1522,7 @@ html:has(.developer-page) body {
 .source-inspector-toolbar button,
 .source-detail-head > a {
   border: 1px solid var(--color-dashboard-rule-strong);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: transparent;
   color: var(--color-dashboard-ink-soft);
   cursor: pointer;
@@ -1786,7 +1788,7 @@ html:has(.developer-page) body {
   min-height: 2.4rem;
   padding-inline: var(--space-md);
   border: 1px solid color-mix(in oklch, var(--color-dashboard-dark-ink) 32%, transparent);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-dark-glass);
   position: absolute;
   z-index: 1;
@@ -1922,7 +1924,7 @@ html:has(.developer-page) body {
   min-height: 2.45rem;
   padding-inline: var(--space-md);
   border: 1px solid transparent;
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: transparent;
   color: var(--color-dashboard-muted);
   cursor: pointer;
@@ -2117,7 +2119,7 @@ html:has(.developer-page) body {
   min-height: 2.35rem;
   padding-inline: var(--space-md);
   border: 1px solid var(--color-dashboard-rule-strong);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-surface);
   color: var(--color-dashboard-ink-soft);
   cursor: pointer;
@@ -2944,7 +2946,7 @@ html:has(.developer-page) body {
  * same action reached a second way, so it should not shout equally. */
 .discovery-section .source-onboarding button {
   border: 1px solid var(--color-dashboard-rule-strong);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   background: transparent;
   color: var(--color-dashboard-ink);
   padding: .6rem 1.1rem;
@@ -3309,7 +3311,7 @@ html:has(.developer-page) body {
   min-height: 2.5rem;
   padding-inline: var(--space-md);
   border: 1px solid var(--color-dashboard-rule);
-  border-radius: var(--radius-dashboard-pill);
+  border-radius: var(--radius-dashboard-sm);
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
