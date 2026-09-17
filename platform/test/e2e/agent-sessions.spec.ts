@@ -133,7 +133,12 @@ test('non-admin and signed-out accounts have no menu and cannot open a session d
     await page.goto('/dashboard/developer');
     await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
     await page.goto(`/dashboard/sessions/${sessionId}`);
-    await expect(page.getByText('This page could not be found.')).toBeVisible();
+    if (role === 'signed-out') {
+      await expect(page).toHaveURL(`/login?returnTo=${encodeURIComponent(`/dashboard/sessions/${sessionId}`)}`);
+      await expect(page.getByRole('heading', { name: 'Welcome to video2ctx' })).toBeVisible();
+    } else {
+      await expect(page.getByText('This page could not be found.')).toBeVisible();
+    }
     await expect(page.getByText('Summarise the key takeaways from this video.')).toHaveCount(0);
   }
 });

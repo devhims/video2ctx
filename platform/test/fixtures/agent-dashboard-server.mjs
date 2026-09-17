@@ -22,6 +22,10 @@ createServer(async (req, res) => {
   const signedIn = /agent-ui=(allowed|denied|unavailable)/.test(cookie);
   const admin = cookie.includes('admin-ui=allowed');
   const reply = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+  if (url.pathname === '/api/auth/sign-out' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', 'agent-ui=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+    return reply(200, { success: true });
+  }
   if (url.pathname === '/health') return reply(200, { ok: true });
   if (url.pathname === '/api/auth/get-session') return reply(200, signedIn ? { user: { id: 'fixture-user', name: 'Fixture account', email: 'fixture@example.test' }, session: { id: 'fixture-auth-session' } } : null);
   if (url.pathname.startsWith('/v1/admin/')) {

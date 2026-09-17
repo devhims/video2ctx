@@ -44,7 +44,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
 const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
-  const { agentAccess, adminAccess } = useDashboardSession();
+  const { agentAccess, adminAccess, isSigningOut } = useDashboardSession();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -111,7 +111,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         </button>
         <details className={styles.account} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.stopPropagation(); event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}>
           <summary className={styles.item} aria-label={'Account: ' + accountName} data-tooltip={accountName}><span className={styles.avatar}>{accountName.trim().slice(0, 2).toUpperCase()}</span><span className={styles.label}>{accountName}</span><CaretDownIcon className={styles.accountCaret} size={14} aria-hidden='true' /></summary>
-          <div className={styles.accountMenu}><strong>{accountName}</strong><button type='button' aria-label='Account settings' className={styles.item} onClick={() => run(() => onNavigate('settings'))}><Icon name='settings' size={16} />Account settings</button><button type='button' aria-label='Sign out' className={styles.item} onClick={() => run(onSignOut)}><SignOutIcon size={16} aria-hidden='true' />Sign out</button></div>
+          <div className={styles.accountMenu}><strong>{accountName}</strong><button type='button' aria-label='Account settings' className={styles.item} onClick={() => run(() => onNavigate('settings'))}><Icon name='settings' size={16} />Account settings</button><button type='button' aria-label='Sign out' disabled={isSigningOut} className={styles.item} onClick={() => run(onSignOut)}><SignOutIcon size={16} aria-hidden='true' />{isSigningOut ? 'Signing out…' : 'Sign out'}</button></div>
         </details>
       </> : <button type='button' className={styles.item} aria-label='Sign in' data-tooltip='Sign in' onClick={() => run(onSignIn)}><span className={styles.avatar}><Icon name='user' size={16} /></span><span className={styles.label}>Sign in</span></button>}
     </div>

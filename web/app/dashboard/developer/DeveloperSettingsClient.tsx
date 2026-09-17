@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { redirect, useRouter } from 'next/navigation';
 import { KeyIcon, PlusIcon } from '@phosphor-icons/react';
 import { authClient } from '../../../lib/auth-client';
 import { loadDashboardAccountData, publishCreditBalance, type DashboardProject } from '../../../lib/dashboard-data';
@@ -107,15 +107,7 @@ export default function DeveloperSettingsClient() {
     await navigator.clipboard.writeText(createdSecret);
   };
 
-  if (!displayUser) {
-    return <main className='developer-page developer-gate'>
-      <Link href='/dashboard'>← Dashboard</Link>
-      <p className='panel-label'>Developer access</p>
-      <h1>Sign in to manage API keys</h1>
-      <p>API keys inherit your plan and credit balance, so they can only be created from an authenticated browser session.</p>
-      <Link className='button primary' href='/dashboard'>Sign in from the dashboard</Link>
-    </main>;
-  }
+  if (!displayUser) redirect('/login?returnTo=%2Fdashboard%2Fdeveloper');
 
   return <main className='workspace-shell'>
     <DashboardSidebar
@@ -124,7 +116,7 @@ export default function DeveloperSettingsClient() {
       onNavigate={navigateToDashboard}
       onNewProject={() => navigateToDashboard('projects')}
       onOpenProject={() => navigateToDashboard('projects')}
-      onSignIn={() => router.push('/dashboard')}
+      onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fdeveloper')}
       accountName={displayUser.name ?? displayUser.email}
       credits={credits}
       onSignOut={() => void signOut()}

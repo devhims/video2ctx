@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { loginPath } from '../../lib/login-redirect';
 import {
   canDeleteAccount,
   confirmDashboardEmailConsent,
@@ -203,7 +205,6 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [showSignIn, setShowSignIn] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
   const [platformHealth, setPlatformHealth] = useState<PlatformHealthState>('checking');
@@ -283,13 +284,13 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' || showSignIn || showNewProject) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' || showNewProject) return;
       event.preventDefault(); setSection('discover');
       window.requestAnimationFrame(() => searchInput.current?.focus());
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
-  }, [showNewProject, showSignIn]);
+  }, [showNewProject]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -554,17 +555,11 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       : [...current, option]);
   };
 
-  if (!authenticated) return <main className='auth-gate'>
-    <p className='panel-label'>Private research workspace</p>
-    <h1>Sign in to research YouTube</h1>
-    <p>Data APIs now use your plan and credit balance. Sign in to search, inspect transcripts, and manage projects.</p>
-    <button className='signin-button' onClick={() => setShowSignIn(true)}>Sign in</button>
-    {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
-  </main>;
+  if (!authenticated) redirect('/login');
 
   return (
     <main className='workspace-shell'>
-      <DashboardSidebar activeSection={section} onNavigate={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => setShowSignIn(true)} accountName={user?.name ?? (demoEnabled ? 'Local demo' : undefined)} credits={usage?.creditBalance} onSignOut={() => void signOut()} />
+      <DashboardSidebar activeSection={section} onNavigate={navigateTo} projects={projects} onNewProject={() => setShowNewProject(true)} onOpenProject={(project) => void openProject(project)} onSignIn={() => { window.location.href = loginPath(window.location.pathname + window.location.search); }} accountName={user?.name ?? (demoEnabled ? 'Local demo' : undefined)} credits={usage?.creditBalance} onSignOut={() => void signOut()} />
       <div className={`workspace-main ${pageStyles.pages}`}>
         <DashboardHeader title={section === 'trends' ? 'Trend Lab' : section === 'discover' ? 'Sources' : section === 'projects' ? 'Projects' : section === 'monitors' ? 'Monitors' : 'Settings'}>
           <span className={`sync-state ${platformHealth}`} role='status' aria-live='polite'><i />{platformHealth === 'healthy' ? 'Platform online' : platformHealth === 'checking' ? 'Checking platform' : 'Platform unavailable'}</span>
@@ -622,7 +617,6 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
         <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} /></div>
         <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
-      {showSignIn && <SignInDialog onClose={() => setShowSignIn(false)} />}
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
   );
@@ -1333,15 +1327,6 @@ function monitorQueryMetadata(monitor: Monitor): { label?: string; handle?: stri
 
 function isYouTubeChannelId(value: string): boolean {
   return /^UC[A-Za-z0-9_-]{22}$/.test(value);
-}
-
-function SignInDialog({ onClose }: { onClose:()=>void }) {
-  const dialogRef = useDialogFocus<HTMLDivElement>(onClose);
-  const [email,setEmail]=useState(''); const [message,setMessage]=useState('');
-  const callbackURL=()=>`${window.location.pathname}${window.location.search}`;
-  const magic=async(event:FormEvent)=>{event.preventDefault();const response=await fetch('/api/auth/sign-in/magic-link',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,callbackURL:callbackURL()})});setMessage(response.ok?'Check your inbox for a secure sign-in link.':'Could not send the link.');};
-  const google=async()=>{const response=await fetch('/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:'google',callbackURL:callbackURL()})});const data=await response.json() as {url?:string};if(data.url)window.location.href=data.url;};
-  return <div className='dialog-backdrop' onMouseDown={onClose}><div ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='sign-in-title' onMouseDown={(event)=>event.stopPropagation()}><button className='dialog-close' aria-label='Close sign-in dialog' onClick={onClose}>×</button><p className='panel-label'>Private workspace</p><h2 id='sign-in-title'>Sign in to your research</h2><p>Projects, notes, monitors, and YouTube sync stay private to you.</p><button className='google-button' onClick={()=>void google()}>Continue with Google</button><div className='or'><span/>or<span/></div><form onSubmit={magic}><label className='field-label' htmlFor='sign-in-email'>Email address</label><input id='sign-in-email' type='email' required value={email} onChange={(event)=>setEmail(event.target.value)} placeholder='you@example.com'/><button>Send magic link</button></form><small className='dialog-message' role='status' aria-live='polite'>{message || '\u00a0'}</small></div></div>;
 }
 
 function NewProjectDialog({ onClose,onCreate }: { onClose:()=>void;onCreate:(name:string)=>void }) { const dialogRef=useDialogFocus<HTMLFormElement>(onClose);const [name,setName]=useState('');return <div className='dialog-backdrop' onMouseDown={onClose}><form ref={dialogRef} className='dialog' role='dialog' aria-modal='true' aria-labelledby='new-project-title' onMouseDown={(event)=>event.stopPropagation()} onSubmit={(event)=>{event.preventDefault();if(name.trim())onCreate(name.trim());}}><button type='button' className='dialog-close' aria-label='Close new-project dialog' onClick={onClose}>×</button><p className='panel-label'>New project</p><h2 id='new-project-title'>Name this line of inquiry</h2><label className='field-label' htmlFor='project-name'>Project name</label><input id='project-name' autoFocus value={name} onChange={(event)=>setName(event.target.value)} placeholder='e.g. AI video research'/><button className='button primary' disabled={!name.trim()}>Create project</button></form></div>; }
