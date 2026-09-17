@@ -33,8 +33,8 @@
     "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "25",
     "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
     "AGENT_RUNTIME_ENABLED": "true",
-    // Rollout: admins by default; all permits every authenticated user with data access.
-    "AGENT_ACCESS_MODE": "admins",
+    // Rollout: Agent-only allowlist by default; all permits every authenticated user with data access.
+    "AGENT_ACCESS_MODE": "allowlist",
     "LOCAL_AUTH_BYPASS_ENABLED": "false",
   },
   "containers": [

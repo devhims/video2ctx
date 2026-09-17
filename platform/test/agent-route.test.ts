@@ -47,9 +47,9 @@ describe('agent routes', () => {
     '/v1/agent/f1611a8b-cb84-4305-a365-328bd06bedac/runs/cd056140-7d4c-4516-bb9e-c97914439553/events',
     '/v1/agent/sessions/f1611a8b-cb84-4305-a365-328bd06bedac',
     '/v1/agent/f1611a8b-cb84-4305-a365-328bd06bedac/runs/cd056140-7d4c-4516-bb9e-c97914439553',
-  ])('denies non-admins before work or data access at %s', async (path) => {
+  ])('denies unlisted accounts before work or data access at %s', async (path) => {
     const harness = agentHarness();
-    harness.adminUser.mockResolvedValue({ email: 'other@example.com', emailVerified: 1 });
+    harness.accessUser.mockResolvedValue({ email: 'other@example.com', emailVerified: 1 });
     const response = await app.request(path, { method: path === '/v1/agent' ? 'POST' : 'GET',
       headers: { 'x-admin': 'true', 'x-user-email': 'agent@example.com' } }, harness.env, executionContext);
     expect(response.status).toBe(403);
@@ -64,7 +64,7 @@ describe('agent routes', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ enabled: true });
     expect(response.headers.get('Cache-Control')).toBe('no-store');
-    expect(harness.adminUser).toHaveBeenCalledOnce();
+    expect(harness.accessUser).toHaveBeenCalledOnce();
     expect(harness.getByName).not.toHaveBeenCalled();
     expect(harness.accountGetByName).not.toHaveBeenCalled();
     expect(creditBalance).not.toHaveBeenCalled();
@@ -73,7 +73,6 @@ describe('agent routes', () => {
   test.each([
     { AGENT_RUNTIME_ENABLED: 'false' },
     { AGENT_ACCESS_MODE: 'invalid' },
-    { ADMIN_EMAILS_SECRET: '' },
   ])('fails closed on access discovery with %o', async configuration => {
     const harness = agentHarness();
     Object.assign(harness.env, configuration);
@@ -106,21 +105,15 @@ describe('agent routes', () => {
 
   test('requires a verified email even for an allowlisted account', async () => {
     const harness = agentHarness();
-    harness.adminUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 0 });
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 0 });
     expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(403);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
-  test('allows the configured admin email with normalized case and whitespace', async () => {
+  test.each([undefined, 'allowlist', 'admins', 'invalid'])('fails closed for access mode %s', async (mode) => {
     const harness = agentHarness();
-    Object.assign(harness.env, { ADMIN_EMAILS_SECRET: '  ADMIN@EXAMPLE.COM  ' });
-    harness.adminUser.mockResolvedValue({ email: 'admin@example.com', emailVerified: 1 });
-    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
-  });
-
-  test.each([undefined, 'admins', 'invalid'])('fails closed for access mode %s', async (mode) => {
-    const harness = agentHarness();
-    Object.assign(harness.env, { AGENT_ACCESS_MODE: mode, ADMIN_EMAILS_SECRET: '' });
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
+    Object.assign(harness.env, { AGENT_ACCESS_MODE: mode });
     const response = await postAgent(harness.env, { message: 'Research' });
     expect([403, 503]).toContain(response.status);
     expect(harness.startRun).not.toHaveBeenCalled();
@@ -128,15 +121,52 @@ describe('agent routes', () => {
 
   test('supports an explicit rollout to authenticated non-admin users', async () => {
     const harness = agentHarness();
-    Object.assign(harness.env, { AGENT_ACCESS_MODE: 'all', ADMIN_EMAILS_SECRET: '' });
+    Object.assign(harness.env, { AGENT_ACCESS_MODE: 'all' });
     expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
-    expect(harness.adminUser).not.toHaveBeenCalled();
+    expect(harness.accessUser).not.toHaveBeenCalled();
   });
 
-  test('fails closed when the current admin record cannot be checked', async () => {
+  test('fails closed when the current access record cannot be checked', async () => {
     const harness = agentHarness();
-    harness.adminUser.mockRejectedValue(new Error('Database unavailable'));
+    harness.accessUser.mockRejectedValue(new Error('Database unavailable'));
     expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(503);
+    expect(harness.startRun).not.toHaveBeenCalled();
+  });
+
+  test('D1 grants and revocations take effect on the next request with the same credentials', async () => {
+    const harness = agentHarness();
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
+    const check = () => app.request('/v1/agent/access', {}, harness.env, executionContext);
+    expect((await check()).status).toBe(403);
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 1 });
+    expect((await check()).status).toBe(200);
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
+    expect((await check()).status).toBe(403);
+  });
+
+  test.each([undefined, 'allowlist', 'admins'])('admin membership alone never grants Agent access in mode %s', async mode => {
+    const harness = agentHarness();
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
+    Object.assign(harness.env, { AGENT_ACCESS_MODE: mode, ADMIN_EMAILS_SECRET: 'agent@example.com' });
+    const response = await app.request('/v1/agent/access', {}, harness.env, executionContext);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'AGENT_ACCESS_REQUIRED' } });
+  });
+
+  test('Agent access does not grant administrative job access', async () => {
+    const harness = agentHarness();
+    Object.assign(harness.env, { ADMIN_EMAILS_SECRET: 'operator@example.com' });
+    expect((await app.request('/v1/agent/access', {}, harness.env, executionContext)).status).toBe(200);
+    const response = await app.request('/v1/admin/jobs', {}, harness.env, executionContext);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'ADMIN_REQUIRED' } });
+  });
+
+  test('D1 membership still requires a verified current email', async () => {
+    const harness = agentHarness();
+    harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 0, agentAllowed: 1 });
+    expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(403);
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
@@ -604,7 +634,7 @@ describe('agent routes', () => {
     expect(await response.json()).toEqual(withSessionId(receipt));
     expect(harness.startRun).not.toHaveBeenCalled();
     expect(harness.registerConversation).not.toHaveBeenCalled();
-    expect(harness.adminUser).toHaveBeenCalledTimes(1);
+    expect(harness.accessUser).toHaveBeenCalledTimes(1);
     expect(harness.enqueueAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'Research' }),
       expect.objectContaining({ userId: 'agent-user', creditsRemaining: 500 }),
@@ -676,7 +706,7 @@ function postAgent(env: Env, input: Record<string, unknown>) {
 }
 
 function agentHarness(enabled = 'true') {
-  const adminUser = vi.fn(async () => ({ email: 'agent@example.com', emailVerified: 1 }));
+  const accessUser = vi.fn(async (): Promise<{ email: string; emailVerified: number; agentAllowed?: number } | null> => ({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 1 }));
   const instanceNames: string[] = [];
   let conversationTurn = 0;
   const startRun = vi.fn(async (request: { conversationId: string; message: string }, _admission: AgentAdmission) => {
@@ -714,15 +744,14 @@ function agentHarness(enabled = 'true') {
   return {
     env: {
       AGENT_RUNTIME_ENABLED: enabled,
-      AGENT_ACCESS_MODE: 'admins',
-      ADMIN_EMAILS_SECRET: 'agent@example.com',
-      DB: { prepare: () => ({ bind: () => ({ first: adminUser }) }) },
+      AGENT_ACCESS_MODE: 'allowlist',
+      DB: { prepare: () => ({ bind: () => ({ first: accessUser }) }) },
       AGENT_RUNTIME: { getByName },
       USER_ACCOUNT: { getByName: accountGetByName },
     } as unknown as Env,
     getByName,
     instanceNames,
-    adminUser,
+    accessUser,
     startRun,
     getRun, getRunProgress,
     getConversation,

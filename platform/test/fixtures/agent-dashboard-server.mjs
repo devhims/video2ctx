@@ -24,7 +24,7 @@ createServer(async (req, res) => {
   if (url.pathname === '/api/auth/get-session') return reply(200, signedIn ? { user: { id: 'fixture-user', name: 'Fixture account', email: 'fixture@example.test' }, session: { id: 'fixture-auth-session' } } : null);
   if (url.pathname.startsWith('/v1/agent')) {
     if (cookie.includes('agent-ui=unavailable')) return reply(503, { error: { code: 'AUTH_UNAVAILABLE' } });
-    if (!allowed) return reply(signedIn ? 403 : 401, { error: { code: 'ADMIN_REQUIRED' } });
+    if (!allowed) return reply(signedIn ? 403 : 401, { error: { code: 'AGENT_ACCESS_REQUIRED' } });
     if (url.pathname === '/v1/agent' && req.method === 'POST') {
       let raw = ''; for await (const chunk of req) raw += chunk;
       const input = JSON.parse(raw);

@@ -302,7 +302,7 @@ export const openApiDocument = {
     { name: 'Playlists', description: 'Playlist inspection.' },
     { name: 'Projects', description: 'Private research projects and saved material.' },
     { name: 'Research', description: 'Imports, jobs, cited answers, comparisons, and reports.' },
-    { name: 'Agents', description: 'Durable agent runs and results. Feature-flagged; access is restricted to verified admin accounts during the initial rollout.' },
+    { name: 'Agents', description: 'Durable agent runs and results. Feature-flagged; access is restricted to verified, allowlisted tester accounts during the initial rollout.' },
     { name: 'Exports', description: 'Project export creation and download.' },
     { name: 'Monitoring', description: 'Monitors, notifications, and digest preferences.' },
     { name: 'YouTube OAuth', description: 'Connect or disconnect the user’s YouTube account.' },
@@ -627,7 +627,7 @@ export const openApiDocument = {
     '/v1/agent/access': {
       get: {
         tags: ['Agents'], operationId: 'getAgentAccess', summary: 'Check agent access for the authenticated account',
-        description: 'Uses the same runtime flag, rollout mode and current verified-email allowlist as agent execution. Returns 403 for accounts without access and 503 when disabled or verification is unavailable. Does not expose the allowlist or start a run.',
+        description: 'Uses the same runtime flag, rollout mode and current verified-email Agent allowlist in D1 as agent execution. Returns 403 for accounts without access and 503 when disabled or verification is unavailable. Does not expose the allowlist or start a run.',
         security: dataSecurity,
         responses: { '200': jsonResponse('Agent access is enabled.', { type: 'object', required: ['enabled'], properties: { enabled: { const: true } } }), ...standardErrors },
       },

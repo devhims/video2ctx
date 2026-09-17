@@ -231,19 +231,40 @@ The processor uses a locked local dependency on `packages/all-things-youtube`. W
 
 ## Production access and rollout
 
-All `/v1/agent` and `/v1/agent/*` requests first require the existing Better Auth principal and data-read permission for scoped credentials. A shared server-side gate then checks:
+Agent execution, access discovery, session reads, and run reads require the existing Better Auth principal and data-read permission for scoped credentials. Their shared server-side gate checks:
 
-- `AGENT_RUNTIME_ENABLED=false`: disable all agent routes with `503 AGENT_DISABLED`.
-- `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=admins`: only accounts whose current, verified Better Auth email is in `ADMIN_EMAILS_SECRET` can use agent routes. Others receive `403 ADMIN_REQUIRED`.
+- `AGENT_RUNTIME_ENABLED=false`: disable these routes with `503 AGENT_DISABLED`.
+- `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=allowlist`: require a current, verified Better Auth email present in D1 `agent_access_allowlist`. Otherwise return `403 AGENT_ACCESS_REQUIRED`.
 - `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=all`: allow authenticated users with the required credential scope. Account ownership and credit checks still apply.
 
-Missing access mode defaults to `admins`. An invalid mode or unavailable account lookup fails closed. The current production configuration enables the admin rollout and uses the private `ADMIN_EMAILS_SECRET` Worker secret for its allowlist. The authenticated account ID resolves the email from the database on every restricted request, covering browser sessions, CLI sessions, and API keys without trusting a supplied email header or cached admin claim.
+Missing access mode defaults to `allowlist`. The legacy spelling `admins` remains an alias for this Agent-only allowlist; it never reads `ADMIN_EMAILS_SECRET`. Invalid modes or unavailable database reads fail closed. No Agent grant confers operator privileges, and operator membership alone does not grant Agent access. `ADMIN_EMAILS_SECRET` continues to control `/v1/admin/jobs` independently.
 
-This uses a private email allowlist and Better Auth user records; it does not install Better Auth's separate admin-management plugin or create new administrative APIs. No auth schema migration is required. For unauthenticated local Postman testing, explicitly set `AGENT_ACCESS_MODE=all` along with the existing local-only authentication bypass. Production never permits that bypass.
+The authenticated account ID resolves the current email, verification status, and D1 membership on every restricted request. The gate does not trust request-supplied email headers, cached session emails, or stored admin claims. Browser sessions, CLI sessions, and API keys use the same gate. The dashboard checks `/v1/agent/access` without caching on login/page load, navigation, and window focus, so a page refresh picks up grants or revocations without signing out.
 
-These settings take effect when the platform is deployed; changing checked-in configuration alone does not update a running production Worker.
+### Manage testers in D1
 
-Set the allowlist with `npx wrangler secret put ADMIN_EMAILS_SECRET` from `platform/` and enter the value at the prompt. Never place its value in Wrangler vars, fixtures, or documentation. For local admin testing, set it in the ignored `.dev.vars` file.
+Apply migration `0015_agent_access_allowlist.sql` before deploying the new gate. In the target database's D1 console, add one row per email, even before the person signs up:
+
+```sql
+INSERT INTO agent_access_allowlist (email)
+VALUES ('tester@example.com')
+ON CONFLICT DO NOTHING;
+```
+
+Case and surrounding spaces are ignored. `created_at` is populated automatically in Unix milliseconds. To revoke the D1 grant:
+
+```sql
+DELETE FROM agent_access_allowlist
+WHERE lower(trim(email)) = lower(trim('tester@example.com'));
+```
+
+D1 is the sole source for tester membership; no Agent email secret is needed. Already-admitted runs are not cancelled by removing access, but new requests and subsequent session/run reads are denied. Existing open streams are not reauthorized mid-connection.
+
+### Rollout
+
+For production rollout, first apply the migration and populate D1 with everyone who should retain Agent access, including operators who also test the Agent. The old admin list is intentionally not copied or used as a fallback. Then deploy the Worker with `AGENT_ACCESS_MODE=allowlist`. Changing checked-in files does not change a running Worker. D1 changes after deployment require no redeploy.
+
+For unauthenticated local Postman testing, explicitly set `AGENT_ACCESS_MODE=all` with the existing local-only authentication bypass. Production never permits that bypass.
 
 ## Run response and answer completeness
 

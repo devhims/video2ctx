@@ -1,8 +1,39 @@
-import { exports } from 'cloudflare:workers';
+import { env, exports } from 'cloudflare:workers';
 import { describe, expect, test } from 'vitest';
 
 const worker = exports.default;
 const baseUrl = 'http://auth.test';
+
+describe('Agent tester access with real D1 and browser sessions', () => {
+  test('checks D1 changes on refresh without a new login and keeps admin jobs private', async () => {
+    const browser = await createBrowserSession();
+    const check = () => request('/v1/agent/access', { headers: { cookie: browser.cookie } });
+    expect((await check()).status).toBe(403);
+
+    // Direct console inserts can use mixed case and surrounding spaces.
+    await env.DB.prepare('INSERT INTO agent_access_allowlist (email) VALUES (?)')
+      .bind(`  ${browser.user.email.toUpperCase()}  `).run();
+    const granted = await check();
+    expect(granted.status).toBe(200);
+    expect(granted.headers.get('Cache-Control')).toBe('no-store');
+    expect(await granted.json()).toEqual({ enabled: true });
+    expect((await request('/v1/admin/jobs', { headers: { cookie: browser.cookie } })).status).toBe(403);
+
+    // Duplicate normalized emails are rejected by the migration's unique index.
+    await expect(env.DB.prepare('INSERT INTO agent_access_allowlist (email) VALUES (?)')
+      .bind(browser.user.email).run()).rejects.toThrow();
+
+    // A cached login cannot override the current verified-email record.
+    await env.DB.prepare('UPDATE user SET emailVerified = 0 WHERE id = ?').bind(browser.user.id).run();
+    expect((await check()).status).toBe(403);
+    await env.DB.prepare('UPDATE user SET emailVerified = 1 WHERE id = ?').bind(browser.user.id).run();
+    expect((await check()).status).toBe(200);
+
+    await env.DB.prepare('DELETE FROM agent_access_allowlist WHERE lower(trim(email)) = ?')
+      .bind(browser.user.email.toLowerCase()).run();
+    expect((await check()).status).toBe(403);
+  });
+});
 
 describe('device authorization on the Worker runtime', () => {
   test('issues an isolated CLI session and enforces its route boundary', async () => {
