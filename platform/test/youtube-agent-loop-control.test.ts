@@ -18,6 +18,39 @@ import type { EvidencePacket } from '../src/agents/contracts';
 import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
 
 describe('YouTube AgentCore loop control', () => {
+  it('reads one complete transcript directly in inspection and reuses it across rephrased calls', async () => {
+    const context = transcriptResearchContext();
+    if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst spy');
+    const analyze = context.transcriptPolicy.analyze;
+    const original = context.provider.transcript;
+    context.provider.transcript = vi.fn(async (...args: Parameters<typeof original>) => {
+      const response = await original(...args);
+      response.value.segments = Array.from({ length: 12 }, (_, index) => ({
+        startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000, text: `Location ${index + 1}: complete details.`,
+      }));
+      return response;
+    });
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      if (step++ < 2) return modelResult({ toolCallId: `captions-${step}`, toolName: 'get_video_transcript',
+        input: JSON.stringify({ videoId: 'video000001', focus: step === 1 ? 'All locations' : 'Last four locations' }) });
+      expect(JSON.stringify(call.prompt)).toContain('Location 12: complete details.');
+      return modelResult({ toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Twelve locations.', evidenceIds: ['transcript:video000001:11:11000:0'] }],
+        intent: 'inspect_video', confidence: 'high', artifacts: [], warnings: [],
+      }) });
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(JSON.stringify(call.prompt)).toContain('Location 12: complete details.');
+      return finalizerModelResult({ blocks: [{ text: 'Twelve locations.', evidenceIds: ['ref_12'] }], confidence: 'high', warnings: [] });
+    } });
+    await runResearchAgentWithModel({ model, finalizationModel: finalizer, message: 'List all locations',
+      decision: { route: 'inspect_video', videoId: 'video000001' }, toolNames: ['get_video_transcript', 'finalize_answer'], context });
+    expect(context.provider.transcript).toHaveBeenCalledTimes(1);
+    expect(analyze).not.toHaveBeenCalled();
+    expect(context.finalize).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])('refreshes remembered metadata and retains it only if refresh fails (%s)', async fails => {
     const metadata = metadataForConversation([{ recordedAt: 2000, packet: {
       packetId: 'prior-video', kind: 'youtube_video',
@@ -927,7 +960,7 @@ describe('YouTube AgentCore loop control', () => {
       const analyze = vi.fn(async ({ signal }: { signal: AbortSignal }): Promise<never> =>
         new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
       context.transcriptPolicy.analyze = analyze;
-      const model = new MockLanguageModelV4({ doGenerate: async () => multiToolModelResult([1, 2, 3, 4].map(n => ({
+      const model = new MockLanguageModelV4({ doGenerate: async () => multiToolModelResult([1, 2, 3, 4, 5, 6, 7, 8].map(n => ({
         toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
         input: JSON.stringify({ videoId: 'video000001', focus: `Design skills ${n}` }),
       }))) });
@@ -936,14 +969,14 @@ describe('YouTube AgentCore loop control', () => {
         intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
       }) });
       const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Compare design skills',
-        decision: { route: 'inspect_video', videoId: 'video000001' }, toolNames: ['get_video_transcript', 'finalize_answer'], context,
+        decision: { route: 'topic_research', researchVideoCount: 8, researchBreadth: 'comparative' }, toolNames: ['get_video_transcript', 'finalize_answer'], context,
         recoveredEvidence: [transcriptAnalysisPacket()],
       });
       await vi.advanceTimersByTimeAsync(1);
-      expect(analyze).toHaveBeenCalledTimes(2);
+      expect(analyze).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(40_000);
       await expect(run).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
-      expect(analyze).toHaveBeenCalledTimes(2);
+      expect(analyze).toHaveBeenCalledTimes(4);
       expect(context.finalize).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });

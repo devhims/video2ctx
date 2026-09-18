@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
-import { storyboardSchema } from '../storyboard';
+import { storyboardManifestSchema, storyboardSchema } from '../storyboard';
 import { storyboardPreviewsSchema } from '../../../runtime/storyboard-previews';
 import { safeIdPart, videoIdSchema, youtubeVideoUrl, meteredCredits } from './provider-evidence';
 
@@ -11,13 +11,14 @@ export const getVideoStoryboardInputSchema = z.object({
   focus: z.string().trim().min(1).max(1_000).optional(),
   maxSheets: z.number().int().min(1).max(20).optional()
     .describe('Choose the number of sheets for a spread overview, up to 20 per call. Image payload limit is 8 MiB. Larger selections take more processing time.'),
-  sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(20).optional()
+  sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(20).refine(indexes => new Set(indexes).size === indexes.length, 'Select distinct sheet indexes.').optional()
     .describe('Select zero-based source sheet indexes using the manifest. Choose these or timestampsMs, not both.'),
   timestampsMs: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).min(1).max(20).optional()
     .describe('Select sheets containing these sampled timestamps in milliseconds. Nearby targets share one sheet. These are not exact video frames.'),
 }).superRefine((input, ctx) => {
   const inspect = input.maxSheets !== undefined || input.sheetIndexes !== undefined || input.timestampsMs !== undefined;
   if (inspect && !input.focus) ctx.addIssue({ code: 'custom', message: 'Supply a focused visual question for image inspection.' });
+  if (input.sheetIndexes && input.sheetIndexes.length > (input.maxSheets ?? 20)) ctx.addIssue({ code: 'custom', message: 'Selected sheet indexes exceed maxSheets.' });
   if (input.sheetIndexes && input.timestampsMs) ctx.addIssue({ code: 'custom', message: 'Choose sheetIndexes or timestampsMs, not both.' });
 });
 export function createGetVideoStoryboardTool(context: AgentToolContext) {
@@ -37,6 +38,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     execute: async () => {
       context.signal.throwIfAborted();
       if ((!metadataOnly && !context.analyzeStoryboard) || !context.provider.storyboard) throw new Error('Storyboard analysis is unavailable.');
+      if (!metadataOnly) validateStoryboardSelection(parsed, context);
       const response = await context.provider.storyboard(parsed.videoId, parsed.timestampsMs, {
         maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
       }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
@@ -88,4 +90,23 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       return packet;
     },
   });
+}
+
+/** Validate against persisted metadata before waking the image provider or vision model. */
+function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext) {
+  const artifacts = (context.getEvidence?.() ?? []).flatMap(packet => packet.artifacts);
+  const artifact = artifacts.reverse().find(artifact => artifact.type === 'youtube_storyboard_analysis' && artifact.data.videoId === input.videoId && artifact.data.manifest);
+  const result = storyboardManifestSchema.safeParse(artifact?.data.manifest);
+  if (!result.success) throw new Error('Retrieve storyboard metadata first: call get_video_storyboard with videoId only, then select from its available sheets.');
+  const manifest = result.data;
+  const intervalMs = artifact!.data.intervalMs;
+  if (typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) throw new Error('Retrieve storyboard metadata again: sampling interval is unavailable.');
+  const endMs = manifest.lastSampleMs + intervalMs;
+  const guidance = `Available sheet indexes are 0 through ${manifest.totalSheets - 1}; timestamps must be below ${endMs} ms. Choose only available sheets or timestamps.`;
+  if (input.sheetIndexes?.some(index => index >= manifest.totalSheets)) throw new Error(`Invalid storyboard selection. ${guidance}`);
+  if (input.timestampsMs?.some(timestamp => timestamp >= endMs)) throw new Error(`Invalid storyboard timestamp. ${guidance}`);
+  if (input.timestampsMs) {
+    const selected = new Set(input.timestampsMs.map(timestamp => Math.floor(timestamp / (manifest.framesPerSheet * intervalMs))));
+    if (selected.size > (input.maxSheets ?? 20)) throw new Error(`Selected timestamps require ${selected.size} sheets, exceeding maxSheets=${input.maxSheets}. ${guidance}`);
+  }
 }

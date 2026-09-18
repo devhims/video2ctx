@@ -59,7 +59,7 @@ export function createGetVideoTranscriptTool(context: AgentToolContext) {
   }
   return tool({
     description: description.join(' '),
-    inputSchema: getVideoTranscriptInputSchema,
+    inputSchema: getVideoTranscriptInputSchema.omit({ focus: true }),
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideoTranscript(input, context, toolCallId),
   });
@@ -101,7 +101,9 @@ export function executeGetVideoTranscript(
   toolCallId: string,
 ): Promise<EvidencePacket> {
   const parsed = getVideoTranscriptInputSchema.parse(input);
-  const semanticKey = transcriptSemanticKey(parsed);
+  const semanticKey = context.transcriptPolicy.mode === 'complete_transcript'
+    ? `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language })}`
+    : transcriptSemanticKey(parsed);
 
   return context.executeEvidenceTool({
     toolCallId,

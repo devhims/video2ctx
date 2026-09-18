@@ -33,12 +33,40 @@ function context(): AgentToolContext {
   return {
     runId: 'visual-test', signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
     provider: { search: unexpected, browse: unexpected, trends: unexpected, video: unexpected, tracks: unexpected, transcript: unexpected, comments: unexpected, endscreen: unexpected, channel: unexpected, channelVideos: unexpected, channelPlaylists: unexpected, playlist: unexpected, storyboard: vi.fn(async () => ({ value: storyboard, cacheStatus: 'miss' } as const)) },
+    getEvidence: () => [{ packetId: 'manifest', kind: 'youtube_storyboard', sources: [], excerpts: [], warnings: [], usage: [],
+      artifacts: [{ type: 'youtube_storyboard_analysis', data: { videoId: storyboard.videoId, intervalMs: 5000,
+        manifest: { totalSheets: 6, framesPerSheet: 2, tileWidth: 100, tileHeight: 100, columns: 2, rows: 1, lastSampleMs: 55000 } } }] }],
     analyzeStoryboard: createVisualAnalyst(model()),
     executeEvidenceTool: execution => execution.execute(),
     finalize: vi.fn(),
   };
 }
 describe('storyboard agent tool', () => {
+  it.each([
+    { sheetIndexes: [6] }, { sheetIndexes: [5, 6, 7] },
+    { timestampsMs: [60000] }, { timestampsMs: [0, 50000], maxSheets: 1 },
+  ])('rejects unavailable selections before provider and vision calls: %j', async selection => {
+    const ctx = context();
+    ctx.analyzeStoryboard = vi.fn();
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Locations', ...selection }, ctx, 'invalid'))
+      .rejects.toThrow('Available sheet indexes are 0 through 5');
+    expect(ctx.provider.storyboard).not.toHaveBeenCalled();
+    expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('requires metadata from the same video before image retrieval (unrelated metadata: %s)', async unrelated => {
+    const ctx = context();
+    const packets = ctx.getEvidence!();
+    ctx.getEvidence = () => unrelated ? packets.map(packet => ({ ...packet, artifacts: packet.artifacts.map(artifact => ({ ...artifact, data: { ...artifact.data, videoId: 'abcdefghijk' } })) })) : [];
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Locations', maxSheets: 2 }, ctx, 'missing'))
+      .rejects.toThrow('Retrieve storyboard metadata first');
+    expect(ctx.provider.storyboard).not.toHaveBeenCalled();
+  });
+  it('rejects duplicate indexes and selections exceeding their explicit budget', () => {
+    for (const selection of [{ sheetIndexes: [0, 0] }, { sheetIndexes: [0, 1], maxSheets: 1 }]) {
+      expect(getVideoStoryboardInputSchema.safeParse({ videoId: storyboard.videoId, focus: 'Locations', ...selection }).success).toBe(false);
+    }
+  });
+
   it('correlates failed extraction diagnostics through the pinned provider', async () => {
     const ctx = context();
     ctx.onExtractionDiagnostic = vi.fn();
