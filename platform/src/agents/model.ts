@@ -56,7 +56,7 @@ export function createAgentModel(
       // explicit thinking budget; GPT-OSS uses its native low reasoning effort.
       maxOutputTokens: (params.maxOutputTokens ?? 1_500) + FINALIZER_THINKING_TOKENS,
       providerOptions: { ...params.providerOptions, ...profile.providerOptions,
-        fireworks: { ...profile.providerOptions.fireworks, promptCacheKey: sessionAffinity } },
+        fireworks: { ...profile.providerOptions.fireworks, serviceTier: 'priority', promptCacheKey: sessionAffinity } },
     } : useFireworks ? {
       ...params,
       // Keep the same research ceiling as Workers AI. GLM supports low/high/max;
@@ -64,6 +64,7 @@ export function createAgentModel(
       providerOptions: { ...params.providerOptions, fireworks: {
         reasoningEffort: reasoningEffort === 'medium' ? 'high' : reasoningEffort,
         reasoningHistory: 'interleaved',
+        serviceTier: 'priority',
         promptCacheKey: sessionAffinity,
       } },
     } : params,
@@ -74,6 +75,7 @@ export function createAgentModel(
       analysisAttempt: params.providerOptions?.agentDiagnostics?.analysisAttempt as number | undefined,
       runId: metadata?.agent_run_id as string | undefined,
       role: metadata?.model_role as string | undefined, modelId: model.modelId,
+      serviceTier: useFireworks ? 'priority' : undefined,
     }, params.abortSignal, doGenerate),
   } });
 }
