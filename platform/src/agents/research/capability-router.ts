@@ -98,6 +98,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       instructions: [
         'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
         'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without new provider calls. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
+        'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The finalizer can use the supplied history and current message; do not list the messages yourself.',
         'For finalize set researchVideoCount to 0 and give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
         'Choose finalize with responseIntent rejected and a brief reason when the task is unrelated to researching, understanding, comparing, or synthesizing YouTube video content. Reject general assistant tasks such as standalone coding, arithmetic, creative writing, bookings, and requests to generate or edit a video. A YouTube link alone does not make an unrelated task supported.',
         'Currently only YouTube is supported. Reject requests that require inspecting videos hosted on other platforms, local uploads, or general web research. Do not silently replace an explicitly requested unsupported source with YouTube.',
@@ -135,8 +136,9 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
         }),
       },
       // Fireworks GLM can return incomplete arguments when a tool is forced.
-      // Validate the auto-selected call and allow one repair within the same deadline.
-      toolChoice: 'auto',
+      // Start with auto to avoid incomplete forced arguments. If the model skips
+      // the routing call, require it on repair instead of repeating auto selection.
+      toolChoice: feedback.some(issue => issue.code === 'invalid_tool_call_count') ? { type: 'tool', toolName: 'classify_request' } : 'auto',
       temperature: 0,
       maxOutputTokens: 1_000,
       maxRetries: 2,
@@ -153,8 +155,11 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
 
     input.signal.throwIfAborted();
     const calls = result.toolCalls.filter(call => call.toolName === 'classify_request');
-    const parsed = classifierDecisionSchema.safeParse(calls.length === 1 && result.toolCalls.length === 1 ? calls[0]?.input : undefined);
-    feedback = parsed.success ? [] : parsed.error.issues.map(issue => ({
+    const hasSingleRoutingCall: boolean = calls.length === 1 && result.toolCalls.length === 1;
+    const parsed = classifierDecisionSchema.safeParse(hasSingleRoutingCall ? calls[0]?.input : undefined);
+    feedback = !hasSingleRoutingCall ? [{ path: 'tool call', code: 'invalid_tool_call_count',
+      message: `Expected exactly one classify_request call; received ${calls.length} routing calls and ${result.toolCalls.length} total calls. Plain text is not a routing decision.`,
+    }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
     input.onDiagnostic?.({ attempt, outcome: parsed.success ? 'valid' : 'invalid',
