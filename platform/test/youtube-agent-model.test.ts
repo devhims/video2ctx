@@ -95,6 +95,7 @@ describe('YouTube agent model', () => {
         expect(body).not.toHaveProperty('thinking');
       } else {
         expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+      expect(body.prompt_cache_key).toBe('session');
         expect(body).not.toHaveProperty('reasoning_effort');
       }
       return Response.json({ id: 'test', created: 1, model: body.model,
@@ -124,6 +125,7 @@ describe('YouTube agent model', () => {
       const body = JSON.parse(String(init?.body));
       expect(body.max_tokens).toBe(3524);
       expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+      expect(body.prompt_cache_key).toBe('session');
       expect(body).not.toHaveProperty('reasoning_effort');
       expect(body.response_format.type).toBe('json_schema');
       return Response.json({ id: 'test', created: 1, model: body.model,

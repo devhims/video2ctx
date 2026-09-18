@@ -41,10 +41,10 @@ describe('YouTube agent capability router', () => {
       issues: expect.arrayContaining([{ path: 'route', code: 'invalid_value' }]) });
   });
 
-  it('repairs a clarification missing its question, and stops after one unsuccessful repair', async () => {
-    const model = classifierModel({ route: 'clarification', reason: 'No earlier context.' });
+  it('repairs finalization missing its response intent, and stops after one unsuccessful repair', async () => {
+    const model = classifierModel({ route: 'finalize', reason: 'No earlier context.' });
     await expect(classifyCapabilityWithModel({ message: 'try again', model, signal: new AbortController().signal }))
-      .rejects.toThrow(/Classification.*question/);
+      .rejects.toThrow(/Classification.*responseIntent/);
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
@@ -119,7 +119,7 @@ describe('YouTube agent capability router', () => {
     const decision = await classifyCapabilityWithModel({ message: 'Research video lighting',
       model: classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'video lighting', channelId: '@invented' }),
       signal: new AbortController().signal });
-    expect(decision.route).toBe('clarification');
+    expect(decision).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
   it('uses low reasoning for bounded research planning and inspection', () => {
     expect(agentCoreReasoningEffort('topic_research')).toBe('low');
@@ -219,10 +219,10 @@ describe('YouTube agent capability router', () => {
 
   it('accepts a rejection with a reason and disallows executable answers for it', async () => {
     const decision = await classifyCapabilityWithModel({ message: 'Book a flight for me',
-      model: classifierModel({ route: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.' }),
+      model: classifierModel({ route: 'finalize', responseIntent: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.', answerDetail: 'standard' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.' });
+    expect(decision).toEqual({ route: 'finalize', responseIntent: 'rejected', reason: 'Travel booking is outside YouTube video synthesis.', answerDetail: 'standard' });
     expect(finalIntentMatchesRoute(decision, 'rejected')).toBe(true);
     expect(finalIntentMatchesRoute(decision, 'topic_research')).toBe(false);
     expect(finalIntentMatchesRoute(decision, 'clarification')).toBe(false);
@@ -231,7 +231,7 @@ describe('YouTube agent capability router', () => {
 
   it('rejects malformed scope rejections that omit the reason', async () => {
     await expect(classifyCapabilityWithModel({ message: 'Book a flight for me',
-      model: classifierModel({ route: 'rejected' }), signal: new AbortController().signal,
+      model: classifierModel({ route: 'finalize', responseIntent: 'rejected' }), signal: new AbortController().signal,
     })).rejects.toThrow();
   });
 
@@ -264,8 +264,8 @@ describe('YouTube agent capability router', () => {
     });
 
     expect(decision).toEqual({
-      route: 'clarification',
-      question: 'Which YouTube video would you like me to inspect? Please provide its URL or video ID.',
+      route: 'finalize', responseIntent: 'clarification',
+      reason: 'Which YouTube video would you like me to inspect? Please provide its URL or video ID.',
     });
   });
 

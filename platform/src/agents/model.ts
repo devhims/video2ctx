@@ -55,7 +55,8 @@ export function createAgentModel(
       // allowance; the provider adds reasoning headroom. GLM/DeepSeek have an
       // explicit thinking budget; GPT-OSS uses its native low reasoning effort.
       maxOutputTokens: (params.maxOutputTokens ?? 1_500) + FINALIZER_THINKING_TOKENS,
-      providerOptions: { ...params.providerOptions, ...profile.providerOptions },
+      providerOptions: { ...params.providerOptions, ...profile.providerOptions,
+        fireworks: { ...profile.providerOptions.fireworks, promptCacheKey: sessionAffinity } },
     } : useFireworks ? {
       ...params,
       // Keep the same research ceiling as Workers AI. GLM supports low/high/max;

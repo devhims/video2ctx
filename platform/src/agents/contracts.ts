@@ -35,6 +35,13 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     route: z.literal('rejected'),
     reason: z.string().trim().min(1).max(1_000),
   }),
+  z.object({
+    route: z.literal('finalize'),
+    responseIntent: z.enum(['context_answer', 'clarification', 'rejected']),
+    reason: z.string().trim().min(1).max(1_000),
+    answerDetail: answerDetailSchema.optional(),
+    numberedItemCount: numberedItemCountSchema,
+  }),
 ]);
 
 export const agentWarningSchema = z.object({
@@ -154,7 +161,7 @@ export const agentCitationSchema = z.object({
 
 export const finalizeAnswerInputSchema = z.object({
   answer: z.string().min(1).max(20_000),
-  intent: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
+  intent: z.enum(['topic_research', 'inspect_video', 'context_answer', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),
   citations: z.array(citationReferenceSchema).max(50),
   artifacts: z.array(agentArtifactSchema).max(20).default([]),
@@ -167,7 +174,7 @@ export const agentTurnResultSchema = z.object({
   userMessageId: z.string().uuid(),
   agentMessageId: z.string().uuid(),
   answer: z.string(),
-  intent: z.enum(['topic_research', 'inspect_video', 'clarification', 'rejected']),
+  intent: z.enum(['topic_research', 'inspect_video', 'context_answer', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),
   citations: z.array(agentCitationSchema),
   artifacts: z.array(agentArtifactSchema),

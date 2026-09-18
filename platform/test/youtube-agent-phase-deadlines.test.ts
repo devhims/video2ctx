@@ -25,7 +25,13 @@ function setup(classificationMs: number, decision = { route: 'inspect_video', vi
   } });
   const stalled = () => new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
   const research = stalled();
-  const finalizer = stalled();
+  const finalizer = decision.responseIntent === 'rejected' ? new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [], blocks: [{
+      text: 'I can help research YouTube videos, but cannot write standalone code.', evidenceIds: [],
+    }] }) }], finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 } },
+  }) }) : stalled();
   models.select.mockImplementation((_env, _session, _effort, metadata) =>
     metadata.model_role === 'classifier' ? classifier
       : metadata.model_role === 'agent_core' ? research : finalizer);
@@ -113,20 +119,20 @@ it('resumes classification with its saved deadline', async () => {
   expect(options.persistRoute).not.toHaveBeenCalled();
 });
 
-it('returns a classified rejection without evidence tools or downstream model calls', async () => {
-  const decision = { route: 'rejected', reason: 'Standalone code generation is outside YouTube video synthesis.' };
+it('finalizes a classified rejection without research or evidence tools', async () => {
+  const decision = { route: 'finalize', responseIntent: 'rejected', reason: 'Standalone code generation is outside YouTube video synthesis.', answerDetail: 'standard' };
   const { options, research, finalizer } = setup(3_000, decision);
   const run = executeResearchRun(options);
   await vi.advanceTimersByTimeAsync(3_000);
   await run;
   expect(options.persistRoute).toHaveBeenCalledExactlyOnceWith(decision);
-  expect(options.finalize).toHaveBeenCalledWith('route:phase-run:rejected', expect.objectContaining({
-    intent: 'rejected', citations: [], warnings: [{ code: 'OUT_OF_SCOPE', message: decision.reason }],
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    intent: 'rejected', citations: [], warnings: [{ code: 'OUT_OF_SCOPE', message: expect.any(String) }],
   }));
   expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   expect(research.doGenerateCalls).toHaveLength(0);
-  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
 });
 
 it('resumes research with its remaining time instead of a new window', async () => {

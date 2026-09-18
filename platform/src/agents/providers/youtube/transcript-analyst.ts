@@ -1,3 +1,4 @@
+import { conversationHistoryForModel, CONVERSATION_CONTEXT_GUIDANCE, type ConversationTurn } from '../../runtime/conversation-memory';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from 'ai';
 import { failureDetails } from '../../runtime/diagnostics';
@@ -31,6 +32,7 @@ interface TranscriptCatalogEntry {
 }
 
 export interface TranscriptAnalystInput {
+  conversationHistory?: ConversationTurn[];
   videoId: string;
   researchQuestion: string;
   focus: string;
@@ -134,6 +136,7 @@ export async function analyzeTranscriptWithModel(
         providerOptions: { agentDiagnostics: { videoId: input.videoId, modelCallId, analysisAttempt: attempt + 1 } },
         instructions: [
           'You are a transcript analyst working for a YouTube research agent.',
+          CONVERSATION_CONTEXT_GUIDANCE,
           'Read the complete transcript and extract only findings relevant to the research question and requested focus.',
           'Return compact evidence notes, not a finished answer. Do not write a separate summary. Spend the output budget on supported facts and exact short quotes.',
           TRANSCRIPT_GROUNDING_GUIDANCE,
@@ -152,6 +155,7 @@ export async function analyzeTranscriptWithModel(
             : []),
         ].join('\n'),
         prompt: JSON.stringify({
+          conversationHistory: conversationHistoryForModel(input.conversationHistory),
           researchQuestion: input.researchQuestion,
           focus: input.focus,
           videoId: input.videoId,

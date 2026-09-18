@@ -83,6 +83,34 @@ describe('YouTube AgentCore loop control', () => {
     expect(vi.mocked(context.finalize).mock.calls[0]?.[1].answer).toContain(`[cite:${metadata[0]!.excerpts[0]!.id}]`);
   });
 
+  it.each([false, true])('preserves prior claims in finalization, including resumed runs (%s)', async resumed => {
+    const packet = transcriptAnalysisPacket();
+    const history = [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: ['abcdefghijk'],
+      user: 'Who is the interviewer?', assistant: 'The man in red is holding the microphone.' },
+    { userMessageId: 'u2', agentMessageId: 'a2', resourceIds: ['abcdefghijk'],
+      user: 'Check the frames.', assistant: 'The woman holds the microphone toward the man.' }];
+    const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+      toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'A correction.', evidenceIds: [packet.excerpts[0]!.id] }],
+      }),
+    }) });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
+      confidence: 'low', warnings: [], blocks: [{ text: 'A correction.', evidenceIds: ['ref_1'] }],
+    }) });
+    await runResearchAgentWithModel({ model: research, finalizationModel: finalizer,
+      message: 'Correct your previous assumption.', conversationHistory: history,
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context: inspectContext(),
+      recoveredEvidence: [packet], ...(resumed ? { finalizationDeadlineAt: Date.now() + 40_000 } : {}) });
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+    const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+    for (const turn of history) {
+      expect(prompt).toContain(turn.user);
+      expect(prompt).toContain(turn.assistant);
+    }
+    expect(prompt).toContain('Correct your previous assumption.');
+  });
+
   it('hands an ordinary research completion to the configured finalizer', async () => {
     const packet = transcriptAnalysisPacket();
     const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({
@@ -112,10 +140,11 @@ describe('YouTube AgentCore loop control', () => {
     let attempts = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult(attempts++ ? valid : invalid) });
     const context = inspectContext();
-    await runResearchAgentWithModel({ model, message: 'Inspect the video',
+    await runResearchAgentWithModel({ model, message: 'Inspect the video', conversationHistory: [{ userMessageId: 'prior-user', agentMessageId: 'prior-agent', resourceIds: ['abcdefghijk'], user: 'Identify the interviewer.', assistant: 'The earlier interviewer claim.' }],
       decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
       finalizationDeadlineAt: Date.now() + 40_000, recoveredEvidence: [transcriptAnalysisPacket()] });
     expect(attempts).toBe(2);
+    for (const call of model.doGenerateCalls) expect(JSON.stringify(call.prompt)).toContain('The earlier interviewer claim.');
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: expect.stringContaining('Uses existing components.') }));
     expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('complete paragraph');
@@ -559,6 +588,7 @@ describe('YouTube AgentCore loop control', () => {
       model: researchModel,
       finalizationModel: repairModel,
       message: 'Inspect https://youtu.be/abcdefghijk',
+      conversationHistory: [{ userMessageId: 'prior-user', agentMessageId: 'prior-agent', resourceIds: ['abcdefghijk'], user: 'Identify the interviewer.', assistant: 'The earlier interviewer claim.' }],
       decision: { route: 'inspect_video', videoId: 'abcdefghijk' },
       context,
       toolNames: ['get_video', FINALIZE_ANSWER_TOOL_NAME],
@@ -569,6 +599,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(result.stepCount).toBe(3);
     expect(repairModel.doGenerateCalls).toHaveLength(1);
     expect(researchModel.doGenerateCalls).toHaveLength(3);
+    for (const call of researchModel.doGenerateCalls) expect(JSON.stringify(call.prompt)).toContain('The earlier interviewer claim.');
     expect(context.provider.video).toHaveBeenCalledWith('abcdefghijk');
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(modelBudget.entries.map((entry) => entry.category)).toEqual([

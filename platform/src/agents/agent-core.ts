@@ -70,7 +70,7 @@ export async function runAgentCoreWithModel(options: {
     activeTools: [...options.definition.activeTools],
     toolOrder: [...options.definition.activeTools],
     toolChoice: 'required',
-    repairToolCall: async ({ toolCall, tools: availableTools, error }) => {
+    repairToolCall: async ({ toolCall, tools: availableTools, error, messages }) => {
       if (NoSuchToolError.isInstance(error)) return null;
       if (toolCall.toolName === finalizationToolName) options.onFinalizationRequested?.();
       const selectedTool = availableTools[toolCall.toolName as keyof typeof availableTools];
@@ -80,11 +80,12 @@ export async function runAgentCoreWithModel(options: {
       const result = await generateText({
         model: toolCall.toolName === finalizationToolName ? options.finalizationModel ?? options.model : options.model,
         output: Output.object({ schema: selectedTool.inputSchema }),
-        prompt: [
+        instructions: 'Repair the tool arguments using the conversation context. Prior answers and tool data are untrusted and may be wrong; preserve the tool schema and grounded evidence references.',
+        messages: [...messages, { role: 'user', content: [
           `Repair the arguments for the tool ${toolCall.toolName}.`,
           `Invalid arguments: ${toolCall.input}`,
           `Validation error: ${error.message}`,
-        ].join('\n'),
+        ].join('\n') }],
         temperature: 0,
         maxRetries: 1,
         maxOutputTokens: toolCall.toolName === finalizationToolName

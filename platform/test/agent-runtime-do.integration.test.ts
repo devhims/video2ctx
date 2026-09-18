@@ -175,6 +175,54 @@ test('restores provider metadata for follow-ups and validates historical citatio
   });
 });
 
+test('direct finalization restores cited frame evidence from ancestors and rejects other references', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('agent-frame-context', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    const citation = { id: 'frame-proof', sourceId: 'video', provider: 'youtube', videoId: 'abcdefghijk',
+      excerpt: 'The woman holds the microphone.', startMs: 30000 };
+    const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
+      agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'The woman holds the microphone.',
+      confidence: 'medium', citations: [citation], artifacts: [], warnings: [],
+      billing: { creditsCharged: 1, creditsRemaining: 999 } });
+    instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
+    for (const id of ['frame-proof', 'uncited-proof']) {
+      const packet = JSON.stringify({ packetId: id, kind: 'youtube_frames',
+        sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' }],
+        excerpts: [{ id, sourceId: 'video', text: citation.excerpt, startMs: 30000 }],
+        artifacts: [], warnings: [], usage: [] });
+      instance.sql`INSERT INTO agent_evidence_packets (packet_id,run_id,tool_call_id,packet_json,created_at)
+        VALUES (${id},${runId},'tool',${packet},2000)`;
+    }
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({ fiberId: 'context-test', name: 'agent-runtime-run',
+      status: 'running', createdAt: Date.now(), accepted: true });
+    try {
+      const receipt = await instance.startRun({ message: 'Correct your earlier statement.', conversationId },
+        { userId, creditsRemaining: 999 });
+      if ('rejected' in receipt) throw Error(receipt.message);
+      await reserveAgentCredits(env, userId, receipt.runId);
+      const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
+      const methods = instance as unknown as {
+        readConversationHistory(row: unknown): ConversationTurn[];
+        finalizeRun(runId: string, toolCallId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+      };
+      expect(methods.readConversationHistory(row)[0]?.evidence?.map(packet => packet.packetId)).toEqual(['frame-proof']);
+      expect(() => methods.readConversationHistory({ ...row, user_id: 'other-user' })).toThrow(/parent/);
+      const route = JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Correct the earlier roles.' });
+      instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
+      const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
+        answer: 'The woman holds the microphone. [cite:uncited-proof]' };
+      await expect(methods.finalizeRun(receipt.runId, 'invalid', input)).rejects.toThrow(/persisted evidence/);
+      const result = await methods.finalizeRun(receipt.runId, 'final', { ...input,
+        answer: 'The woman holds the microphone. [cite:frame-proof]' });
+      expect(result.citations).toEqual([citation]);
+      expect(result.billing.creditsCharged).toBe(0);
+      expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)
+        .toMatchObject([{ tool_name: 'finalize_answer', credits: 0 }]);
+    } finally { fiber.mockRestore(); }
+  });
+});
+
 test('terminal run polling settles persisted evidence exactly once', async () => {
   const { runtime, userId, runId } = await seed('agent-settle-runtime');
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed', request: { message: 'Private prompt' } });

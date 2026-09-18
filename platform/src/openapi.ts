@@ -2187,7 +2187,7 @@ export const openApiDocument = {
         properties: {
           runId: { type: 'string', format: 'uuid' }, sessionId: { type: 'string', format: 'uuid' },
           userMessageId: { type: 'string', format: 'uuid' }, agentMessageId: { type: 'string', format: 'uuid' },
-          answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'clarification', 'rejected'] },
+          answer: { type: 'string' }, intent: { type: 'string', enum: ['topic_research', 'inspect_video', 'context_answer', 'clarification', 'rejected'] },
           confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           citations: { type: 'array', items: schemaRef('AgentCitation') },
           artifacts: { type: 'array', items: { type: 'object', required: ['type', 'data'], properties: { type: { type: 'string' }, title: { type: 'string' }, data: { type: 'object', additionalProperties: true } } } },
