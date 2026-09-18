@@ -1,0 +1,1025 @@
+{
+  "startedAt": "2026-09-18T12:20:55.660Z",
+  "samples": [
+    {
+      "task": "glm_text",
+      "pair": 0,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1434,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 1399,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.739",
+        "fireworks-server-time-to-first-token": "0.253",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-2b8d2f846f3a475bbe93ae26e9eadd0d"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 34,
+        "outputTokenDetails": {
+          "textTokens": 34,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 72
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 0,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 977,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 975,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.690",
+        "fireworks-server-time-to-first-token": "0.318",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-4239cf780ff24b6e9680402429690120"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 26,
+        "outputTokenDetails": {
+          "textTokens": 26,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 64
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 1,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 763,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 762,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.651",
+        "fireworks-server-time-to-first-token": "0.234",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-49c8e74854734edb89239195aa21bec6"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 28,
+        "outputTokenDetails": {
+          "textTokens": 28,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 66
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 1,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 838,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 835,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.660",
+        "fireworks-server-time-to-first-token": "0.236",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-a8048003cb1d4198bdc3ea5e55fb1948"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 28,
+        "outputTokenDetails": {
+          "textTokens": 28,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 66
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 2,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1030,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 1025,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.914",
+        "fireworks-server-time-to-first-token": "0.270",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-e36247e0f0e94fadb83f52dfb3301388"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 42,
+        "outputTokenDetails": {
+          "textTokens": 39,
+          "reasoningTokens": 3
+        },
+        "totalTokens": 80
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 2,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 780,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 779,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.674",
+        "fireworks-server-time-to-first-token": "0.252",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-df01ec75f2f44a7687bf4f11633449f5"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 28,
+        "outputTokenDetails": {
+          "textTokens": 28,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 66
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 3,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1167,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1166,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.051",
+        "fireworks-server-time-to-first-token": "0.254",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-3dcbc1a507794209b0fad1eb46307f27"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 28,
+        "outputTokenDetails": {
+          "textTokens": 28,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 66
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 3,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1960,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 1958,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.852",
+        "fireworks-server-time-to-first-token": "1.362",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-bd969cb79a014dc1987528ffdb16073c"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 34,
+        "outputTokenDetails": {
+          "textTokens": 31,
+          "reasoningTokens": 3
+        },
+        "totalTokens": 72
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 4,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1106,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 1104,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.974",
+        "fireworks-server-time-to-first-token": "0.374",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-2d18e06335a24e2dad26a9ca4669641f"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 28,
+        "outputTokenDetails": {
+          "textTokens": 28,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 66
+      }
+    },
+    {
+      "task": "glm_text",
+      "pair": 4,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1386,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1385,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "38",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.287",
+        "fireworks-server-time-to-first-token": "0.620",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-84cdf256fcf145aca86fbeaa4841b6d0"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 38,
+        "inputTokenDetails": {
+          "noCacheTokens": 38,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 34,
+        "outputTokenDetails": {
+          "textTokens": 31,
+          "reasoningTokens": 3
+        },
+        "totalTokens": 72
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 0,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 2241,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2237,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.871",
+        "fireworks-server-time-to-first-token": "0.502",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-77ecddfeca5947efa586cd40d87fa9da"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 49,
+        "outputTokenDetails": {
+          "textTokens": 49,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1545
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 0,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1258,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1256,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.127",
+        "fireworks-server-time-to-first-token": "0.317",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-a23c0db241564be488f3416441050d76"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 49,
+        "outputTokenDetails": {
+          "textTokens": 49,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1545
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 1,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1248,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1246,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.102",
+        "fireworks-server-time-to-first-token": "0.461",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-0c0dd9d2c6b844418e5a507e1876203d"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 49,
+        "outputTokenDetails": {
+          "textTokens": 49,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1545
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 1,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 2969,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2967,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "2.614",
+        "fireworks-server-time-to-first-token": "0.369",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-dce14e220a364653a2cdc09d8b581825"
+      },
+      "ok": false,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 58,
+        "outputTokenDetails": {
+          "textTokens": 58,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1554
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 2,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1874,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 1868,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.513",
+        "fireworks-server-time-to-first-token": "0.573",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-8b29ba2544c845a094a0a79b1dc371df"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 50,
+        "outputTokenDetails": {
+          "textTokens": 50,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1546
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 2,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1429,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1425,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.319",
+        "fireworks-server-time-to-first-token": "0.285",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-3bf8e25bbd0f44c9a50b18f3b7a81dd3"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 57,
+        "outputTokenDetails": {
+          "textTokens": 57,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1553
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 3,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 910,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 908,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "0.785",
+        "fireworks-server-time-to-first-token": "0.272",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-c8cee97f1b0d4a96a2118324552f1b5a"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 47,
+        "outputTokenDetails": {
+          "textTokens": 47,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1543
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 3,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 2164,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2162,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.815",
+        "fireworks-server-time-to-first-token": "0.345",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-d360c758bf9e443592ffece1caf961e2"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 57,
+        "outputTokenDetails": {
+          "textTokens": 57,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1553
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 4,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 2775,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2773,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "2.420",
+        "fireworks-server-time-to-first-token": "0.320",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-e09f23e17c1b4b8da695e7ff7f34161b"
+      },
+      "ok": false,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 69,
+        "outputTokenDetails": {
+          "textTokens": 69,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1565
+      }
+    },
+    {
+      "task": "glm_vision_4_sheets",
+      "pair": 4,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/glm-5p3-flash",
+      "elapsedMs": 1877,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 1875,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "1496",
+        "fireworks-sampling-options": "{\"max_tokens\": 1600, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 0.95, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.770",
+        "fireworks-server-time-to-first-token": "0.722",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-43b0981d49e04cad80c0ce94a83817aa"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 1496,
+        "inputTokenDetails": {
+          "noCacheTokens": 1496,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 52,
+        "outputTokenDetails": {
+          "textTokens": 52,
+          "reasoningTokens": 0
+        },
+        "totalTokens": 1548
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 0,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 2329,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2326,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "2.212",
+        "fireworks-server-time-to-first-token": "0.488",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-98e7a129e2da40f48bd9a0216f130560"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 147,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 274,
+        "outputTokenDetails": {
+          "textTokens": 40,
+          "reasoningTokens": 234
+        },
+        "totalTokens": 421
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 0,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 4666,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 4664,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "0",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "4.318",
+        "fireworks-server-time-to-first-token": "0.312",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-d5473bab1a934a899c1d7d28478f90c3"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 147,
+          "cacheReadTokens": 0
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 1,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 2383,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 2382,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.854",
+        "fireworks-server-time-to-first-token": "0.650",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-496d42e8324c44f78906c975bf765223"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 1,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 2080,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2078,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "1.975",
+        "fireworks-server-time-to-first-token": "1.173",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-ca55a96ece7f4f4985c9bbe48b433549"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 120,
+        "outputTokenDetails": {
+          "textTokens": 42,
+          "reasoningTokens": 78
+        },
+        "totalTokens": 267
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 2,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 4148,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 4147,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "4.044",
+        "fireworks-server-time-to-first-token": "1.756",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-8826eed3714f43c7a4c60a009a090e0f"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 347,
+        "outputTokenDetails": {
+          "textTokens": 40,
+          "reasoningTokens": 307
+        },
+        "totalTokens": 494
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 2,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 3947,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 3946,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "3.416",
+        "fireworks-server-time-to-first-token": "2.152",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-802260dba581454db87ff53f4f61da31"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 3,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 5455,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 5452,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "5.011",
+        "fireworks-server-time-to-first-token": "3.991",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-d679f5cc1cbc4360912b68b790e0834e"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 3,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 2443,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 2442,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "2.171",
+        "fireworks-server-time-to-first-token": "0.898",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-2c52d88cb48b4cecaefd9566dfa3ab5b"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 4,
+      "tier": "standard",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 3733,
+      "sentTier": "standard",
+      "status": 200,
+      "headersMs": 3731,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "3.240",
+        "fireworks-server-time-to-first-token": "0.168",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-b077ca7d932448ee8df5bb6f96392a73"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 339,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 298
+        },
+        "totalTokens": 486
+      }
+    },
+    {
+      "task": "deepseek_finalizer",
+      "pair": 4,
+      "tier": "priority",
+      "model": "accounts/fireworks/models/deepseek-v4-flash-0731",
+      "elapsedMs": 7440,
+      "sentTier": "priority",
+      "status": 200,
+      "headersMs": 7439,
+      "metrics": {
+        "fireworks-cached-prompt-tokens": "146",
+        "fireworks-prompt-tokens": "147",
+        "fireworks-sampling-options": "{\"max_tokens\": 2624, \"temperature\": 0.0, \"top_k\": 0, \"top_p\": 1.0, \"min_p\": 0.0, \"typical_p\": 1.0, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"mirostat_target\": null, \"mirostat_lr\": 0.1, \"cycle_multiplier\": 0.0, \"cycle_base\": 0.0, \"cycle_allowed_length\": 0, \"cycle_sequence_breakers\": []}",
+        "fireworks-server-processing-time": "7.104",
+        "fireworks-server-time-to-first-token": "5.781",
+        "fireworks-speculation-prompt-matched-tokens": "0",
+        "x-request-id": "chatcmpl-1e261ab240df4376b7f2a38403eef6db"
+      },
+      "ok": true,
+      "finishReason": "stop",
+      "usage": {
+        "inputTokens": 147,
+        "inputTokenDetails": {
+          "noCacheTokens": 1,
+          "cacheReadTokens": 146
+        },
+        "outputTokens": 163,
+        "outputTokenDetails": {
+          "textTokens": 41,
+          "reasoningTokens": 122
+        },
+        "totalTokens": 310
+      }
+    }
+  ]
+}

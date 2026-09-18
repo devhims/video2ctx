@@ -35,6 +35,7 @@ describe('YouTube agent model', () => {
       expect(body.max_tokens).toBe(1600);
       expect(body.reasoning_effort).toBe('low');
       expect(body.reasoning_history).toBe('interleaved');
+      expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('test-session');
       expect(body).not.toHaveProperty('thinking');
       expect(body.response_format.type).toBe('json_schema');
@@ -90,12 +91,13 @@ describe('YouTube agent model', () => {
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe(`accounts/fireworks/models/${name}`);
       expect(body.max_tokens).toBe(3524);
+      expect(body.service_tier).toBe('priority');
+      expect(body.prompt_cache_key).toBe('session');
       if (name === 'gpt-oss-120b') {
         expect(body.reasoning_effort).toBe('low');
         expect(body).not.toHaveProperty('thinking');
       } else {
         expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
-      expect(body.prompt_cache_key).toBe('session');
         expect(body).not.toHaveProperty('reasoning_effort');
       }
       return Response.json({ id: 'test', created: 1, model: body.model,
@@ -107,9 +109,18 @@ describe('YouTube agent model', () => {
         prompt: 'Public evidence', maxOutputTokens: 2500 });
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(fireworksModelPricing(`accounts/fireworks/models/${name}`)?.outputUsdPerMillionTokens)
-        .toBe(name === 'gpt-oss-120b' ? 0.6 : 0.66);
+        .toBe(name === 'gpt-oss-120b' ? 0.72 : 0.825);
       expect(createAgentModel(env, 'session', 'low', { model_role: 'classifier' }).modelId).toBe('glm');
     } finally { fetchMock.mockRestore(); }
+  });
+
+  test('accounts for Priority input, cache, and output prices for both production models', () => {
+    expect(fireworksModelPricing(FIREWORKS_GLM_MODEL_ID)).toEqual({
+      uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625,
+    });
+    expect(fireworksModelPricing('accounts/fireworks/models/deepseek-v4-flash-0731')).toEqual({
+      uncachedInputUsdPerMillionTokens: .275, cachedInputUsdPerMillionTokens: .00875, outputUsdPerMillionTokens: .825,
+    });
   });
 
   test('rejects unknown model profiles and does not invent their pricing', () => {
@@ -125,6 +136,7 @@ describe('YouTube agent model', () => {
       const body = JSON.parse(String(init?.body));
       expect(body.max_tokens).toBe(3524);
       expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+      expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
       expect(body).not.toHaveProperty('reasoning_effort');
       expect(body.response_format.type).toBe('json_schema');

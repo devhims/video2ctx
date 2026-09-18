@@ -205,7 +205,9 @@ describe('storyboard agent tool', () => {
       storyboard, focus: 'Diagram', signal: new AbortController().signal, modelCallId: 'visual-cost',
     });
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ category: 'visual_analyst',
-      modelId, pricing: expect.objectContaining({ uncachedInputUsdPerMillionTokens: 0.15, cachedInputUsdPerMillionTokens: 0.03, outputUsdPerMillionTokens: 0.5 }) }));
+      modelId, pricing: expect.objectContaining(modelId.startsWith('accounts/fireworks/')
+        ? { uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625 }
+        : { uncachedInputUsdPerMillionTokens: .15, cachedInputUsdPerMillionTokens: .03, outputUsdPerMillionTokens: .5 }) }));
   });
   it('bounds a non-cooperative visual model to 20 seconds', async () => {
     vi.useFakeTimers();
