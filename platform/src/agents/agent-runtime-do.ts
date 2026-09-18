@@ -25,6 +25,7 @@ import {
 } from './research/research-agent';
 import {
   resolveConversationHistory,
+  conversationEvidence,
   type LinkedConversationTurn,
   type ConversationTurn,
 } from './runtime/conversation-memory';
@@ -593,13 +594,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'completed'
     `[0]?.credits ?? 0;
+    const history = this.readConversationHistory(run);
     const result = buildAgentTurnResult({
       runId,
       conversationId: run.conversation_id,
       userMessageId: run.user_message_id,
       agentMessageId: run.agent_message_id,
     }, admission, parsedInput,
-    evidenceWithConversationMetadata(this.readEvidencePackets(runId), this.readConversationHistory(run)), creditsCharged);
+    conversationEvidence(evidenceWithConversationMetadata(this.readEvidencePackets(runId), history), history), creditsCharged);
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();
     this.sql`
@@ -822,6 +824,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       `[0];
       if (!parent || parent.status !== 'completed' || !parent.result_json) return undefined;
       const result = agentTurnResultSchema.parse(JSON.parse(parent.result_json));
+      const citedIds = new Set(result.citations.map(citation => citation.id));
+      const evidence = this.readEvidencePackets(parent.id).filter(packet => packet.kind !== 'youtube_video'
+        && packet.excerpts.some(excerpt => citedIds.has(excerpt.id)));
       const metadata = metadataForConversation(this.sql<{ packet_json: string; created_at: number }>`
         SELECT packet_json, created_at FROM agent_evidence_packets
         WHERE run_id = ${parent.id} AND json_extract(packet_json, '$.kind') = 'youtube_video'
@@ -834,6 +839,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         user: parent.execution_message ?? parent.message,
         assistant: result.answer,
         ...(metadata.length ? { metadata } : {}),
+        ...(evidence.length ? { evidence } : {}),
         resourceIds: [...new Set([
           ...extractYouTubeVideoIds(parent.execution_message ?? parent.message),
           ...result.citations.flatMap((citation) => citation.videoId ? [citation.videoId] : []),

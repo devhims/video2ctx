@@ -10,7 +10,7 @@ import {
 } from '../src/agents/runtime/conversation-memory';
 
 describe('YouTube agent conversation memory', () => {
-  it('exposes bounded prior metadata and includes it in the history character budget', () => {
+  it('retains prior metadata with its observation time', () => {
     const metadata = metadataForConversation([{ recordedAt: 1000, packet: {
       packetId: 'prior-video', kind: 'youtube_video',
       sources: [{ id: 'video', kind: 'video', provider: 'youtube', videoId: 'abcdefghijk', title: 'Video' }],
@@ -20,7 +20,7 @@ describe('YouTube agent conversation memory', () => {
     const history = [{ ...turn('summarize', 'A summary without a view count.'), metadata }];
     expect(JSON.stringify(conversationModelMessages(history, 'How many views?'))).toContain('404433');
     expect(JSON.stringify(conversationModelMessages(history, 'How many views?'))).toContain('1970-01-01T00:00:01.000Z');
-    expect(boundConversationHistory(history, { maxCharacters: 100 })).toEqual([]);
+    expect(boundConversationHistory(history)).toEqual(history);
   });
 
   it('keeps a single-turn request free of invented history', () => {
@@ -44,17 +44,26 @@ describe('YouTube agent conversation memory', () => {
     ]);
   });
 
-  it('selects the newest ancestors within both turn and character budgets', () => {
+  it('selects the newest ancestors within the turn limit', () => {
     const newestFirst = [
       turn('newest-user', 'newest-assistant'),
       turn('middle-user', 'middle-assistant'),
       turn('oldest-user', 'oldest-assistant'),
     ];
 
-    expect(boundConversationHistory(newestFirst, { maxTurns: 2, maxCharacters: 1_000 }))
+    expect(boundConversationHistory(newestFirst, { maxTurns: 2 }))
       .toEqual([newestFirst[1], newestFirst[0]]);
-    expect(boundConversationHistory(newestFirst, { maxTurns: 8, maxCharacters: 60 }))
-      .toEqual([newestFirst[1], newestFirst[0]]);
+  });
+
+  it('keeps eight complete turns even when history exceeds 64,000 characters', () => {
+    const newestFirst = Array.from({ length: 10 }, (_, index) =>
+      turn(`user-${index}`, `${index}:` + 'x'.repeat(65_000)));
+    expect(boundConversationHistory(newestFirst)).toEqual(newestFirst.slice(0, 8).reverse());
+    const records = newestFirst.map((entry, index) => ({ ...entry,
+      parentMessageId: newestFirst[index + 1]?.agentMessageId ?? null }));
+    const byId = new Map(records.map(entry => [entry.agentMessageId, entry]));
+    expect(resolveConversationHistory(records[0]!.agentMessageId, id => byId.get(id)))
+      .toEqual({ ok: true, history: records.slice(0, 8).reverse() });
   });
 
   it('keeps sibling conversation branches isolated', () => {

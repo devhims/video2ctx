@@ -22,12 +22,21 @@ export const structuredAnswerSchema = fields.extend({
 });
 
 export const clarificationAnswerSchema = fields.extend({
-  intent: z.literal('clarification'),
+  intent: z.enum(['clarification', 'rejected']),
   blocks: z.array(block.extend({ evidenceIds: z.array(block.shape.evidenceIds.element).max(0) })).length(1),
+});
+
+export const contextAnswerSchema = fields.extend({
+  intent: z.literal('context_answer'),
+  blocks: z.array(block.extend({
+    evidenceIds: z.array(block.shape.evidenceIds.element).max(12).describe('Cite persisted evidence for video facts. Use no evidence IDs only when discussing prior conversation statements, without treating them as verified video facts.'),
+  })).min(1).max(20),
 });
 
 // The classifier owns intent; persisted evidence owns artifacts and citations.
 export const finalizationOutputSchema = structuredAnswerSchema.omit({ intent: true, artifacts: true });
+export const contextFinalizationOutputSchema = contextAnswerSchema.omit({ intent: true, artifacts: true });
+export const conversationalFinalizationOutputSchema = clarificationAnswerSchema.omit({ intent: true, artifacts: true });
 export const FINALIZATION_SCHEMA_VERSION = 'answer-blocks-v3';
 
 export function assertRequestedNumberedItems(output: z.infer<typeof finalizationOutputSchema>, expected: number | undefined) {
@@ -41,8 +50,9 @@ export function assertRequestedNumberedItems(output: z.infer<typeof finalization
   }
 }
 
-export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema>): FinalizeAnswerInput {
-  const input = value.intent === 'clarification' ? clarificationAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
+export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>): FinalizeAnswerInput {
+  const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
+    : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
   assertCoherentAnswerBlocks(input);
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,
