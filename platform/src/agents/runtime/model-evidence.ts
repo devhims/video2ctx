@@ -62,7 +62,7 @@ export const modelEvidencePacketSchema = z.object({
     coverage: transcriptAnalysisDataSchema.shape.coverage,
     selectedExcerptCount: z.number().int().nonnegative(),
   }).optional(),
-  excerpts: z.array(evidenceExcerptSchema).max(MODEL_EXCERPTS_PER_PACKET).optional(),
+  excerpts: z.array(evidenceExcerptSchema).max(5_000).optional(),
   visualCoverage: visualCoverageSchema.optional(),
   frameCoverage: frameCoverageSchema.optional(),
   artifacts: z.array(z.object({
@@ -80,6 +80,14 @@ export type ModelEvidencePacket = z.infer<typeof modelEvidencePacketSchema>;
  * remains the source of truth for billing, recovery, and citation validation.
  */
 export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePacket {
+  // Single-video inspection is read directly by the main model, including on recovery/finalization.
+  if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
+    return modelEvidencePacketSchema.parse({
+      packetId: packet.packetId, kind: packet.kind, sources: packet.sources,
+      excerpts: packet.excerpts,
+      artifacts: packet.artifacts.map(({ type, title }) => ({ type, title })), warnings: packet.warnings,
+    });
+  }
   const transcriptAnalysis = readTranscriptAnalysis(packet);
   if (transcriptAnalysis) {
     return modelEvidencePacketSchema.parse({
@@ -192,6 +200,7 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
     });
   }
 
+  const completeTranscript = packet.artifacts?.some(artifact => artifact.type === 'youtube_complete_transcript');
   const excerpts = packet.excerpts?.slice(0, (packet.kind === 'youtube_storyboard' || packet.kind === 'youtube_frames') ? 5 : 1).map((excerpt) => ({
     ...excerpt,
     text: boundedText(excerpt.text, 200),
@@ -203,6 +212,8 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
     excerpts,
     artifacts: packet.artifacts?.slice(0, 1),
     continuation: undefined,
+    warnings: completeTranscript ? [...packet.warnings, { code: 'TRANSCRIPT_CONTEXT_TRUNCATED',
+      message: 'The complete retrieved transcript exceeds the finalization evidence budget. Only a partial excerpt is supplied here; do not claim exhaustive coverage.' }] : packet.warnings,
   });
 }
 

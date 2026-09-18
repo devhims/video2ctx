@@ -81,17 +81,17 @@ sequenceDiagram
     M-->>R: Metadata, transcript, or other permitted calls
     R->>Y: Fetch requested video evidence
     Y-->>R: Metadata and complete timed transcript
-    R->>M: Isolated transcript analysis
-    M-->>R: Findings and selected window IDs
-    R->>R: Validate and persist exact excerpts
-    R->>M: Summarize compact evidence
+    R->>R: Persist complete timed captions keyed by video and language
+    R->>M: Main inspection model reads complete transcript
+    M-->>R: Request finalization with grounded evidence
+    R->>M: Finalize using persisted transcript evidence
     M-->>R: Answer with excerpt markers
     R->>R: Resolve citations and persist result
     P->>R: GET run status
     R-->>P: Completed result, or partial result/failure
 ```
 
-Inspection first reads video metadata when it is not already available and the metadata tool is enabled, then uses transcripts and optional sampled storyboard images. It does not accept local MP4 uploads. Its provider adapter rejects calls for another video. Missing or ambiguous video identification can route to clarification. It has no separate one-analysis-per-run cap; identical transcript requests are reused, while different focus requests remain subject to the shared time and tool budgets.
+Inspection first reads video metadata when it is not already available and the metadata tool is enabled, then uses transcripts and optional sampled storyboard images. It does not accept local MP4 uploads. Its provider adapter rejects calls for another video. Missing or ambiguous video identification can route to clarification. Single-video inspection uses no isolated transcript analyst. The main model receives all returned timed captions from get_video_transcript and handles the complete question directly. Retrieval is deduplicated durably within the run by video ID and requested language, independent of focus. Recovery and finalization retain complete transcript excerpts when they fit the finalization evidence budget; oversized finalization context is explicitly marked TRANSCRIPT_CONTEXT_TRUNCATED. Multi-video research retains its bounded isolated analysts.
 
 ## Tool sets
 
@@ -221,7 +221,7 @@ The recovery finalizer and deterministic fallback occur outside Agent Core's ste
 
 ## Storyboard evidence
 
-Both paths can call `get_video_storyboard`. A call with `videoId` and no selection returns metadata without downloading images or running vision. The model receives total sheet count, frames per sheet, tile and grid dimensions, sampling interval, last sampled timestamp, and total frames. It then supplies a focused visual question and chooses `maxSheets` for a spread overview, `sheetIndexes` for explicit zero-based source sheets, or `timestampsMs` for sampled moments. The agent chooses how many sheets to inspect. Each call allows up to 20 sheets and 8 MiB of JPEG bytes within the shared research time and cost budgets. Oversized selections fail explicitly; they are never silently sliced. Follow-ups can inspect other sheets while budget remains. Metadata is not visual content evidence. Source frame indexes remain unchanged across non-contiguous selections. Temporary files are deleted on success and failure. Paths and signed image URLs do not reach the main agent.
+Both paths can call `get_video_storyboard`. A call with `videoId` and no selection returns metadata without downloading images or running vision. The model receives total sheet count, frames per sheet, tile and grid dimensions, sampling interval, last sampled timestamp, and total frames. It then supplies a focused visual question and chooses `maxSheets` for a spread overview, `sheetIndexes` for explicit zero-based source sheets, or `timestampsMs` for sampled moments. The agent chooses how many sheets to inspect. Each call allows up to 20 sheets and 8 MiB of JPEG bytes within the shared research time and cost budgets. Before any image provider call, the runtime validates selection against the same video's persisted manifest. Missing metadata requires a metadata call first. Duplicate or out-of-range indexes, out-of-range timestamps, and selections requiring more than maxSheets are rejected locally with correction guidance. Oversized selections fail explicitly; they are never silently sliced. Follow-ups can inspect other sheets while budget remains. Metadata is not visual content evidence. Source frame indexes remain unchanged across non-contiguous selections. Temporary files are deleted on success and failure. Paths and signed image URLs do not reach the main agent.
 
 An isolated GLM-5.3-Flash model reads the images and returns at most five visual findings, each tied to up to three supplied frame indexes. The native visual output schema enumerates only the supplied frame IDs, including gaps between sheets. The application also validates indexes and computes timestamps from the original mapping. Model evidence keeps one excerpt per distinct visual finding before repeated frame citations, so early findings cannot consume the excerpt budget and hide later findings. Requested timestamps and sampled ranges reach the finalizer. Visual observations are labelled as such, rather than represented as transcript quotations. Raw images are not stored in evidence packets. This is sampled coverage, not complete video coverage. Cropping or selecting a storyboard does not improve source resolution.
 

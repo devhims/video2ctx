@@ -7,6 +7,26 @@ import {
 } from '../src/agents/runtime/model-evidence';
 
 describe('agent model evidence', () => {
+  it('preserves every direct transcript excerpt through recovery and finalization', () => {
+    const packet = transcriptPacket();
+    packet.artifacts = [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: true } }];
+    packet.excerpts = Array.from({ length: 12 }, (_, index) => ({ ...packet.excerpts[0]!, id: `caption:${index}`, text: `Location ${index}: ` + 'x'.repeat(1000) }));
+    const projected = evidencePacketForModel(packet);
+    expect(projected.excerpts).toEqual(packet.excerpts);
+    const finalization = finalizationEvidenceForModel([packet], 40_000);
+    expect(finalization.evidence[0]!.excerpts).toHaveLength(12);
+    expect(finalization.evidence[0]!.excerpts![11]!.text).toBe(packet.excerpts[11]!.text);
+    expect(finalization.fullIds.get('ref_12')).toBe('caption:11');
+  });
+  it('reports partial context when a complete transcript exceeds the finalization budget', () => {
+    const packet = transcriptPacket();
+    packet.artifacts = [{ type: 'youtube_complete_transcript', data: {} }];
+    packet.excerpts = Array.from({ length: 100 }, (_, index) => ({ ...packet.excerpts[0]!, id: `caption:${index}`, text: 'x'.repeat(2000) }));
+    const projected = evidencePacketsForModel([packet], { maxCharacters: 40_000 });
+    expect(projected[0]!.warnings).toContainEqual(expect.objectContaining({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED' }));
+    expect(JSON.stringify(projected).length).toBeLessThanOrEqual(40_000);
+  });
+
   it('replaces transcript text with the query-focused analyst result', () => {
     const packet = transcriptPacket();
 

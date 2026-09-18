@@ -26,6 +26,7 @@ export interface AgentToolContext {
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;
+  getEvidence?(): readonly EvidencePacket[];
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;

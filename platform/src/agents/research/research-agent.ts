@@ -176,7 +176,7 @@ export async function executeResearchRun(options: {
       createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
-    transcriptPolicy: {
+    transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : {
       mode: 'contextual_analysis',
       researchQuestion: options.message,
       analyze: transcriptAnalyst,
@@ -328,6 +328,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
     researchQuestion: options.message,
+    getEvidence: () => [...evidence.values()],
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {
       await startFinalization();
@@ -354,7 +355,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       finalized = true;
       return result;
     },
-    transcriptPolicy: options.context.transcriptPolicy.mode === 'contextual_analysis'
+    transcriptPolicy: options.decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : options.context.transcriptPolicy.mode === 'contextual_analysis'
       ? { ...options.context.transcriptPolicy, budget: transcriptBudget,
         analyze: (input) => {
           const queuedAt = Date.now();
@@ -672,7 +673,8 @@ async function runUnifiedFinalizer(options: {
       assertGroundedAnswerBlocks(output.blocks.filter(block => block.evidenceIds.length > 0), options.evidence);
       validationStage = 'rendered_answer';
       const input = renderStructuredAnswer({ ...output, intent, artifacts: [] });
-      input.warnings = mergeWarnings(input.warnings, failureWarnings);
+      input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
+        packet.warnings.filter(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED'))]);
       if (intent === 'rejected') input.warnings.push({ code: 'OUT_OF_SCOPE', message: 'This request is outside YouTube research and understanding.' });
       validationStage = 'citations_and_persistence';
       const answer = await options.context.finalize(`timeout-finalizer:${options.context.runId}:${attempt}`, input);

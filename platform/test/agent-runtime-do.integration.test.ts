@@ -1,3 +1,6 @@
+import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
+import type { EvidencePacket } from '../src/agents/contracts';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
@@ -588,5 +591,33 @@ test('legacy retry chains keep their original branch and completed retries remem
     expect(memory.readConversationHistory({ ...row, parent_message_id: receipt.agentMessageId }).at(-1))
       .toMatchObject({ user: 'Summarize https://youtu.be/abcdefghijk', assistant: 'A summary.', resourceIds: ['abcdefghijk'] });
     fiber.mockRestore();
+  });
+});
+
+
+test('deduplicates complete transcript retrieval durably across focuses and keeps language requests separate', async () => {
+  const { runtime, runId } = await seed('direct-transcript-reuse', 'running');
+  for (const [callId, language] of [['first', 'en'], ['rephrased', 'en'], ['translated', 'fr']] as const) {
+    await runInDurableObject(runtime, async instance => {
+      const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+      const transcript = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
+        videoId: 'abcdefghijk', track: { id: language, name: language, languageCode: language, kind: 'manual' as const, isTranslatable: true, isDefault: true },
+        segments: [{ startMs: 0, endMs: 1000, durationMs: 1000, text: `Caption ${language}` }], text: `Caption ${language}`,
+        meta: { source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+      } }));
+      const context = {
+        runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+        provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(), executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+      } as AgentToolContext;
+      const packet = await executeGetVideoTranscript({ videoId: 'abcdefghijk', language, focus: callId }, context, callId);
+      expect(packet.excerpts[0]!.text).toBe(`Caption ${language}`);
+      expect(transcript).toHaveBeenCalledTimes(callId === 'rephrased' ? 0 : 1);
+    });
+  }
+  await runInDurableObject(runtime, async instance => {
+    const calls = instance.sql<{ credits: number }>`SELECT credits FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`;
+    expect(calls).toHaveLength(2);
+    expect(calls.reduce((sum, call) => sum + call.credits, 0)).toBe(2);
+    expect(instance.sql`SELECT * FROM agent_evidence_packets WHERE run_id = ${runId}`).toHaveLength(2);
   });
 });
