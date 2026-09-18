@@ -12,6 +12,20 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     { message: 'Compare it with the other one', route: 'finalize', responseIntent: 'clarification', terms: [] },
     { message: 'Write a standalone Python function to sort integers', route: 'finalize', responseIntent: 'rejected', terms: [] },
   ];
+  it('routes a request to list user messages to the context finalizer', async () => {
+    const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
+    if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
+    const decision = await classifyCapabilityWithModel({
+      message: 'Can you list all the user messages in this conversation?',
+      conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: ['spCHbOtF-3s'],
+        user: 'can you check the frames to confirm who is holding the microphone',
+        assistant: 'The woman holds the microphone toward the man in the red jacket.' }],
+      model: createAgentModel({ AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: apiKey,
+        AI_GATEWAY_ID: '' } as unknown as Env, `router-eval:${crypto.randomUUID()}`, 'low', { model_role: 'classifier' }),
+      signal: AbortSignal.timeout(25_000),
+    });
+    expect(decision).toMatchObject({ route: 'finalize', responseIntent: 'context_answer' });
+  }, 30_000);
   it.each(cases)('$message', async ({ message, route, terms, responseIntent }) => {
     const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
     if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');

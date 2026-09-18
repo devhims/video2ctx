@@ -60,6 +60,32 @@ describe('YouTube agent capability router', () => {
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
+  it('requires a routing call when a conversation-list request produces prose', async () => {
+    const message = 'Can you list all the user messages in this conversation?';
+    const conversationHistory: ConversationTurn[] = [{ userMessageId: 'u1', agentMessageId: 'a1',
+      user: 'Who is holding the microphone?', assistant: 'The woman holds it.', resourceIds: [] }];
+    const model = new MockLanguageModelV4({ doGenerate: async ({ toolChoice }) => ({
+      content: toolChoice?.type === 'tool'
+        ? [{ type: 'tool-call' as const, toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
+          route: 'finalize', responseIntent: 'context_answer', reason: 'List the supplied user messages.',
+          answerDetail: 'standard', researchVideoCount: 0,
+        }) }]
+        : [{ type: 'text' as const, text: 'Your earlier message was: Who is holding the microphone?' }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    }) });
+    await expect(classifyCapabilityWithModel({ message, conversationHistory, model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'context_answer' });
+    expect(model.doGenerateCalls.map(call => call.toolChoice)).toEqual([
+      { type: 'auto' }, { type: 'tool', toolName: 'classify_request' },
+    ]);
+    for (const call of model.doGenerateCalls) {
+      expect(JSON.stringify(call.prompt)).toContain(conversationHistory[0]!.user);
+      expect(JSON.stringify(call.prompt)).toContain(message);
+    }
+  });
+
   it('keeps repair inside the original classification deadline', async () => {
     vi.useFakeTimers();
     try {

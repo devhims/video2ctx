@@ -624,6 +624,7 @@ async function runUnifiedFinalizer(options: {
           'You are the finalizer for a YouTube research run.',
           'Ground factual claims about videos in the supplied persisted evidence. Use conversation history to discuss and correct earlier statements.',
           CONVERSATION_CONTEXT_GUIDANCE,
+          'When asked to list user messages, quote the user entries in conversationHistory chronologically and include the current request unless asked for earlier messages only. History contains at most eight completed prior turns, not necessarily the entire session; describe the list as the messages available in context and do not invent missing or failed turns.',
           finalizationAnswerGuidance(options.decision.route === 'topic_research' ? 'topic_research' : 'inspect_video'),
           'Follow responseIntent from the request payload. For clarification, ask one concise question addressing missing scope. For rejected, briefly explain the YouTube research boundary without performing the unsupported task. Neither requires citations.',
           'For context_answer, answer or correct prior statements using conversation history and available evidence. Uncited blocks may only discuss the conversation itself, not assert unverified video facts. Cite supplied evidence for factual video claims. Never invent citations or claim a new lookup occurred. If context is insufficient, state exactly what cannot be established.',
