@@ -59,7 +59,7 @@ export function compactAgentRun(run: AgentRunView, include: AgentResponseOptions
     sessionId: run.conversationId,
     agentMessageId: run.agentMessageId,
     status: run.status,
-    ...(run.result ? { result: compactResult(run.result, include, run.route), billing: run.result.billing } : {}),
+    ...(run.result ? { result: compactAgentResult(run.result, include, run.route), billing: run.result.billing } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
     ...(include.includes('diagnostics') ? { diagnostics: {
       userMessageId: run.userMessageId, conversationTurn: run.conversationTurn,
@@ -69,7 +69,7 @@ export function compactAgentRun(run: AgentRunView, include: AgentResponseOptions
   });
 }
 
-function compactResult(result: AgentTurnResult, include: AgentResponseOptions['include'], route?: CapabilityRouteDecision) {
+export function compactAgentResult(result: AgentTurnResult, include: AgentResponseOptions['include'] = [], route?: CapabilityRouteDecision) {
   const citations = new Map(result.citations.map(citation => [citation.id, citation]));
   const videoTitles = storedVideoTitles(result);
   const sources: z.infer<typeof compactAgentSourceSchema>[] = [];

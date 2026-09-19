@@ -694,3 +694,27 @@ test('backfills original messages including failed retries into Session history 
     expect(writer.sessionStore.search.readHistory().messages).toHaveLength(2);
   });
 });
+
+
+test('restores display citations consistently without rewriting canonical answers or user text', async () => {
+  const { runtime, runId, conversationId, userId } = await seed('restore-display-citations', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    const answer = '**Saved observation** [cite:frame:1] [cite:frame:2]\n\nSecond paragraph [cite:frame:1].';
+    const result: AgentTurnResult = { runId, conversationId, userMessageId: String(row.user_message_id),
+      agentMessageId: String(row.agent_message_id), intent: 'inspect_video', answer, confidence: 'medium',
+      citations: ['frame:1', 'frame:2'].map(id => ({ id, sourceId: 'frames', provider: 'youtube',
+        videoId: 'abcdefghijk', title: 'Saved video', excerpt: 'A person is visible.' })),
+      artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } };
+    const literalUser = 'Explain the literal token [cite:example].';
+    instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify(result)}, message = ${literalUser} WHERE id = ${runId}`;
+    const page = await instance.getConversation(conversationId, userId);
+    expect(page?.messages.find(message => message.role === 'user')?.content).toBe(literalUser);
+    const display = page?.messages.find(message => message.role === 'assistant')?.content;
+    expect(display).toBe('**Saved observation** [1]\n\nSecond paragraph [1].');
+    const progress = await instance.getRunProgress(runId);
+    expect(display).toBe(progress?.run.result?.answer);
+    expect((await instance.getRun(runId))?.result?.answer).toBe(answer);
+    expect(JSON.parse(String(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId}`[0]!.result_json)).answer).toBe(answer);
+  });
+});

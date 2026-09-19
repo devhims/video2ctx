@@ -475,7 +475,7 @@ describe('YouTube AgentCore loop control', () => {
         expect(call.responseFormat?.type).toBe('json');
         expect(call.tools).toBeUndefined();
         return finalizerModelResult({
-            blocks: [{ text: 'The available metadata identifies the video.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+            blocks: [{ text: 'The available metadata identifies the video.', evidenceIds: ['ref_1'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
@@ -504,7 +504,7 @@ describe('YouTube AgentCore loop control', () => {
         expect(call.responseFormat?.type).toBe('json');
         expect(call.tools).toBeUndefined();
         return finalizerModelResult({
-            blocks: [{ text: 'The run finalized with the evidence already collected.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+            blocks: [{ text: 'The run finalized with the evidence already collected.', evidenceIds: ['ref_1'] }],
             intent: 'inspect_video',
             confidence: 'low',
             citations: [],
@@ -523,6 +523,7 @@ describe('YouTube AgentCore loop control', () => {
       context,
       toolNames: ['get_video', FINALIZE_ANSWER_TOOL_NAME],
       modelBudget,
+      recoveredEvidence: [transcriptAnalysisPacket()],
     });
 
     expect(result.stepCount).toBe(1);
@@ -660,7 +661,7 @@ describe('YouTube AgentCore loop control', () => {
     });
     const finalizationModel = new MockLanguageModelV4({
       doGenerate: async () => finalizerModelResult({
-        blocks: [{ text: 'The transcript could not be retrieved, so no transcript-based answer is available.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+        blocks: [{ text: 'The transcript could not be retrieved, so no transcript-based answer is available.', evidenceIds: ['ref_1'] }],
         intent: 'inspect_video',
         confidence: 'low',
         citations: [],
@@ -679,6 +680,8 @@ describe('YouTube AgentCore loop control', () => {
       context,
       toolNames: ['get_video_transcript', FINALIZE_ANSWER_TOOL_NAME],
       modelBudget,
+      recoveredEvidence: [{ ...transcriptAnalysisPacket(), kind: 'youtube_frames', artifacts: [],
+        excerpts: [{ id: 'saved-frame', sourceId: 'youtube:abcdefghijk:transcript', text: 'A diagram is visible in the saved frame.' }] }],
       modelCallPrefix: 'timeout-partial',
     });
 
@@ -774,7 +777,7 @@ describe('YouTube AgentCore loop control', () => {
         expect(call.responseFormat?.type).toBe('json');
         expect(call.tools).toBeUndefined();
         return finalizerModelResult({
-            blocks: [{ text: 'Two transcript analyses provide enough evidence.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
+            blocks: [{ text: 'Two transcript analyses provide enough evidence.', evidenceIds: ['ref_1'] }],
             intent: 'topic_research',
             confidence: 'medium',
             citations: [],

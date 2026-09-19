@@ -4,7 +4,7 @@ import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime
 import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
 import { saveFramePreviews } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
-import { compactAgentRun } from './response';
+import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
@@ -1028,7 +1028,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private restoreMessages(row: RunRow): AgentConversationMessage[] {
     const answer = row.result_json
-      ? agentTurnResultSchema.parse(JSON.parse(row.result_json)).answer
+      ? compactAgentResult(agentTurnResultSchema.parse(JSON.parse(row.result_json))).answer
       : '';
     return [
       {
