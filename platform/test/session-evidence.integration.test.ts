@@ -598,7 +598,7 @@ test.each([true, false])(
         ...(resume ? { finalizationDeadlineAt: Date.now() + 30000 } : {}),
       });
       expect(coreCalls).toBe(resume ? 0 : 2);
-      expect(finalizerCalls).toBe(2);
+      expect(finalizerCalls).toBe(3);
       expect(ctx.finalize).toHaveBeenCalledTimes(1);
       expect((await vi.mocked(ctx.finalize).mock.results[0]!.value).citations[0]?.id).toBe(excerptId);
       expect(p.transcript).toHaveBeenCalledTimes(1);
@@ -628,4 +628,24 @@ test('lazy transcript index backfill survives reconstruction and cannot restore 
     await rejection;
     expect(sql.exec('SELECT * FROM session_context_fts').toArray()).toEqual([]);
     expect(sql.exec('SELECT * FROM session_search_assets').toArray()).toEqual([]);
+  }));
+
+test('a new frame question reanalyzes the saved image without extracting or charging again',async()=>
+  within('frame-followup-trace',async(store,reopen)=>{
+    const {executeGetVideoFrames}=await import('../src/agents/providers/youtube/tools/get-video-frames');
+    const {toolTrace}=await import('../src/agents/runtime/run-progress');
+    const fetchFrames=vi.fn(async()=>({cacheStatus:'miss' as const,value:{videoId:id,
+      frames:[{timestampMs:135000,width:640,height:360,mimeType:'image/jpeg' as const,imageBase64:'/9j/2Q=='}],failures:[],meta:{partial:false,warnings:[]}}}));
+    const p={frames:fetchFrames} as unknown as YouTubeAgentProvider;
+    const analyze=vi.fn(async()=>({findings:[{observation:'The person looks serious.',timestampsMs:[135000]}],warnings:[]}));
+    const first=context(store,sessionProvider(p,store));first.analyzeFrames=analyze;
+    await executeGetVideoFrames({videoId:id,timestampsMs:[135000],focus:'Describe the scene.'},first,'first');
+    const restored=reopen();const second=context(restored,sessionProvider(p,restored));second.analyzeFrames=analyze;
+    const result=await executeGetVideoFrames({videoId:id,timestampsMs:[135000],focus:'Describe the facial expression.'},second,'followup');
+    expect(fetchFrames).toHaveBeenCalledTimes(1);
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(result.usage[0]!.credits).toBe(0);
+    expect(restored.brief().assets).toHaveLength(1);
+    const trace=toolTrace({tool_call_id:'followup',tool_name:'get_video_frames',operation:'frames',semantic_key:'frames:{}',status:'completed',created_at:1,updated_at:2,result_json:JSON.stringify(result)},true);
+    expect(trace.output?.sessionReused).toBe(true);
   }));

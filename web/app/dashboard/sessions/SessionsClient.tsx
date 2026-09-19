@@ -343,14 +343,14 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
       }}>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
-        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name.replaceAll('_', ' ')}</span>
+        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name === 'get_video_frames' && tool.output?.sessionReused ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>
         {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}
         <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
-          {tool.name === 'get_video_frames' && tool.status === 'completed' && <FramePreviews frames={tool.output?.frames ?? []} />}
+          {tool.name === 'get_video_frames' && tool.status === 'completed' && <>{tool.output?.sessionReused && <p className='agent-frame-note'>Used saved session images. No new frames were extracted.</p>}<FramePreviews frames={tool.output?.frames ?? []} /></>}
           {tool.name === 'get_video_storyboard' && tool.status === 'completed' && (isStoryboardMetadata(tool)
             ? <p className='agent-frame-note'>Metadata only. No images were downloaded or inspected.</p>
             : <FramePreviews kind='storyboard' frames={tool.output?.storyboard?.sheets ?? []} />)}

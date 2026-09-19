@@ -13,7 +13,7 @@ export const getVideoFramesInputSchema = frameRequestSchema.extend({
 
 export function createGetVideoFramesTool(context: AgentToolContext) {
   return tool({
-    description: 'Extract and inspect up to six individual video frames at requested millisecond timestamps. Use get_video_storyboard first to locate relevant moments, then this tool for small text, charts, code, or an ambiguous sampled image. You may request a frame directly when its timestamp is already known. Default maxWidth is 1920 without upscaling; source quality is best effort and reported. Timestamps must be strictly before the video duration. Returns focused visual observations with timestamped evidence, plus unavailable-frame and quality warnings. Still images cannot establish motion or speech.',
+    description: 'Inspect up to six individual video frames, reusing saved session images before extracting missing frames at requested millisecond timestamps. Use get_video_storyboard first to locate relevant moments, then this tool for small text, charts, code, or an ambiguous sampled image. You may request a frame directly when its timestamp is already known. Default maxWidth is 1920 without upscaling; source quality is best effort and reported. Timestamps must be strictly before the video duration. Returns focused visual observations with timestamped evidence, plus unavailable-frame and quality warnings. Still images cannot establish motion or speech.',
     inputSchema: getVideoFramesInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideoFrames(input, context, toolCallId),
@@ -44,7 +44,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         modelCallId: `frame-analyst:${context.runId}:${toolCallId}` });
       console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
         extractionMs: extractedAt - startedAt, analysisMs: Date.now() - extractedAt,
-        extractionTimeoutMs, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
+        extractionTimeoutMs, sessionReused: response.sessionReused === true, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:frames`;
       const packet = evidencePacketSchema.parse({
@@ -56,7 +56,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
             text: `Visual observation at requested frame: ${finding.observation}`, startMs: time, endMs: time };
         })),
         artifacts: [{ type: 'youtube_frame_analysis', title: `Selected frames for ${parsed.videoId}`,
-          data: { videoId: parsed.videoId, focus: parsed.focus, requestedTimestampsMs: request.timestampsMs,
+          data: { sessionReused: response.sessionReused === true, videoId: parsed.videoId, focus: parsed.focus, requestedTimestampsMs: request.timestampsMs,
             frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping), failures: frames.failures } }],
         warnings: [
           { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only. Timestamps identify requested seek positions.' },

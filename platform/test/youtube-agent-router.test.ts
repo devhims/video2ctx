@@ -67,7 +67,7 @@ describe('YouTube agent capability router', () => {
     const model = new MockLanguageModelV4({ doGenerate: async ({ toolChoice }) => ({
       content: toolChoice?.type === 'tool'
         ? [{ type: 'tool-call' as const, toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
-          route: 'finalize', responseIntent: 'context_answer', reason: 'List the supplied user messages.',
+          route: 'finalize', responseIntent: 'context_answer', contextScope: 'history', reason: 'List the supplied user messages.',
           answerDetail: 'standard', researchVideoCount: 0,
         }) }]
         : [{ type: 'text' as const, text: 'Your earlier message was: Who is holding the microphone?' }],

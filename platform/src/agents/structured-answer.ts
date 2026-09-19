@@ -73,6 +73,15 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
 /** Local checks complement the transmitted schema without constraining decoding. */
 function assertCoherentAnswerBlocks(input: { blocks: { text: string }[]; warnings: { message: string }[] }) {
   const issues: z.core.$ZodIssue[] = [];
+  // Narrow checks for known non-answers, not a minimum answer length. Quotes,
+  // names, numbers, yes/no answers and supported partial answers remain valid.
+  const texts = input.blocks.map(block => block.text.trim());
+  const fragment = /^(?:the|a|an|and|but|because|however|therefore)[,:]?$/i;
+  const promise = /^(?:I(?:['’]ll| will| am going to)|Let me) (?:first )?(?:look up|check|search|retrieve|fetch|inspect|read|analy[sz]e)\b[^.!?]*(?:[.!?])?$/i;
+  if (texts.every(text => fragment.test(text) || promise.test(text))) {
+    issues.push({code:'custom',path:['blocks'],message:'The answer is only a fragment or promise of future work. Answer the request now, or state the concrete missing context. Do not report planned work as completed.'});
+  }
+
   for (let index = 1; index < input.blocks.length; index++) {
     const previous = input.blocks[index - 1]!.text.trim();
     const current = input.blocks[index]!.text.trim();

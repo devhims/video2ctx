@@ -44,6 +44,7 @@ export interface SessionAccess {
     offset?: number,
     query?: string,
   ): Promise<{ packets: EvidencePacket[]; nextOffset?: number; needsInspection?: boolean }>;
+  readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
   searchHistory?(query: string): Promise<{ content: string }[]>;
   searchTools?(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal): Promise<ToolSet>;
   remember(runId: string, updates: MemoryUpdate[], evidence: EvidencePacket[]): void;
@@ -98,6 +99,9 @@ export class SessionEvidenceStore implements SessionAccess {
       `CREATE TABLE IF NOT EXISTS session_run_generations (run_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)`,
     );
     this.search = new SessionSearch(sql);
+  }
+  readHistory(offset = 0, role?: 'user' | 'assistant') {
+    return this.search.readHistory(offset, role);
   }
   searchHistory(query: string) {
     return this.search.searchHistory(query);
