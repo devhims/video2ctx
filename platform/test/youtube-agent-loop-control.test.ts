@@ -379,7 +379,7 @@ describe('YouTube AgentCore loop control', () => {
         model, finalizationModel: recovery, message: 'Research design skills',
         decision: { route: 'topic_research' }, context: inspectContext(),
       });
-      const check = expect(run).rejects.toThrow(/Finalization phase timeout/i);
+      const check = expect(run).rejects.toThrow(/Finalization timed out/i);
       await vi.advanceTimersByTimeAsync(60_001);
       await check;
     } finally { vi.useRealTimers(); }
@@ -1129,6 +1129,11 @@ describe('YouTube AgentCore loop control', () => {
     const lastInput = vi.mocked(context.finalize).mock.calls.at(-1)![1];
     expect(lastInput.answer).toContain(`[cite:${packet.excerpts[0]!.id}]`);
     expect(lastInput.answer).not.toContain('[cite:invented]');
+    if (failure === 'exhausted') {
+      expect(lastInput.answer).toContain('answer validation checks');
+      expect(lastInput.warnings).toContainEqual({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
+        message: expect.stringContaining('Retry the question') });
+    }
   });
 
   it('repairs a finalizer unit change before persisting the answer', async () => {
@@ -1184,6 +1189,41 @@ describe('YouTube AgentCore loop control', () => {
       await vi.advanceTimersByTimeAsync(60_001);
       await check;
       expect(attempts).toBe(2);
+      const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+      expect(input.answer).toContain('Finalization timed out');
+      expect(input.warnings).toContainEqual({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
+        message: expect.stringContaining('Finalization timed out') });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['raw', 'analyzed'] as const)('preserves output-limit and repair-timeout causes with %s evidence', async kind => {
+    vi.useFakeTimers();
+    try {
+      const packet = transcriptAnalysisPacket();
+      if (kind === 'raw') packet.artifacts = [];
+      const context = inspectContext();
+      let attempts = 0;
+      const recovery = new MockLanguageModelV4({ doGenerate: async () => {
+        if (++attempts > 1) return new Promise(() => {});
+        return { ...finalizerModelResult({ blocks: [] }),
+          finishReason: { unified: 'length', raw: 'length' } };
+      } });
+      const run = runResearchAgentWithModel({
+        model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+        finalizationModel: recovery, message: 'Research workflows', decision: { route: 'topic_research' },
+        context, recoveredEvidence: [packet],
+      });
+      const reason = 'output limit, and the repair attempt timed out';
+      const check = kind === 'raw'
+        ? expect(run).rejects.toMatchObject({ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: expect.stringContaining(reason) })
+        : expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+      await vi.advanceTimersByTimeAsync(60_001);
+      await check;
+      if (kind === 'analyzed') {
+        const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+        expect(input.answer).toContain(reason);
+        expect(input.warnings).toContainEqual({ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: expect.stringContaining(reason) });
+      } else expect(context.finalize).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
   });
 

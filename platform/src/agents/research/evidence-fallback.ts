@@ -17,6 +17,7 @@ export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean 
 export function evidenceFallback(
   packets: readonly EvidencePacket[],
   intent: 'topic_research' | 'inspect_video',
+  failureMessage?: string,
 ): FinalizeAnswerInput | null {
   const blocks: string[] = [];
   const seen = new Set<string>();
@@ -63,10 +64,10 @@ export function evidenceFallback(
   if (!blocks.length) return null;
   return {
     intent, confidence: 'low', citations: [], artifacts: [],
-    answer: `Partial evidence summary\n\nFinal synthesis could not be completed. These are individually supported findings, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
+    answer: `Partial evidence summary\n\n${failureMessage ?? 'Final synthesis could not be completed.'} These are individually supported findings, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
     warnings: [
       { code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings because final synthesis did not complete. This is not a completed comparison or recommendation.' },
-      { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
+      { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: failureMessage ?? 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
     ],
   };
 }

@@ -15,6 +15,7 @@ import { ApiError } from '../../lib/http';
 import { renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
+import { finalizationFailure } from './finalization-failure';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../runtime/frame-budget';
 import { generateText, Output, NoObjectGeneratedError, tool, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel } from 'ai';
@@ -141,9 +142,11 @@ export async function executeResearchRun(options: {
   if (decision.route === 'finalize' || decision.route === 'clarification' || decision.route === 'rejected') {
     const deadlineAt = options.finalizationDeadlineAt ?? Date.now() + AGENT_FINALIZATION_TIMEOUT_MS;
     await options.onFinalizing(deadlineAt);
+    const finalizationFailures: string[] = [];
     try {
       await withRunDeadline(deadlineAt, options.signal, (signal, persist) => runUnifiedFinalizer({
         model: createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
+        onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, allowEscalation: decision.route==='finalize' && decision.responseIntent==='context_answer' && decision.contextScope !== 'history',
         context: { session: options.session, runId: options.runId, signal, finalize: (id, input) => persist(() => options.finalize(id, input)) },
         evidence: conversationEvidence(options.recoveredEvidence, options.conversationHistory), toolFailures: options.recoveredToolFailures,
@@ -151,7 +154,13 @@ export async function executeResearchRun(options: {
       }), 'Finalization phase timeout.');
       return;
     } catch (error) {
-      if (!(error instanceof MoreEvidenceRequired)) throw error;
+      if (!(error instanceof MoreEvidenceRequired)) {
+        options.signal.throwIfAborted();
+        const normalized = normalizeAgentExecutionError(error);
+        if ((normalized instanceof ApiError && !['INVALID_AGENT_CITATION', 'AGENT_CITATION_REQUIRED'].includes(normalized.code))
+          || errorMessage(error) === 'Persistence phase timeout.') throw normalized;
+        throw finalizationFailure(error, finalizationFailures);
+      }
       decision = error.decision;
       await options.persistRoute(decision);
       options.finalizationDeadlineAt = undefined;
@@ -540,9 +549,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
     }
 
+    const finalizationFailures: string[] = [];
     try {
       const deadlineAt = await startFinalization();
       await withRunDeadline(deadlineAt, options.context.signal, (signal, persist) => runUnifiedFinalizer({
+        onFailure: code => finalizationFailures.push(code),
         deadlineAt, model: options.finalizationModel ?? options.model,
         message: options.message,
         conversationHistory: options.conversationHistory,
@@ -571,7 +582,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       );
       if (errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
-      const partial = evidenceFallback([...evidence.values()], options.decision.route);
+      const failure = finalizationFailure(finalizationError, finalizationFailures);
+      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message);
       if (partial) {
         partial.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-fallback:${options.context.runId}`, partial);
@@ -580,9 +592,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       if (toolFailures.size > 0) throw new Error(summarizeToolFailures([...toolFailures.values()]));
       const normalizedFinalizationError = normalizeAgentExecutionError(finalizationError);
       if (normalizedFinalizationError !== finalizationError) throw normalizedFinalizationError;
-      if (hasContentEvidence([...evidence.values()])) throw new ApiError(502, 'FINAL_SYNTHESIS_UNAVAILABLE',
-        'The final answer could not be completed. Successfully saved evidence remains available in this session. Retry the question to use it again.');
-      throw finalizationError;
+      throw failure;
     }
   }
 }
@@ -622,6 +632,7 @@ class MoreEvidenceRequired extends Error {
 async function runUnifiedFinalizer(options: {
   deadlineAt: number;
   allowEscalation?: boolean;
+  onFailure?: (code: string) => void;
   conversationHistory?: ConversationTurn[];
   onEvidence?: (packets: EvidencePacket[]) => void;
   model: LanguageModel;
@@ -905,6 +916,14 @@ async function runUnifiedFinalizer(options: {
         } catch { validationStage = 'json_parse'; }
       }
       if (error instanceof MoreEvidenceRequired) throw error;
+      const failureCode = errorMessage(error) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
+          : error instanceof ApiError ? error.code
+          : finishReason === 'length' ? 'ANSWER_TOKEN_LIMIT'
+          : error instanceof TranscriptGroundingError ? 'UNGROUNDED_ANSWER'
+          : error instanceof ZodError || generationError ? 'INVALID_ANSWER_STRUCTURE'
+          : options.context.signal.aborted ? 'FINALIZATION_ABORTED'
+          : isAgentCoreTimeout(error) ? 'FINALIZATION_ATTEMPT_TIMEOUT' : 'MODEL_GENERATION_FAILED';
+      options.onFailure?.(failureCode);
       console.warn(JSON.stringify({ event: 'agent_finalization_attempt_failed', runId: options.context.runId,
         attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt,
         schemaVersion: FINALIZATION_SCHEMA_VERSION, validationStage, finishReason,
@@ -913,13 +932,7 @@ async function runUnifiedFinalizer(options: {
         remainingMs: Math.max(0, options.deadlineAt - Date.now()),
         citationFailure: error instanceof AgentCitationError ? error.reason : undefined,
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
-        code: errorMessage(error) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
-          : error instanceof ApiError ? error.code
-          : finishReason === 'length' ? 'ANSWER_TOKEN_LIMIT'
-          : error instanceof TranscriptGroundingError ? 'UNGROUNDED_ANSWER'
-          : error instanceof ZodError || generationError ? 'INVALID_ANSWER_STRUCTURE'
-          : options.context.signal.aborted ? 'FINALIZATION_ABORTED'
-          : isAgentCoreTimeout(error) ? 'FINALIZATION_ATTEMPT_TIMEOUT' : 'MODEL_GENERATION_FAILED' }));
+        code: failureCode }));
       const referenceError = error instanceof ApiError
         && ['AGENT_CITATION_REQUIRED', 'INVALID_AGENT_CITATION'].includes(error.code);
       if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && !(error instanceof TranscriptGroundingError) && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;

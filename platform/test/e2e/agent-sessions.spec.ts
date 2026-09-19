@@ -503,3 +503,30 @@ test('views stored session evidence and deletes assets with their dependent memo
   await expect(panel.getByRole('heading',{name:'Memory (0)'})).toBeVisible();
   await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
 });
+
+test('finalization failure reasons stay visible after refresh for failed and partial runs', async ({ page, context }) => {
+  await login(context, 'allowed');
+  let partial = false;
+  const reason = 'The answer reached its output limit, and the repair attempt timed out. Any successfully saved evidence remains available in this session. Retry the question to use it again.';
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
+    status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+      run: { sessionId, runId: sessionId, status: partial ? 'completed' : 'failed',
+        ...(partial ? { result: { outcome: 'partial', answer: `Partial evidence summary\n\n${reason}\n\nA supported finding.`,
+          sources: [], warnings: [{ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: reason }] } } : { error: reason }) },
+      phase: partial ? 'completed' : 'failed', tools: [],
+    })}\n\n`,
+  }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const alert = page.locator('.agent-assistant-message').last().getByRole('alert');
+  await expect(alert).toContainText('This run failed');
+  await expect(alert).toContainText(reason);
+  await page.reload();
+  await expect(alert).toContainText(reason);
+  partial = true;
+  await page.reload();
+  await expect(alert).toContainText('Answer incomplete');
+  await expect(alert).toContainText(reason);
+  await expect(page.locator('.agent-caveats')).not.toHaveAttribute('open');
+  await page.reload();
+  await expect(alert).toContainText(reason);
+});

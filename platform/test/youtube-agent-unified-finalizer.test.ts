@@ -279,7 +279,7 @@ it('fails after one repair instead of persisting a repeated non-answer', async (
   const {options,classifier,output}=setup('context_answer');
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,blocks:[{text:'The',evidenceIds:[]}]})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
-  await expect(executeResearchRun(options)).rejects.toThrow(/fragment/);
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
   expect(finalizer.doGenerateCalls).toHaveLength(2);
   expect(options.finalize).not.toHaveBeenCalled();
 });
@@ -388,4 +388,28 @@ it('allows a comparison clarification without demanding video citations', async 
   await executeResearchRun(options);
   expect(options.finalize).toHaveBeenCalledOnce();
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+
+it.each(['length', 'timeout', 'length_then_timeout'] as const)('explains direct finalization failure: %s', async failure => {
+  vi.useFakeTimers();
+  try {
+    const { options, decision, finalizer } = setup('context_answer');
+    let attempts = 0;
+    finalizer.doGenerate = async () => {
+      attempts++;
+      if (failure === 'timeout' || (failure === 'length_then_timeout' && attempts > 1)) return new Promise(() => {});
+      return { content: [{ type: 'text', text: '{"blocks":[' }],
+        finishReason: { unified: 'length', raw: 'length' }, usage, warnings: [] };
+    };
+    const expected = failure === 'length_then_timeout' ? 'output limit, and the repair attempt timed out'
+      : failure === 'length' ? 'output limit and could not be completed after repair' : 'Finalization timed out';
+    const run = executeResearchRun({ ...options, persistedRoute: decision });
+    const check = expect(run).rejects.toMatchObject({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
+      message: expect.stringContaining(expected) });
+    await vi.advanceTimersByTimeAsync(60_001);
+    await check;
+    expect(options.finalize).not.toHaveBeenCalled();
+    expect(attempts).toBe(2);
+  } finally { vi.useRealTimers(); }
 });

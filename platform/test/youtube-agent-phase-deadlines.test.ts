@@ -63,7 +63,7 @@ it('starts a full research window after slow classification, then a full finaliz
   await vi.advanceTimersByTimeAsync(59_999);
   expect(finished).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
-  expect(await run).toMatch(/Finalization phase timeout/i);
+  expect(await run).toMatch(/Finalization timed out/i);
 });
 
 it('gives visual research time for extraction and analysis, while preserving its saved deadline', async () => {
@@ -76,7 +76,7 @@ it('gives visual research time for extraction and analysis, while preserving its
   await vi.advanceTimersByTimeAsync(1);
   expect(finalizer.doGenerateCalls).toHaveLength(1);
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(await run).toMatch(/Finalization phase timeout/i);
+  expect(await run).toMatch(/Finalization timed out/i);
 
   const resumed = setup(0);
   const savedDeadline = Date.now() + 15_000;
@@ -87,7 +87,7 @@ it('gives visual research time for extraction and analysis, while preserving its
   expect(resumed.options.onCapabilityLoaded).toHaveBeenCalledWith('inspect_video', savedDeadline);
   expect(resumed.finalizer.doGenerateCalls).toHaveLength(1);
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(await resume).toMatch(/Finalization phase timeout/i);
+  expect(await resume).toMatch(/Finalization timed out/i);
 });
 
 it('still permits user cancellation during classification', async () => {
@@ -149,7 +149,7 @@ it('resumes research with its remaining time instead of a new window', async () 
   await vi.advanceTimersByTimeAsync(1);
   expect(finalizer.doGenerateCalls).toHaveLength(1);
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(await run).toMatch(/Finalization phase timeout/i);
+  expect(await run).toMatch(/Finalization timed out/i);
 });
 
 it('resumes finalization without rerunning research or resetting its deadline', async () => {
@@ -167,5 +167,5 @@ it('resumes finalization without rerunning research or resetting its deadline', 
   expect(options.onFinalizing).toHaveBeenCalledExactlyOnceWith(finalizationDeadlineAt);
   expect(finished).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
-  expect(await run).toMatch(/Finalization phase timeout/i);
+  expect(await run).toMatch(/Finalization timed out/i);
 });
