@@ -14,6 +14,10 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 - `packages/all-things-youtube/` is the extraction library. The processor installs an exact published npm version using its lockfile for general provider calls. Publish library changes before updating that dependency. The storyboard path is the narrow exception: `platform/youtube-processor/storyboard-extractor.mjs` is a committed bundle of the shared storyboard source, checked in CI and deployed with the processor. Regenerate it with `npm --prefix platform/youtube-processor run bundle`; do not edit the generated file. The processor-directory Docker context uses an allowlist that excludes credentials, tests, and local artifacts.
 - `packages/video2ctx-cli/` is the independently published hosted-service CLI. Keep authentication and transport behavior compatible with both `video2ctx-platform` branches, and verify the npm tarball before releasing it.
 
+## Agent session evidence
+
+For session evidence reuse, memory, citation versions and deletion invariants, read `reference/engineering/SESSION_EVIDENCE.md`.
+
 ## Configuration
 
 Non-secret bindings live in `platform/wrangler.jsonc`; runtime secrets stay outside source control. Local development needs Docker for processor cache misses. Proxy credentials belong in `OUTBOUND_PROXY_URL` and never in logs.

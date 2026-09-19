@@ -73,7 +73,8 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
           ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
           ...analysis.warnings.map(message => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
         ],
-        usage: [{ operation: 'storyboard', credits: meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+        assetVersions: response.assetVersions,
+        usage: [{ operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
       if (!metadataOnly && context.saveStoryboardPreviews) {
         try {

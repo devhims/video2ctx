@@ -199,3 +199,12 @@
 }
 
 .agent-delivery-status { font-size: 0.8125rem; color: var(--muted); }
+.agent-session-assets { margin: 0 0 24px; border: 1px solid var(--line); border-radius: var(--radius-dashboard-sm); font-size: 13px; }
+.agent-session-assets > summary { cursor: pointer; padding: 14px; font-weight: 550; }
+.agent-assets-body { padding: 0 14px 14px; }
+.agent-assets-body p { line-height: 1.6; overflow-wrap: anywhere; }
+.agent-assets-body ul { list-style: none; padding: 0; }
+.agent-assets-body li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.agent-assets-body h3 { margin-top: 22px; font-size: 14px; }
+.agent-asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-asset-text { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

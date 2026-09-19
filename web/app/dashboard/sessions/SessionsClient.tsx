@@ -1,5 +1,6 @@
 'use client';
 
+import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
@@ -184,6 +185,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
       <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {session && <header className='agent-heading'><div><h2>{session.title}</h2>
       <p className='agent-id'>Session ID: {sessionId}</p></div></header>}
+    {session && <SessionAssets sessionId={sessionId} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}

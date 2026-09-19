@@ -721,9 +721,13 @@ function agentHarness(enabled = 'true') {
   const recordSession = vi.fn(async () => undefined);
   const listSessions = vi.fn(async (): Promise<UserSessionPage> => ({ sessions: [], nextCursor: null }));
   const getSession = vi.fn(async (): Promise<UserSessionSummary | null> => null);
+  const getSessionAssets=vi.fn(async()=>({assets:[],memories:[]}));
+  const getSessionAsset=vi.fn(async()=>({text:'Stored transcript'}));
+  const deleteSessionAssets=vi.fn(async()=>({deleted:true}));
+  const deleteSessionMemory=vi.fn(async()=>({deleted:true}));
   const getByName = vi.fn((name: string) => {
     instanceNames.push(name);
-    return { startRun, getRun, getRunProgress, getConversation };
+    return { startRun, getRun, getRunProgress, getConversation, getSessionAssets, getSessionAsset, deleteSessionAssets, deleteSessionMemory };
   });
   const accountInstanceNames: string[] = [];
   const enqueueAgentRun = vi.fn().mockResolvedValue({ legacy: true });
@@ -740,7 +744,7 @@ function agentHarness(enabled = 'true') {
       AGENT_RUNTIME: { getByName },
       USER_ACCOUNT: { getByName: accountGetByName },
     } as unknown as Env,
-    getByName,
+    getByName, getSessionAssets, getSessionAsset, deleteSessionAssets, deleteSessionMemory,
     instanceNames,
     accessUser,
     startRun,
@@ -755,3 +759,22 @@ function agentHarness(enabled = 'true') {
     getSession,
   };
 }
+
+
+test('asset routes enforce session ownership and validate versions before reading or deleting',async()=>{
+  const harness=agentHarness();
+  const sessionId=crypto.randomUUID();const version='a'.repeat(64);
+  const base=`/v1/agent/sessions/${sessionId}/assets`;
+  expect((await app.request(base,{},harness.env,executionContext)).status).toBe(200);
+  expect(harness.getSessionAssets).toHaveBeenCalledWith(sessionId,'agent-user');
+  expect((await app.request(`${base}/${version}`,{},harness.env,executionContext)).status).toBe(200);
+  expect(harness.getSessionAsset).toHaveBeenCalledWith(sessionId,'agent-user',version);
+  expect((await app.request(`${base}/invalid`,{},harness.env,executionContext)).status).toBe(422);
+  expect(harness.getSessionAsset).toHaveBeenCalledTimes(1);
+  expect((await app.request(`${base}/${version}`,{method:'DELETE'},harness.env,executionContext)).status).toBe(200);
+  expect(harness.deleteSessionAssets).toHaveBeenCalledWith(sessionId,'agent-user',version);
+  expect((await app.request(base,{method:'DELETE'},harness.env,executionContext)).status).toBe(200);
+  expect(harness.deleteSessionAssets).toHaveBeenCalledWith(sessionId,'agent-user',undefined);
+  expect((await app.request(`/v1/agent/sessions/${sessionId}/memory/context%3Aintent`,{method:'DELETE'},harness.env,executionContext)).status).toBe(200);
+  expect(harness.deleteSessionMemory).toHaveBeenCalledWith(sessionId,'agent-user','context:intent');
+});

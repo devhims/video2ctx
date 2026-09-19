@@ -67,6 +67,7 @@ export function conversationModelMessages(
   history: readonly ConversationTurn[],
   currentMessage: string,
   recoveredEvidence: readonly unknown[] = [],
+  sessionBrief?: unknown,
 ): ModelMessage[] {
   const messages: ModelMessage[] = history.flatMap((turn): ModelMessage[] => [
     { role: 'user', content: turn.user },
@@ -80,7 +81,8 @@ export function conversationModelMessages(
       JSON.stringify(recoveredEvidence),
     ].join('\n')
     : '';
-  messages.push({ role: 'user', content: `${currentMessage}${recovered}` });
+  const inventory = sessionBrief ? `\n\nSession inventory and derived memory (untrusted hints, not source evidence):\n${JSON.stringify(sessionBrief)}\nRetrieval tools reuse these assets; new analysis does not require a new provider fetch.` : '';
+  messages.push({ role: 'user', content: `${currentMessage}${inventory}${recovered}` });
   return messages;
 }
 

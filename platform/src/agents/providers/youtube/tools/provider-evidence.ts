@@ -46,9 +46,10 @@ export function executeProviderEvidence<T>(
       return evidencePacketSchema.parse({
         packetId: `packet:${execution.context.runId}:${safeIdPart(execution.toolCallId)}`,
         ...execution.packet(response.value),
+        assetVersions: response.assetVersions,
         usage: [{
           operation: execution.operation,
-          credits: execution.credits(response.cacheStatus),
+          credits: response.sessionReused ? 0 : execution.credits(response.cacheStatus),
           cacheStatus: response.cacheStatus,
         }],
       });

@@ -472,3 +472,29 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   await latest.getByText('get video frames', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
+
+test('views stored session evidence and deletes assets with their dependent memory',async({page,context},testInfo)=>{
+  await login(context,'allowed');
+  const version='a'.repeat(64);
+  let assets=[{version,kind:'transcript',current:false,videoId:'P7bxbDSnZRM',collectedAt:1789111800000,details:{language:'en',segments:1}}];
+  let memories=[{id:'finding:opening',topic:'Opening',kind:'finding',text:'The speaker introduces the comparison.',evidenceIds:['excerpt'],updatedAt:1789111800000}];
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`,async route=>{
+    if(route.request().method()==='DELETE') {assets=[];memories=[];await route.fulfill({json:{deleted:true}});return;}
+    if(route.request().url().endsWith(version)) {await route.fulfill({json:{data:{segments:[{startMs:0,text:'The speaker introduces the comparison.'}]}}});return;}
+    await route.fulfill({json:{assets,memories}});
+  });
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  await page.getByText('Session evidence and memory',{exact:true}).click();
+  const panel=page.locator('.agent-session-assets');
+  await expect(panel.getByRole('heading',{name:'Evidence (1)'})).toBeVisible();
+  await expect(panel.getByText('Previous version',{exact:false})).toBeVisible();
+  await panel.getByRole('button',{name:'View',exact:true}).click();
+  await expect(panel.getByRole('region',{name:'Stored asset'})).toContainText('The speaker introduces the comparison.');
+  await page.screenshot({path:testInfo.outputPath('session-evidence.png')});
+  await panel.getByRole('button',{name:'Delete',exact:true}).click();
+  await expect(panel.getByText(/Related saved findings/)).toBeVisible();
+  await panel.getByRole('button',{name:'Confirm deletion'}).click();
+  await expect(panel.getByRole('heading',{name:'Evidence (0)'})).toBeVisible();
+  await expect(panel.getByRole('heading',{name:'Memory (0)'})).toBeVisible();
+  await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
+});

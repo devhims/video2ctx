@@ -40,12 +40,12 @@ export function createGetVideoTranscriptTool(context: AgentToolContext) {
   const description = context.transcriptPolicy.mode === 'contextual_analysis'
     ? [
       'Analyze the complete available transcript of one selected YouTube video in an isolated model context.',
-      'Each call performs exactly one transcript provider operation and returns bounded, timestamped evidence selected by the transcript analyst.',
+      'Retrieval reuses complete session evidence when available; a cache miss performs one transcript provider operation and returns bounded, timestamped evidence selected by the transcript analyst.',
       'Provide a focused evidence question relevant to the research task.',
     ]
     : [
       'Read the complete available transcript of the supplied YouTube video.',
-      'Each call performs exactly one transcript provider operation and returns every timed segment supplied by the provider directly as evidence.',
+      'Retrieval reuses complete session evidence when available; a cache miss performs one transcript provider operation and returns every timed segment supplied by the provider directly as evidence.',
       'This capability does not invoke a transcript analyst or discard segments based on relevance.',
     ];
   if (context.transcriptPolicy.mode === 'contextual_analysis') {
@@ -157,9 +157,10 @@ export function executeGetVideoTranscript(
             ? [{ code: 'NO_TRANSCRIPT_EVIDENCE', message: 'The transcript contained no usable evidence.' }]
             : []),
         ].map(warning => ({ ...warning, videoId: parsed.videoId })),
+        assetVersions: response.assetVersions,
         usage: [{
           operation: 'transcript',
-          credits: dataOperationCost('transcript', response.cacheStatus),
+          credits: response.sessionReused ? 0 : dataOperationCost('transcript', response.cacheStatus),
           cacheStatus: response.cacheStatus,
         }],
       });
@@ -227,7 +228,7 @@ function transcriptSemanticKey(input: GetVideoTranscriptInput): string {
   return `transcript:${JSON.stringify(input)}`;
 }
 
-function completeTranscriptEvidence(
+export function completeTranscriptEvidence(
   videoId: string,
   segments: TranscriptSegment[],
   sourceId: string,

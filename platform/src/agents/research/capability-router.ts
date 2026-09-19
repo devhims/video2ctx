@@ -10,7 +10,7 @@ import {
   type EvidencePacket,
   type FinalizeAnswerInput,
 } from '../contracts';
-import { finalizationEvidenceForModel } from '../runtime/model-evidence';
+import { sessionBriefForModel, type SessionBrief } from '../runtime/session-evidence';
 import { conversationAssistantMessage, type ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
@@ -19,6 +19,7 @@ import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/dea
 // an explicit visual-tool choice, and research also requires breadth and search.
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'finalize']),
+  refreshEvidence: z.boolean().optional().describe('True only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
   responseIntent: z.enum(['context_answer', 'clarification', 'rejected']).optional().describe('Required for finalize: answer using existing context, ask for missing scope, or decline an unsupported request.'),
   answerDetail: answerDetailSchema.describe('Use detailed for an explicit request for an extensive report, exhaustive coverage, detailed steps or extensive examples. Otherwise use standard, including ordinary summaries, comparisons and numbered shortlists. For rejected or clarification routes use standard.'),
   numberedItemCount: numberedItemCountSchema.describe('Only when the user explicitly requests a numbered list of a specific size, record that count. Otherwise omit. Do not derive a count from numbers in a video title, product name, or year.'),
@@ -37,6 +38,7 @@ const classifierDecisionSchema = z.object({
   for (const key of required) {
     if (!input[key]) ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required for ${input.route}.` });
   }
+  if (input.route === 'finalize' && input.refreshEvidence) ctx.addIssue({code:'custom',path:['route'],message:'Fresh retrieval requires an executable route.'});
   if (input.route === 'finalize' && input.researchVideoCount !== 0) {
     ctx.addIssue({ code: 'custom', path: ['researchVideoCount'], message: 'Non-executable routes require zero research videos.' });
   }
@@ -66,6 +68,7 @@ export interface CapabilityClassifierInput {
   message: string;
   conversationHistory?: ConversationTurn[];
   availableEvidence?: EvidencePacket[];
+  sessionBrief?: SessionBrief;
   model: LanguageModel;
   signal: AbortSignal;
   modelBudget?: AgentModelCostBudget;
@@ -84,6 +87,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   const conversationHistory = input.conversationHistory ?? [];
   const videoIds = [...new Set([
     ...extractYouTubeVideoIds(input.message),
+    ...(input.sessionBrief?.assets.map(asset=>asset.videoId) ?? []),
     ...conversationHistory.flatMap((turn) => turn.resourceIds),
   ])];
   const channelIds = extractYouTubeChannelIds(input.message);
@@ -97,6 +101,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       model: input.model,
       instructions: [
         'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
+        'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A complete transcript can support new transcript questions through finalizer reads. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. Explicit refresh requires an executable route with refreshEvidence true.',
         'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without new provider calls. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
         'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The finalizer can use the supplied history and current message; do not list the messages yourself.',
         'For finalize set researchVideoCount to 0 and give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
@@ -123,7 +128,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
           user: turn.user,
           assistant: conversationAssistantMessage(turn),
         })),
-        availableEvidence: finalizationEvidenceForModel(input.availableEvidence ?? [], 12_000).evidence,
+        session: input.sessionBrief ? sessionBriefForModel(input.sessionBrief) : undefined,
+        availableEvidence: (input.availableEvidence ?? []).map(packet=>({kind:packet.kind,sources:packet.sources,excerptCount:packet.excerpts.length})),
         currentMessage: input.message,
         ...(feedback.length ? { classificationRepair: { instruction: 'The previous classification was invalid. Submit one complete classify_request call that satisfies the schema and these validation requirements.', issues: feedback } } : {}),
         suppliedVideoIds: videoIds,
