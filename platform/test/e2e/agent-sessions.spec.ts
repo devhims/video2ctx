@@ -437,12 +437,15 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
     run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed', result: {
       outcome: 'answered', answer: 'The frames show the chart at the requested timestamps.', sources: [], warnings: [] } }, phase: 'completed',
     tools: [{ toolCallId: 'frames', name: 'get_video_frames', operation: 'frames', status: 'completed', startedAt: 100, finishedAt: 200,
-      input: { videoId: 'abcdefghijk', timestampsMs: [14000, 16000, 18000] }, output: { sourceCount: 1, excerptCount: 3, sources: [], warningCodes: [], frames, sessionReused: true } }],
+      input: { videoId: 'abcdefghijk', timestampsMs: [14000, 16000, 18000] }, output: { sourceCount: 1, excerptCount: 0, sources: [], warningCodes: [], frames, sessionReused: true } },
+      {toolCallId:'analysis',name:'analyze_video_frames',operation:'frames',status:'completed',startedAt:200,finishedAt:300,
+       input:{assetVersions:['a'.repeat(64)],focus:'Describe the chart'},output:{sourceCount:1,excerptCount:3,sources:[],warningCodes:[]}}],
   })}\n\n` }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Analyze saved frames', { exact: true }).click();
+  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
+  await latest.getByText('Retrieve saved frames', { exact: true }).click();
   await expect(latest.getByText('Used saved session images. No new frames were extracted.')).toBeVisible();
   const first = latest.getByRole('button', { name: 'Open frame at 0:14' });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 1280);
@@ -470,7 +473,8 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   frames.splice(0);
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Analyze saved frames', { exact: true }).click();
+  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
+  await latest.getByText('Retrieve saved frames', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 

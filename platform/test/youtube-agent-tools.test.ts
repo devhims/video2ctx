@@ -1,3 +1,6 @@
+import { attachTestAssetStore } from './fixtures/analysis-session';
+import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
+import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
 import type { SearchResponse, Transcript, VideoSummary } from 'all-things-youtube';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,6 +17,12 @@ import { createCapabilityToolSet } from '../src/agents/providers/youtube/tool-li
 import { YOUTUBE_PROVIDER_TOOL_NAMES } from '../src/agents/providers/youtube/tool-names';
 import { executeSearchYouTube, searchYouTubeInputSchema } from '../src/agents/providers/youtube/tools/search-youtube';
 import type { EvidencePacket } from '../src/agents/contracts';
+
+async function retrieveAndAnalyzeTranscript(input: Parameters<typeof executeGetVideoTranscript>[0], context: AgentToolContext, id: string) {
+  attachTestAssetStore(context);
+  const retrieved = await executeGetVideoTranscript(input,context,`${id}-retrieve`);
+  return executeAnalyzeVideoTranscript({assetVersion:retrieved.assetVersions![0]!,focus:input.focus!},context,id);
+}
 
 describe('YouTube agent evidence tools', () => {
   it('maps one search tool call to one provider request and bounds candidates', async () => {
@@ -99,7 +108,7 @@ describe('YouTube agent evidence tools', () => {
     }));
     const context = toolContext({ transcript, analyzeTranscript });
 
-    const packet = await executeGetVideoTranscript({
+    const packet = await retrieveAndAnalyzeTranscript({
       videoId: 'abcdefghijk',
       focus: 'visual hierarchy interaction agents',
     }, context, 'call-transcript-1');
@@ -121,8 +130,8 @@ describe('YouTube agent evidence tools', () => {
       type: 'youtube_transcript_analysis',
       data: { coverage: { completeTranscriptRead: true, segmentCount: 3 } },
     });
-    expect(packet.warnings).toContainEqual({ code: 'TRANSCRIPT_ANALYST_WARNING', message: 'No pricing figures in this video.', videoId: 'abcdefghijk' });
-    expect(packet.usage).toEqual([{ operation: 'transcript', credits: 1, cacheStatus: 'hit' }]);
+    expect(packet.warnings).toContainEqual({ code: 'TRANSCRIPT_ANALYST_WARNING', message: 'No pricing figures in this video.' });
+    expect(packet.usage).toEqual([]);
   });
 
   it('returns compact analyst findings to Agent Core while retaining full citation evidence', async () => {
@@ -172,10 +181,11 @@ describe('YouTube agent evidence tools', () => {
       return packet;
     };
 
-    const modelResult = await executeGetVideoTranscriptForModel({
+    const analyzed = await retrieveAndAnalyzeTranscript({
       videoId: 'abcdefghijk',
       focus: 'frontend skills',
     }, context, 'call-transcript-model-result');
+    const modelResult = evidencePacketForModel(analyzed);
 
     expect(JSON.stringify(modelResult)).not.toContain('FULL TRANSCRIPT TEXT');
     expect(modelResult).toMatchObject({
@@ -394,7 +404,7 @@ describe('YouTube agent capability tool sets', () => {
     });
     const context = toolContext({ transcript, analyzeTranscript });
 
-    await expect(executeGetVideoTranscript({
+    await expect(retrieveAndAnalyzeTranscript({
       videoId: 'abcdefghijk',
       focus: 'the main recommendation',
     }, context, 'timed-out-analysis')).rejects.toThrow(

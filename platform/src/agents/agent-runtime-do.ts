@@ -585,10 +585,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     this.assertRunActive(runId);
-    const toolCount = this.sql<{ count: number }>`
-      SELECT COUNT(*) AS count FROM agent_tool_calls WHERE run_id = ${runId}
-    `[0]?.count ?? 0;
-    if (toolCount >= MAX_TOOL_CALLS - 1) {
+    // Separate analysis records must not consume the provider credit reservation twice.
+    // Both classes remain bounded, including failed attempts and resumed runs.
+    const counts = this.sql<{ provider_count: number; analysis_count: number }>`
+      SELECT
+        SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 0 ELSE 1 END) AS provider_count,
+        SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 1 ELSE 0 END) AS analysis_count
+      FROM agent_tool_calls WHERE run_id = ${runId}
+    `[0];
+    const analysis = ['analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard'].includes(execution.toolName);
+    if ((analysis ? counts?.analysis_count ?? 0 : counts?.provider_count ?? 0) >= MAX_TOOL_CALLS - 1) {
       throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted. Finalize with available evidence.');
     }
 
@@ -662,6 +668,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (run.result_json) return agentTurnResultSchema.parse(JSON.parse(run.result_json));
     const toolCount = this.sql<{ count: number }>`
       SELECT COUNT(*) AS count FROM agent_tool_calls WHERE run_id = ${runId}
+        AND tool_name NOT IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard')
     `[0]?.count ?? 0;
     if (toolCount >= MAX_TOOL_CALLS) {
       throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The total agent tool budget is exhausted.');

@@ -1,3 +1,6 @@
+import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
+import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
+import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -36,6 +39,8 @@ function context(store: SessionEvidenceStore, p: YouTubeAgentProvider): AgentToo
     runId: crypto.randomUUID(),
     signal: new AbortController().signal,
     provider: p,
+    session: store,
+    getEvidence: () => store.evidence(),
     transcriptPolicy: { mode: 'complete_transcript' },
     executeEvidenceTool: async (execution) => {
       const packet = await versionEvidencePacket(await execution.execute());
@@ -106,13 +111,13 @@ test('raw transcript survives an analyst failure, and can be read and cited by a
         throw new Error('analysis failed');
       }),
     };
-    await expect(executeGetVideoTranscript({ videoId: id, focus: 'Opening' }, ctx, 'analysis')).rejects.toThrow(
-      'analysis failed',
-    );
-    expect(store.evidence()).toHaveLength(0);
+    const retrieved = await executeGetVideoTranscript({ videoId: id }, ctx, 'retrieve');
+    expect(ctx.transcriptPolicy.analyze).not.toHaveBeenCalled();
+    await expect(executeAnalyzeVideoTranscript({ assetVersion: retrieved.assetVersions![0]!, focus: 'Opening' }, ctx, 'analysis')).rejects.toThrow('analysis failed');
+    expect(store.evidence()).toHaveLength(1);
     const result = await store.readEvidence(store.brief().assets[0]!.version);
     expect(result.packets[0]!.excerpts[0]!.text).toBe('A clear opening sentence.');
-    expect(store.evidence()).toHaveLength(1);
+    expect(store.evidence()).toHaveLength(2);
     await sessionProvider(p, store).transcript(id);
     expect(p.transcript).toHaveBeenCalledTimes(1);
   }));
@@ -245,7 +250,7 @@ test('partially successful frames are reused by timestamp while failed frames re
   }));
 
 test('storyboard selections batch missing sheets and reuse overlapping sheets across runs', async () =>
-  within('storyboards', async (store) => {
+  within('storyboards', async (store, reopen) => {
     const base = {
       videoId: id,
       frameCount: 6,
@@ -295,6 +300,20 @@ test('storyboard selections batch missing sheets and reuse overlapping sheets ac
     );
     expect(storyboard).toHaveBeenCalledTimes(3);
     expect(store.brief().assets.filter((asset) => asset.kind === 'storyboard_sheet')).toHaveLength(3);
+    const restored = reopen();
+    const ctx = context(restored, p);
+    ctx.analyzeStoryboard = vi.fn(async () => ({findings:[{observation:'A chart is shown.',frameIndexes:[2]}],warnings:[]}));
+    const versions = restored.brief().assets.filter(asset => asset.kind === 'storyboard_sheet').map(asset => asset.version);
+    const result = await executeAnalyzeVideoStoryboard({assetVersions:versions,focus:'Describe the chart.'},ctx,'analyze-sheets');
+    expect(storyboard).toHaveBeenCalledTimes(3);
+    expect(result.usage).toEqual([]);
+    expect(result.excerpts[0]!.startMs).toBe(10000);
+    expect(ctx.analyzeStoryboard).toHaveBeenCalledOnce();
+    await restored.delete(versions[0]);
+    await expect(executeAnalyzeVideoStoryboard({assetVersions:versions,focus:'Read the title.'},ctx,'deleted')).rejects.toThrow('unavailable or deleted');
+    expect(storyboard).toHaveBeenCalledTimes(3);
+    expect(ctx.analyzeStoryboard).toHaveBeenCalledOnce();
+
   }));
 
 test('forgetting memory during a run prevents that run from restoring its stale snapshot', async () =>
@@ -639,13 +658,17 @@ test('a new frame question reanalyzes the saved image without extracting or char
     const p={frames:fetchFrames} as unknown as YouTubeAgentProvider;
     const analyze=vi.fn(async()=>({findings:[{observation:'The person looks serious.',timestampsMs:[135000]}],warnings:[]}));
     const first=context(store,sessionProvider(p,store));first.analyzeFrames=analyze;
-    await executeGetVideoFrames({videoId:id,timestampsMs:[135000],focus:'Describe the scene.'},first,'first');
+    const raw=await executeGetVideoFrames({videoId:id,timestampsMs:[135000]},first,'first');
+    expect(analyze).not.toHaveBeenCalled();
+    expect(raw.excerpts).toEqual([]);
+    expect(raw.usage[0]!.credits).toBe(2);
+    await executeAnalyzeVideoFrames({assetVersions:raw.assetVersions!,focus:'Describe the scene.'},first,'analysis');
     const restored=reopen();const second=context(restored,sessionProvider(p,restored));second.analyzeFrames=analyze;
-    const result=await executeGetVideoFrames({videoId:id,timestampsMs:[135000],focus:'Describe the facial expression.'},second,'followup');
+    const result=await executeAnalyzeVideoFrames({assetVersions:raw.assetVersions!,focus:'Describe the facial expression.'},second,'followup');
     expect(fetchFrames).toHaveBeenCalledTimes(1);
     expect(analyze).toHaveBeenCalledTimes(2);
-    expect(result.usage[0]!.credits).toBe(0);
+    expect(result.usage).toEqual([]);
     expect(restored.brief().assets).toHaveLength(1);
-    const trace=toolTrace({tool_call_id:'followup',tool_name:'get_video_frames',operation:'frames',semantic_key:'frames:{}',status:'completed',created_at:1,updated_at:2,result_json:JSON.stringify(result)},true);
+    const trace=toolTrace({tool_call_id:'followup',tool_name:'analyze_video_frames',operation:'frames',semantic_key:'frame-analysis:{}',status:'completed',created_at:1,updated_at:2,result_json:JSON.stringify(result)},true);
     expect(trace.output?.sessionReused).toBe(true);
   }));

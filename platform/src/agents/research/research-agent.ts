@@ -305,7 +305,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => (name !== 'get_video_storyboard' && name !== 'get_video_frames') || options.decision.useStoryboard !== false);
+    .filter(name => !['get_video_storyboard','get_video_frames','analyze_video_frames','analyze_video_storyboard'].includes(name) || options.decision.useStoryboard !== false);
   const evidence = new Map(
     evidenceWithConversationMetadata(options.recoveredEvidence ?? [], options.conversationHistory ?? [])
       .map((packet) => [packet.packetId, packet]),
@@ -325,7 +325,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     || (options.recoveredToolFailures ?? []).some(failure => failure.toolName === 'search_youtube');
   const analystLimiter = new ConcurrencyLimiter(options.decision.route === 'topic_research'
     ? Math.min(4, researchVideoTarget(options.decision)) : MAX_CONCURRENT_TRANSCRIPT_ANALYSES);
-  let transcriptRequested = (options.recoveredToolFailures ?? []).some(failure => failure.toolName === 'get_video_transcript')
+  let transcriptRequested = (options.recoveredToolFailures ?? []).some(failure => ['get_video_transcript', 'analyze_video_transcript'].includes(failure.toolName))
     || (options.recoveredEvidence ?? []).some(packet => packet.kind === 'youtube_transcript');
   let finalized = false;
   let finalizationDeadlineAt = options.finalizationDeadlineAt;
@@ -342,12 +342,15 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
     researchQuestion: options.message,
+    refreshEvidence: options.decision.refreshEvidence,
+    pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
     getEvidence: () => [...evidence.values()],
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {
       await startFinalization();
       const reviewedVideos = new Set([...evidence.values()].filter(packet =>
-        packet.kind === 'youtube_transcript' && packet.excerpts.length > 0,
+        packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
+        && (options.decision.route !== 'topic_research' || packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')),
       ).flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])));
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined;
@@ -393,7 +396,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       return options.context.analyzeStoryboard!({ ...input, conversationHistory: options.conversationHistory });
     }) : undefined,
     executeEvidenceTool: async (execution) => {
-      if (execution.toolName === 'get_video_transcript') transcriptRequested = true;
+      if (['get_video_transcript', 'analyze_video_transcript'].includes(execution.toolName)) transcriptRequested = true;
       if (options.decision.route === 'topic_research' && execution.toolName === 'search_youtube') {
         // Reserve synchronously: a model may request multiple searches in one parallel step.
         if (searchUsed) throw new Error('The one-search budget is exhausted. Use the available evidence and other permitted tools.');

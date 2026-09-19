@@ -1,3 +1,5 @@
+import { attachTestAssetStore } from './fixtures/analysis-session';
+import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
@@ -27,8 +29,14 @@ function context(): AgentToolContext {
   };
 }
 const input = { videoId: frames.videoId, timestampsMs: [1234], focus: 'Read the chart' };
+
+async function retrieveAndAnalyze(ctx: AgentToolContext, callId: string) {
+  attachTestAssetStore(ctx);
+  const packet = await executeGetVideoFrames(input, ctx, `${callId}-retrieve`);
+  return executeAnalyzeVideoFrames({assetVersions:packet.assetVersions!,focus:input.focus},ctx,callId);
+}
 describe('agent frame tool', () => {
-  test('correlates diagnostics through capability scoping before analysis can fail', async () => {
+  test('correlates retrieval diagnostics without invoking the failing analyst', async () => {
     const ctx = context();
     ctx.onExtractionDiagnostic = vi.fn();
     ctx.provider.frames = async (_request, _signal, _limits, onDiagnostic) => {
@@ -37,7 +45,8 @@ describe('agent frame tool', () => {
     };
     ctx.provider = createCapabilityProvider(ctx.provider, { route: 'inspect_video', videoId: frames.videoId });
     ctx.analyzeFrames = async () => { throw new Error('analysis failed'); };
-    await expect(executeGetVideoFrames(input, ctx, 'frame-call')).rejects.toThrow('analysis failed');
+    const packet = await executeGetVideoFrames(input, ctx, 'frame-call');
+    expect(packet.excerpts).toEqual([]);
     expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...extractionFixture, kind: 'frames', toolCallId: 'frame-call' });
   });
   test('reserves analysis time and forwards a bounded extraction budget', async () => {
@@ -49,7 +58,7 @@ describe('agent frame tool', () => {
     const options = vi.mocked(ctx.provider.frames!).mock.calls[0]![2];
     expect(options?.extractionTimeoutMs).toBeGreaterThan(15_000);
     expect(options?.extractionTimeoutMs).toBeLessThanOrEqual(20_000);
-    expect(ctx.analyzeFrames).toHaveBeenCalledWith(expect.objectContaining({ researchQuestion: ctx.researchQuestion }));
+    expect(ctx.analyzeFrames).not.toHaveBeenCalled();
   });
   test('does not start extraction when there is no time left for analysis', async () => {
     const ctx = context();
@@ -72,20 +81,20 @@ describe('agent frame tool', () => {
     expect(trace.output?.frames).toEqual(previews);
     expect(JSON.stringify(trace)).not.toContain('/9j/');
   });
-  test('preserves successful visual analysis when preview storage fails', async () => {
+  test('preserves retrieval when preview storage fails', async () => {
     const ctx = context();
     ctx.saveFramePreviews = async () => { throw new Error('private storage failure'); };
     const result = await executeGetVideoFrames(input, ctx, 'unsaved-call');
-    expect(result.excerpts[0]!.text).toContain('42');
+    expect(result.excerpts).toEqual([]);
     expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'FRAME_PREVIEW_UNAVAILABLE' }));
     expect(JSON.stringify(result)).not.toContain('private storage failure');
     expect(result.usage[0]!.credits).toBe(2);
   });
   test('delivers JPEGs to vision and returns timestamped evidence without image bytes', async () => {
-    const result = await executeGetVideoFrames(input, context(), 'call-1');
+    const result = await retrieveAndAnalyze(context(), 'call-1');
     expect(result.excerpts[0]).toMatchObject({ startMs: 1234, endMs: 1234, text: expect.stringContaining('42') });
     expect(JSON.stringify(result)).not.toContain('/9j/');
-    expect(result.usage).toEqual([{ operation: 'frames', credits: 2, cacheStatus: 'miss' }]);
+    expect(result.usage).toEqual([]);
     expect(evidencePacketForModel(result).frameCoverage).toMatchObject({
       requestedTimestampsMs: [1234], frames: [{ timestampMs: 1234, width: 1920, height: 1080 }], failures: [],
     });
@@ -93,7 +102,7 @@ describe('agent frame tool', () => {
   test('rejects invented visual timestamps', async () => {
     const ctx = context();
     ctx.analyzeFrames = async () => ({ findings: [{ observation: 'Fake', timestampsMs: [5000] }], warnings: [] });
-    await expect(executeGetVideoFrames(input, ctx, 'call')).rejects.toThrow('unavailable frame');
+    await expect(retrieveAndAnalyze(ctx, 'call')).rejects.toThrow('unavailable frame');
   });
   test('enforces pinned-video and disabled-visual capabilities', async () => {
     const ctx = context();
