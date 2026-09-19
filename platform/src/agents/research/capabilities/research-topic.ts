@@ -11,9 +11,12 @@ export const RESEARCH_TOPIC_TOOL_NAMES = [
   'search_youtube',
   'browse_youtube',
   'get_video',
+  'get_video_transcript',
   'analyze_video_transcripts',
   'get_video_storyboard',
   'get_video_frames',
+  'analyze_video_frames',
+  'analyze_video_storyboard',
   'get_video_comments',
   'get_channel',
   'get_channel_videos',
@@ -31,12 +34,12 @@ Work in a dynamic evidence loop:
 1. Use the supplied initial search evidence to select videos immediately. If no initial search was supplied, use one focused YouTube search, then select evidence. Only one search_youtube call is allowed per run, even if it fails; the tool is removed after use. Avoid repeated planning and discovery when useful candidates are available.
 2. Use search_youtube for topic discovery. Use browse_youtube only for category feeds.
 3. Inspect candidate metadata, channels, channel catalogs, and playlists only when they materially narrow the evidence.
-4. Select the target number of distinct videos likely to contain material evidence, preferring different creators and substantive relevance over search rank. Call analyze_video_transcripts ONCE with all selected videoIds and a focused evidence question. Do not split the selection into separate batches; the application schedules the independent analyses together. The application limits active analysts to the research target, at most four. Each tool analyzes the complete transcript in one isolated model call and returns bounded, exact transcript evidence.
+4. Select the target number of distinct videos likely to contain material evidence, preferring different creators and substantive relevance over search rank. Use transcript versions from session inventory when suitable. Call get_video_transcript for missing or explicitly refreshed videos, with independent retrievals in parallel. Then call analyze_video_transcripts ONCE with all selected saved assetVersions and a focused evidence question. Retrieval never invokes an analyst; analysis never fetches a transcript. Do not split the selection into separate batches; the application schedules the independent analyses together. The application limits active analysts to the research target, at most four. Each tool analyzes the complete transcript in one isolated model call and returns bounded, exact transcript evidence.
 5. Use get_video_comments only when audience response is relevant to the question.
 6. Compare evidence, identify gaps or conflicts, and finalize from available evidence. Do not keep searching after repeated provider network failures.
 7. After the target number of unique transcript-analysis requests, or earlier when candidates are unsuitable or the time budget requires it, call finalize_answer. Repeating an identical request reuses its durable result and does not consume another analysis slot.
 
-When available, use get_video_storyboard only when visible slides, interfaces, charts, or demonstrations would help answer the question. It returns sampled visual observations, not a complete video analysis. First call with videoId only to read storyboard metadata without images. Use the available sheet count, frame dimensions, sampling interval, and timestamp mapping to choose the coverage needed. Then pass a focus plus maxSheets for a spread overview, sheetIndexes for selected source sheets, or timestampsMs for relevant moments. You choose the sheet count, up to 20 sheets and 8 MiB per call within the shared research budget. Metadata alone does not establish what is visible. Use a targeted follow-up at other timestamps when needed within the research budget; do not repeat the same selection. These are sampled previews and cannot resolve unreadable text. The classifier controls whether visual tools are available for the request. Use get_video_frames to inspect up to six selected timestamps when a storyboard cannot resolve small text, code, chart values, or a brief visual state. Timestamps are milliseconds. Prefer a small relevant selection and retain quality or missing-frame warnings.
+Visual retrieval and analysis are separate operations. First use existing analysis from session evidence when it answers the question. For a new visual question about saved images, call analyze_video_frames or analyze_video_storyboard directly with their assetVersions and a focus. These tools read saved images only and never call YouTube. If an asset is missing or the user explicitly requests a fresh fetch, retrieve it first. get_video_frames accepts up to six timestamps in milliseconds and returns saved frame versions, previews and warnings, without analysis. get_video_storyboard with videoId alone returns metadata; use the manifest to select maxSheets, sheetIndexes or timestampsMs, then analyze only its analysisAssetVersions (sheet versions, not the manifest). Retrieve at most 20 sheets and 8 MiB per selection. Retrieval results contain no visual observations and are not proof of what an image shows. Keep quality and missing-image warnings. The classifier controls whether visual tools are available.
 
 ${RESEARCH_ANSWER_GUIDANCE}
 

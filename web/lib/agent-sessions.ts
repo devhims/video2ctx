@@ -34,7 +34,7 @@ export const agentProgressSchema = z.object({
   tools: z.array(z.object({
     toolCallId: z.string(), name: z.string(), operation: z.string(),
     status: z.enum(['running', 'completed', 'failed']), startedAt: z.number(), finishedAt: z.number().optional(),
-    input: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])),
+    input: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number()), z.array(z.string().max(64))])),
     output: z.object({ sourceCount: z.number(), excerptCount: z.number(),
       sources: z.array(z.object({ title: z.string().optional(), videoId: z.string().optional(), channelId: z.string().optional() })),
       warningCodes: z.array(z.string()),

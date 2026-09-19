@@ -1,3 +1,5 @@
+import { createAnalyzeVideoFramesTool } from './tools/analyze-video-frames';
+import { createAnalyzeVideoStoryboardTool } from './tools/analyze-video-storyboard';
 import { createGetVideoFramesTool } from './tools/get-video-frames';
 import { createAnalyzeVideoTranscriptsTool } from './tools/analyze-video-transcripts';
 import { createGetVideoStoryboardTool } from './tools/get-video-storyboard';
@@ -42,6 +44,8 @@ export function createCapabilityToolSet(
     selected[name] = name === 'finalize_answer'
       ? createFinalizeAnswerTool(context)
       : name === 'analyze_video_transcripts' ? createAnalyzeVideoTranscriptsTool(context)
+      : name === 'analyze_video_frames' ? createAnalyzeVideoFramesTool(context)
+      : name === 'analyze_video_storyboard' ? createAnalyzeVideoStoryboardTool(context)
       : providerToolFactories[name](context);
   }
   return selected;

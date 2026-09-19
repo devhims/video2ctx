@@ -36,18 +36,21 @@ sequenceDiagram
     Worker->>Storyboard: Fetch sampled sheets
     Storyboard->>YouTube: Storyboard requests
     Storyboard-->>Worker: Sampled images and mapping
-    Worker-->>Agent: Manifest or visual observations
-    Agent->>Worker: get_video_frames(videoId, timestampsMs, focus)
+    Worker-->>Agent: Manifest or saved sheet versions
+    Agent->>Worker: get_video_frames(videoId, timestampsMs)
     Worker->>Frames: Validated extraction request
     Frames->>YouTube: Resolve formats and read byte ranges
     Frames->>Frames: FFmpeg seeks and writes JPEGs
     Frames-->>Worker: Images, dimensions, failures, warnings
     Frames->>Frames: Remove temporary files
-    Worker->>Worker: Vision analysis and citation validation
+    Worker->>Worker: Save raw frames and previews
+    Worker-->>Agent: Saved frame versions and coverage
+    Agent->>Worker: analyze_video_frames(assetVersions, focus)
+    Worker->>Worker: Read saved frames, analyze and validate citations
     Worker-->>Agent: Timestamped visual evidence
 ```
 
-Frame extraction is available only through `get_video_frames` inside the existing agent API. There is no public data API frame endpoint. The private container's `/frames` route is reached through its Worker binding. The built-in agent tool passes JPEGs to an isolated visual analyst, then returns observations with timestamped citations. It persists the evidence and compact image metadata. After successful analysis, it saves the original JPEG bytes in R2 storage for dashboard previews. Media URLs and container paths are not persisted. The existing visual classifier, pinned-video checks, analyst concurrency limit, model budget, and research deadline apply.
+Frame extraction is available only through `get_video_frames` inside the existing agent API. There is no public data API frame endpoint. The private container's `/frames` route is reached through its Worker binding. The retrieval tool saves raw JPEGs and compact image metadata in session storage, plus dashboard previews. The separate `analyze_video_frames` tool reads selected saved versions, passes their JPEGs to an isolated visual analyst, then persists observations with timestamped citations. Analysis never invokes the container or YouTube. Media URLs and container paths are not persisted. The existing visual classifier, pinned-video checks, analyst concurrency limit, model budget, and research deadline apply.
 
 ## Agent tool and private container contract
 
@@ -57,16 +60,15 @@ During a request to `POST /v1/agent`, the agent can call `get_video_frames` with
 {
   "videoId": "dQw4w9WgXcQ",
   "timestampsMs": [30000, 68000],
-  "maxWidth": 1920,
-  "focus": "Read the on-screen text at these moments."
+  "maxWidth": 1920
 }
 ```
 
-The selection contains 1 to 6 nonnegative integer millisecond timestamps. Duplicates are removed and timestamps are sorted. Each timestamp must be strictly before the known video duration. `maxWidth` defaults to 1920 and accepts 320 to 1920. The tool passes `focus` to the visual analyst and sends only the video ID, timestamps, and maximum width to the container. The caller cannot supply media URLs, local paths, proxy configuration, or executable names.
+The selection contains 1 to 6 nonnegative integer millisecond timestamps. Duplicates are removed and timestamps are sorted. Each timestamp must be strictly before the known video duration. `maxWidth` defaults to 1920 and accepts 320 to 1920. The retrieval tool sends only the video ID, timestamps, and maximum width to the container. A later `analyze_video_frames` call takes the returned `assetVersions` and a `focus`, such as “Read the on-screen text at these moments.” The caller cannot supply media URLs, local paths, proxy configuration, or executable names.
 
-Successful private container responses contain `videoId`, `frames`, `failures`, and `meta`. Each frame contains `timestampMs`, `mimeType`, `width`, `height`, optional source dimensions, and `imageBase64`. The response accounts for every unique requested timestamp exactly once, either as a JPEG or an explicit failure. The Worker checks this mapping before running vision. The agent receives visual findings and image metadata, with no JPEG bytes in its evidence packet.
+Successful private container responses contain `videoId`, `frames`, `failures`, and `meta`. Each frame contains `timestampMs`, `mimeType`, `width`, `height`, optional source dimensions, and `imageBase64`. The response accounts for every unique requested timestamp exactly once, either as a JPEG or an explicit failure. The Worker checks this mapping before running vision. Retrieval returns saved asset versions, image metadata and previews. Analysis returns visual findings; neither tool returns JPEG bytes to the main model.
 
-The agreed price is 2 credits per successful batch of 1 to 6 frames, including visual analysis and partial results, through the existing agent usage and reservation lifecycle. Failed extraction or analysis does not charge for that tool call. An identical request reused within the same agent run incurs no additional charge. Other successful tools in the run retain their own charges. Viewing a saved preview does not charge credits or repeat extraction.
+The price remains 2 credits per successful retrieval batch of 1 to 6 frames, including partial results, through the existing agent usage and reservation lifecycle. Analysis has no additional provider charge. Failed extraction is not charged; a failed later analysis does not undo the completed retrieval charge because its raw assets remain saved and reusable. An identical request reused within the same agent run incurs no additional charge. Other successful tools in the run retain their own charges. Viewing a saved preview does not charge credits or repeat extraction.
 
 ## Resource bounds and deployment
 
@@ -136,9 +138,9 @@ Cloudflare references: [Container class](https://developers.cloudflare.com/conta
 
 ## Dashboard frame and storyboard previews
 
-New frame calls save the exact JPEGs sent to the visual analyst after analysis succeeds. The expanded dashboard tool trace shows a thumbnail grid with timestamps and dimensions, plus an enlarged viewer. The trace contains only preview descriptors, never base64 image data. Historical calls without saved images explain that previews were not saved.
+New frame retrieval calls save the exact JPEGs before any analysis, so previews remain available even if later analysis fails. The expanded dashboard tool trace shows a thumbnail grid with timestamps and dimensions, plus an enlarged viewer. The trace contains only preview descriptors, never base64 image data. Historical calls without saved images explain that previews were not saved.
 
-Storyboard inspection calls also save the exact analyzed sheet JPEGs, up to 20 sheets and 8 MiB per call. The trace exposes `storyboard.mode` and `storyboard.sheets`, including each sheet's first and last sampled timestamps, grid dimensions, sample count, and interval. The shared viewer shows the selected sheets and their sampled ranges. A call with no sheet or timestamp selector retrieves metadata only, skips analysis and preview storage, and displays as "Storyboard metadata" with an explicit explanation. Saved descriptors are excluded from model evidence projections. Preview storage failures preserve visual findings and add `STORYBOARD_PREVIEW_UNAVAILABLE`. Existing sessions can show the metadata label, but past inspection calls without saved images cannot gain previews retroactively.
+Storyboard retrieval calls also save the sheet JPEGs before analysis, up to 20 sheets and 8 MiB per call. The trace exposes `storyboard.mode` and `storyboard.sheets`, including each sheet's first and last sampled timestamps, grid dimensions, sample count, and interval. The shared viewer shows the selected sheets and their sampled ranges. A call with no sheet or timestamp selector retrieves metadata only, skips analysis and preview storage, and displays as "Storyboard metadata" with an explicit explanation. Saved descriptors are excluded from model evidence projections. Preview storage failures preserve visual findings and add `STORYBOARD_PREVIEW_UNAVAILABLE`. Existing sessions can show the metadata label, but past inspection calls without saved images cannot gain previews retroactively.
 
 Objects live under `agent-frames/{collectionId}/{assetId}.jpg` in the existing RESEARCH bucket. Collection IDs are derived from the account ID; each asset ID has 256 random bits. URLs contain no session IDs, run IDs, prompts, or raw account IDs. Images remain available until account deletion. The deletion flow drains active agent work before deleting both private research data and the account’s frame collection. Failed or cancelled uploads roll back their batch; storage failures leave successful visual evidence usable with a `FRAME_PREVIEW_UNAVAILABLE` warning.
 

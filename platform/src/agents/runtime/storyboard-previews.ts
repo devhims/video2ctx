@@ -21,7 +21,7 @@ export const storyboardTraceSchema = z.object({
 });
 
 export function packetStoryboardPreviews(packet: EvidencePacket): z.infer<typeof storyboardTraceSchema> {
-  const data = packet.artifacts.find(artifact => artifact.type === 'youtube_storyboard_analysis')?.data;
+  const data = packet.artifacts.find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type))?.data;
   const selection = z.object({ mode: z.string() }).safeParse(data?.selection);
   const mode = selection.success && selection.data.mode === 'metadata' ? 'metadata' : 'inspection';
   const previews = storyboardPreviewsSchema.safeParse(data?.previews);

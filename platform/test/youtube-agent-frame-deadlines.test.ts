@@ -1,3 +1,4 @@
+import { attachTestAssetStore } from './fixtures/analysis-session';
 import { MockLanguageModelV4 } from 'ai/test';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
@@ -34,20 +35,20 @@ function setup(delayMs: number) {
     finalize: vi.fn(async (_id, input) => ({ ...input, runId: 'frame-deadline-run', conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), billing: { creditsCharged: 0, creditsRemaining: 100 } })),
   };
+  attachTestAssetStore(context);
   let step = 0;
   const model = new MockLanguageModelV4({ doGenerate: async () => ({
-    content: [{ type: 'tool-call', toolCallId: step ? 'done' : 'frames', toolName: step++ ? 'finalize_answer' : 'get_video_frames',
-      input: step === 1 ? JSON.stringify({ videoId, timestampsMs: [28000], focus: 'Read names printed on shirts.' }) : JSON.stringify({
-        intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
-        blocks: [{ text: 'The shirt reads SMRITI.', evidenceIds: [`frames:${videoId}:frames:0:28000`] }],
-      }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
+    content: [{ type: 'tool-call', toolCallId: `step-${step}`, toolName: ['get_video_frames','analyze_video_frames','finalize_answer'][Math.min(step,2)]!,
+      input: step++ === 0 ? JSON.stringify({videoId,timestampsMs:[28000]}) : step === 2
+        ? JSON.stringify({assetVersions:['1'.padStart(64,'0')],focus:'Read names printed on shirts.'})
+        : JSON.stringify({intent:'inspect_video',confidence:'medium',artifacts:[],warnings:[],blocks:[{text:'The shirt reads SMRITI.',evidenceIds:['ref_1']}]}) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
   }) });
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({
     confidence: 'low', warnings: [], blocks: [{ text: 'The available evidence is limited.', evidenceIds: ['ref_1'] }],
   }) }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
   const options = { model, finalizationModel: finalizer, context, message: 'Look at frames to confirm player names.',
     decision: { route: 'inspect_video' as const, videoId, useStoryboard: true },
-    toolNames: ['get_video_frames', 'finalize_answer'] as const };
+    toolNames: ['get_video_frames', 'analyze_video_frames', 'finalize_answer'] as const };
   return { options, context, analyzed, finalizer };
 }
 
@@ -60,7 +61,7 @@ test('allows a frame retrieval within the service limit to finish before visual 
   await run;
   expect(analyzed).toHaveBeenCalledOnce();
   expect(context.finalize).toHaveBeenCalledOnce();
-  expect(JSON.stringify(finalizer.doGenerateCalls[0]?.prompt)).toContain('The shirt reads SMRITI.');
+  expect(JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt)).toContain('The shirt reads SMRITI.');
 });
 
 test('reports an interrupted frame call to the finalizer before cancellation acknowledgement', async () => {
@@ -71,7 +72,7 @@ test('reports an interrupted frame call to the finalizer before cancellation ack
   await vi.advanceTimersByTimeAsync(40_000);
   expect(context.provider.frames).toHaveBeenCalledOnce();
   await run;
-  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]?.prompt);
+  const prompt = JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt);
   expect(prompt).toContain('get_video_frames');
   expect(prompt).toContain('Research phase timeout');
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:

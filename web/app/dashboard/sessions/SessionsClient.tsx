@@ -343,7 +343,7 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
       }}>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
-        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name === 'get_video_frames' && tool.output?.sessionReused ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
+        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>
         {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}

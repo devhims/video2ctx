@@ -4,7 +4,7 @@ import { compactAgentRunSchema } from '../response';
 import { framePreviewSchema, packetFramePreviews } from './frame-previews';
 import { packetStoryboardPreviews, storyboardTraceSchema } from './storyboard-previews';
 
-const inputValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.number())]);
+const inputValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.number()), z.array(z.string().max(64))]);
 export const agentToolTraceSchema = z.object({
   toolCallId: z.string(), name: z.string(), operation: z.string(),
   status: z.enum(['running', 'completed', 'failed']),
@@ -29,7 +29,7 @@ export const agentRunProgressSchema = z.object({
 // context, continuation token, provider response, raw diagnostic, or model reasoning.
 const inputKeys = new Set(['query', 'videoId', 'channelId', 'playlistId', 'language', 'focus',
   'maxSheets', 'sheetIndexes', 'timestampsMs', 'type', 'sort', 'limit', 'dateFrom', 'dateTo',
-  'duration', 'captionsOnly', 'live', 'minViews', 'region', 'category']);
+  'duration', 'captionsOnly', 'live', 'minViews', 'region', 'category', 'assetVersion', 'assetVersions']);
 
 export function toolTrace(row: {
   tool_call_id: string; tool_name: string; operation: string; semantic_key: string;
@@ -54,7 +54,7 @@ export function toolTrace(row: {
       sourceCount: packet.data.sources.length, excerptCount: packet.data.excerpts.length,
       sources: packet.data.sources.map(({ title, videoId, channelId }) => ({ title, videoId, channelId })),
       warningCodes: [...new Set(packet.data.warnings.map(warning => warning.code))],
-      ...(packet.data.kind === 'youtube_frames' ? { frames: packetFramePreviews(packet.data), sessionReused: packet.data.artifacts.find(artifact => artifact.type === 'youtube_frame_analysis')?.data.sessionReused === true } : {}),
+      ...(packet.data.kind === 'youtube_frames' ? { frames: packetFramePreviews(packet.data), sessionReused: packet.data.artifacts.find(artifact => ['youtube_frame_analysis', 'youtube_frame_retrieval'].includes(artifact.type))?.data.sessionReused === true } : {}),
       ...(packet.data.kind === 'youtube_storyboard' ? { storyboard: packetStoryboardPreviews(packet.data) } : {}),
     } } : {}),
   });

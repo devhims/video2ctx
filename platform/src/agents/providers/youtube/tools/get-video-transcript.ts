@@ -1,32 +1,12 @@
-import { type TranscriptSourceContext, TranscriptGroundingError } from '../../../runtime/transcript-grounding';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { dataOperationCost } from '../../../../lib/metering';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
-import {
-  evidencePacketForModel,
-  modelEvidencePacketSchema,
-  type ModelEvidencePacket,
-} from '../../../runtime/model-evidence';
 import type { AgentToolContext } from '../tool-context';
-import { TranscriptAnalysisInvalidReferenceError } from '../transcript-analyst';
 
-type TranscriptToolErrorCode =
-  | 'TRANSCRIPT_FETCH_FAILED'
-  | 'TRANSCRIPT_ANALYSIS_TIMEOUT'
-  | 'TRANSCRIPT_ANALYSIS_INVALID_REFERENCE'
-  | 'TRANSCRIPT_ANALYSIS_UNGROUNDED'
-  | 'TRANSCRIPT_ANALYSIS_FAILED';
-
-export class TranscriptToolStageError extends Error {
-  override readonly name = 'TranscriptToolStageError';
-
-  constructor(readonly code: TranscriptToolErrorCode, cause: unknown) {
-    super(`${code}: ${errorMessage(cause)}`, { cause });
-  }
-}
+import { TranscriptToolStageError } from './transcript-tool-errors';
 
 export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -37,62 +17,18 @@ export const getVideoTranscriptInputSchema = z.object({
 export type GetVideoTranscriptInput = z.infer<typeof getVideoTranscriptInputSchema>;
 
 export function createGetVideoTranscriptTool(context: AgentToolContext) {
-  const description = context.transcriptPolicy.mode === 'contextual_analysis'
-    ? [
-      'Analyze the complete available transcript of one selected YouTube video in an isolated model context.',
-      'Retrieval reuses complete session evidence when available; a cache miss performs one transcript provider operation and returns bounded, timestamped evidence selected by the transcript analyst.',
-      'Provide a focused evidence question relevant to the research task.',
-    ]
-    : [
-      'Read the complete available transcript of the supplied YouTube video.',
-      'Retrieval reuses complete session evidence when available; a cache miss performs one transcript provider operation and returns every timed segment supplied by the provider directly as evidence.',
-      'This capability does not invoke a transcript analyst or discard segments based on relevance.',
-    ];
-  if (context.transcriptPolicy.mode === 'contextual_analysis') {
-    return tool({
-      description: description.join(' '),
-      inputSchema: getVideoTranscriptInputSchema,
-      outputSchema: modelEvidencePacketSchema,
-      execute: (input, { toolCallId }) =>
-        executeGetVideoTranscriptForModel(input, context, toolCallId),
-    });
-  }
   return tool({
-    description: description.join(' '),
+    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns all timed captions for you to read. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
     inputSchema: getVideoTranscriptInputSchema.omit({ focus: true }),
-    outputSchema: evidencePacketSchema,
-    execute: (input, { toolCallId }) => executeGetVideoTranscript(input, context, toolCallId),
+    execute: (input, { toolCallId }) => executeGetVideoTranscriptForModel(input, context, toolCallId),
   });
 }
 
-export async function executeGetVideoTranscriptForModel(
-  input: GetVideoTranscriptInput,
-  context: AgentToolContext,
-  toolCallId: string,
-): Promise<EvidencePacket | ModelEvidencePacket> {
-  if (context.transcriptPolicy.mode !== 'contextual_analysis') {
-    return executeGetVideoTranscript(input, context, toolCallId);
-  }
-  const parsed = getVideoTranscriptInputSchema.parse(input);
-  const semanticKey = transcriptSemanticKey(parsed);
-  const budget = context.transcriptPolicy.budget;
-  if (budget && !budget.tryReserve(semanticKey)) {
-    return modelEvidencePacketSchema.parse({
-      packetId: `control:${context.runId}:transcript-analysis-budget`,
-      kind: 'youtube_transcript',
-      sources: [],
-      warnings: [{
-        code: 'TRANSCRIPT_ANALYSIS_BUDGET_REACHED',
-        message: 'The transcript analysis budget for this research breadth is complete. Finalize with the available evidence.',
-      }],
-    });
-  }
-  try {
-    return evidencePacketForModel(await executeGetVideoTranscript(parsed, context, toolCallId));
-  } catch (error) {
-    budget?.release(semanticKey);
-    throw error;
-  }
+export async function executeGetVideoTranscriptForModel(input: GetVideoTranscriptInput, context: AgentToolContext, toolCallId: string) {
+  const packet = await executeGetVideoTranscript(input, context, toolCallId);
+  if (context.transcriptPolicy.mode === 'complete_transcript' || !packet.assetVersions?.length) return packet;
+  // The main research model receives handles, not every selected video's raw captions.
+  return { ...packet, excerpts: [] };
 }
 
 export function executeGetVideoTranscript(
@@ -101,9 +37,7 @@ export function executeGetVideoTranscript(
   toolCallId: string,
 ): Promise<EvidencePacket> {
   const parsed = getVideoTranscriptInputSchema.parse(input);
-  const semanticKey = context.transcriptPolicy.mode === 'complete_transcript'
-    ? `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language })}`
-    : transcriptSemanticKey(parsed);
+  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language })}`;
 
   return context.executeEvidenceTool({
     toolCallId,
@@ -121,9 +55,7 @@ export function executeGetVideoTranscript(
       }
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:transcript`;
-      const evidence = context.transcriptPolicy.mode === 'contextual_analysis'
-        ? await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_analysis' }, context.signal, () => analystEvidence(parsed, context, response.value.segments, sourceId, toolCallId, semanticKey, { language: response.value.track.languageCode, provenance: response.value.track.provenance, ...(response.value.translatedTo ? { translatedTo: response.value.translatedTo.languageCode } : {}) }))
-        : completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
+      const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       context.signal.throwIfAborted();
 
       return evidencePacketSchema.parse({
@@ -141,6 +73,7 @@ export function executeGetVideoTranscript(
           type: evidence.artifactType,
           title: evidence.artifactTitle,
           data: {
+            requiresAnalysis: context.transcriptPolicy.mode === 'contextual_analysis' && !!response.assetVersions?.length,
             videoId: parsed.videoId,
             track: response.value.track,
             translatedTo: response.value.translatedTo,
@@ -166,66 +99,6 @@ export function executeGetVideoTranscript(
       });
     },
   });
-}
-
-async function analystEvidence(
-  input: GetVideoTranscriptInput,
-  context: AgentToolContext,
-  segments: TranscriptSegment[],
-  sourceId: string,
-  toolCallId: string,
-  analysisKey: string,
-  sourceContext: TranscriptSourceContext,
-) {
-  if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Transcript analyst is unavailable.');
-  if (!input.focus) throw new Error('A focused evidence question is required for contextual transcript analysis.');
-  let analysis;
-  try {
-    analysis = await context.transcriptPolicy.analyze({
-      videoId: input.videoId,
-      sourceContext,
-      researchQuestion: context.transcriptPolicy.researchQuestion,
-      focus: input.focus,
-      segments,
-      signal: context.signal,
-      modelCallId: toolCallId,
-    });
-  } catch (error) {
-    if (context.signal.aborted) throw error;
-    if (error instanceof TranscriptAnalysisInvalidReferenceError) {
-      throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_INVALID_REFERENCE', error);
-    }
-    if (error instanceof TranscriptGroundingError) throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_UNGROUNDED', error);
-    if (isTimeoutError(error)) {
-      throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_TIMEOUT', error);
-    }
-    throw new TranscriptToolStageError('TRANSCRIPT_ANALYSIS_FAILED', error);
-  }
-  return {
-    excerpts: analysis.excerpts.map((excerpt) => ({
-      id: excerpt.id,
-      sourceId,
-      text: excerpt.text,
-      startMs: excerpt.startMs,
-      endMs: excerpt.endMs,
-    })),
-    artifactType: 'youtube_transcript_analysis',
-    artifactTitle: `Complete transcript analysis for ${input.videoId}`,
-    artifactData: {
-      groundingVersion: analysis.groundingVersion,
-      sourceContext: analysis.sourceContext ?? sourceContext,
-      summary: analysis.summary,
-      findings: analysis.findings,
-      coverage: analysis.coverage,
-      selectedExcerptCount: analysis.excerpts.length,
-      analysisKey,
-    },
-    warnings: analysis.warnings.map((message) => ({ code: 'TRANSCRIPT_ANALYST_WARNING', message })),
-  };
-}
-
-function transcriptSemanticKey(input: GetVideoTranscriptInput): string {
-  return `transcript:${JSON.stringify(input)}`;
 }
 
 export function completeTranscriptEvidence(
@@ -271,14 +144,4 @@ function chunkText(value: string, maximum: number): string[] {
 
 function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
-}
-
-function isTimeoutError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return error.name === 'TimeoutError'
-    || /(?:timed?\s*out|timeout|aborted due to timeout)/iu.test(error.message);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

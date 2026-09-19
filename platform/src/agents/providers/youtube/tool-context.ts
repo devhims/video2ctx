@@ -5,7 +5,7 @@ import type { SaveStoryboardPreviews } from '../../runtime/storyboard-previews';
 import type { VisualAnalyst } from './visual-analyst';
 import type { AgentTurnResult, EvidenceOperation, EvidencePacket, FinalizeAnswerInput } from '../../contracts';
 import type { YouTubeAgentProvider } from './provider';
-import type { YouTubeProviderToolName } from './tool-names';
+import type { YouTubeEvidenceToolName } from './tool-names';
 import type { TranscriptAnalyst } from './transcript-analyst';
 
 export interface TranscriptAnalysisBudget {
@@ -16,13 +16,15 @@ export interface TranscriptAnalysisBudget {
 
 export interface EvidenceToolExecution {
   toolCallId: string;
-  toolName: YouTubeProviderToolName;
+  toolName: YouTubeEvidenceToolName;
   semanticKey: string;
   operation: EvidenceOperation;
   execute: () => Promise<EvidencePacket>;
 }
 
 export interface AgentToolContext {
+  pinnedVideoId?: string;
+  refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;

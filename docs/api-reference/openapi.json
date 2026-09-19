@@ -8050,6 +8050,13 @@
                         "items": {
                           "type": "number"
                         }
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 64
+                        }
                       }
                     ]
                   }

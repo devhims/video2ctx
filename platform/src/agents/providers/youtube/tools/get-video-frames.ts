@@ -8,13 +8,13 @@ import type { AgentToolContext } from '../tool-context';
 import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence';
 
 export const getVideoFramesInputSchema = frameRequestSchema.extend({
-  focus: z.string().trim().min(1).max(1000).describe('The visual question to answer using these specific frames.'),
+  focus: z.string().trim().min(1).max(1000).optional(),
 });
 
 export function createGetVideoFramesTool(context: AgentToolContext) {
   return tool({
-    description: 'Inspect up to six individual video frames, reusing saved session images before extracting missing frames at requested millisecond timestamps. Use get_video_storyboard first to locate relevant moments, then this tool for small text, charts, code, or an ambiguous sampled image. You may request a frame directly when its timestamp is already known. Default maxWidth is 1920 without upscaling; source quality is best effort and reported. Timestamps must be strictly before the video duration. Returns focused visual observations with timestamped evidence, plus unavailable-frame and quality warnings. Still images cannot establish motion or speech.',
-    inputSchema: getVideoFramesInputSchema,
+    description: 'Retrieve or reuse up to six video frames at millisecond timestamps. This performs no visual analysis. Returns saved assetVersions, dimensions, previews and failures, without image bytes. Use analyze_video_frames with those versions and a question. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
+    inputSchema: getVideoFramesInputSchema.omit({ focus: true }),
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideoFrames(input, context, toolCallId),
   });
@@ -26,10 +26,10 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
   return context.executeEvidenceTool({
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
-    semanticKey: `frames:${JSON.stringify({ ...request, focus: parsed.focus })}`,
+    semanticKey: `frames:${JSON.stringify(request)}`,
     execute: async () => {
       context.signal.throwIfAborted();
-      if (!context.provider.frames || !context.analyzeFrames) throw new Error('Frame analysis is unavailable.');
+      if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
       const extractionTimeoutMs = frameExtractionBudget(context.researchDeadlineAt);
       if (extractionTimeoutMs < FRAME_EXTRACTION_MIN_MS) {
         throw new Error('Insufficient time for frame extraction and analysis. Finalize using the available evidence.');
@@ -39,30 +39,21 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
       context.signal.throwIfAborted();
       const frames = validateFrameResponse(request, response.value);
-      const extractedAt = Date.now();
-      const analysis = await context.analyzeFrames({ frames, focus: parsed.focus, researchQuestion: context.researchQuestion, signal: context.signal,
-        modelCallId: `frame-analyst:${context.runId}:${toolCallId}` });
       console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
-        extractionMs: extractedAt - startedAt, analysisMs: Date.now() - extractedAt,
-        extractionTimeoutMs, sessionReused: response.sessionReused === true, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
-      context.signal.throwIfAborted();
+        extractionMs: Date.now() - startedAt, extractionTimeoutMs,
+        sessionReused: response.sessionReused === true, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
       const sourceId = `youtube:${parsed.videoId}:frames`;
       const packet = evidencePacketSchema.parse({
         packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_frames',
         sources: [{ id: sourceId, provider: 'youtube', kind: 'frames', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
-        excerpts: analysis.findings.flatMap((finding, index) => [...new Set(finding.timestampsMs)].map(time => {
-          if (!frames.frames.some(frame => frame.timestampMs === time)) throw new Error('Analyst cited an unavailable frame.');
-          return { id: `frames:${parsed.videoId}:${safeIdPart(toolCallId)}:${index}:${time}`, sourceId,
-            text: `Visual observation at requested frame: ${finding.observation}`, startMs: time, endMs: time };
-        })),
-        artifacts: [{ type: 'youtube_frame_analysis', title: `Selected frames for ${parsed.videoId}`,
-          data: { sessionReused: response.sessionReused === true, videoId: parsed.videoId, focus: parsed.focus, requestedTimestampsMs: request.timestampsMs,
+        excerpts: [],
+        artifacts: [{ type: 'youtube_frame_retrieval', title: `Selected frames for ${parsed.videoId}`,
+          data: { sessionReused: response.sessionReused === true, videoId: parsed.videoId, requestedTimestampsMs: request.timestampsMs,
             frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping), failures: frames.failures } }],
         warnings: [
           { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only. Timestamps identify requested seek positions.' },
           ...frames.meta.warnings.map(message => ({ code: 'FRAME_EXTRACTION_WARNING', message })),
           ...frames.failures.map(failure => ({ code: 'FRAME_UNAVAILABLE', message: `Frame at ${failure.timestampMs}ms is unavailable (${failure.code}).` })),
-          ...analysis.warnings.map(message => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
         ],
         assetVersions: response.assetVersions,
         usage: [{ operation: 'frames', credits: response.sessionReused ? 0 : meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
@@ -76,7 +67,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         } catch {
           context.signal.throwIfAborted();
           packet.warnings.push({ code: 'FRAME_PREVIEW_UNAVAILABLE',
-            message: 'The frames were analyzed, but their image previews could not be saved.' });
+            message: 'The frames were retrieved, but their image previews could not be saved.' });
         }
       }
       context.signal.throwIfAborted();

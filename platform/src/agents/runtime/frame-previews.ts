@@ -27,7 +27,7 @@ export function framePreviewKey(collectionId: string, assetId: string) {
 
 export function packetFramePreviews(packet: EvidencePacket): FramePreview[] {
   if (packet.kind !== 'youtube_frames') return [];
-  const artifact = packet.artifacts.find(value => value.type === 'youtube_frame_analysis');
+  const artifact = packet.artifacts.find(value => ['youtube_frame_analysis', 'youtube_frame_retrieval'].includes(value.type));
   const parsed = z.array(framePreviewSchema).max(6).safeParse(artifact?.data?.previews);
   return parsed.success ? parsed.data : [];
 }

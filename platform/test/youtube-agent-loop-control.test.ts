@@ -1,3 +1,4 @@
+import { attachTestAssetStore } from './fixtures/analysis-session';
 import { analyzeVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { ApiError } from '../src/lib/http';
@@ -19,7 +20,7 @@ import { metadataForConversation } from '../src/agents/runtime/conversation-meta
 
 describe('YouTube AgentCore loop control', () => {
   it('reads one complete transcript directly in inspection and reuses it across rephrased calls', async () => {
-    const context = transcriptResearchContext();
+    const context = await transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst spy');
     const analyze = context.transcriptPolicy.analyze;
     const original = context.provider.transcript;
@@ -329,13 +330,13 @@ describe('YouTube AgentCore loop control', () => {
   it('handles a fresh all-transcript timeout without synthesizing discovery metadata', async () => {
     vi.useFakeTimers();
     try {
-      const context = transcriptResearchContext();
+      const context = await transcriptResearchContext();
       if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
       context.transcriptPolicy.analyze = async ({ signal }) => new Promise<never>((_, reject) =>
         signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
       const model = new MockLanguageModelV4({ doGenerate: async () => modelResult({
         toolCallId: 'batch-timeout', toolName: 'analyze_video_transcripts',
-        input: JSON.stringify({ videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Use cases' }),
+        input: JSON.stringify({ assetVersions: [1, 2, 3, 4].map(assetVersion), focus: 'Use cases' }),
       }) });
       const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Do not synthesize metadata'); } });
       const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Top use cases', context,
@@ -344,7 +345,7 @@ describe('YouTube AgentCore loop control', () => {
       });
       await vi.advanceTimersByTimeAsync(40_001);
       await expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      expect(finalizationModel.doGenerateCalls).toHaveLength(0);
+      expect(finalizationModel.doGenerateCalls.every(call => call.responseFormat?.type !== 'json')).toBe(true);
     } finally { vi.useRealTimers(); }
   });
 
@@ -715,6 +716,10 @@ describe('YouTube AgentCore loop control', () => {
             input: JSON.stringify({ videoId: 'abcdefghijk', focus: 'frontend skills' }),
           });
         }
+        if (generation === 2) {
+          expect(JSON.stringify(call.prompt)).not.toContain(persistedText);
+          return modelResult({toolCallId:'analyze',toolName:'analyze_video_transcripts',input:JSON.stringify({assetVersions:[assetVersion(1)],focus:'frontend skills'})});
+        }
         const prompt = JSON.stringify(call.prompt);
         expect(prompt).toContain(analysisSummary);
         expect(prompt).not.toContain(persistedText);
@@ -744,7 +749,7 @@ describe('YouTube AgentCore loop control', () => {
       message: 'Suggest frontend development skills.',
       decision: { route: 'topic_research' },
       context,
-      toolNames: ['get_video_transcript', FINALIZE_ANSWER_TOOL_NAME],
+      toolNames: ['get_video_transcript', 'analyze_video_transcripts', FINALIZE_ANSWER_TOOL_NAME],
     });
 
     expect(result.finishReason).toBe('timeout-finalized');
@@ -766,14 +771,15 @@ describe('YouTube AgentCore loop control', () => {
             { toolCallId: 'transcript-5', videoId: 'video000005' },
           ].map(({ toolCallId, videoId }) => ({
             toolCallId,
-            toolName: 'get_video_transcript',
+            toolName: 'analyze_video_transcripts',
             input: JSON.stringify({
-              videoId,
+              assetVersions: [assetVersion(Number(videoId.slice(-1)))],
               focus: 'frontend development skills',
             }),
           })));
         }
 
+        if (call.responseFormat?.type !== 'json') return { content: [{type:'text' as const,text:'Context is sufficient.'}],finishReason:{unified:'stop' as const,raw:'stop'},usage:modelResult({toolCallId:'unused',toolName:'unused',input:'{}'}).usage,warnings:[] };
         expect(call.responseFormat?.type).toBe('json');
         expect(call.tools).toBeUndefined();
         return finalizerModelResult({
@@ -786,20 +792,18 @@ describe('YouTube AgentCore loop control', () => {
           });
       },
     });
-    const context = transcriptResearchContext();
+    const context = await transcriptResearchContext();
 
     const result = await runResearchAgentWithModel({
       model: researchModel,
       message: 'Suggest the best frontend development skills.',
       decision: { route: 'topic_research', researchBreadth },
       context,
-      toolNames: ['get_video_transcript', FINALIZE_ANSWER_TOOL_NAME],
+      toolNames: ['analyze_video_transcripts', FINALIZE_ANSWER_TOOL_NAME],
     });
 
     expect(result.stepCount).toBe(2);
-    expect(context.provider.transcript).toHaveBeenCalledTimes(target);
-    expect(context.provider.transcript).toHaveBeenNthCalledWith(1, 'video000001', undefined);
-    expect(context.provider.transcript).toHaveBeenNthCalledWith(2, 'video000002', undefined);
+    expect(context.provider.transcript).not.toHaveBeenCalled();
     expect(context.transcriptPolicy.mode).toBe('contextual_analysis');
     if (context.transcriptPolicy.mode === 'contextual_analysis') {
       expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(target);
@@ -808,11 +812,11 @@ describe('YouTube AgentCore loop control', () => {
   });
 
   it('uses the classified video count for the actual analysis budget instead of comparative breadth', async () => {
-    const context = transcriptResearchContext();
+    const context = await transcriptResearchContext();
     let step = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => step++ === 0
       ? modelResult({ toolCallId: 'batch', toolName: 'analyze_video_transcripts', input: JSON.stringify({
-        videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Practical tasks',
+        assetVersions: [1, 2, 3, 4].map(assetVersion), focus: 'Practical tasks',
       }) })
       : modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
         blocks: [{ text: 'Supported comparison.', evidenceIds: ['transcript:video000001:window:0:0'] }],
@@ -821,25 +825,26 @@ describe('YouTube AgentCore loop control', () => {
     });
     await runResearchAgentWithModel({ model, message: 'Compare options',
       decision: { route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 3 }, context });
-    expect(context.provider.transcript).toHaveBeenCalledTimes(3);
+    expect(context.provider.transcript).not.toHaveBeenCalled();
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 3, reviewedVideos: 3 } })]),
     }));
   });
 
   it('collects independent batch results even when one selected transcript fails', async () => {
-    const context = transcriptResearchContext();
-    const original = context.provider.transcript;
-    context.provider.transcript = vi.fn(async (id, language) => {
-      if (id === 'video000004') throw new Error('Captions unavailable');
-      return original(id, language);
+    const context = await transcriptResearchContext();
+    if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+    const original = context.transcriptPolicy.analyze;
+    context.transcriptPolicy.analyze = vi.fn(async input => {
+      if (input.videoId === 'video000004') throw new Error('Analysis unavailable');
+      return original(input);
     });
     let step = 0;
     const model = new MockLanguageModelV4({ doGenerate: async call => {
       if (step++ === 0) return modelResult({ toolCallId: 'batch', toolName: 'analyze_video_transcripts',
-        input: JSON.stringify({ videoIds: ['video000001', 'video000002', 'video000003', 'video000004'], focus: 'Practical tasks' }),
+        input: JSON.stringify({ assetVersions: [1, 2, 3, 4].map(assetVersion), focus: 'Practical tasks' }),
       });
-      expect(JSON.stringify(call.prompt)).toContain('Captions unavailable');
+      expect(JSON.stringify(call.prompt)).toContain('Analysis unavailable');
       expect(JSON.stringify(call.prompt)).toContain('video000003');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
         blocks: [{ text: 'Supported use case.', evidenceIds: ['transcript:video000001:window:0:0'] }],
@@ -848,19 +853,19 @@ describe('YouTube AgentCore loop control', () => {
     } });
     await runResearchAgentWithModel({ model, message: 'Top use cases',
       decision: { route: 'topic_research', researchBreadth: 'comparative' }, context });
-    expect(context.provider.transcript).toHaveBeenCalledTimes(4);
+    expect(context.provider.transcript).not.toHaveBeenCalled();
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 4, reviewedVideos: 3 } })]),
     }));
   });
 
   it('rejects duplicate or oversized transcript batches before provider calls', () => {
-    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: ['video000001', 'video000001'], focus: 'Tasks' }).success).toBe(false);
-    expect(analyzeVideoTranscriptsInputSchema.safeParse({ videoIds: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `video00000${n}`), focus: 'Tasks' }).success).toBe(false);
+    expect(analyzeVideoTranscriptsInputSchema.safeParse({ assetVersions: [1, 1].map(assetVersion), focus: 'Tasks' }).success).toBe(false);
+    expect(analyzeVideoTranscriptsInputSchema.safeParse({ assetVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(assetVersion), focus: 'Tasks' }).success).toBe(false);
   });
 
   it.each([['focused', 2], ['comparative', 4]] as const)('bounds %s analysts to %i concurrent calls', async (researchBreadth, limit) => {
-    const context = transcriptResearchContext();
+    const context = await transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
     const original = context.transcriptPolicy.analyze;
     let active = 0;
@@ -877,8 +882,8 @@ describe('YouTube AgentCore loop control', () => {
     let step = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => {
       if (step++ === 0) return multiToolModelResult([1, 2, 3, 4].map(n => ({
-        toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
-        input: JSON.stringify({ videoId: `video00000${n}`, focus: 'Design skills' }),
+        toolCallId: `analysis-${n}`, toolName: 'analyze_video_transcripts',
+        input: JSON.stringify({ assetVersions: [assetVersion(n)], focus: 'Design skills' }),
       })));
       return finalizerModelResult({
         blocks: [{ text: 'Compared the sources.', evidenceIds: ['transcript:video000001:window:0:0'] }],
@@ -886,7 +891,7 @@ describe('YouTube AgentCore loop control', () => {
       });
     } });
     const run = runResearchAgentWithModel({ model, message: 'Compare design skills',
-      decision: { route: 'topic_research', researchBreadth }, toolNames: ['get_video_transcript', 'finalize_answer'], context });
+      decision: { route: 'topic_research', researchBreadth }, toolNames: ['analyze_video_transcripts', 'finalize_answer'], context });
     await vi.waitFor(() => expect(started).toBe(limit));
     expect(active).toBe(limit);
     releases.splice(0).forEach(release => release());
@@ -900,13 +905,14 @@ describe('YouTube AgentCore loop control', () => {
     try {
       const startedAt = Date.now();
       const onFinalizing = vi.fn();
-      const context = transcriptResearchContext();
+      const context = await transcriptResearchContext();
       const research = new MockLanguageModelV4({ doGenerate: async () => {
         await new Promise(resolve => setTimeout(resolve, 34_000));
-        return modelResult({ toolCallId: 'transcript', toolName: 'get_video_transcript',
-          input: JSON.stringify({ videoId: 'video000001', focus: 'Relevant findings' }) });
+        return modelResult({ toolCallId: 'transcript', toolName: 'analyze_video_transcripts',
+          input: JSON.stringify({ assetVersions: [assetVersion(1)], focus: 'Relevant findings' }) });
       } });
-      const synthesis = vi.fn(async () => {
+      const synthesis = vi.fn(async (call) => {
+        if (call.responseFormat?.type !== 'json') return { content: [{type:'text' as const,text:'Context is sufficient.'}],finishReason:{unified:'stop' as const,raw:'stop'},usage:modelResult({toolCallId:'unused',toolName:'unused',input:'{}'}).usage,warnings:[] };
         await new Promise(resolve => setTimeout(resolve, duration));
         return finalizerModelResult({ blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
           intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
@@ -914,11 +920,11 @@ describe('YouTube AgentCore loop control', () => {
       const run = runResearchAgentWithModel({ model: research, onFinalizing,
         finalizationModel: new MockLanguageModelV4({ doGenerate: synthesis }),
         message: 'Research workflows', decision: { route: 'topic_research' },
-        toolNames: ['get_video_transcript', 'finalize_answer'], context });
+        toolNames: ['analyze_video_transcripts', 'finalize_answer'], context });
       await vi.advanceTimersByTimeAsync(85_000);
       await run;
       expect(onFinalizing).toHaveBeenCalledExactlyOnceWith(startedAt + 34_000 + 40_000);
-      expect(synthesis).toHaveBeenCalledTimes(1);
+      expect(synthesis.mock.calls.filter(([call])=>call.responseFormat?.type === 'json')).toHaveLength(1);
       expect(context.finalize).toHaveBeenCalledTimes(1);
       if (duration > 40_000) {
         expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
@@ -958,21 +964,21 @@ describe('YouTube AgentCore loop control', () => {
   it('does not start queued analysts after the research deadline and preserves finalization time', async () => {
     vi.useFakeTimers();
     try {
-      const context = transcriptResearchContext();
+      const context = await transcriptResearchContext();
       if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
       const analyze = vi.fn(async ({ signal }: { signal: AbortSignal }): Promise<never> =>
         new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
       context.transcriptPolicy.analyze = analyze;
       const model = new MockLanguageModelV4({ doGenerate: async () => multiToolModelResult([1, 2, 3, 4, 5, 6, 7, 8].map(n => ({
-        toolCallId: `analysis-${n}`, toolName: 'get_video_transcript',
-        input: JSON.stringify({ videoId: 'video000001', focus: `Design skills ${n}` }),
+        toolCallId: `analysis-${n}`, toolName: 'analyze_video_transcripts',
+        input: JSON.stringify({ assetVersions: [assetVersion(1)], focus: `Design skills ${n}` }),
       }))) });
       const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({
         blocks: [{ text: 'A supported finding.', evidenceIds: ['transcript:abcdefghijk:window:0:0'] }],
         intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
       }) });
       const run = runResearchAgentWithModel({ model, finalizationModel, message: 'Compare design skills',
-        decision: { route: 'topic_research', researchVideoCount: 8, researchBreadth: 'comparative' }, toolNames: ['get_video_transcript', 'finalize_answer'], context,
+        decision: { route: 'topic_research', researchVideoCount: 8, researchBreadth: 'comparative' }, toolNames: ['analyze_video_transcripts', 'finalize_answer'], context,
         recoveredEvidence: [transcriptAnalysisPacket()],
       });
       await vi.advanceTimersByTimeAsync(1);
@@ -1319,7 +1325,7 @@ function transcriptFailureContext(): AgentToolContext {
   return context;
 }
 
-function transcriptResearchContext(): AgentToolContext {
+async function transcriptResearchContext(): Promise<AgentToolContext> {
   const runId = crypto.randomUUID();
   const context = inspectContext();
   context.provider.transcript = vi.fn(async (videoId: string) => ({
@@ -1394,6 +1400,9 @@ function transcriptResearchContext(): AgentToolContext {
     warnings: [],
     billing: { creditsCharged: 0, creditsRemaining: 100 },
   }));
+  attachTestAssetStore(context);
+  for (let n = 1; n <= 8; n++) await context.provider.transcript(`video00000${n}`);
+  vi.mocked(context.provider.transcript).mockClear();
   return context;
 }
 
@@ -1459,6 +1468,7 @@ function researchTranscriptContext(
     persistedPackets.push(packet);
     return packet;
   };
+  attachTestAssetStore(context);
   return context;
 }
 
@@ -1561,3 +1571,5 @@ function providerWithVideo(): YouTubeAgentProvider {
     playlist: unexpected,
   } as YouTubeAgentProvider;
 }
+
+function assetVersion(n: number) { return n.toString(16).padStart(64, '0'); }

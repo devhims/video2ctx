@@ -38,6 +38,7 @@ export interface SessionBrief {
 }
 export interface SessionAccess {
   brief(): SessionBrief;
+  readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(): EvidencePacket[];
   readEvidence(
     version: string,
@@ -234,6 +235,12 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   has(version: string) {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
+  }
+  async readAsset(version: string) {
+    const asset = this.brief().assets.find(asset => asset.version === version);
+    if (!asset) return null;
+    const value = await this.read(version);
+    return value === null ? null : { asset, value };
   }
   async read(version: string): Promise<unknown | null> {
     const row = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).toArray()[0];

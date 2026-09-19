@@ -1,3 +1,5 @@
+import { attachTestAssetStore } from './fixtures/analysis-session';
+import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -40,6 +42,11 @@ function context(): AgentToolContext {
     executeEvidenceTool: execution => execution.execute(),
     finalize: vi.fn(),
   };
+}
+async function retrieveAndAnalyze(input: Parameters<typeof executeGetVideoStoryboard>[0], ctx: AgentToolContext, id: string) {
+  attachTestAssetStore(ctx);
+  const packet = await executeGetVideoStoryboard(input,ctx,`${id}-retrieve`);
+  return executeAnalyzeVideoStoryboard({assetVersions:packet.assetVersions!,focus:input.focus!},ctx,id);
 }
 describe('storyboard agent tool', () => {
   it.each([
@@ -100,7 +107,7 @@ describe('storyboard agent tool', () => {
     const ctx = context();
     ctx.saveStoryboardPreviews = async () => { throw new Error('private storage failure'); };
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'failed-save');
-    expect(packet.excerpts[0]!.text).toContain('two boxes');
+    expect(packet.excerpts).toEqual([]);
     expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE' }));
     expect(packet.usage[0]!.credits).toBe(1);
     expect(JSON.stringify(packet)).not.toContain('private storage failure');
@@ -149,13 +156,13 @@ describe('storyboard agent tool', () => {
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
       { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false }, expect.any(Function));
-    expect(ctx.analyzeStoryboard).toHaveBeenCalledWith(expect.objectContaining({ storyboard: expect.objectContaining({ sheets }) }));
+    expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
-    expect(packet.excerpts[0]?.startMs).toBe(35000);
+    expect(packet.excerpts).toEqual([]);
   });
-  it('requires a focus for images and rejects conflicting selectors', () => {
-    expect(getVideoStoryboardInputSchema.safeParse({ videoId: storyboard.videoId, maxSheets: 4 }).success).toBe(false);
+  it('retrieves images without an analysis question and rejects conflicting selectors', () => {
+    expect(getVideoStoryboardInputSchema.safeParse({ videoId: storyboard.videoId, maxSheets: 4 }).success).toBe(true);
     expect(getVideoStoryboardInputSchema.safeParse({ videoId: storyboard.videoId, focus: 'Chart',
       sheetIndexes: [0], timestampsMs: [0] }).success).toBe(false);
   });
@@ -177,11 +184,11 @@ describe('storyboard agent tool', () => {
     }
   });
   it('delivers images to the isolated model and produces timestamped evidence without image data', async () => {
-    const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Describe the diagram' }, context(), 'call-1');
+    const result = await retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Describe the diagram' }, context(), 'call-1');
     expect(result.excerpts[0]).toMatchObject({ startMs: 55000, endMs: 55000, text: expect.stringContaining('two boxes') });
     expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'SAMPLED_VISUAL_EVIDENCE' })]));
     expect(JSON.stringify(result)).not.toContain('/9j/');
-    expect(result.usage).toEqual([{ operation: 'storyboard', credits: 1, cacheStatus: 'miss' }]);
+    expect(result.usage).toEqual([]);
     const finalized = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
       { userId: 'test', creditsRemaining: 100 },
@@ -191,7 +198,7 @@ describe('storyboard agent tool', () => {
   });
   it('rejects invented or unprovided frame references', async () => {
     const ctx = context(); ctx.analyzeStoryboard = createVisualAnalyst(model(0));
-    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'call')).rejects.toThrow();
+    await expect(retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'call')).rejects.toThrow();
   });
   it('constrains structured generation to the supplied source frame IDs', async () => {
     const analyze = createVisualAnalyst(new MockLanguageModelV4({ doGenerate: async call => {
@@ -213,7 +220,7 @@ describe('storyboard agent tool', () => {
   });
   it('honors cancellation before fetching images', async () => {
     const ctx = context(); ctx.signal = AbortSignal.abort();
-    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'call')).rejects.toThrow();
+    await expect(retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'call')).rejects.toThrow();
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
   });
   it('enforces inspect video scope before fetching images', async () => {
@@ -224,7 +231,7 @@ describe('storyboard agent tool', () => {
   });
   it('returns no invented evidence when the analyst finds nothing relevant', async () => {
     const ctx = context(); ctx.analyzeStoryboard = async () => ({ findings: [], warnings: ['No relevant visuals.'] });
-    const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Find a chart' }, ctx, 'empty');
+    const result = await retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Find a chart' }, ctx, 'empty');
     expect(result.excerpts).toEqual([]);
   });
   it.each(['@cf/zai-org/glm-5.3-flash', 'accounts/fireworks/models/glm-5p3-flash'])('records usage using the visual model pricing and identity for %s', async modelId => {
@@ -275,11 +282,11 @@ describe('visual evidence presented to synthesis', () => {
       { observation: 'Another layout.', frameIndexes: [9, 10, 11] },
       { observation: 'Final screen.', frameIndexes: [100, 101] },
     ], warnings: [] });
-    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Overview' }, ctx, 'overview');
+    const packet = await retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Overview' }, ctx, 'overview');
     const projected = evidencePacketForModel(packet);
     expect(projected.excerpts).toHaveLength(8);
     expect(projected.excerpts!.slice(0, 4).map(e => e.startMs)).toEqual([0, 30000, 45000, 500000]);
-    expect(projected.visualCoverage).toMatchObject({ selection: { mode: 'spread' },
+    expect(projected.visualCoverage).toMatchObject({ selection: { mode: 'indexes' },
       sampledRanges: [{ startMs: 0, endMs: 120000 }, { startMs: 500000, endMs: 505000 }] });
     const finalizer = finalizationEvidenceForModel([packet], 20000);
     const late = finalizer.evidence[0]!.excerpts!.find(e => e.text.includes('Final screen'))!;

@@ -718,3 +718,31 @@ test('restores display citations consistently without rewriting canonical answer
     expect(JSON.parse(String(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId}`[0]!.result_json)).answer).toBe(answer);
   });
 });
+
+test('persists retrieval and analysis with separate bounded quotas and settles only retrieval credits', async () => {
+  const {runtime,runId}=await seed('separate-analysis-quota','running');
+  await runInDurableObject(runtime,async instance=>{
+    const writer=instance as unknown as {
+      performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;
+      finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>;
+    };
+    const execute=(n:number,analysis:boolean)=>writer.performEvidenceTool(runId,{
+      toolCallId:`${analysis?'analysis':'retrieval'}-${n}`,toolName:analysis?'analyze_video_transcript':'get_video_transcript',
+      semanticKey:`${analysis?'analysis':'retrieval'}:${n}`,operation:'transcript',
+      execute:async()=>({packetId:`packet:${runId}:${analysis?'analysis':'retrieval'}-${n}`,kind:'youtube_transcript',
+        sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],
+        excerpts:analysis?[{id:`finding-${n}`,sourceId:'source',text:'A supported finding.'}]:[],artifacts:[],warnings:[],
+        usage:analysis?[]:[{operation:'transcript',cacheStatus:'miss',credits:1}]}),
+    });
+    // seed already recorded one provider call. Fill its quota, then analyze saved content.
+    for(let n=0;n<10;n++) await execute(n,false);
+    await expect(execute(10,false)).rejects.toThrow('budget is exhausted');
+    let citation = '';
+    for(let n=0;n<11;n++) {const packet=await execute(n,true);citation ||= packet.excerpts[0]!.id;}
+    await expect(execute(11,true)).rejects.toThrow('budget is exhausted');
+    instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'topic_research'})},0)`;
+    const result=await writer.finalizeRun(runId,'finish',{intent:'topic_research',answer:`A supported finding. [cite:${citation}]`,confidence:'high',citations:[],artifacts:[],warnings:[]});
+    expect(result.billing.creditsCharged).toBe(11);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='analyze_video_transcript' AND credits=0`).toHaveLength(11);
+  });
+});
