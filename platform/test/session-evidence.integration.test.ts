@@ -672,3 +672,30 @@ test('a new frame question reanalyzes the saved image without extracting or char
     const trace=toolTrace({tool_call_id:'followup',tool_name:'analyze_video_frames',operation:'frames',semantic_key:'frame-analysis:{}',status:'completed',created_at:1,updated_at:2,result_json:JSON.stringify(result)},true);
     expect(trace.output?.sessionReused).toBe(true);
   }));
+
+
+test('loads full saved comparison transcripts once and preserves citations across paged reads and deletion', async () =>
+  within('comparison-transcript', async (store, reopen) => {
+    const value=transcript();
+    value.segments=Array.from({length:70},(_,index)=>({text:`Complete sentence number ${index}.`,startMs:index*1000,endMs:(index+1)*1000,durationMs:1000}));
+    value.text=value.segments.map(segment=>segment.text).join(' ');
+    const p=provider(vi.fn(async()=>({value,cacheStatus:'miss' as const})));
+    await sessionProvider(p,store).transcript(id);
+    const version=store.brief().assets[0]!.version;
+    const full=await store.readTranscriptEvidence(version);
+    const page=await reopen().readEvidence(version);
+    expect(full.packets[0]!.excerpts).toHaveLength(70);
+    expect(full.nextOffset).toBeUndefined();
+    expect(page.packets[0]!.excerpts).toHaveLength(30);
+    expect(page.nextOffset).toBe(30);
+    expect(full.packets[0]!.excerpts[0]).toEqual(page.packets[0]!.excerpts[0]);
+    expect(p.transcript).toHaveBeenCalledOnce();
+    const citation=full.packets[0]!.excerpts[69]!.id;
+    const result=buildAgentTurnResult({runId:crypto.randomUUID(),conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
+      {userId:'user',creditsRemaining:100},{intent:'inspect_video',confidence:'high',answer:`The final passage. [cite:${citation}]`,citations:[],artifacts:[],warnings:[]},
+      reopen().evidenceForCitations([citation]),0);
+    expect(result.citations[0]!.excerpt).toBe('Complete sentence number 69.');
+    await store.delete(version);
+    await expect(reopen().readTranscriptEvidence(version)).rejects.toThrow('unavailable');
+    expect(reopen().evidenceForCitations([citation])).toEqual([]);
+  }));

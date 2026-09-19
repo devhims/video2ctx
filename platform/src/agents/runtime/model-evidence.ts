@@ -173,6 +173,26 @@ export function evidencePacketsForModel(
       selected.push(packet);
       continue;
     }
+    if (packet.artifacts?.some(artifact => artifact.type === 'youtube_complete_transcript') && packet.excerpts?.length) {
+      // Keep as much of a long transcript as fits, spread across its timeline.
+      // Dropping straight to the opening sentence loses almost all comparison context.
+      const excerpts = packet.excerpts;
+      const candidate = (count: number): ModelEvidencePacket => ({ ...packet,
+        excerpts: Array.from({length: count}, (_, index) => excerpts[count === 1 ? 0
+          : Math.floor(index * (excerpts.length - 1) / (count - 1))]!),
+        warnings: [...packet.warnings, {code:'TRANSCRIPT_CONTEXT_TRUNCATED',
+          message:'Only sampled passages fit the finalization context. Additional passages remain available through saved evidence reads; do not claim exhaustive coverage.'}],
+      });
+      let low = 1, high = excerpts.length - 1;
+      let fitted: ModelEvidencePacket | undefined;
+      while (low <= high) {
+        const count = Math.floor((low + high) / 2);
+        const sample = candidate(count);
+        if (serializedLength([...selected, sample]) <= options.maxCharacters) { fitted = sample; low = count + 1; }
+        else high = count - 1;
+      }
+      if (fitted) { selected.push(fitted); continue; }
+    }
     const reduced = reduceModelEvidencePacket(packet);
     if (serializedLength([...selected, reduced]) <= options.maxCharacters) selected.push(reduced);
   }
@@ -229,26 +249,37 @@ function serializedLength(value: unknown): number {
 }
 
 /** Short references reduce recovery output tokens; full IDs remain persisted. */
-export function finalizationEvidenceForModel(packets: readonly EvidencePacket[], maxCharacters: number) {
-  const fullIds = new Map<string, string>();
+export function finalizationEvidenceForModel(
+  packets: readonly EvidencePacket[], maxCharacters: number, comparisonVideoIds: readonly string[] = [],
+) {
   const aliases = new Map<string, string>();
+  const fullIds = new Map<string, string>();
   const alias = (id: string) => {
     let value = aliases.get(id);
-    if (!value) {
-      value = `ref_${aliases.size + 1}`;
-      aliases.set(id, value);
-      fullIds.set(value, id);
-    }
+    if (!value) { value = `ref_${aliases.size + 1}`; aliases.set(id, value); }
     return value;
   };
-  const evidence = evidencePacketsForModel(packets, { maxCharacters }).map(packet => ({
-    ...packet,
-    ...(packet.transcriptAnalysis ? { transcriptAnalysis: { ...packet.transcriptAnalysis,
-      findings: packet.transcriptAnalysis.findings.map(finding => ({ ...finding,
-        excerptIds: finding.excerptIds.map(alias),
-      })),
-    } } : {}),
-    ...(packet.excerpts ? { excerpts: packet.excerpts.map(excerpt => ({ ...excerpt, id: alias(excerpt.id) })) } : {}),
-  }));
+  // Shorten IDs before measuring the input budget, not only after truncation.
+  const compact = packets.map(packet => {
+    const analysis = readTranscriptAnalysis(packet);
+    return { ...packet,
+      excerpts: packet.excerpts.map(excerpt => ({ ...excerpt, id: alias(excerpt.id) })),
+      artifacts: packet.artifacts.map(artifact => artifact.type === 'youtube_transcript_analysis' && analysis
+        ? { ...artifact, data: { ...artifact.data, findings: analysis.findings.map(finding => ({
+          ...finding, excerptIds: finding.excerptIds.map(alias),
+        })) } } : artifact),
+    };
+  });
+  const evidence = comparisonVideoIds.length
+    ? comparisonVideoIds.flatMap(videoId => evidencePacketsForModel(
+      compact.filter(packet => packet.sources.some(source => source.videoId === videoId)),
+      { maxCharacters: Math.floor(maxCharacters / comparisonVideoIds.length) },
+    ))
+    : evidencePacketsForModel(compact, { maxCharacters });
+  const included = new Set(evidence.flatMap(packet => [
+    ...(packet.excerpts?.map(excerpt => excerpt.id) ?? []),
+    ...(packet.transcriptAnalysis?.findings.flatMap(finding => finding.excerptIds) ?? []),
+  ]));
+  for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);
   return { evidence, fullIds };
 }

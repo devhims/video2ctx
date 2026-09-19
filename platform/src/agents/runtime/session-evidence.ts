@@ -40,6 +40,7 @@ export interface SessionAccess {
   brief(): SessionBrief;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(): EvidencePacket[];
+  readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   readEvidence(
     version: string,
     offset?: number,
@@ -250,7 +251,12 @@ export class SessionEvidenceStore implements SessionAccess {
     const value = blob ? await blob.json() : null;
     return this.has(version) ? value : null;
   }
-  async readEvidence(version: string, offset = 0, query?: string) {
+  async readTranscriptEvidence(version: string) {
+    const asset = this.brief().assets.find(asset => asset.version === version);
+    if (asset?.kind !== 'transcript') throw new Error('Saved transcript is unavailable.');
+    return this.readEvidence(version, 0, undefined, 5_000);
+  }
+  async readEvidence(version: string, offset = 0, query?: string, limit = 30) {
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) throw new Error('Session asset is unavailable or deleted.');
     if (asset.kind === 'transcript') {
@@ -260,9 +266,9 @@ export class SessionEvidenceStore implements SessionAccess {
       const evidence = completeTranscriptEvidence(asset.videoId, transcript.segments, sourceId);
       const excerpts = evidence.excerpts.map((excerpt, index) => ({ ...excerpt, id: `evidence:${version}:${index}` }));
       const matching = query ? excerpts.filter((e) => e.text.toLowerCase().includes(query.toLowerCase())) : excerpts;
-      const page = matching.slice(offset, offset + 30);
+      const page = matching.slice(offset, offset + limit);
       const packet = evidencePacketSchema.parse({
-        packetId: `session:${version}:${offset}:${await sha256(query ?? '')}`,
+        packetId: `session:${version}:${offset}:${limit}:${await sha256(query ?? '')}`,
         kind: 'youtube_transcript',
         assetVersions: [version],
         sources: [
@@ -275,9 +281,12 @@ export class SessionEvidenceStore implements SessionAccess {
           },
         ],
         excerpts: page,
-        artifacts: [],
+        artifacts: limit > 30 ? [{type: 'youtube_complete_transcript', data: {
+          ...evidence.artifactData, requiresAnalysis: false,
+          allReturnedSegmentsIncluded: page.length === matching.length,
+        }}] : [],
         warnings: this.currentVersions().has(version)
-          ? []
+          ? (limit > 30 && page.length < matching.length ? [{code:'TRANSCRIPT_CONTEXT_TRUNCATED',message:'The saved transcript exceeds the full-read limit. Additional passages remain available through paged reads.'}] : [])
           : [
               {
                 code: 'SUPERSEDED_SESSION_EVIDENCE',

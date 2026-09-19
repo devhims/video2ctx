@@ -11,6 +11,8 @@ export async function discoverInitialEvidence(
   context: AgentToolContext,
   searchUsed: boolean,
 ) {
+  // Named comparison subjects need retrieval, not unrelated search results.
+  if (decision.comparisonVideoIds?.length) return;
   if (!decision.channelId) {
     if (decision.searchQuery && !searchUsed) await executeSearchYouTube(
       { query: decision.searchQuery, type: 'video' }, context, `initial-search:${context.runId}`,

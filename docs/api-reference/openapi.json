@@ -7305,6 +7305,15 @@
                               "detailed"
                             ]
                           },
+                          "comparisonVideoIds": {
+                            "minItems": 2,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{11}$"
+                            }
+                          },
                           "numberedItemCount": {
                             "type": "integer",
                             "minimum": 1,
@@ -7347,6 +7356,15 @@
                               "standard",
                               "detailed"
                             ]
+                          },
+                          "comparisonVideoIds": {
+                            "minItems": 2,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{11}$"
+                            }
                           },
                           "numberedItemCount": {
                             "type": "integer",
@@ -7446,6 +7464,15 @@
                               "standard",
                               "detailed"
                             ]
+                          },
+                          "comparisonVideoIds": {
+                            "minItems": 2,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{11}$"
+                            }
                           },
                           "numberedItemCount": {
                             "type": "integer",
@@ -8610,6 +8637,15 @@
                           "detailed"
                         ]
                       },
+                      "comparisonVideoIds": {
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        }
+                      },
                       "numberedItemCount": {
                         "type": "integer",
                         "minimum": 1,
@@ -8652,6 +8688,15 @@
                           "standard",
                           "detailed"
                         ]
+                      },
+                      "comparisonVideoIds": {
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        }
                       },
                       "numberedItemCount": {
                         "type": "integer",
@@ -8751,6 +8796,15 @@
                           "standard",
                           "detailed"
                         ]
+                      },
+                      "comparisonVideoIds": {
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{11}$"
+                        }
                       },
                       "numberedItemCount": {
                         "type": "integer",

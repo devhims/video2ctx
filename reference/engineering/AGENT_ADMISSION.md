@@ -46,7 +46,7 @@ sequenceDiagram
 - Queueing and classification do not consume the research or finalization
   budgets. Classification has a separate 20-second timeout. Research starts its
   40-second clock after classification, and finalization starts a separate
-  40-second clock at handoff. Each deadline is persisted on first entry and
+  60-second clock at handoff. Each deadline is persisted on first entry and
   reused on recovery. Pending status is not a promise of active inference.
 - Admission does not reserve or charge credits. Existing runtime reservation and
   settlement safeguards remain authoritative.

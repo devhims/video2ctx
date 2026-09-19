@@ -18,6 +18,27 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
+  it('repairs a follow-up comparison that drops the saved video from its scope', async () => {
+    const previous = 'abcdefghijk', current = 'lmnopqrstuv';
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
+        route: 'inspect_video', videoId: current, researchVideoCount: 1, answerDetail: 'standard', useStoryboard: false,
+        ...(calls++ ? { comparisonVideoIds: [previous, current] } : {}),
+      }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [],
+    }) });
+    const result = await classifyCapabilityWithModel({
+      message: `compare this video with a new one: https://youtu.be/${current}`, model, signal: new AbortController().signal,
+      conversationHistory: [{ userMessageId: 'u', agentMessageId: 'a', user: `Summarize https://youtu.be/${previous}`,
+        assistant: 'Earlier summary.', resourceIds: [previous] }],
+      sessionBrief: { assets: [{version:'a'.repeat(64),kind:'transcript',videoId:previous,collectedAt:1,current:true,details:{}}], memories: [] },
+    });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(result).toMatchObject({route:'inspect_video',videoId:current,comparisonVideoIds:[previous,current]});
+    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('comparisonVideoIds');
+  });
+
   it('repairs the captured incomplete classifier response without forcing tool selection', async () => {
     const valid = { route: 'topic_research', answerDetail: 'standard', researchVideoCount: 3,
       researchBreadth: 'comparative', searchQuery: 'model comparison', useStoryboard: false };

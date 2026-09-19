@@ -116,10 +116,10 @@ Research has ten evidence tool types plus finalization. Inspection has five evid
 
 | Limit | Current behavior |
 |---|---|
-| Total run deadline | Up to 100 seconds across classification (20), research (40), and finalization (40), excluding queueing and persistence |
+| Total run deadline | Up to 120 seconds across classification (20), research (40), and finalization (60), excluding queueing and persistence |
 | Research phase | Up to 40 seconds after classification; includes planning, tools, and analyses |
 | Forced early finalization | At a model-step boundary, when <=12 seconds remain in the main phase, nominal step 8 is reached, transcript/tool budget is exhausted, or estimated model cost reaches the reserve threshold |
-| Finalization phase | Up to 40 seconds from handoff, including synthesis and any citation repair; early research completion starts it sooner |
+| Finalization phase | Up to 60 seconds from handoff, including synthesis and any citation repair; early research completion starts it sooner |
 | Persistence | Separate 30-second timeout outside model-processing windows; billing settlement retries durably |
 | Agent Core steps | Eight nominal; finalization is forced by the eighth. Stop ceiling is ten including two retry allowances. Time can stop execution much earlier |
 | Durable tool calls | Twelve total: at most eleven evidence calls, reserving one successful finalization slot |
@@ -129,7 +129,8 @@ Research has ten evidence tool types plus finalization. Inspection has five evid
 | Provider concurrency | Four evidence executions |
 | Analyst concurrency | Up to four for research, bounded by the classified count; two for inspection |
 | Classifier timeout | 20 seconds from classification start, including retries; persisted across recovery |
-| Agent Core/finalizer output | Shared SDK ceiling: 1,500 tokens per generation for standard answers, 2,500 for explicitly detailed requests. Terminal tool-argument repair uses the same ceiling |
+| Agent Core output | 1,500 tokens for standard and 2,500 for detailed requests, including terminal tool-argument repair |
+| Unified finalizer output | 3,000 standard or 4,000 detailed tokens, plus 1,000 on repair and the provider reasoning allowance |
 | Analyst output | Five findings by default; single-video numbered requests raise the limit to the classified count, up to twenty. Three supporting windows per finding, 2,400 output tokens; structured source quotes, identities and measurements, no generated summary |
 | Analyst own timeout | 90-second helper default, overridden in practice by the earlier parent phase/run cancellation |
 | Tool-argument repair | Separate model call with a 15-second own timeout, bounded by parent cancellation. Nonterminal repairs allow 2,000 tokens; terminal repairs use the selected answer ceiling |
@@ -165,7 +166,7 @@ sequenceDiagram
         else Synthesis fails, stalls, or has invalid citations
             R->>R: Build labelled source-excerpt collection
             alt Usable evidence exists
-                R->>V: Validate excerpts and save partial result
+                R->>V: Validate findings and save partial result
                 V-->>R: completed, low confidence, PARTIAL_EVIDENCE
             else No usable evidence
                 R-->>R: failed with retrieval/finalization error
@@ -178,15 +179,15 @@ The finalizer resolves inline excerpt IDs against saved source records and exact
 
 The reserved finalization phase uses `Output.object` with native provider `response_format: json_schema`. Its `answer-blocks-v3` schema contains confidence, blocks and warnings. The application supplies the classified intent and retains persisted artifacts. Every research/inspection block requires one to twelve references in both the transmitted schema and local validation. Clarification has a separate schema and is normally rendered directly from classification. JSON-schema support does not replace citation membership validation or guarantee factual grounding.
 
-Classification supplies a required `answerDetail` enum (`standard` or `detailed`) through its tool schema. The application maps that choice to `maxOutputTokens`; the Workers AI provider forwards it as `max_tokens`. Persisted legacy routes without this field use standard. Every research-loop generation can naturally emit the final answer tool, so the selected ceiling applies to each loop generation, reserved synthesis and terminal-tool argument repair. Evidence-tool argument repairs retain their separate 2,000-token ceiling.
+Classification supplies a required `answerDetail` enum (`standard` or `detailed`) through its tool schema. The application maps that choice to `maxOutputTokens`; the Workers AI provider forwards it as `max_tokens`. Persisted legacy routes without this field use standard. Every research-loop generation can naturally emit the final answer tool, so the selected ceiling applies to each loop generation and terminal-tool argument repair. Reserved structured synthesis allows 3,000 standard or 4,000 detailed output tokens, with another 1,000 on its single repair attempt. Fireworks receives an additional 1,024-token reasoning allowance. Evidence-tool argument repairs retain their separate 2,000-token ceiling.
 
 Both answer paths share qualitative writing guidance about relevance, concise recommendations, explicit requested scope and evidence limitations. The native schema limits answer blocks and references and permits at most three distinct model warnings. It does not impose a per-block character ceiling; complete paragraphs are checked against the existing 20,000-character rendered answer limit. Local validation rejects obvious sentence continuations across block boundaries and repeated warning phrases. These checks are conservative heuristics, not a grammar or factual verifier.
 
 For an explicitly requested numbered list, classification may preserve `numberedItemCount`. Reserved synthesis must return labels 1 through that count, or explicitly disclose `ANSWER_SCOPE_SHORTFALL`. Other formats are not inferred from arbitrary numbers in the request. These checks detect missing numbered items, not whether each item is useful or fully supported. A token ceiling is a truncation boundary, not a guarantee of a complete answer or a wall-clock latency bound.
 
-A failed structured response gets at most one repair within the same 40-second finalization deadline. Repair receives the failed candidate and specific validation errors, with instructions to preserve valid content. Diagnostics record the schema version, validation stage, finish reason, candidate length and bounded issue paths/codes, without logging the candidate text. Test captures must preserve these structured issue arrays.
+A failed structured response gets at most one repair within the same 60-second finalization deadline. Context gathering is bounded to 10 seconds. The first synthesis attempt reserves up to 20 seconds for repair, or half the remaining phase time on a short resumed deadline. A stalled first attempt can use this reserved retry. Repair receives the failed candidate and specific validation errors, with instructions to preserve valid content. Diagnostics record the schema version, validation stage, finish reason, candidate length and bounded issue paths/codes, without logging the candidate text. Test captures must preserve these structured issue arrays.
 
-Partial results contain quoted source excerpts, not a model-invented recommendation. They use status completed, confidence low, and warning code PARTIAL_EVIDENCE. When content was retrieved but synthesis failed, FINAL_SYNTHESIS_UNAVAILABLE identifies that outcome explicitly. Discovery-only fallback uses NO_CONTENT_EVIDENCE. A completed durable run or a low-confidence answer alone does not identify successful synthesis; inspect the warning codes.
+Partial results contain deduplicated analyst findings or visual observations. Raw transcript pages and comments do not become arbitrary excerpt summaries. Partial findings use status completed, confidence low, and warning code PARTIAL_EVIDENCE. If synthesis fails and there are no useful findings, the run fails with a clear explanation that saved evidence can be reused. When content was retrieved but synthesis failed, FINAL_SYNTHESIS_UNAVAILABLE identifies that outcome explicitly. Discovery-only fallback uses NO_CONTENT_EVIDENCE. A completed durable run or a low-confidence answer alone does not identify successful synthesis; inspect the warning codes.
 
 ## What the response counters mean
 
@@ -194,7 +195,7 @@ modelStepCount counts completed Agent Core steps. Classifier calls, transcript a
 
 toolCallCount counts durable tool-call rows. Failed evidence calls count. Successful finalization counts. Rejected finalization attempts are not stored as completed tool rows. Reused evidence may avoid another row. Provider-internal HTTP retries do not appear as separate tools: one search call can cause multiple YouTube attempts and processor-slot retries.
 
-The recovery finalizer and deterministic fallback occur outside Agent Core's step ceiling. Synthesis and repair share the original finalization deadline; saving uses the separate persistence timeout. The three model phases total at most 100 seconds; queueing and persistence can extend end-to-end completion.
+The recovery finalizer and deterministic fallback occur outside Agent Core's step ceiling. Synthesis and repair share the original finalization deadline; saving uses the separate persistence timeout. The three model phases total at most 120 seconds; queueing and persistence can extend end-to-end completion.
 
 ## Remaining limitations
 
