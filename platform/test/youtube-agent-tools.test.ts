@@ -445,7 +445,7 @@ describe('YouTube agent deterministic finalizer', () => {
     expect(() => buildAgentTurnResult(identity(), admission(), {
       answer: 'A claim. [cite:transcript:abcdefghijk:0]', intent: 'topic_research',
       confidence: 'high', citations: [], artifacts: [], warnings: [],
-    }, [packet, conflicting], 1)).toThrow(/unambiguously/);
+    }, [packet, conflicting], 1)).toThrow(expect.objectContaining({ code: 'INVALID_AGENT_CITATION', reason: 'conflicting_evidence' }));
   });
 
   it('does not manufacture references for an answer without markers', () => {
@@ -468,7 +468,7 @@ describe('YouTube agent deterministic finalizer', () => {
       }],
       artifacts: [],
       warnings: [],
-    }, [packet], 1)).toThrow(/does not reference persisted evidence/);
+    }, [packet], 1)).toThrow(expect.objectContaining({ code: 'INVALID_AGENT_CITATION', reason: 'missing_evidence' }));
   });
 });
 

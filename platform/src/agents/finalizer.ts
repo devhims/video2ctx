@@ -10,6 +10,12 @@ import {
 
 const CITATION_MARKER = /\[cite:([A-Za-z0-9:_-]+)\]/g;
 
+export class AgentCitationError extends ApiError {
+  constructor(marker: string, readonly reason: 'missing_evidence' | 'conflicting_evidence') {
+    super(422, 'INVALID_AGENT_CITATION', `Citation ${marker} does not reference persisted evidence unambiguously.`);
+  }
+}
+
 export interface FinalizationIdentity {
   runId: string;
   conversationId: string;
@@ -40,7 +46,7 @@ export function buildAgentTurnResult(
     if (!match || matches.some(({ source, excerpt }) =>
       source.id !== match.source.id || source.url !== match.source.url ||
       excerpt.text !== match.excerpt.text || excerpt.startMs !== match.excerpt.startMs || excerpt.endMs !== match.excerpt.endMs)) {
-      throw new ApiError(422, 'INVALID_AGENT_CITATION', `Citation ${marker} does not reference persisted evidence unambiguously.`);
+      throw new AgentCitationError(marker, match ? 'conflicting_evidence' : 'missing_evidence');
     }
     const { source, excerpt } = match;
     citations.push({

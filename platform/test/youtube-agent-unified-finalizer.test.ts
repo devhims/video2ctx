@@ -82,6 +82,19 @@ it('gives the router and finalizer earlier source evidence and validates its cit
   expect(result.billing.creditsCharged).toBe(0);
 });
 
+it('constrains generated citation IDs to supplied evidence, including memory findings', async () => {
+  const { options, finalizer } = setup('context_answer', true);
+  await executeResearchRun(options);
+  const format = finalizer.doGenerateCalls[0]!.responseFormat;
+  expect(format?.type).toBe('json');
+  if (format?.type !== 'json') throw new Error('Expected structured output.');
+  const references = { items: { enum: ['ref_1', 'frame-observation'] } };
+  expect(format.schema).toMatchObject({ properties: {
+    blocks: { items: { properties: { evidenceIds: references } } },
+    memoryUpdates: { items: { properties: { evidenceIds: references } } },
+  } });
+});
+
 it('resumes direct finalization without reclassification or a new deadline', async () => {
   const { options, classifier, finalizer, decision } = setup('context_answer');
   const deadlineAt = Date.now() + 10_000;
@@ -160,11 +173,13 @@ it.each([false,true])('escalates insufficient context once and returns to the sa
   let finalizedCalls=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>({
     content:[{type:'text',text:JSON.stringify(call.responseFormat?.type!=='json' ? {ready:true} : finalizedCalls++===0
-      ? {...output,needsEvidence:{videoId:'abcdefghijk',visual:true,reason:'The stored observations do not identify both participants.'}}
+      ? {...output,blocks:[{text:'The requested visual evidence is unavailable.',evidenceIds:[]}],needsEvidence:{videoId:'abcdefghijk',visual:true,reason:'The stored observations do not identify both participants.'}}
       : output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   })});
+  let coreCalls=0;
   const core=new MockLanguageModelV4({doGenerate:async()=>({
-    content:[{type:'tool-call',toolCallId:'finish',toolName:'finalize_answer',input:JSON.stringify({...output,intent:'inspect_video',artifacts:[]})}],
+    content:olderReference && coreCalls++===0 ? [{type:'tool-call',toolCallId:'frames',toolName:'get_video_frames',input:JSON.stringify({videoId:'abcdefghijk',timestampsMs:[30000],focus:'Identify the participants.'})}]
+      : [{type:'tool-call',toolCallId:'finish',toolName:'finalize_answer',input:JSON.stringify({...output,intent:'inspect_video',artifacts:[]})}],
     finishReason:{unified:'tool-calls',raw:'tool_calls'},usage,warnings:[],
   })});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : metadata.model_role==='finalizer' ? finalizer : core);

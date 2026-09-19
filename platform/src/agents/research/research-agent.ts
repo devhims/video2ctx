@@ -1,3 +1,4 @@
+import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
 import { conversationHistoryForModel, conversationEvidence, CONVERSATION_CONTEXT_GUIDANCE } from '../runtime/conversation-memory';
@@ -633,7 +634,8 @@ async function runUnifiedFinalizer(options: {
   const conversational = intent === 'clarification' || intent === 'rejected';
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
-  const outputSchema = baseOutputSchema.extend({
+  const gatheredEvidenceIds = new Set<string>();
+  const baseSchema = baseOutputSchema.extend({
     memoryUpdates: z.array(memoryUpdateSchema).max(12).optional(),
     needsEvidence: z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),visual:z.boolean(),reason:z.string().max(500)}).optional(),
   });
@@ -647,6 +649,7 @@ async function runUnifiedFinalizer(options: {
   const contextMessages: ModelMessage[] = [];
   const contextTools: ToolSet | undefined = options.context.session ? {
     ...await options.context.session.searchTools?.(packets => {
+      for (const packet of packets) for (const excerpt of packet.excerpts) gatheredEvidenceIds.add(excerpt.id);
       options.onEvidence?.(packets);
       for (const packet of packets) if (!options.evidence.some(existing=>existing.packetId===packet.packetId)) options.evidence.push(packet);
     },options.context.signal),
@@ -663,6 +666,7 @@ async function runUnifiedFinalizer(options: {
       execute:async ({version,offset,query}) => {
         options.context.signal.throwIfAborted();
         const result = await options.context.session!.readEvidence(version,offset,query);
+        for (const packet of result.packets) for (const excerpt of packet.excerpts) gatheredEvidenceIds.add(excerpt.id);
         options.onEvidence?.(result.packets);
         for (const packet of result.packets) {
           if (!options.evidence.some(existing=>existing.packetId===packet.packetId)) options.evidence.push(packet);
@@ -707,6 +711,19 @@ async function runUnifiedFinalizer(options: {
     options.context.signal.throwIfAborted();
     assertModelCostAvailable(options.modelBudget);
     prepared = finalizationEvidenceForModel(options.evidence, TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS);
+    // Constrain decoding, not just post-generation validation. Inventory asset IDs,
+    // packet IDs and citations copied from unrelated history are not excerpt IDs.
+    const allowedIds = [...new Set([...prepared.fullIds.keys(), ...prepared.fullIds.values(), ...gatheredEvidenceIds])];
+    const reference = allowedIds.length ? z.enum(allowedIds) : z.string();
+    const outputSchema = baseSchema.extend({
+      blocks: z.array(baseOutputSchema.shape.blocks.element.extend({
+        evidenceIds: z.array(reference).min(conversational || intent === 'context_answer' || !allowedIds.length ? 0 : 1)
+          .max(conversational || !allowedIds.length ? 0 : 12),
+      })).min(1).max(conversational ? 1 : 20),
+      memoryUpdates: z.array(memoryUpdateSchema.extend({
+        evidenceIds: z.array(reference).max(allowedIds.length ? 20 : 0).default([]),
+      })).max(12).optional(),
+    });
     const attemptStartedAt = Date.now();
     let candidate: string | undefined;
     let finishReason: string | undefined;
@@ -833,6 +850,7 @@ async function runUnifiedFinalizer(options: {
         attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt,
         schemaVersion: FINALIZATION_SCHEMA_VERSION, validationStage, finishReason,
         candidateCharacters: candidate?.length,
+        citationFailure: error instanceof AgentCitationError ? error.reason : undefined,
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
         code: errorMessage(error) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
           : error instanceof ApiError ? error.code
