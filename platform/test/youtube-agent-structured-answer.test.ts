@@ -137,3 +137,9 @@ describe('structured answer citations', () => {
     expect(rendered.answer).toBe('Supported claim with an example. [cite:e1]');
   });
 });
+
+it.each(['No.', '42', 'Raynald Westerling', '"The"', 'The stored transcript is unavailable.', 'I checked the history. Your first question was about wolves.'])(
+  'retains a legitimate short answer or completed explanation: %s', text => {
+    expect(renderStructuredAnswer({intent:'context_answer',confidence:'high',warnings:[],artifacts:[],blocks:[{text,evidenceIds:[]}]}).answer).toBe(text);
+  },
+);

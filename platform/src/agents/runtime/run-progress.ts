@@ -14,6 +14,7 @@ export const agentToolTraceSchema = z.object({
     sourceCount: z.number(), excerptCount: z.number(),
     sources: z.array(z.object({ title: z.string().optional(), videoId: z.string().optional(), channelId: z.string().optional() })),
     warningCodes: z.array(z.string()),
+    sessionReused: z.boolean().optional(),
     frames: z.array(framePreviewSchema).max(6).optional(),
     storyboard: storyboardTraceSchema.optional(),
   }).optional(),
@@ -53,7 +54,7 @@ export function toolTrace(row: {
       sourceCount: packet.data.sources.length, excerptCount: packet.data.excerpts.length,
       sources: packet.data.sources.map(({ title, videoId, channelId }) => ({ title, videoId, channelId })),
       warningCodes: [...new Set(packet.data.warnings.map(warning => warning.code))],
-      ...(packet.data.kind === 'youtube_frames' ? { frames: packetFramePreviews(packet.data) } : {}),
+      ...(packet.data.kind === 'youtube_frames' ? { frames: packetFramePreviews(packet.data), sessionReused: packet.data.artifacts.find(artifact => artifact.type === 'youtube_frame_analysis')?.data.sessionReused === true } : {}),
       ...(packet.data.kind === 'youtube_storyboard' ? { storyboard: packetStoryboardPreviews(packet.data) } : {}),
     } } : {}),
   });

@@ -38,6 +38,7 @@ export const agentProgressSchema = z.object({
     output: z.object({ sourceCount: z.number(), excerptCount: z.number(),
       sources: z.array(z.object({ title: z.string().optional(), videoId: z.string().optional(), channelId: z.string().optional() })),
       warningCodes: z.array(z.string()),
+    sessionReused: z.boolean().optional(),
       frames: z.array(z.object({
         assetId: z.string().regex(/^[a-f0-9]{64}$/), collectionId: z.string().regex(/^[a-f0-9]{64}$/), timestampMs: z.number().int().nonnegative(),
         width: z.number().int().positive(), height: z.number().int().positive(),

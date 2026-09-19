@@ -7419,6 +7419,22 @@
                               "rejected"
                             ]
                           },
+                          "contextScope": {
+                            "type": "string",
+                            "enum": [
+                              "history",
+                              "video",
+                              "mixed"
+                            ]
+                          },
+                          "historySelection": {
+                            "type": "string",
+                            "enum": [
+                              "first_user_message",
+                              "all_user_messages",
+                              "relevant_messages"
+                            ]
+                          },
                           "reason": {
                             "type": "string",
                             "minLength": 1,
@@ -8071,6 +8087,9 @@
                         "type": "string"
                       }
                     },
+                    "sessionReused": {
+                      "type": "boolean"
+                    },
                     "frames": {
                       "maxItems": 6,
                       "type": "array",
@@ -8696,6 +8715,22 @@
                           "context_answer",
                           "clarification",
                           "rejected"
+                        ]
+                      },
+                      "contextScope": {
+                        "type": "string",
+                        "enum": [
+                          "history",
+                          "video",
+                          "mixed"
+                        ]
+                      },
+                      "historySelection": {
+                        "type": "string",
+                        "enum": [
+                          "first_user_message",
+                          "all_user_messages",
+                          "relevant_messages"
                         ]
                       },
                       "reason": {

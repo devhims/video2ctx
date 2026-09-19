@@ -20,7 +20,7 @@ const evidence: EvidencePacket = {
 };
 
 function setup(responseIntent: 'context_answer' | 'clarification' | 'rejected', cited = false) {
-  const decision: CapabilityRouteDecision = { route: 'finalize', responseIntent, reason: 'Use existing context.', answerDetail: 'standard' };
+  const decision: CapabilityRouteDecision = { route: 'finalize', responseIntent, contextScope:'video', reason: 'Use existing context.', answerDetail: 'standard' };
   const classifier = new MockLanguageModelV4({ doGenerate: async () => ({
     content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request',
       input: JSON.stringify({ ...decision, researchVideoCount: 0 }) }],
@@ -143,7 +143,9 @@ it('reads stored evidence on demand before finalizing and commits memory after v
   });
   await executeResearchRun(options);
   expect(session.readEvidence).toHaveBeenCalledWith(version,undefined,undefined);
-  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(finalizer.doGenerateCalls).toHaveLength(3);
+  expect(finalizer.doGenerateCalls[0]!.responseFormat?.type).not.toBe('json');
+  expect(finalizer.doGenerateCalls[2]!.responseFormat?.type).toBe('json');
   expect(remember).toHaveBeenCalledWith(options.runId,expect.arrayContaining([expect.objectContaining({topic:'interviewer'})]),expect.arrayContaining([stored]));
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
@@ -156,8 +158,8 @@ it.each([false,true])('escalates insufficient context once and returns to the sa
       searchHistory:vi.fn(async()=>[{content:'Inspect https://youtu.be/abcdefghijk'}])} as unknown as NonNullable<typeof options.session>;
   }
   let finalizedCalls=0;
-  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
-    content:[{type:'text',text:JSON.stringify(finalizedCalls++===0
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>({
+    content:[{type:'text',text:JSON.stringify(call.responseFormat?.type!=='json' ? {ready:true} : finalizedCalls++===0
       ? {...output,needsEvidence:{videoId:'abcdefghijk',visual:true,reason:'The stored observations do not identify both participants.'}}
       : output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   })});
@@ -170,7 +172,7 @@ it.each([false,true])('escalates insufficient context once and returns to the sa
   await executeResearchRun(options);
   expect(options.persistRoute).toHaveBeenLastCalledWith(expect.objectContaining({route:'inspect_video',videoId:'abcdefghijk',useStoryboard:true}));
   expect(options.onCapabilityLoaded).toHaveBeenCalledTimes(1);
-  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(finalizer.doGenerateCalls).toHaveLength(olderReference ? 4 : 2);
   expect(options.finalize).toHaveBeenCalledTimes(1);
 });
 
@@ -216,4 +218,68 @@ it('reserves the final model step for an answer when history pagination exceeds 
   await executeResearchRun(options);
   expect(finalizer.doGenerateCalls).toHaveLength(5);
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({warnings:expect.arrayContaining([expect.objectContaining({code:'PARTIAL_EVIDENCE'})])}));
+});
+
+it.each(['The', "I'll look up the full message history to find your exact first message."])('repairs an incomplete answer before persistence: %s', async text => {
+  const { options, classifier, output } = setup('context_answer');
+  let calls = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify(calls++ ? output : {...output, blocks:[{text,evidenceIds:[]}]}) }],
+    finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
+  }) });
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(calls).toBe(2);
+  expect(options.finalize).toHaveBeenCalledTimes(1);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:output.blocks[0]!.text}));
+});
+
+it('reads the exact first user message before generation and blocks video escalation for history', async () => {
+  const {options,classifier,output} = setup('context_answer');
+  options.message='What was my exact first message in this conversation?';
+  options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read stored messages.'};
+  const original='summarise this video: https://youtu.be/abcdefghijk?si=original';
+  const readHistory=vi.fn(()=>({messages:[{id:'first',role:'user',text:original,createdAt:new Date()}]}));
+  options.session={brief:()=>({historyMessages:24,assets:[],memories:[]}),evidence:()=>[],readHistory,searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+  let answers=0;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
+    expect(readHistory).toHaveBeenCalledWith(0,'user');
+    expect(JSON.stringify(call.prompt)).toContain(original);
+    const answer=call.responseFormat?.type==='json';
+    return {content:[{type:'text',text:answer ? JSON.stringify(answers++===0
+      ? {...output,needsEvidence:{videoId:'abcdefghijk',visual:false,reason:'Need metadata.'}}
+      : {...output,blocks:[{text:`Your first message was: ${original}`,evidenceIds:[]}]}) : 'The first message is available.'}],
+      finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
+  }});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(answers).toBe(2);
+  expect(readHistory).toHaveBeenCalledTimes(1);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledTimes(1);
+});
+
+it('fails after one repair instead of persisting a repeated non-answer', async () => {
+  const {options,classifier,output}=setup('context_answer');
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,blocks:[{text:'The',evidenceIds:[]}]})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await expect(executeResearchRun(options)).rejects.toThrow(/fragment/);
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).not.toHaveBeenCalled();
+});
+
+it('repairs a paraphrased first message using the original stored wording', async () => {
+  const {options,classifier,output}=setup('context_answer');
+  options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read the first message.'};
+  const original='Summarise this video: https://youtu.be/abcdefghijk?si=keep-original';
+  options.session={brief:()=>({historyMessages:24,assets:[],memories:[]}),readHistory:()=>({messages:[{role:'user',text:original}]}),searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+  let attempts=0;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>({content:[{type:'text',text:call.responseFormat?.type==='json'
+    ? JSON.stringify({...output,blocks:[{text:attempts++ ? original : 'You asked for a summary of the video.',evidenceIds:[]}]}) : 'Context available.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(attempts).toBe(2);
+  expect(options.finalize).toHaveBeenCalledTimes(1);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });

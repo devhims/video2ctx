@@ -40,6 +40,8 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
     route: z.literal('finalize'),
     responseIntent: z.enum(['context_answer', 'clarification', 'rejected']),
+    contextScope: z.enum(['history', 'video', 'mixed']).optional(),
+    historySelection: z.enum(['first_user_message', 'all_user_messages', 'relevant_messages']).optional(),
     reason: z.string().trim().min(1).max(1_000),
     answerDetail: answerDetailSchema.optional(),
     numberedItemCount: numberedItemCountSchema,
