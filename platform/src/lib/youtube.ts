@@ -34,6 +34,8 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  sessionReused?: boolean;
+  assetVersions?: string[];
   value: T;
   cacheStatus: CacheStatus;
 }

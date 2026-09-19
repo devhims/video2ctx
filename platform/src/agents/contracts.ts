@@ -16,6 +16,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     searchQuery: z.string().trim().min(1).max(500).optional(),
     channelId: z.string().trim().min(1).max(200).regex(/^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$/).optional(),
     useStoryboard: z.boolean().optional(),
+    refreshEvidence: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
     numberedItemCount: numberedItemCountSchema,
   }),
@@ -24,6 +25,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     researchVideoCount: z.literal(1).optional(),
     videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
     useStoryboard: z.boolean().optional(),
+    refreshEvidence: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
     numberedItemCount: numberedItemCountSchema,
   }),
@@ -114,6 +116,7 @@ export const agentArtifactSchema = z.object({
 });
 
 export const evidencePacketSchema = z.object({
+  assetVersions: z.array(z.string()).max(30).optional(),
   packetId: z.string().min(1).max(300),
   kind: z.enum([
     'youtube_search',
@@ -159,7 +162,16 @@ export const agentCitationSchema = z.object({
   endMs: z.number().int().nonnegative().optional(),
 });
 
+export const memoryUpdateSchema = z.object({
+  topic: z.string().trim().min(1).max(120),
+  kind: z.enum(['finding', 'context', 'question']),
+  text: z.string().trim().min(1).max(1500),
+  evidenceIds: z.array(z.string().max(300)).max(20).default([]),
+});
+export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
+
 export const finalizeAnswerInputSchema = z.object({
+  memoryUpdates: z.array(memoryUpdateSchema).max(12).optional(),
   answer: z.string().min(1).max(20_000),
   intent: z.enum(['topic_research', 'inspect_video', 'context_answer', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),

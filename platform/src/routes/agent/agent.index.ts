@@ -162,6 +162,41 @@ agentRoutes.get('/agent/sessions/:sessionId', async (c) => {
   });
 });
 
+function sessionAssetPath(c:Context<App>) {
+  const parsed=sessionDetailPathSchema.extend({version:z.string().regex(/^[a-f0-9]{64}$/).optional(),id:z.string().max(200).optional()}).safeParse(c.req.param());
+  if (!parsed.success) throw new ApiError(422,'INVALID_SESSION_ASSET_REQUEST','Invalid session or asset identifier.');
+  return parsed.data;
+}
+function requireSessionAssetResult<T>(value:T | null):T {
+  if (value===null) throw new ApiError(404,'AGENT_SESSION_NOT_FOUND','Agent session not found.');
+  return value;
+}
+// Owner identity selects the Durable Object; the object also validates ownership.
+agentRoutes.get('/agent/sessions/:sessionId/assets', async c => {
+  const user = requireUser(c);
+  const {sessionId} = sessionAssetPath(c);
+  return c.json(requireSessionAssetResult(await (await agentForConversation(c.env,user.id,sessionId)).getSessionAssets(sessionId,user.id)));
+});
+agentRoutes.get('/agent/sessions/:sessionId/assets/:version', async c => {
+  const user = requireUser(c);
+  const {sessionId} = sessionAssetPath(c);
+  const version = sessionAssetPath(c).version!;
+  const data = await (await agentForConversation(c.env,user.id,sessionId)).getSessionAsset(sessionId,user.id,version);
+  if (data === null) throw new ApiError(404,'SESSION_ASSET_NOT_FOUND','Session asset not found.');
+  return c.json({data});
+});
+agentRoutes.delete('/agent/sessions/:sessionId/assets/:version?', async c => {
+  const user = requireUser(c);
+  const {sessionId} = sessionAssetPath(c);
+  const version = sessionAssetPath(c).version;
+  return c.json(requireSessionAssetResult(await (await agentForConversation(c.env,user.id,sessionId)).deleteSessionAssets(sessionId,user.id,version)));
+});
+agentRoutes.delete('/agent/sessions/:sessionId/memory/:id', async c => {
+  const user = requireUser(c);
+  const {sessionId} = sessionAssetPath(c);
+  return c.json(requireSessionAssetResult(await (await agentForConversation(c.env,user.id,sessionId)).deleteSessionMemory(sessionId,user.id,sessionAssetPath(c).id!)));
+});
+
 agentRoutes.post('/agent', async (c) => {
   const principal = requireUser(c);
   const startedAt = c.get('requestStartedAt');

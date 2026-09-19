@@ -669,6 +669,27 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/agent/sessions/{sessionId}/assets': {
+      get: {tags:['Agents'],operationId:'listAgentSessionAssets',summary:'List session evidence and memory',security:dataSecurity,
+        description:'Returns the authenticated owner’s stored evidence inventory and derived session memory. Raw evidence is loaded separately by version.',
+        parameters:[pathParameter('sessionId','Session UUID.')],responses:{'200':jsonResponse('Evidence inventory and memory.',{type:'object',properties:{assets:{type:'array',items:{type:'object'}},memories:{type:'array',items:{type:'object'}}}}),...standardErrors}},
+      delete: {tags:['Agents'],operationId:'deleteAgentSessionAssets',summary:'Delete all session evidence and memory',security:dataSecurity,
+        description:'Deletes stored evidence, source excerpts and memory. Conversation messages remain, with deleted source references marked unavailable.',
+        parameters:[pathParameter('sessionId','Session UUID.')],responses:{'200':jsonResponse('Deletion completed.',{type:'object',properties:{deleted:{type:'boolean'}}}),...standardErrors}},
+    },
+    '/v1/agent/sessions/{sessionId}/assets/{version}': {
+      get: {tags:['Agents'],operationId:'getAgentSessionAsset',summary:'Read a stored session asset',security:dataSecurity,
+        parameters:[pathParameter('sessionId','Session UUID.'),pathParameter('version','Immutable evidence version, a SHA-256 hash.')],
+        responses:{'200':jsonResponse('Raw transcript, comments, storyboard or frame payload. Images use JPEG base64.',{type:'object',properties:{data:{type:'object'}}}),...standardErrors}},
+      delete: {tags:['Agents'],operationId:'deleteAgentSessionAsset',summary:'Delete one evidence version and dependent memory',security:dataSecurity,
+        parameters:[pathParameter('sessionId','Session UUID.'),pathParameter('version','Immutable evidence version, a SHA-256 hash.')],
+        responses:{'200':jsonResponse('Deletion completed.',{type:'object',properties:{deleted:{type:'boolean'}}}),...standardErrors}},
+    },
+    '/v1/agent/sessions/{sessionId}/memory/{id}': {
+      delete: {tags:['Agents'],operationId:'deleteAgentSessionMemory',summary:'Forget a session memory entry',security:dataSecurity,
+        parameters:[pathParameter('sessionId','Session UUID.'),pathParameter('id','Memory identifier from the inventory, URL encoded.')],
+        responses:{'200':jsonResponse('Memory deleted.',{type:'object',properties:{deleted:{type:'boolean'}}}),...standardErrors}},
+    },
     '/v1/agent/{sessionId}/runs/{runId}': {
       get: {
         tags: ['Agents'],

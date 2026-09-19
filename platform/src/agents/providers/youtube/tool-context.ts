@@ -23,6 +23,7 @@ export interface EvidenceToolExecution {
 }
 
 export interface AgentToolContext {
+  session?: import('../../runtime/session-evidence').SessionAccess;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;

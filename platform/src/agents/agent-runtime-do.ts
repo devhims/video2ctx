@@ -1,3 +1,4 @@
+import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
@@ -134,6 +135,96 @@ export interface AgentRunRejection {
 }
 
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
+  #sessionStore?: SessionEvidenceStore;
+  private get sessionStore() {
+    return this.#sessionStore ??= new SessionEvidenceStore(this.ctx.storage.sql, this.env.RESEARCH, `agent-session/${this.ctx.id.toString()}/`);
+  }
+  private syncSessionHistory() {
+    const search = this.sessionStore.search;
+    for (const row of this.ctx.storage.sql.exec<{ [K in keyof RunRow]: RunRow[K] }>(`
+      SELECT r.* FROM agent_runs r WHERE NOT EXISTS (
+        SELECT 1 FROM session_history_runs h
+        WHERE h.id = r.id AND h.revision = CAST(r.updated_at AS TEXT) || ':' || r.status
+      ) ORDER BY turn_ordinal
+    `)) {
+      search.upsertHistory({
+        id: row.user_message_id, role: 'user', text: row.message,
+        ordinal: row.turn_ordinal * 2, parentId: row.parent_message_id, createdAt: row.created_at,
+      });
+      if (row.status !== 'completed' || !row.result_json) {
+        search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+        continue;
+      }
+      const result = agentTurnResultSchema.parse(JSON.parse(row.result_json));
+      if (result.warnings.some(warning => warning.code === 'SESSION_EVIDENCE_DELETED')) {
+        search.removeHistory([row.agent_message_id]);
+      } else {
+        search.upsertHistory({
+          id: row.agent_message_id, role: 'assistant', text: result.answer,
+          ordinal: row.turn_ordinal * 2 + 1, parentId: row.user_message_id, createdAt: row.updated_at,
+        });
+      }
+      search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+    }
+  }
+  private hasSessionOwner(conversationId:string, userId:string) {
+    this.ensureAgentRuntimeSchema();
+    return !this.#deleted && this.sql`SELECT id FROM agent_runs WHERE conversation_id=${conversationId} AND user_id=${userId} LIMIT 1`.length > 0;
+  }
+  async getSessionAssets(conversationId:string,userId:string) {
+    if (!this.hasSessionOwner(conversationId,userId)) return null;
+    return this.sessionStore.brief();
+  }
+  async getSessionAsset(conversationId:string,userId:string,version:string) {
+    if (!this.hasSessionOwner(conversationId,userId)) return null;
+    return this.sessionStore.read(z.string().regex(/^[a-f0-9]{64}$/).parse(version));
+  }
+  async deleteSessionMemory(conversationId:string,userId:string,id:string) {
+    if (!this.hasSessionOwner(conversationId,userId)) return null;
+    this.sessionStore.deleteMemory(z.string().max(200).parse(id));
+    return {deleted:true};
+  }
+  async deleteSessionAssets(conversationId:string,userId:string,version?:string) {
+    if (!this.hasSessionOwner(conversationId,userId)) return null;
+    if (version) z.string().regex(/^[a-f0-9]{64}$/).parse(version);
+    // Remove SQL copies synchronously before the first await, including tool traces.
+    const removed = new Set(version ? [version] : this.sessionStore.brief().assets.map(asset=>asset.version));
+    const deletedIds = new Set<string>();
+    const affectedRuns = new Set<string>();
+    const removedVideos = new Set(this.sessionStore.brief().assets.filter(asset=>removed.has(asset.version)).map(asset=>asset.videoId));
+    const previews:string[] = [];
+    for (const row of this.sql<{packet_id:string;packet_json:string;run_id:string;tool_call_id:string}>`SELECT * FROM agent_evidence_packets`) {
+      const packet = evidencePacketSchema.parse(JSON.parse(row.packet_json));
+      if (version ? !packet.assetVersions?.some(id=>removed.has(id)) : false) continue;
+      affectedRuns.add(row.run_id);
+      packet.excerpts.forEach(excerpt=>deletedIds.add(excerpt.id));
+      for (const artifact of packet.artifacts) if (Array.isArray(artifact.data.previews)) {
+        for (const item of artifact.data.previews) if (item && typeof item==='object' && 'collectionId' in item && 'assetId' in item)
+          previews.push(`agent-frames/${item.collectionId}/${item.assetId}.jpg`);
+      }
+      this.sql`DELETE FROM agent_evidence_packets WHERE packet_id=${row.packet_id}`;
+      this.sql`UPDATE agent_tool_calls SET result_json=null WHERE run_id=${row.run_id} AND tool_call_id=${row.tool_call_id}`;
+    }
+    // Include citations read directly by the finalizer from session assets.
+    for (const packet of this.sessionStore.evidence()) if (!version || packet.assetVersions?.some(id=>removed.has(id)))
+      packet.excerpts.forEach(excerpt=>deletedIds.add(excerpt.id));
+    for (const row of this.sql<RunRow>`SELECT * FROM agent_runs WHERE result_json IS NOT NULL`) {
+      const result = agentTurnResultSchema.parse(JSON.parse(row.result_json!));
+      if (version && !affectedRuns.has(row.id) && !result.citations.some(citation=>deletedIds.has(citation.id))
+        && !result.artifacts.some(artifact=>typeof artifact.data.videoId==='string' && removedVideos.has(artifact.data.videoId))) continue;
+      result.citations = result.citations.filter(citation=>!deletedIds.has(citation.id));
+      result.answer = result.answer.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker);
+      result.artifacts = [];
+      result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. This historical answer is not reusable source evidence.'});
+      const serialized = JSON.stringify(result);
+      this.sessionStore.search.removeHistory([row.agent_message_id]);
+      this.sql`UPDATE agent_runs SET result_json=${serialized} WHERE id=${row.id}`;
+      this.sql`UPDATE agent_tool_calls SET result_json=${serialized} WHERE run_id=${row.id} AND tool_name='finalize_answer'`;
+    }
+    this.sessionStore.queueCleanup(previews);
+    await this.sessionStore.delete(version);
+    return {deleted:true};
+  }
   initialState: AgentRuntimeState = { version: 1 };
   #deleted = false;
   readonly #activeRuns = new Set<Promise<void>>();
@@ -142,6 +233,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   async onStart(): Promise<void> {
     this.#deleted = (await this.ctx.storage.get<boolean>('account-deleted')) ?? false;
     this.ensureAgentRuntimeSchema();
+    await this.sessionStore.cleanup();
     if (!this.#deleted) {
       for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
         await this.scheduleRunReconciliation(run);
@@ -386,7 +478,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         return;
       }
       fiber.signal.throwIfAborted();
+      this.syncSessionHistory();
+      this.sessionStore.beginRun(runId);
       await executeResearchRun({
+        session: this.sessionStore,
         classificationDeadlineAt: row.classification_deadline_at ?? undefined,
         onClassifying: deadlineAt => this.updatePhase(runId, 'routing', deadlineAt),
         researchDeadlineAt: row.research_deadline_at ?? undefined,
@@ -516,10 +611,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
 
     try {
-      const packet = evidencePacketSchema.parse(await execution.execute());
+      const packet = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
+      if (packet.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
       this.assertRunActive(runId);
       const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
       if (credits > AGENT_CREDIT_RESERVE / (MAX_TOOL_CALLS - 1)) throw new Error('Evidence tool exceeded its credit allowance.');
+      this.sessionStore.savePacket(packet);
       const serialized = JSON.stringify(packet);
       this.sql`
         INSERT INTO agent_evidence_packets (packet_id, run_id, tool_call_id, packet_json, created_at)
@@ -595,13 +692,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE run_id = ${runId} AND status = 'completed'
     `[0]?.credits ?? 0;
     const history = this.readConversationHistory(run);
+    const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
+    const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
     const result = buildAgentTurnResult({
       runId,
       conversationId: run.conversation_id,
       userMessageId: run.user_message_id,
       agentMessageId: run.agent_message_id,
     }, admission, parsedInput,
-    conversationEvidence(evidenceWithConversationMetadata(this.readEvidencePackets(runId), history), history), creditsCharged);
+    conversationEvidence(evidenceWithConversationMetadata([...citedSessionEvidence, ...this.readEvidencePackets(runId)], history), history), creditsCharged);
+    this.sessionStore.remember(runId, parsedInput.memoryUpdates ?? [], citedSessionEvidence);
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();
     this.sql`
@@ -620,6 +720,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       SET status = 'completed', phase = 'completed', result_json = ${serialized}, error = null, updated_at = ${timestamp}
       WHERE id = ${runId}
     `;
+    this.sessionStore.search.upsertHistory({
+      id: run.agent_message_id, role: 'assistant', text: result.answer,
+      ordinal: run.turn_ordinal * 2 + 1, parentId: run.user_message_id, createdAt: timestamp,
+    });
     this.recordEvent(runId, 'run.completed', {
       runId,
       route: decision.route,
@@ -702,8 +806,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // Abort propagates to provider and model calls. Drain tool promises before
     // removing evidence so a late completion cannot recreate private data.
     await Promise.allSettled([...this.#inFlightEvidence.values()]);
+    await this.sessionStore.delete();
+    this.sessionStore.search.clearHistory();
     for (const table of ['agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_runs']) {
+      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
     // SDK snapshots contain run identifiers only, but clear those too.
@@ -826,6 +932,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       const result = agentTurnResultSchema.parse(JSON.parse(parent.result_json));
       const citedIds = new Set(result.citations.map(citation => citation.id));
       const evidence = this.readEvidencePackets(parent.id).filter(packet => packet.kind !== 'youtube_video'
+        && !packet.warnings.some(warning=>warning.code==='PARTIAL_TRANSCRIPT' || warning.code==='NO_TRANSCRIPT_EVIDENCE')
         && packet.excerpts.some(excerpt => citedIds.has(excerpt.id)));
       const metadata = metadataForConversation(this.sql<{ packet_json: string; created_at: number }>`
         SELECT packet_json, created_at FROM agent_evidence_packets
@@ -837,7 +944,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         agentMessageId: parent.agent_message_id,
         parentMessageId: parent.parent_message_id,
         user: parent.execution_message ?? parent.message,
-        assistant: result.answer,
+        assistant: result.warnings.some(warning=>warning.code==='SESSION_EVIDENCE_DELETED') ? '[Historical answer omitted because its supporting evidence was deleted.]' : result.answer,
         ...(metadata.length ? { metadata } : {}),
         ...(evidence.length ? { evidence } : {}),
         resourceIds: [...new Set([
@@ -873,10 +980,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private persistRoute(runId: string, decision: CapabilityRouteDecision): void {
     if (this.#deleted) return;
+    const previous=this.readRoute(runId);
+    if (previous?.route==='finalize' && (decision.route==='inspect_video' || decision.route==='topic_research')) {
+      this.sql`UPDATE agent_runs SET finalization_deadline_at=null, research_deadline_at=null WHERE id=${runId}`;
+    }
     this.sql`
       INSERT INTO agent_routes (run_id, decision_json, created_at)
       VALUES (${runId}, ${JSON.stringify(decision)}, ${Date.now()})
-      ON CONFLICT(run_id) DO NOTHING
+      ON CONFLICT(run_id) DO UPDATE SET decision_json=excluded.decision_json
     `;
   }
 

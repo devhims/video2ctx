@@ -64,7 +64,8 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
           ...frames.failures.map(failure => ({ code: 'FRAME_UNAVAILABLE', message: `Frame at ${failure.timestampMs}ms is unavailable (${failure.code}).` })),
           ...analysis.warnings.map(message => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
         ],
-        usage: [{ operation: 'frames', credits: meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+        assetVersions: response.assetVersions,
+        usage: [{ operation: 'frames', credits: response.sessionReused ? 0 : meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
       if (context.saveFramePreviews) {
         try {

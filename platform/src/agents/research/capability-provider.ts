@@ -37,9 +37,9 @@ export function createCapabilityProvider(
       requirePinnedVideo(videoId);
       return await provider.tracks(videoId);
     },
-    transcript: async (videoId, language) => {
+    transcript: async (videoId, language, options) => {
       requirePinnedVideo(videoId);
-      return await provider.transcript(videoId, language);
+      return await provider.transcript(videoId, language, options);
     },
     comments: async (videoId, options) => {
       requirePinnedVideo(videoId);

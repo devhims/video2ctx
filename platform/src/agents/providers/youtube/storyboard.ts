@@ -7,6 +7,7 @@ export const storyboardManifestSchema = z.object({
   lastSampleMs: z.number().int().nonnegative(),
 });
 export interface StoryboardSelectionOptions {
+  refresh?: boolean;
   maxSheets?: number;
   sheetIndexes?: number[];
   metadataOnly?: boolean;

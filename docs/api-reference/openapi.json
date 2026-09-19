@@ -694,6 +694,398 @@
         "x-video2ctx-audience": "consumer"
       }
     },
+    "/v1/agent/sessions/{sessionId}/assets": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "listAgentSessionAssets",
+        "summary": "List session evidence and memory",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "description": "Returns the authenticated owner’s stored evidence inventory and derived session memory. Raw evidence is loaded separately by version.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence inventory and memory.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "assets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "memories": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "delete": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "deleteAgentSessionAssets",
+        "summary": "Delete all session evidence and memory",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "description": "Deletes stored evidence, source excerpts and memory. Conversation messages remain, with deleted source references marked unavailable.",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/agent/sessions/{sessionId}/assets/{version}": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "getAgentSessionAsset",
+        "summary": "Read a stored session asset",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Immutable evidence version, a SHA-256 hash.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw transcript, comments, storyboard or frame payload. Images use JPEG base64.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      },
+      "delete": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "deleteAgentSessionAsset",
+        "summary": "Delete one evidence version and dependent memory",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Immutable evidence version, a SHA-256 hash.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
+    "/v1/agent/sessions/{sessionId}/memory/{id}": {
+      "delete": {
+        "tags": [
+          "Agents"
+        ],
+        "operationId": "deleteAgentSessionMemory",
+        "summary": "Forget a session memory entry",
+        "security": [
+          {
+            "bearerApiKey": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "cliSession": []
+          },
+          {
+            "apiKey": []
+          },
+          {
+            "demoUser": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "description": "Session UUID.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Memory identifier from the inventory, URL encoded.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "x-video2ctx-audience": "consumer"
+      }
+    },
     "/v1/agent/{sessionId}/runs/{runId}": {
       "get": {
         "tags": [
@@ -6903,6 +7295,9 @@
                           "useStoryboard": {
                             "type": "boolean"
                           },
+                          "refreshEvidence": {
+                            "type": "boolean"
+                          },
                           "answerDetail": {
                             "type": "string",
                             "enum": [
@@ -6941,6 +7336,9 @@
                             "pattern": "^[A-Za-z0-9_-]{11}$"
                           },
                           "useStoryboard": {
+                            "type": "boolean"
+                          },
+                          "refreshEvidence": {
                             "type": "boolean"
                           },
                           "answerDetail": {
@@ -8176,6 +8574,9 @@
                       "useStoryboard": {
                         "type": "boolean"
                       },
+                      "refreshEvidence": {
+                        "type": "boolean"
+                      },
                       "answerDetail": {
                         "type": "string",
                         "enum": [
@@ -8214,6 +8615,9 @@
                         "pattern": "^[A-Za-z0-9_-]{11}$"
                       },
                       "useStoryboard": {
+                        "type": "boolean"
+                      },
+                      "refreshEvidence": {
                         "type": "boolean"
                       },
                       "answerDetail": {

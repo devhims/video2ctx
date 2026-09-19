@@ -34,6 +34,7 @@
       "database_id": "00000000-0000-0000-0000-000000000001"
     }
   ],
+  "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-test-evidence"}],
   "vars": {
     "STARTER_ONBOARDING_CREDITS": "1000",
     "BUILDER_MONTHLY_CREDITS": "20000"

@@ -34,10 +34,10 @@ export interface YouTubeAgentProvider {
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
   video(videoId: string): Promise<CachedResult<Video>>;
   tracks(videoId: string): Promise<CachedResult<CaptionTrackList>>;
-  transcript(videoId: string, language?: string): Promise<CachedResult<Transcript>>;
+  transcript(videoId: string, language?: string, options?: { refresh?: boolean }): Promise<CachedResult<Transcript>>;
   comments(
     videoId: string,
-    options?: { continuation?: string; all?: boolean },
+    options?: { continuation?: string; all?: boolean; refresh?: boolean },
   ): Promise<CachedResult<CommentsPage | CommentsCollection>>;
   endscreen(videoId: string): Promise<CachedResult<EndscreenElement[]>>;
   channel(channelId: string): Promise<CachedResult<Channel>>;
@@ -72,8 +72,12 @@ export function createYouTubeAgentProvider(
       value: await provider.getTracks(env, videoId),
       cacheStatus: 'miss',
     }),
-    transcript: (videoId, language) => provider.getTranscript(env, videoId, language),
-    comments: (videoId, options = {}) => options.all
+    transcript: async (videoId, language, options) => options?.refresh
+      ? {value: await runYouTubeOperation(env, {kind:'transcript',id:videoId,lang:language,granularity:'word'}),cacheStatus:'miss'}
+      : provider.getTranscript(env, videoId, language),
+    comments: async (videoId, options = {}) => options.refresh
+      ? {value: options.all ? await runYouTubeOperation(env, {kind:'all-comments',id:videoId,maxPages:100}) : await runYouTubeOperation(env, {kind:'comments',id:videoId,continuation:options.continuation}),cacheStatus:'miss'}
+      : options.all
       ? provider.getAllComments(env, videoId)
       : provider.getComments(env, videoId, options.continuation),
     endscreen: async (videoId) => ({
