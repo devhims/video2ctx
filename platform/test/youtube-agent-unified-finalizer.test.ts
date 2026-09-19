@@ -279,7 +279,7 @@ it('fails after one repair instead of persisting a repeated non-answer', async (
   const {options,classifier,output}=setup('context_answer');
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,blocks:[{text:'The',evidenceIds:[]}]})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
-  await expect(executeResearchRun(options)).rejects.toThrow(/fragment/);
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
   expect(finalizer.doGenerateCalls).toHaveLength(2);
   expect(options.finalize).not.toHaveBeenCalled();
 });
@@ -297,4 +297,119 @@ it('repairs a paraphrased first message using the original stored wording', asyn
   expect(attempts).toBe(2);
   expect(options.finalize).toHaveBeenCalledTimes(1);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+
+it('repairs a truncated comparison after the old 40-second cutoff', async () => {
+  vi.useFakeTimers();
+  try {
+    const {options, classifier, output} = setup('context_answer', true);
+    let attempts = 0;
+    const finalizer = new MockLanguageModelV4({doGenerate: async () => {
+      const attempt = attempts++;
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 29_000 : 16_000));
+      return {content:[{type:'text',text:JSON.stringify(output)}],
+        finishReason:{unified:attempt === 0 ? 'length' : 'stop',raw:'stop'},usage,warnings:[]};
+    }});
+    models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+    const startedAt = Date.now();
+    const run = executeResearchRun(options).then(()=> 'completed', error=>error.message);
+    await vi.advanceTimersByTimeAsync(45_001);
+    expect(await run).toBe('completed');
+    expect(options.onFinalizing).toHaveBeenCalledWith(startedAt + 60_000);
+    expect(options.finalize).toHaveBeenCalledOnce();
+    expect(finalizer.doGenerateCalls[1]!.maxOutputTokens).toBeGreaterThan(finalizer.doGenerateCalls[0]!.maxOutputTokens!);
+  } finally { vi.useRealTimers(); }
+});
+
+
+it.each(['finalize', 'inspect_video'] as const)('loads both saved comparison transcripts and repairs a one-sided %s answer without provider retrieval', async route => {
+  const {options, classifier} = setup('context_answer');
+  const ids = ['abcdefghijk', 'lmnopqrstuv'];
+  const versions = ['a'.repeat(64), 'b'.repeat(64)];
+  const packets: EvidencePacket[] = ids.map((videoId, index) => ({packetId:`saved:${index}`,kind:'youtube_transcript',
+    sources:[{id:`source:${index}`,provider:'youtube',kind:'transcript',videoId}],
+    excerpts:[{id:`evidence:${versions[index]}:0`,sourceId:`source:${index}`,text:`The video explains method ${index + 1}.`}],
+    artifacts:[{type:'youtube_complete_transcript',data:{requiresAnalysis:false}}],warnings:[],usage:[],assetVersions:[versions[index]!] }));
+  const readTranscriptEvidence = vi.fn(async version => ({packets:[packets[versions.indexOf(version)]!]}));
+  options.message='Compare the earlier video with this new one.';
+  options.persistedRoute=route === 'finalize' ? {route,responseIntent:'context_answer',contextScope:'video',reason:'Saved transcripts.',comparisonVideoIds:ids}
+    : {route,videoId:ids[1]!,useStoryboard:false,comparisonVideoIds:ids};
+  options.finalizationDeadlineAt=Date.now()+60_000;
+  options.session={brief:()=>({assets:ids.map((videoId,index)=>({version:versions[index],kind:'transcript',videoId,current:true,collectedAt:1,details:{}})),memories:[]}),
+    readTranscriptEvidence,readEvidence:vi.fn(),searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+  let attempts=0;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
+    expect(readTranscriptEvidence).toHaveBeenCalledTimes(2);
+    const answer=call.responseFormat?.type==='json';
+    if (answer) {
+      expect(JSON.stringify(call.prompt)).toContain('method 1');
+      expect(JSON.stringify(call.prompt)).toContain('method 2');
+    }
+    return {content:[{type:'text',text:answer?JSON.stringify({confidence:'medium',warnings:[],blocks:[
+      {text:'The first video explains method 1.',evidenceIds:['ref_1']},
+      ...(attempts++ ? [{text:'The second video explains method 2.',evidenceIds:['ref_2']}] : []),
+    ]}):'Context is ready.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
+  }});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  options.finalize=vi.fn(async(_id,input)=>buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
+    {userId:'user',creditsRemaining:100},input,packets,0));
+  await executeResearchRun(options);
+  expect(attempts).toBe(2);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  const result=await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations).toMatchObject(ids.map(videoId=>({videoId})));
+  expect(result.artifacts).toContainEqual({type:'research_coverage',data:{targetVideos:2,requiredVideos:2,reviewedVideos:2}});
+});
+
+it('stops stalled context gathering and still generates an answer', async () => {
+  vi.useFakeTimers();
+  try {
+    const {options, classifier, output}=setup('context_answer');
+    options.session={brief:()=>({assets:[],memories:[]}),readEvidence:vi.fn(),searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+    const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
+      if (call.responseFormat?.type!=='json') return new Promise(()=>{});
+      expect(JSON.stringify(call.prompt)).toContain('contextIncomplete');
+      return {content:[{type:'text',text:JSON.stringify(output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
+    }});
+    models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+    const run=executeResearchRun(options);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await run;
+    expect(options.finalize).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
+});
+
+
+it('allows a comparison clarification without demanding video citations', async () => {
+  const {options}=setup('clarification');
+  options.persistedRoute={route:'finalize',responseIntent:'clarification',reason:'Which aspect should be compared?',
+    comparisonVideoIds:['abcdefghijk','lmnopqrstuv']};
+  await executeResearchRun(options);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+
+it.each(['length', 'timeout', 'length_then_timeout'] as const)('explains direct finalization failure: %s', async failure => {
+  vi.useFakeTimers();
+  try {
+    const { options, decision, finalizer } = setup('context_answer');
+    let attempts = 0;
+    finalizer.doGenerate = async () => {
+      attempts++;
+      if (failure === 'timeout' || (failure === 'length_then_timeout' && attempts > 1)) return new Promise(() => {});
+      return { content: [{ type: 'text', text: '{"blocks":[' }],
+        finishReason: { unified: 'length', raw: 'length' }, usage, warnings: [] };
+    };
+    const expected = failure === 'length_then_timeout' ? 'output limit, and the repair attempt timed out'
+      : failure === 'length' ? 'output limit and could not be completed after repair' : 'Finalization timed out';
+    const run = executeResearchRun({ ...options, persistedRoute: decision });
+    const check = expect(run).rejects.toMatchObject({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
+      message: expect.stringContaining(expected) });
+    await vi.advanceTimersByTimeAsync(60_001);
+    await check;
+    expect(options.finalize).not.toHaveBeenCalled();
+    expect(attempts).toBe(2);
+  } finally { vi.useRealTimers(); }
 });

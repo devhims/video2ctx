@@ -503,3 +503,43 @@ test('views stored session evidence and deletes assets with their dependent memo
   await expect(panel.getByRole('heading',{name:'Memory (0)'})).toBeVisible();
   await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
 });
+
+test('finalization failure reasons stay visible after refresh for failed and partial runs', async ({ page, context }) => {
+  await login(context, 'allowed');
+  // A session and a follow-up run have different IDs. Keep this fixture local
+  // so earlier tests that submit follow-ups cannot change the run under test.
+  const runId = 'af8c1283-784d-4baf-8632-28173714766d';
+  const stamp = 1789111800000;
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, route => route.fulfill({ json: {
+    sessionId, title: 'Finalization failure', latestMessagePreview: 'Compare the videos.',
+    lastRunId: runId, runCount: 2, createdAt: stamp, updatedAt: stamp, nextCursor: null,
+    messages: ['user', 'assistant'].map((role, index) => ({
+      messageId: index ? runId : 'db52125f-fd61-4e8e-8505-2ebefc775375', runId,
+      parentMessageId: null, conversationTurn: 2, role, status: 'completed',
+      content: index ? 'Saved response' : 'Compare the videos.', createdAt: stamp, updatedAt: stamp,
+    })),
+  } }));
+  let partial = false;
+  const reason = 'The answer reached its output limit, and the repair attempt timed out. Any successfully saved evidence remains available in this session. Retry the question to use it again.';
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
+    status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+      run: { sessionId, runId, status: partial ? 'completed' : 'failed',
+        ...(partial ? { result: { outcome: 'partial', answer: `Partial evidence summary\n\n${reason}\n\nA supported finding.`,
+          sources: [], warnings: [{ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: reason }] } } : { error: reason }) },
+      phase: partial ? 'completed' : 'failed', tools: [],
+    })}\n\n`,
+  }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const alert = page.locator('.agent-assistant-message').last().getByRole('alert');
+  await expect(alert).toContainText('This run failed');
+  await expect(alert).toContainText(reason);
+  await page.reload();
+  await expect(alert).toContainText(reason);
+  partial = true;
+  await page.reload();
+  await expect(alert).toContainText('Answer incomplete');
+  await expect(alert).toContainText(reason);
+  await expect(page.locator('.agent-caveats')).not.toHaveAttribute('open');
+  await page.reload();
+  await expect(alert).toContainText(reason);
+});

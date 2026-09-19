@@ -5,6 +5,7 @@ import { generateText, tool, type LanguageModel } from 'ai';
 import {
   capabilityRouteDecisionSchema,
   answerDetailSchema,
+  comparisonVideoIdsSchema,
   numberedItemCountSchema,
   type CapabilityRouteDecision,
   type EvidencePacket,
@@ -19,6 +20,7 @@ import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/dea
 // an explicit visual-tool choice, and research also requires breadth and search.
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'finalize']),
+  comparisonVideoIds: comparisonVideoIdsSchema.describe('For a comparison of specific videos, list every subject, including references resolved from earlier turns. These are answer subjects, separate from videoId which selects a new inspection. Omit for comparisons of concepts within one video or open-ended discovery.'),
   refreshEvidence: z.boolean().optional().describe('True only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
   responseIntent: z.enum(['context_answer', 'clarification', 'rejected']).optional().describe('Required for finalize: answer using existing context, ask for missing scope, or decline an unsupported request.'),
   contextScope: z.enum(['history', 'video', 'mixed']).optional().describe('For context_answer: history for questions about conversation messages or user preferences, video for source facts, mixed when both are needed. History-only requests cannot fetch video evidence.'),
@@ -114,13 +116,14 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
         'Currently only YouTube is supported. Reject requests that require inspecting videos hosted on other platforms, local uploads, or general web research. Do not silently replace an explicitly requested unsupported source with YouTube.',
         'YouTube topic discovery, recommendations, comparisons, summaries, extraction, visual interpretation, and follow-ups synthesizing previously researched videos are supported. A topic question that can be answered by researching YouTube videos does not need to mention YouTube or include a URL. Do not reinterpret an unrelated task as a video search just to accept it.',
         'A general topic or recommendation request does not need a supplied video. Do not ask for a video URL for such requests. With no suppliedVideoIds, inspect_video is never valid.',
-        'Return topic_research when the request needs discovery, comparisons, multiple sources, or synthesis beyond one video. When the user names a topic and asks for an explanation, understanding, comparison, or research, the task is sufficiently scoped to begin discovery. Unfamiliar concepts, terminology, methods, product names, or model names do not by themselves require clarification, even if they have several possible meanings. Preserve the supplied terms together in searchQuery and let YouTube discovery establish their context and what evidence is available. Do not require the user to define the terms they are asking you to understand. Do not invent a field or expand an unfamiliar term to a guessed meaning before searching.',
+        'Return topic_research when the request needs discovery or new evidence from multiple videos. Specific-video comparisons with reusable evidence follow the comparisonVideoIds rules below. When the user names a topic and asks for an explanation, understanding, comparison, or research, the task is sufficiently scoped to begin discovery. Unfamiliar concepts, terminology, methods, product names, or model names do not by themselves require clarification, even if they have several possible meanings. Preserve the supplied terms together in searchQuery and let YouTube discovery establish their context and what evidence is available. Do not require the user to define the terms they are asking you to understand. Do not invent a field or expand an unfamiliar term to a guessed meaning before searching.',
         'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". Also set researchVideoCount explicitly. Usually choose 1-2 for a narrow question, 3 for an ordinary comparison, and 4-8 only when the requested breadth warrants it. Fewer focused sources leave more time for careful extraction. This is a research target, not proof that the answer is incomplete if fewer sufficient sources are found.',
         'For all finalize decisions set researchVideoCount to 0. For every executable route explicitly choose its researchVideoCount.',
         'Set requiredVideoCount only when the user explicitly requests that many source videos, not that many recommendations or answer items. Set researchVideoCount to that required count up to the capacity of 8; preserve the actual required count separately. For inspect_video set researchVideoCount to 1.',
         'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name and requested task. The application executes this search immediately; no separate search-planning step is needed.',
         'When the request targets a supplied channel, set channelId from suppliedChannelIds. The application will inspect its identity and Videos tab and restrict search to that channel. Do not replace channel research with an unrestricted search.',
-        'Return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
+        'Resolve every subject of a specific-video comparison into comparisonVideoIds using suppliedVideoIds and history. Do not drop an earlier video when the current message introduces a new URL. If all subjects have saved transcripts, choose finalize. If just one needs retrieval, choose inspect_video for that video and retain all comparisonVideoIds. If several need retrieval, choose topic_research with comparisonVideoIds and researchVideoCount matching that set; discovery will be skipped. If the earlier reference is ambiguous, ask for clarification.',
+        'Otherwise return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
         'For inspect_video, copy the selected ID exactly from suppliedVideoIds. Never invent an ID.',
         'Choose finalize with responseIntent clarification only when required references or the requested task are missing and discovery cannot reasonably proceed: for example, "summarize this video" with no resolvable video, or "compare it with the other one" with no resolvable subjects. Uncertainty about the meaning of named topics is a research question, not missing scope. If discovery later leaves materially different interpretations unresolved, the research agent can ask a focused clarification then. Describe the missing scope in reason. The finalizer will write the question or decline.',
         'Routing examples: "Explain event sourcing versus CQRS" -> topic_research, comparative, searchQuery "event sourcing vs CQRS", useStoryboard false. "Help me understand reservoir computing" -> topic_research, focused, searchQuery "reservoir computing explained", useStoryboard false. These requests need discovery even if you do not know the terms. "Explain that approach" without a resolvable prior reference -> finalize with responseIntent clarification. "Write a sorting function" -> finalize with responseIntent rejected.',
@@ -173,10 +176,11 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
     }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
-    input.onDiagnostic?.({ attempt, outcome: parsed.success ? 'valid' : 'invalid',
+    if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
+    input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
       elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });
-    if (!parsed.success) continue;
+    if (!parsed.success || feedback.length > 0) continue;
     const decision = parsed.data;
     const resolved = resolveClassification(capabilityRouteDecisionSchema.parse(decision), videoIds);
     if (resolved.route === 'topic_research') {
@@ -189,6 +193,32 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   }
   throw new ApiError(502, 'AGENT_CLASSIFICATION_INVALID',
     `Classification could not produce a valid routing decision after one repair. Invalid fields: ${feedback.map(issue => issue.path || 'tool call').join(', ')}. Please retry the request.`);
+}
+
+function comparisonScopeIssues(
+  decision: z.infer<typeof classifierDecisionSchema>, input: CapabilityClassifierInput, videoIds: string[],
+): {path: string; code: string; message: string}[] {
+  const subjects = decision.comparisonVideoIds;
+  // Guard the concrete follow-up form that previously passed schema validation
+  // while silently dropping the prior video. Other phrasing is resolved by the classifier.
+  const explicit = extractYouTubeVideoIds(input.message);
+  const previous = (input.conversationHistory ?? []).at(-1)?.resourceIds ?? [];
+  const expected = /\bcompare\s+(?:this|that|the previous|the earlier)\s+video\s+(?:with|to)\b/i.test(input.message)
+    && explicit.length === 1 && previous.length === 1 && previous[0] !== explicit[0]
+    ? [previous[0]!, explicit[0]!] : [];
+  const missing = decision.route !== 'finalize' || decision.responseIntent === 'context_answer';
+  if ((subjects && (new Set(subjects).size !== subjects.length || subjects.some(id => !videoIds.includes(id))))
+    || (missing && expected.some(id => !subjects?.includes(id)))
+    || (decision.route === 'inspect_video' && subjects && !subjects.includes(decision.videoId!))) {
+    return [{path:'comparisonVideoIds',code:'invalid_comparison_scope',
+    message:`Preserve every comparison subject using distinct supplied IDs. Expected subjects for this follow-up: ${expected.join(', ') || 'resolve from supplied history and IDs'}. Ask for clarification if the reference is ambiguous.`}];
+  }
+  if (decision.route === 'inspect_video' && subjects?.some(id => id !== decision.videoId
+    && (decision.refreshEvidence || !input.sessionBrief?.assets.some(asset => asset.videoId === id && asset.kind === 'transcript' && asset.current)))) {
+    return [{path:'route',code:'missing_comparison_evidence',message:'Several comparison subjects need evidence. Choose topic_research with all comparisonVideoIds, or clarify missing references.'}];
+  }
+  if (subjects && decision.route === 'topic_research' && decision.researchVideoCount !== subjects.length) return [{path:'researchVideoCount',code:'invalid_comparison_count',message:'Match researchVideoCount to the specific comparison subjects.'}];
+  return [];
 }
 
 export function extractYouTubeChannelIds(message: string): string[] {

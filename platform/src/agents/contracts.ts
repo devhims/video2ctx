@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const comparisonVideoIdsSchema = z.array(z.string().regex(/^[A-Za-z0-9_-]{11}$/)).min(2).max(8).optional();
+
 export const answerDetailSchema = z.enum(['standard', 'detailed']);
 
 export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_video']);
@@ -18,6 +20,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     useStoryboard: z.boolean().optional(),
     refreshEvidence: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
+    comparisonVideoIds: comparisonVideoIdsSchema,
     numberedItemCount: numberedItemCountSchema,
   }),
   z.object({
@@ -27,6 +30,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     useStoryboard: z.boolean().optional(),
     refreshEvidence: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
+    comparisonVideoIds: comparisonVideoIdsSchema,
     numberedItemCount: numberedItemCountSchema,
   }),
   z.object({
@@ -44,6 +48,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     historySelection: z.enum(['first_user_message', 'all_user_messages', 'relevant_messages']).optional(),
     reason: z.string().trim().min(1).max(1_000),
     answerDetail: answerDetailSchema.optional(),
+    comparisonVideoIds: comparisonVideoIdsSchema,
     numberedItemCount: numberedItemCountSchema,
   }),
 ]);

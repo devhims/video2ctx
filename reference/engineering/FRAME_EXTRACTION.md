@@ -160,7 +160,7 @@ The repeated request passed after that clarification. Run `a7c684ae-c469-48df-82
 
 ## Visual research deadlines
 
-Visual-enabled runs receive a persisted 120-second research window. Ordinary nonvisual research retains its 40-second window. The visual window accommodates frame transport and analysis with time for source selection; individual frame calls now allocate the remaining time as described below. Finalization retains a separate 40-second budget. Recovery uses the stored deadline without resetting it, and user cancellation remains effective.
+Visual-enabled runs receive a persisted 120-second research window. Ordinary nonvisual research retains its 40-second window. The visual window accommodates frame transport and analysis with time for source selection; individual frame calls now allocate the remaining time as described below. Finalization retains a separate 60-second budget. Recovery uses the stored deadline without resetting it, and user cancellation remains effective.
 
 This fixes a production follow-up in session `af8bd853-7ede-894f-8d19-28db752b92d8`, run `ba536e1f-9ae4-47de-b223-eea74852497f`. It called `get_video_frames` after an unsuccessful storyboard lookup, but the frame operation failed after 35.842 seconds, consistent with consuming the remainder of the former 40-second research window. The finalizer reported only the earlier storyboard error because it snapshotted tool failures before the aborted frame call settled.
 

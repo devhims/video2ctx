@@ -3,7 +3,7 @@ export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
 // Visual runs include source selection, bounded frame extraction and analysis.
 // Individual frame calls allocate from this shared window before starting.
 export const AGENT_VISUAL_RESEARCH_TIMEOUT_MS = 120_000;
-export const AGENT_FINALIZATION_TIMEOUT_MS = 40_000;
+export const AGENT_FINALIZATION_TIMEOUT_MS = 60_000;
 export const AGENT_PERSISTENCE_TIMEOUT_MS = 30_000;
 
 export function researchTimeoutMs(useStoryboard: boolean | undefined): number {

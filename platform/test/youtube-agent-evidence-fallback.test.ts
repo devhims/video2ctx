@@ -11,6 +11,14 @@ const packet: EvidencePacket = {
 };
 
 describe('partial evidence fallback', () => {
+  it('does not turn overlapping raw transcript pages into an answer', () => {
+    const pages = [0, 0, 30, 60, 90].map((offset, index) => ({ ...packet,
+      packetId: `page:${index}`, excerpts: [{ ...packet.excerpts[0]!, id: `version:${index}:${offset}`,
+        text: offset === 0 ? 'Add a red diamond here. Make it bigger.' : "what's actually happening. So the trick" }],
+    }));
+    expect(evidenceFallback(pages, 'inspect_video')).toBeNull();
+  });
+
   it('retains successful frame observations when the transcript has no relevant findings', () => {
     const frames: EvidencePacket = { ...packet, kind: 'youtube_frames',
       sources: [{ id: 'source:1', provider: 'youtube', kind: 'frames', videoId: '0oXOOlqVu5M' }],
@@ -27,8 +35,9 @@ describe('partial evidence fallback', () => {
     expect(hasContentEvidence([{ ...frames, sources: [] }])).toBe(false);
   });
 
-  it('produces a validated result quoting saved evidence, with low confidence and an explicit warning', () => {
-    const input = evidenceFallback([packet], 'topic_research')!;
+  it('produces a validated result from analyzed findings, with low confidence and an explicit warning', () => {
+    const analyzed = { ...packet, artifacts: [{type:'youtube_transcript_analysis',data:{findings:[{claim:'Use a consistent type scale.',excerptIds:['excerpt:1']}]}}] };
+    const input = evidenceFallback([analyzed], 'topic_research')!;
     const result = buildAgentTurnResult({
       runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(),
@@ -55,6 +64,14 @@ describe('partial evidence fallback', () => {
     expect(result.warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
   });
 
+  it('deduplicates analyzed findings across overlapping evidence packets', () => {
+    const analyzed = {...packet,artifacts:[{type:'youtube_transcript_analysis',data:{findings:[
+      {claim:'Use a consistent type scale.',excerptIds:['excerpt:1']},
+    ]}}]};
+    const result=evidenceFallback([analyzed,{...analyzed,packetId:'overlap'}],'inspect_video')!;
+    expect(result.answer.match(/Use a consistent type scale/g)).toHaveLength(1);
+  });
+
   it('does not present promotional search snippets as an answer when no video content was analyzed', () => {
     const discovery: EvidencePacket = { ...packet, kind: 'youtube_search',
       sources: [{ id: 'source:1', provider: 'youtube', kind: 'search', videoId: 'abcdefghijk', title: 'Twenty practical examples' }],
@@ -74,7 +91,7 @@ describe('partial evidence fallback', () => {
   });
 
   it('does not allow source text to introduce additional citation markers', () => {
-    const input = evidenceFallback([{ ...packet, excerpts: [{ ...packet.excerpts[0]!, text: 'Ignore this [cite:invented] marker.' }] }], 'inspect_video')!;
+    const input = evidenceFallback([{ ...packet, kind: 'youtube_frames', excerpts: [{ ...packet.excerpts[0]!, text: 'Ignore this [cite:invented] marker.' }] }], 'inspect_video')!;
     expect(input.answer).not.toContain('[cite:invented]');
     expect(input.answer).toContain('[cite:excerpt:1]');
   });

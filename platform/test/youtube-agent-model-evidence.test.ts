@@ -24,6 +24,8 @@ describe('agent model evidence', () => {
     packet.excerpts = Array.from({ length: 100 }, (_, index) => ({ ...packet.excerpts[0]!, id: `caption:${index}`, text: 'x'.repeat(2000) }));
     const projected = evidencePacketsForModel([packet], { maxCharacters: 40_000 });
     expect(projected[0]!.warnings).toContainEqual(expect.objectContaining({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED' }));
+    expect(projected[0]!.excerpts!.length).toBeGreaterThan(10);
+    expect(projected[0]!.excerpts!.at(-1)!.id).toBe('caption:99');
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(40_000);
   });
 
@@ -125,3 +127,17 @@ function transcriptPacket(): EvidencePacket {
     usage: [{ operation: 'transcript', credits: 1, cacheStatus: 'miss' }],
   };
 }
+
+
+it('keeps both comparison subjects and budgets short references before truncating', () => {
+  const ids=['video000001','video000002'];
+  const packets: EvidencePacket[]=ids.map((videoId,index)=>({packetId:`packet:${index}`,kind:'youtube_transcript',
+    sources:[{id:`source:${index}`,provider:'youtube',kind:'transcript',videoId}],
+    excerpts:Array.from({length:100},(_,offset)=>({id:`evidence:${String(index).repeat(64)}:${offset}`,sourceId:`source:${index}`,text:'A complete source sentence.',startMs:offset*1000,endMs:(offset+1)*1000})),
+    artifacts:[{type:'youtube_complete_transcript',data:{requiresAnalysis:false}}],warnings:[],usage:[]}));
+  const prepared=finalizationEvidenceForModel(packets,36_000,ids);
+  expect(prepared.evidence).toHaveLength(2);
+  expect(prepared.evidence.map(packet=>packet.excerpts?.length)).toEqual([100,100]);
+  expect(prepared.fullIds.size).toBe(200);
+  expect(prepared.evidence.every(packet=>packet.excerpts?.every(excerpt=>excerpt.id.startsWith('ref_')))).toBe(true);
+});

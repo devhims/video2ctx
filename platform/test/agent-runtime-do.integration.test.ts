@@ -272,7 +272,7 @@ test.each(['routing', 'executing', 'finalizing'])('migrates an active legacy %s 
     await instance.getRun(runId);
     expect(instance.sql`SELECT research_deadline_at, finalization_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
       .toEqual({ research_deadline_at: phase === 'routing' ? null : createdAt + 40_000,
-        finalization_deadline_at: phase === 'finalizing' ? updatedAt + 40_000 : null });
+        finalization_deadline_at: phase === 'finalizing' ? updatedAt + 60_000 : null });
     expect(instance.sql`SELECT classification_deadline_at FROM agent_runs WHERE id = ${runId}`[0])
       .toEqual({ classification_deadline_at: phase === 'routing' ? updatedAt + 20_000 : null });
   });

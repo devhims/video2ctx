@@ -17,8 +17,11 @@ export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean 
 export function evidenceFallback(
   packets: readonly EvidencePacket[],
   intent: 'topic_research' | 'inspect_video',
+  failureMessage?: string,
 ): FinalizeAnswerInput | null {
   const blocks: string[] = [];
+  const seen = new Set<string>();
+  const add = (key: string, text: string) => { if (!seen.has(key)) { seen.add(key); blocks.push(text); } };
   if (!hasContentEvidence(packets)) {
     const links = packets.flatMap(packet => packet.sources.flatMap(source => {
       const excerpt = packet.excerpts.find(e => e.sourceId === source.id && /^[A-Za-z0-9:_-]+$/.test(e.id));
@@ -43,21 +46,28 @@ export function evidenceFallback(
     const findings = analysis.success ? analysis.data.findings.filter(f => f.excerptIds.every(id => usable.has(id))).slice(0, 2) : [];
     if (findings.length) {
       for (const finding of findings) {
-        blocks.push(`${safeText(finding.claim)} ${[...new Set(finding.excerptIds)].map(id => `[cite:${id}]`).join(' ')}`);
+        add(JSON.stringify([packet.sources.map(source => source.videoId).sort(), safeText(finding.claim).toLowerCase()]),
+          `${safeText(finding.claim)} ${[...new Set(finding.excerptIds)].map(id => `[cite:${id}]`).join(' ')}`);
       }
-    } else {
-      const excerpt = usable.values().next().value;
-      if (excerpt) blocks.push(`Retrieved evidence:\n> ${safeText(excerpt.text)}\n\n[cite:${excerpt.id}]`);
+    } else if (['youtube_frames', 'youtube_storyboard'].includes(packet.kind)
+      && !packet.artifacts.some(artifact => ['youtube_frame_retrieval', 'youtube_storyboard_retrieval'].includes(artifact.type))) {
+      for (const excerpt of [...usable.values()].slice(0, 2)) {
+        const source = packet.sources.find(source => source.id === excerpt.sourceId)!;
+        add(JSON.stringify([source.videoId ?? source.id, safeText(excerpt.text).toLowerCase()]),
+          `${safeText(excerpt.text)} [cite:${excerpt.id}]`);
+      }
     }
+    // Raw transcript segments and comments are not findings. Do not select
+    // arbitrary snippets merely to turn a failed synthesis into a completed run.
     if (blocks.length >= 8) break;
   }
   if (!blocks.length) return null;
   return {
     intent, confidence: 'low', citations: [], artifacts: [],
-    answer: `Partial evidence summary\n\nFinal synthesis could not be completed. These are individually supported findings or source excerpts, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
+    answer: `Partial evidence summary\n\n${failureMessage ?? 'Final synthesis could not be completed.'} These are individually supported findings, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
     warnings: [
-      { code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings or excerpts because final synthesis did not complete. This is not a completed comparison or recommendation.' },
-      { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
+      { code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings because final synthesis did not complete. This is not a completed comparison or recommendation.' },
+      { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: failureMessage ?? 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
     ],
   };
 }
