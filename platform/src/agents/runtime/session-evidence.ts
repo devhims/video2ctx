@@ -1,3 +1,5 @@
+import { SessionSearch } from './session-search';
+import type { ToolSet } from 'ai';
 import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
 import { sha256 } from '../../lib/http';
@@ -30,6 +32,7 @@ export interface SessionMemory extends MemoryUpdate {
   updatedAt: number;
 }
 export interface SessionBrief {
+  historyMessages?: number;
   assets: SessionAsset[];
   memories: SessionMemory[];
 }
@@ -41,6 +44,8 @@ export interface SessionAccess {
     offset?: number,
     query?: string,
   ): Promise<{ packets: EvidencePacket[]; nextOffset?: number; needsInspection?: boolean }>;
+  searchHistory?(query: string): Promise<{ content: string }[]>;
+  searchTools?(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal): Promise<ToolSet>;
   remember(runId: string, updates: MemoryUpdate[], evidence: EvidencePacket[]): void;
 }
 
@@ -60,6 +65,7 @@ export function sessionBriefForModel(brief: SessionBrief) {
   }
   return {
     counts,
+    historyMessages: brief.historyMessages,
     assets: brief.assets.slice(-128),
     memories,
     omittedAssets: Math.max(0, brief.assets.length - 128),
@@ -69,6 +75,7 @@ export function sessionBriefForModel(brief: SessionBrief) {
 
 /** One instance per session DO. Raw payloads live in R2; SQLite owns availability. */
 export class SessionEvidenceStore implements SessionAccess {
+  readonly search: SessionSearch;
   private readonly pending = new Map<string, Promise<CachedResult<unknown>>>();
   constructor(
     private readonly sql: SqlStorage,
@@ -90,6 +97,35 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_run_generations (run_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)`,
     );
+    this.search = new SessionSearch(sql);
+  }
+  searchHistory(query: string) {
+    return this.search.searchHistory(query);
+  }
+  searchTools(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal) {
+    return this.search.tools(this, onEvidence, signal);
+  }
+  async ensureSearchIndexed() {
+    const generation = this.generation();
+    const rows = this.sql
+      .exec<{ version: string }>(
+        `SELECT version FROM session_assets WHERE kind='transcript'
+      AND version NOT IN (SELECT version FROM session_search_assets)`,
+      )
+      .toArray();
+    for (const { version } of rows) {
+      const transcript = (await this.read(version)) as Transcript | null;
+      if (generation !== this.generation())
+        throw new Error('Session evidence changed during indexing. Retry the search.');
+      if (transcript) this.indexTranscript(version, transcript);
+    }
+  }
+  private indexTranscript(version: string, transcript: Transcript) {
+    this.search.indexTranscript(
+      version,
+      completeTranscriptEvidence(transcript.videoId, transcript.segments, `youtube:transcript:${transcript.videoId}`)
+        .excerpts,
+    );
   }
   generation() {
     return this.sql.exec<{ generation: number }>('SELECT generation FROM session_evidence_state WHERE id=1').one()
@@ -98,6 +134,7 @@ export class SessionEvidenceStore implements SessionAccess {
   brief(): SessionBrief {
     const current = this.currentVersions();
     return {
+      historyMessages: this.search.historyCount(),
       assets: this.sql
         .exec<AssetRow>('SELECT * FROM session_assets ORDER BY created_at, version')
         .toArray()
@@ -152,6 +189,7 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   evidenceForCitations(ids: string[]): EvidencePacket[] {
     if (!ids.length) return [];
+    const current = this.currentVersions();
     return this.sql
       .exec<{ packet_json: string }>(
         `SELECT packet_json FROM session_packets WHERE EXISTS (
@@ -160,7 +198,21 @@ export class SessionEvidenceStore implements SessionAccess {
         JSON.stringify(ids),
       )
       .toArray()
-      .map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
+      .map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)))
+      .map((packet) =>
+        packet.assetVersions?.some((version) => !current.has(version))
+          ? {
+              ...packet,
+              warnings: [
+                ...packet.warnings,
+                {
+                  code: 'SUPERSEDED_SESSION_EVIDENCE',
+                  message: 'This evidence refers to an older stored version. Use current assets for current facts.',
+                },
+              ],
+            }
+          : packet,
+      );
   }
   savePacket(packet: EvidencePacket) {
     const versions = packet.assetVersions ?? [];
@@ -174,6 +226,7 @@ export class SessionEvidenceStore implements SessionAccess {
       JSON.stringify({ ...packet, usage: [] }),
       JSON.stringify(versions),
     );
+    this.search.indexPacket(id, packet);
   }
   has(version: string) {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
@@ -212,7 +265,15 @@ export class SessionEvidenceStore implements SessionAccess {
         ],
         excerpts: page,
         artifacts: [],
-        warnings: [],
+        warnings: this.currentVersions().has(version)
+          ? []
+          : [
+              {
+                code: 'SUPERSEDED_SESSION_EVIDENCE',
+                message:
+                  'This evidence refers to an older stored transcript. Use the current version for current facts.',
+              },
+            ],
         usage: [],
       });
       this.savePacket(packet);
@@ -322,6 +383,7 @@ export class SessionEvidenceStore implements SessionAccess {
     const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
     if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
     this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
+    if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
     this.alias(key, version);
     return { ...result, assetVersions: [version] };
   }

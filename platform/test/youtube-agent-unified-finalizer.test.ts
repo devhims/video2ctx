@@ -1,3 +1,5 @@
+import { tool } from 'ai';
+import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
 import { executeResearchRun } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -146,8 +148,13 @@ it('reads stored evidence on demand before finalizing and commits memory after v
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
-it('escalates insufficient stored context once to inspection and returns to the same finalizer',async()=>{
+it.each([false,true])('escalates insufficient context once and returns to the same finalizer (older reference=%s)',async(olderReference)=>{
   const {options,classifier,output}=setup('context_answer',true);
+  if (olderReference) {
+    options.conversationHistory=[];
+    options.session={brief:()=>({assets:[],memories:[]}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),
+      searchHistory:vi.fn(async()=>[{content:'Inspect https://youtu.be/abcdefghijk'}])} as unknown as NonNullable<typeof options.session>;
+  }
   let finalizedCalls=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
     content:[{type:'text',text:JSON.stringify(finalizedCalls++===0
@@ -165,4 +172,48 @@ it('escalates insufficient stored context once to inspection and returns to the 
   expect(options.onCapabilityLoaded).toHaveBeenCalledTimes(1);
   expect(finalizer.doGenerateCalls).toHaveLength(2);
   expect(options.finalize).toHaveBeenCalledTimes(1);
+});
+
+
+it('direct finalization reads older user messages through paginated session tools without changing the system prefix',async()=>{
+  const {options,classifier}=setup('context_answer');
+  options.message='Can you list all the user messages in this conversation?';
+  const reads:number[]=[];
+  const older='Original question outside the recent eight turns';
+  const searchTools=vi.fn(async()=>({read_session_history:tool({
+    inputSchema:z.object({offset:z.number(),role:z.literal('user')}),
+    execute:async({offset})=>{reads.push(offset);return offset===0?{messages:[{role:'user',text:older}],nextOffset:20}:{messages:[{role:'user',text:options.message}]};},
+  })}));
+  options.session={brief:()=>({assets:[],memories:[],historyMessages:30}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),searchTools} as unknown as NonNullable<typeof options.session>;
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
+    content:reads.length<2?[{type:'tool-call',toolCallId:`page-${reads.length}`,toolName:'read_session_history',input:JSON.stringify({offset:reads.length*20,role:'user'})}]
+      :[{type:'text',text:JSON.stringify({confidence:'high',warnings:[],blocks:[{text:`1. ${older}\n2. ${options.message}`,evidenceIds:[]}]})}],
+    finishReason:{unified:reads.length<2?'tool-calls':'stop',raw:'stop'},usage,warnings:[],
+  })});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(reads).toEqual([0,20]);
+  expect(JSON.stringify(classifier.doGenerateCalls[0]!.prompt)).not.toContain(older);
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).not.toContain(older);
+  expect(JSON.stringify(finalizer.doGenerateCalls[2]!.prompt)).toContain(older);
+  expect(finalizer.doGenerateCalls[0]!.prompt[0]).toEqual(finalizer.doGenerateCalls[2]!.prompt[0]);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining(older)}));
+});
+
+
+it('reserves the final model step for an answer when history pagination exceeds the tool budget',async()=>{
+  const {options,classifier}=setup('context_answer');
+  options.session={brief:()=>({assets:[],memories:[]}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),
+    searchTools:async()=>({read_session_history:tool({inputSchema:z.object({}),execute:async()=>({messages:[],nextOffset:20})})})} as unknown as NonNullable<typeof options.session>;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
+    const finish=call.toolChoice?.type==='none';
+    return {content:finish?[{type:'text',text:JSON.stringify({confidence:'low',warnings:[{code:'ANSWER_SCOPE_SHORTFALL',message:'More messages remain.'}],blocks:[{text:'I could not finish reading the session within this run.',evidenceIds:[]}]})}]
+      :[{type:'tool-call',toolCallId:crypto.randomUUID(),toolName:'read_session_history',input:'{}'}],
+      finishReason:{unified:finish?'stop':'tool-calls',raw:'stop'},usage,warnings:[]};
+  }});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(5);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({warnings:expect.arrayContaining([expect.objectContaining({code:'PARTIAL_EVIDENCE'})])}));
 });

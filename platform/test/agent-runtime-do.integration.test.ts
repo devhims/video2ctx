@@ -316,6 +316,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   const { runtime, userId, runId, conversationId } = await seed('agent-delete-runtime', 'running');
   await runInDurableObject(runtime, async instance=> {
     await instance.getSessionAssets(conversationId,userId);
+    (instance as unknown as {syncSessionHistory():void}).syncSessionHistory();
     instance.sql`INSERT INTO session_run_generations VALUES (${runId},0)`;
   });
   await runtime.deleteAccountData();
@@ -329,7 +330,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });
@@ -632,7 +633,7 @@ test('session assets enforce ownership and deletion removes run copies, citation
   await runInDurableObject(runtime,async (instance,state)=>{
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
     const store=new SessionEvidenceStore(state.storage.sql,env.RESEARCH,`agent-session/${state.id.toString()}/`);
-    const raw=await store.retrieve('transcript:abcdefghijk','transcript','abcdefghijk',false,async()=>({value:{text:'Private captions'},cacheStatus:'miss'}),()=>({complete:true}));
+    const raw=await store.retrieve('transcript:abcdefghijk','transcript','abcdefghijk',false,async()=>({value:{videoId:'abcdefghijk',text:'Private captions',segments:[{text:'Private captions',startMs:0,endMs:1000,durationMs:1000}]},cacheStatus:'miss'}),()=>({complete:true}));
     version=raw.assetVersions![0]!;
     const writer=instance as unknown as {performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>};
     const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
@@ -643,7 +644,7 @@ test('session assets enforce ownership and deletion removes run copies, citation
   });
   expect(await runtime.getSessionAssets(conversationId,'different-user')).toBeNull();
   expect((await runtime.getSessionAssets(conversationId,userId))?.assets).toHaveLength(1);
-  expect(await runtime.getSessionAsset(conversationId,userId,version)).toEqual({text:'Private captions'});
+  expect(await runtime.getSessionAsset(conversationId,userId,version)).toMatchObject({text:'Private captions'});
   await runtime.deleteSessionAssets(conversationId,userId,version);
   expect(await runtime.getSessionAsset(conversationId,userId,version)).toBeNull();
   expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([]);
@@ -653,6 +654,10 @@ test('session assets enforce ownership and deletion removes run copies, citation
     const run=await instance.getRun(runId);
     expect(run?.result?.citations).toEqual([]);
     expect(run?.result?.answer).toContain('[source deleted]');
+    const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
+    const store=(instance as unknown as {sessionStore:InstanceType<typeof SessionEvidenceStore>}).sessionStore;
+    expect(await store.search.searchHistory('A caption')).toEqual([]);
+    expect((await store.search.searchEvidence(store,'Private captions')).packets).toEqual([]);
   });
 });
 
@@ -666,5 +671,26 @@ test('persisting a finalizer escalation clears phase deadlines before a restart 
     writer.persistRoute(runId,{route:'inspect_video',videoId:'abcdefghijk',useStoryboard:true});
     expect(instance.sql`SELECT finalization_deadline_at,research_deadline_at FROM agent_runs WHERE id=${runId}`[0]).toEqual({finalization_deadline_at:null,research_deadline_at:null});
     expect(JSON.parse(instance.sql<{decision_json:string}>`SELECT decision_json FROM agent_routes WHERE run_id=${runId}`[0]!.decision_json)).toMatchObject({route:'inspect_video'});
+  });
+});
+
+test('backfills original messages including failed retries into Session history without restoring deleted answers',async()=>{
+  const {runtime,runId,userId,conversationId}=await seed('session-history-backfill','failed');
+  await runInDurableObject(runtime,async(instance)=>{
+    const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
+    const writer=instance as unknown as {syncSessionHistory():void;sessionStore:InstanceType<typeof SessionEvidenceStore>};
+    instance.sql`UPDATE agent_runs SET message='Please try again.',execution_message='Original enterprise pricing request' WHERE id=${runId}`;
+    const aid=crypto.randomUUID(),uid=crypto.randomUUID();
+    const result=JSON.stringify({runId:crypto.randomUUID(),conversationId,userMessageId:uid,agentMessageId:aid,intent:'context_answer',answer:'An obsolete pricing conclusion.',confidence:'high',citations:[],artifacts:[],
+      warnings:[{code:'SESSION_EVIDENCE_DELETED',message:'Source removed'}],billing:{creditsCharged:0,creditsRemaining:99}});
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,turn_ordinal,message,status,phase,result_json,credits_remaining_at_admission,created_at,updated_at)
+      VALUES ('older',${userId},${conversationId},${uid},${aid},0,'Discuss enterprise pricing.','completed','completed',${result},100,0,0)`;
+    writer.syncSessionHistory();
+    expect(writer.sessionStore.search.readHistory(0,'user').messages.map(message=>message.text)).toEqual(['Discuss enterprise pricing.','Please try again.']);
+    expect(await writer.sessionStore.search.searchHistory('obsolete')).toEqual([]);
+    expect(await writer.sessionStore.search.searchHistory('Original enterprise')).toEqual([]);
+    expect((await writer.sessionStore.search.searchHistory('enterprise pricing'))).toHaveLength(1);
+    writer.syncSessionHistory();
+    expect(writer.sessionStore.search.readHistory().messages).toHaveLength(2);
   });
 });

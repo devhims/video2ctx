@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
+import type { EvidencePacket } from '../src/agents/contracts';
 import type { Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
@@ -18,10 +19,13 @@ function transcript(text = 'A clear opening sentence.', partial = false): Transc
     meta: { source: 'allthingsyoutube', fetchedAt: '2026-09-19T00:00:00Z', partial, warnings: [] },
   };
 }
-function within(name: string, fn: (store: SessionEvidenceStore, reopen: () => SessionEvidenceStore) => Promise<void>) {
+function within(
+  name: string,
+  fn: (store: SessionEvidenceStore, reopen: () => SessionEvidenceStore, sql: SqlStorage) => Promise<void>,
+) {
   return runInDurableObject(env.AGENT_RUNTIME.getByName(name), async (_instance, state) => {
     const reopen = () => new SessionEvidenceStore(state.storage.sql, env.RESEARCH, `test-session/${name}/`);
-    await fn(reopen(), reopen);
+    await fn(reopen(), reopen, state.storage.sql);
   });
 }
 function provider(fetch = vi.fn(async () => ({ value: transcript(), cacheStatus: 'miss' as const }))) {
@@ -320,4 +324,308 @@ test('refreshing a resolved language advances the compatible default alias and m
     expect(reuse.value.text).toBe('Fresh English captions');
     expect(p.transcript).toHaveBeenCalledTimes(2);
     expect(store.brief().assets.find((asset) => asset.version === old.assetVersions![0])!.current).toBe(false);
+  }));
+
+test('Session API searches older messages and lists all user turns across reconstruction', async () =>
+  within('session-history-search', async (store, reopen) => {
+    for (let i = 0; i < 45; i++)
+      store.search.upsertHistory({
+        id: `user-${i}`,
+        role: 'user',
+        text: i === 0 ? 'Compare the enterprise pricing.' : `Follow-up ${i}`,
+        ordinal: i * 2,
+        parentId: null,
+        createdAt: i,
+      });
+    store.search.upsertHistory({
+      id: 'assistant',
+      role: 'assistant',
+      text: 'The enterprise pricing is discussed.',
+      ordinal: 1,
+      parentId: 'user-0',
+      createdAt: 1,
+    });
+    const resumed = reopen();
+    expect((await resumed.search.searchHistory('enterprise pricing')).map((message) => message.id)).toEqual(
+      expect.arrayContaining(['user-0', 'assistant']),
+    );
+    const all = [];
+    let offset: number | undefined = 0;
+    do {
+      const page = resumed.search.readHistory(offset, 'user');
+      all.push(...page.messages);
+      offset = page.nextOffset;
+    } while (offset !== undefined);
+    expect(all).toHaveLength(45);
+    expect(all[0]!.text).toBe('Compare the enterprise pricing.');
+    expect(all.at(-1)!.text).toBe('Follow-up 44');
+    resumed.search.upsertHistory({
+      id: 'user-0',
+      role: 'user',
+      text: 'Compare the team plan.',
+      ordinal: 0,
+      parentId: null,
+      createdAt: 0,
+    });
+    resumed.search.removeHistory(['assistant']);
+    expect(await resumed.search.searchHistory('enterprise pricing')).toEqual([]);
+    expect((await resumed.search.searchHistory('team plan'))[0]?.id).toBe('user-0');
+    resumed.search.clearHistory();
+    expect(reopen().search.readHistory().messages).toEqual([]);
+    expect(await reopen().search.searchHistory('team plan')).toEqual([]);
+  }));
+
+test('indexes full transcripts before analysis and searches terms across assets with valid citations', async () =>
+  within('fulltext-transcripts', async (store, reopen) => {
+    const p = provider();
+    vi.mocked(p.transcript).mockResolvedValueOnce({
+      value: transcript('Pricing for the enterprise plan is discussed.'),
+      cacheStatus: 'miss',
+    });
+    const first = await sessionProvider(p, store).transcript(id);
+    vi.mocked(p.transcript).mockResolvedValueOnce({
+      value: { ...transcript('Enterprise customers negotiate pricing.'), videoId: 'zyxwvutsrqp' },
+      cacheStatus: 'miss',
+    });
+    await sessionProvider(p, store).transcript('zyxwvutsrqp');
+    // Neither transcript needs an analyst or a pre-existing evidence packet.
+    expect(store.evidence()).toEqual([]);
+    const result = await reopen().search.searchEvidence(reopen(), 'enterprise pricing');
+    expect(result.packets).toHaveLength(2);
+    for (const packet of result.packets) {
+      expect(packet.excerpts).toHaveLength(1);
+      expect(store.evidenceForCitations([packet.excerpts[0]!.id])).toHaveLength(1);
+    }
+    expect(p.transcript).toHaveBeenCalledTimes(2);
+    await store.delete(first.assetVersions![0]);
+    expect((await reopen().search.searchEvidence(reopen(), 'enterprise pricing')).packets).toHaveLength(1);
+    expect((await store.search.searchEvidence(store, '" OR * ()')).packets).toEqual([]);
+    await store.delete();
+    expect((await reopen().search.searchEvidence(reopen(), 'enterprise')).packets).toEqual([]);
+  }));
+
+test('searchable context uses Session tools, follows memory corrections and removes deleted findings', async () =>
+  within('context-search', async (store) => {
+    const packet = await executeGetVideoTranscript(
+      { videoId: id },
+      context(store, sessionProvider(provider(), store)),
+      'initial',
+    );
+    store.remember(
+      'first',
+      [
+        {
+          kind: 'finding',
+          topic: 'opening',
+          text: 'The opening is a clear sentence.',
+          evidenceIds: [packet.excerpts[0]!.id],
+        },
+        { kind: 'context', topic: 'focus', text: 'Focus on enterprise pricing.', evidenceIds: [] },
+      ],
+      [packet],
+    );
+    const received: EvidencePacket[] = [];
+    const tools = await store.searchTools((packets) => received.push(...packets), new AbortController().signal);
+    expect(Object.keys(tools).sort()).toEqual(['read_session_history', 'search_context']);
+    const options = { toolCallId: 'search', messages: [], context: {} };
+    const run = async (label: string, query: string) =>
+      JSON.parse(String(await tools.search_context!.execute!({ label, query }, options)));
+    expect((await run('memory', 'enterprise pricing'))[0].topic).toBe('focus');
+    store.remember(
+      'second',
+      [{ kind: 'context', topic: 'focus', text: 'Focus on team pricing.', evidenceIds: [] }],
+      [],
+    );
+    expect(await run('memory', 'enterprise')).toEqual([]);
+    expect((await run('memory', 'team pricing'))[0].text).toBe('Focus on team pricing.');
+    const found = await run('evidence', 'clear sentence');
+    expect(found.packets.length).toBeGreaterThan(0);
+    expect(received.length).toBe(found.packets.length);
+    await store.delete(packet.assetVersions![0]);
+    expect(await run('memory', 'opening')).toEqual([]);
+    expect((await run('evidence', 'clear')).packets).toEqual([]);
+    store.deleteMemory('context:focus');
+    expect(await run('memory', 'team pricing')).toEqual([]);
+  }));
+
+test('searches visual observations with immutable citations and labels superseded transcript versions', async () =>
+  within('visual-search-versions', async (store) => {
+    const p = provider();
+    const raw = await sessionProvider(p, store).transcript(id);
+    const version = raw.assetVersions![0]!;
+    const packet = await versionEvidencePacket({
+      packetId: 'visual',
+      kind: 'youtube_frames',
+      assetVersions: [version],
+      sources: [{ id: 'v', provider: 'youtube', kind: 'video', videoId: id }],
+      excerpts: [{ id: 'old', sourceId: 'v', text: 'A red bicycle appears at the entrance.', startMs: 4200 }],
+      artifacts: [],
+      warnings: [],
+      usage: [],
+    });
+    store.savePacket(packet);
+    const found = await store.search.searchEvidence(store, 'bicycle red');
+    expect(found.packets[0]?.excerpts[0]?.id).toBe(packet.excerpts[0]!.id);
+    vi.mocked(p.transcript).mockResolvedValueOnce({
+      value: transcript('The revised introduction.'),
+      cacheStatus: 'miss',
+    });
+    await sessionProvider(p, store, true).transcript(id);
+    const historical = await store.search.searchEvidence(store, 'clear opening');
+    expect(historical.packets[0]?.warnings).toContainEqual(
+      expect.objectContaining({ code: 'SUPERSEDED_SESSION_EVIDENCE' }),
+    );
+    await store.delete(version);
+    expect((await store.search.searchEvidence(store, 'bicycle')).packets).toEqual([]);
+  }));
+
+test('search indexes remain isolated between session Durable Objects', async () => {
+  await within('search-owner-one', async (store) => {
+    store.search.upsertHistory({
+      id: 'private-user',
+      role: 'user',
+      text: 'Private pricing correction.',
+      ordinal: 0,
+      parentId: null,
+      createdAt: 0,
+    });
+    await sessionProvider(provider(), store).transcript(id);
+    store.remember(
+      'one',
+      [{ kind: 'context', topic: 'private', text: 'Private account context.', evidenceIds: [] }],
+      [],
+    );
+  });
+  await within('search-owner-two', async (store) => {
+    expect(await store.search.searchHistory('Private')).toEqual([]);
+    expect(store.search.searchMemory('private')).toEqual([]);
+    expect((await store.search.searchEvidence(store, 'clear')).packets).toEqual([]);
+  });
+});
+
+test.each([true, false])(
+  'real Session search tools supply grounded evidence to the shared finalizer (resume=%s)',
+  async (resume) =>
+    within(`model-search-${resume}`, async (store) => {
+      const { MockLanguageModelV4 } = await import('ai/test');
+      const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+      const p = provider();
+      const raw = await sessionProvider(p, store).transcript(id);
+      const excerptId = `evidence:${raw.assetVersions![0]}:0`;
+      const usage = {
+        inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 10, text: 10, reasoning: 0 },
+      };
+      let coreCalls = 0,
+        finalizerCalls = 0;
+      const core = new MockLanguageModelV4({
+        doGenerate: async () => ({
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: `core-${coreCalls}`,
+              toolName: coreCalls++ === 0 ? 'search_context' : 'finalize_answer',
+              input: JSON.stringify(
+                coreCalls === 1
+                  ? { label: 'evidence', query: 'clear opening' }
+                  : {
+                      intent: 'inspect_video',
+                      confidence: 'high',
+                      warnings: [],
+                      artifacts: [],
+                      blocks: [{ text: 'A clear opening sentence.', evidenceIds: [excerptId] }],
+                    },
+              ),
+            },
+          ],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+          usage,
+          warnings: [],
+        }),
+      });
+      const finalizer = new MockLanguageModelV4({
+        doGenerate: async () => {
+          const search = finalizerCalls++ === 0;
+          return {
+            content: search
+              ? [
+                  {
+                    type: 'tool-call',
+                    toolCallId: 'lookup',
+                    toolName: 'search_context',
+                    input: JSON.stringify({ label: 'evidence', query: 'clear opening' }),
+                  },
+                ]
+              : [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      confidence: 'high',
+                      warnings: [],
+                      blocks: [{ text: 'A clear opening sentence.', evidenceIds: [excerptId] }],
+                    }),
+                  },
+                ],
+            finishReason: { unified: search ? 'tool-calls' : 'stop', raw: 'stop' },
+            usage,
+            warnings: [],
+          };
+        },
+      });
+      const ctx = context(store, sessionProvider(p, store));
+      ctx.session = store;
+      ctx.finalize = vi.fn(async (_tool, input) =>
+        buildAgentTurnResult(
+          {
+            runId: ctx.runId,
+            conversationId: crypto.randomUUID(),
+            userMessageId: crypto.randomUUID(),
+            agentMessageId: crypto.randomUUID(),
+          },
+          { userId: 'test', creditsRemaining: 100 },
+          input,
+          store.evidenceForCitations([excerptId]),
+          0,
+        ),
+      );
+      await runResearchAgentWithModel({
+        model: core,
+        finalizationModel: finalizer,
+        message: 'What is the opening sentence?',
+        decision: { route: 'inspect_video', videoId: id, useStoryboard: false, researchVideoCount: 1 },
+        context: ctx,
+        toolNames: ['finalize_answer'],
+        ...(resume ? { finalizationDeadlineAt: Date.now() + 30000 } : {}),
+      });
+      expect(coreCalls).toBe(resume ? 0 : 2);
+      expect(finalizerCalls).toBe(2);
+      expect(ctx.finalize).toHaveBeenCalledTimes(1);
+      expect((await vi.mocked(ctx.finalize).mock.results[0]!.value).citations[0]?.id).toBe(excerptId);
+      expect(p.transcript).toHaveBeenCalledTimes(1);
+    }),
+);
+
+test('lazy transcript index backfill survives reconstruction and cannot restore an asset deleted during indexing', async () =>
+  within('index-backfill-race', async (store, reopen, sql) => {
+    const raw = await sessionProvider(provider(), store).transcript(id);
+    const version = raw.assetVersions![0]!;
+    sql.exec('DELETE FROM session_context_fts');
+    sql.exec('DELETE FROM session_search_assets');
+    expect((await reopen().search.searchEvidence(reopen(), 'clear opening')).packets).toHaveLength(1);
+    sql.exec('DELETE FROM session_context_fts');
+    sql.exec('DELETE FROM session_search_assets');
+    let release!: (value: unknown) => void;
+    vi.spyOn(store, 'read').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const search = store.search.searchEvidence(store, 'clear');
+    const rejection = expect(search).rejects.toThrow('changed during indexing');
+    await store.delete(version);
+    release(transcript());
+    await rejection;
+    expect(sql.exec('SELECT * FROM session_context_fts').toArray()).toEqual([]);
+    expect(sql.exec('SELECT * FROM session_search_assets').toArray()).toEqual([]);
   }));

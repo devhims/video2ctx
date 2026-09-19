@@ -139,6 +139,34 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   private get sessionStore() {
     return this.#sessionStore ??= new SessionEvidenceStore(this.ctx.storage.sql, this.env.RESEARCH, `agent-session/${this.ctx.id.toString()}/`);
   }
+  private syncSessionHistory() {
+    const search = this.sessionStore.search;
+    for (const row of this.ctx.storage.sql.exec<{ [K in keyof RunRow]: RunRow[K] }>(`
+      SELECT r.* FROM agent_runs r WHERE NOT EXISTS (
+        SELECT 1 FROM session_history_runs h
+        WHERE h.id = r.id AND h.revision = CAST(r.updated_at AS TEXT) || ':' || r.status
+      ) ORDER BY turn_ordinal
+    `)) {
+      search.upsertHistory({
+        id: row.user_message_id, role: 'user', text: row.message,
+        ordinal: row.turn_ordinal * 2, parentId: row.parent_message_id, createdAt: row.created_at,
+      });
+      if (row.status !== 'completed' || !row.result_json) {
+        search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+        continue;
+      }
+      const result = agentTurnResultSchema.parse(JSON.parse(row.result_json));
+      if (result.warnings.some(warning => warning.code === 'SESSION_EVIDENCE_DELETED')) {
+        search.removeHistory([row.agent_message_id]);
+      } else {
+        search.upsertHistory({
+          id: row.agent_message_id, role: 'assistant', text: result.answer,
+          ordinal: row.turn_ordinal * 2 + 1, parentId: row.user_message_id, createdAt: row.updated_at,
+        });
+      }
+      search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+    }
+  }
   private hasSessionOwner(conversationId:string, userId:string) {
     this.ensureAgentRuntimeSchema();
     return !this.#deleted && this.sql`SELECT id FROM agent_runs WHERE conversation_id=${conversationId} AND user_id=${userId} LIMIT 1`.length > 0;
@@ -189,6 +217,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       result.artifacts = [];
       result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. This historical answer is not reusable source evidence.'});
       const serialized = JSON.stringify(result);
+      this.sessionStore.search.removeHistory([row.agent_message_id]);
       this.sql`UPDATE agent_runs SET result_json=${serialized} WHERE id=${row.id}`;
       this.sql`UPDATE agent_tool_calls SET result_json=${serialized} WHERE run_id=${row.id} AND tool_name='finalize_answer'`;
     }
@@ -449,6 +478,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         return;
       }
       fiber.signal.throwIfAborted();
+      this.syncSessionHistory();
       this.sessionStore.beginRun(runId);
       await executeResearchRun({
         session: this.sessionStore,
@@ -690,6 +720,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       SET status = 'completed', phase = 'completed', result_json = ${serialized}, error = null, updated_at = ${timestamp}
       WHERE id = ${runId}
     `;
+    this.sessionStore.search.upsertHistory({
+      id: run.agent_message_id, role: 'assistant', text: result.answer,
+      ordinal: run.turn_ordinal * 2 + 1, parentId: run.user_message_id, createdAt: timestamp,
+    });
     this.recordEvent(runId, 'run.completed', {
       runId,
       route: decision.route,
@@ -773,6 +807,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // removing evidence so a late completion cannot recreate private data.
     await Promise.allSettled([...this.#inFlightEvidence.values()]);
     await this.sessionStore.delete();
+    this.sessionStore.search.clearHistory();
     for (const table of ['agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
       'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
