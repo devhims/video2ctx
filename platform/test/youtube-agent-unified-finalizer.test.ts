@@ -68,6 +68,7 @@ it.each(['context_answer', 'clarification', 'rejected'] as const)('routes %s thr
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ intent, citations: [] }));
   const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
   expect(prompt).toContain('The man is the interviewer.');
+  expect(prompt).toContain('Never use em dashes (--) in responses.');
   expect(prompt.indexOf('conversationHistory')).toBeLessThan(prompt.lastIndexOf('Correct your previous statement.'));
 });
 
