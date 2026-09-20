@@ -156,18 +156,29 @@ test('missing sessions and access outages do not expose private content', async 
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
 });
 
-test('shows a provisional draft and replaces it with the validated answer', async ({ page, context }, testInfo) => {
+test('smoothly reveals an answer and replaces it with the validated result', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.goto(`/dashboard/sessions/${activeId}`);
   const latest = page.locator('.agent-assistant-message').last();
-  await expect(latest.getByRole('region', { name: 'Draft answer' })).toBeVisible();
-  await expect(latest.getByRole('heading', { name: 'Draft answer' })).toBeVisible();
-  await expect(latest.getByText('The agent is assembling the evidence-backed comparison.')).toBeVisible();
+  const streamed = latest.locator('[data-streaming-answer] .agent-markdown');
+  const completeText = 'The agent is assembling the evidence-backed comparison.';
+  await expect.poll(async () => (await streamed.textContent())?.length ?? 0).toBeGreaterThan(0);
+  expect((await streamed.textContent())!.length).toBeLessThan(completeText.length);
+  await expect(streamed).toHaveText(completeText);
+  await expect(latest.getByText('Draft', { exact: true })).toHaveCount(0);
   await expect(latest.getByRole('button', { name: 'Copy answer' })).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath('streaming-draft.png'), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('streaming-answer.png'), fullPage: true });
   await expect(latest.locator('.agent-status')).toHaveText('completed');
-  await expect(latest.getByRole('region', { name: 'Draft answer' })).toHaveCount(0);
+  await expect(latest.getByText(completeText)).toHaveCount(0);
   await expect(latest.getByText('The speaker prefers Fable for coding and Astra for broader tasks. [1]')).toBeVisible();
+});
+
+test('reveals streamed text immediately when reduced motion is enabled', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`/dashboard/sessions/${activeId}`);
+  await expect(page.locator('.agent-assistant-message').last().locator('[data-streaming-answer] .agent-markdown'))
+    .toHaveText('The agent is assembling the evidence-backed comparison.');
 });
 
 
