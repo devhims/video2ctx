@@ -12,13 +12,13 @@ import { answerOutputTokenLimit, finalizationOutputTokenLimit, FINALIZATION_CONT
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
-import { renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../runtime/frame-budget';
-import { generateText, Output, NoObjectGeneratedError, tool, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel } from 'ai';
+import { generateText, streamText, Output, NoObjectGeneratedError, tool, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel } from 'ai';
 import { z, ZodError } from 'zod';
 import { runAgentCoreWithModel } from '../agent-core';
 import {
@@ -55,6 +55,7 @@ import {
   finalizationEvidenceForModel,
 } from '../runtime/model-evidence';
 import { FINALIZE_ANSWER_TOOL_NAME } from '../runtime/loop-control';
+import type { AgentDraft } from '../runtime/run-progress';
 import { capabilityRegistry, describeCapabilities } from './capability-registry';
 import { createCapabilityProvider } from './capability-provider';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
@@ -110,6 +111,7 @@ export async function executeResearchRun(options: {
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
   onCapabilityLoaded: (capability: ExecutableRoute['route'], researchDeadlineAt: number) => void | Promise<void>;
   onFinalizing: (deadlineAt: number) => void | Promise<void>;
+  onDraft?: (draft: AgentDraft) => void;
   executeEvidenceTool: (execution: EvidenceToolExecution) => Promise<EvidencePacket>;
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
   saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
@@ -150,7 +152,7 @@ export async function executeResearchRun(options: {
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, allowEscalation: decision.route==='finalize' && decision.responseIntent==='context_answer' && decision.contextScope !== 'history',
         context: { session: options.session, runId: options.runId, signal, finalize: (id, input) => persist(() => options.finalize(id, input)) },
         evidence: conversationEvidence(options.recoveredEvidence, options.conversationHistory), toolFailures: options.recoveredToolFailures,
-        modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix,
+        modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix, onDraft: options.onDraft,
       }), 'Finalization phase timeout.');
       return;
     } catch (error) {
@@ -221,6 +223,7 @@ export async function executeResearchRun(options: {
     researchDeadlineAt,
     finalizationDeadlineAt: options.finalizationDeadlineAt,
     onFinalizing: options.onFinalizing,
+    onDraft: options.onDraft,
     message: options.message,
     decision,
     context,
@@ -238,6 +241,7 @@ export async function runResearchAgent(options: {
   researchDeadlineAt?: number;
   finalizationDeadlineAt?: number;
   onFinalizing?: (deadlineAt: number) => void | Promise<void>;
+  onDraft?: (draft: AgentDraft) => void;
   env: Env;
   message: string;
   decision: ExecutableRoute;
@@ -255,6 +259,7 @@ export async function runResearchAgent(options: {
     researchDeadlineAt: options.researchDeadlineAt,
     finalizationDeadlineAt: options.finalizationDeadlineAt,
     onFinalizing: options.onFinalizing,
+    onDraft: options.onDraft,
     model: createAgentModel(
       options.env,
       options.sessionAffinity,
@@ -297,6 +302,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   researchDeadlineAt: number;
   finalizationDeadlineAt?: number;
   onFinalizing?: (deadlineAt: number) => void | Promise<void>;
+  onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
   finalizationModel?: LanguageModel;
   message: string;
@@ -567,6 +573,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         toolFailures: [...toolFailures.values()],
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
+        onDraft: options.onDraft,
       }), 'Finalization phase timeout.');
       return {
         finishReason: error === finalizationHandoff ? 'finalized' : 'timeout-finalized',
@@ -635,6 +642,7 @@ async function runUnifiedFinalizer(options: {
   onFailure?: (code: string) => void;
   conversationHistory?: ConversationTurn[];
   onEvidence?: (packets: EvidencePacket[]) => void;
+  onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
@@ -789,7 +797,8 @@ async function runUnifiedFinalizer(options: {
       const remainingMs = Math.max(0, options.deadlineAt - Date.now());
       const reserveMs = attempt === 0 ? Math.min(FINALIZATION_REPAIR_RESERVE_MS, Math.floor(remainingMs / 2)) : 0;
       const attemptDeadlineAt = options.deadlineAt - reserveMs;
-      const result = await withRunDeadline(attemptDeadlineAt, options.context.signal, signal => generateText({
+      const result = await withRunDeadline(attemptDeadlineAt, options.context.signal, async signal => {
+        const generationOptions = {
         model: options.model,
         onStepFinish: step => {
           options.modelBudget?.recordUsage({callId:`${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}:answer`,
@@ -838,7 +847,32 @@ async function runUnifiedFinalizer(options: {
         maxOutputTokens: finalizationOutputTokenLimit(options.decision, attempt > 0),
         abortSignal: signal,
         timeout: { totalMs: Math.max(1, attemptDeadlineAt - Date.now()) },
-      }), 'Finalization attempt timeout.');
+        } satisfies Parameters<typeof generateText>[0];
+        if (!options.onDraft) return generateText(generationOptions);
+
+        const state: AgentDraft['state'] = attempt > 0 ? 'revising' : 'streaming';
+        options.onDraft({ answer: '', state });
+        const streamed = streamText(generationOptions);
+        let latestDraft = '';
+        let publishedDraft = '';
+        let lastPublishedAt = 0;
+        for await (const partial of streamed.partialOutputStream) {
+          latestDraft = renderPartialAnswer(partial);
+          const now = Date.now();
+          if (!latestDraft || latestDraft === publishedDraft || now - lastPublishedAt < 500) continue;
+          options.onDraft({ answer: latestDraft, state });
+          publishedDraft = latestDraft;
+          lastPublishedAt = now;
+        }
+        if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
+        const text = await streamed.text;
+        candidate = text;
+        const [finishReason, response, totalUsage] = await Promise.all([
+          streamed.finishReason, streamed.response, streamed.totalUsage,
+        ]);
+        const output = await streamed.output;
+        return { text, finishReason, response, totalUsage, output };
+      }, 'Finalization attempt timeout.');
       candidate = result.text;
       finishReason = result.finishReason;
       if (!usageRecorded) options.modelBudget?.recordUsage({
@@ -908,7 +942,7 @@ async function runUnifiedFinalizer(options: {
         pricing: fireworksModelPricing(typeof options.model === 'string' ? options.model : options.model.modelId),
       });
       let schemaIssues = error instanceof ZodError ? error.issues.map(({ path, code, message }) => ({ path, code, message })) : undefined;
-      if (!schemaIssues && candidate && generationError) {
+      if (!schemaIssues && candidate) {
         validationStage = 'output_schema';
         try {
           const parsed = outputSchema.safeParse(JSON.parse(candidate));

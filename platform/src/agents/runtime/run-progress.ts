@@ -19,9 +19,16 @@ export const agentToolTraceSchema = z.object({
     storyboard: storyboardTraceSchema.optional(),
   }).optional(),
 });
+export const agentDraftSchema = z.object({
+  answer: z.string().max(20_000),
+  state: z.enum(['streaming', 'revising']),
+});
+export type AgentDraft = z.infer<typeof agentDraftSchema>;
+
 export const agentRunProgressSchema = z.object({
   run: compactAgentRunSchema,
   phase: z.enum(['queued', 'classification', 'research', 'finalization', 'completed', 'failed', 'cancelled']),
+  draft: agentDraftSchema.optional(),
   tools: z.array(agentToolTraceSchema),
 });
 

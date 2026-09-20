@@ -50,6 +50,17 @@ export function assertRequestedNumberedItems(output: z.infer<typeof finalization
   }
 }
 
+/** Render provisional model text only. Citations remain hidden until validation commits the answer. */
+export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | undefined> }): string {
+  return (value.blocks ?? []).flatMap(block => {
+    if (typeof block?.text !== 'string' || !block.text.trim()) return [];
+    return [block.text
+      .replace(/【ref_\d*】?|\[ref_\d*\]?/g, '')
+      .replace(/\[cite:[^\]]*\]?/g, '')
+      .trim()];
+  }).filter(Boolean).join('\n\n').slice(0, 20_000);
+}
+
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);

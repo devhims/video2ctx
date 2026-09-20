@@ -31,6 +31,7 @@ export type AgentRun = z.infer<typeof agentRunSchema>;
 export const agentProgressSchema = z.object({
   run: agentRunSchema,
   phase: z.enum(['queued', 'classification', 'research', 'finalization', 'completed', 'failed', 'cancelled']),
+  draft: z.object({ answer: z.string().max(20_000), state: z.enum(['streaming', 'revising']) }).optional(),
   tools: z.array(z.object({
     toolCallId: z.string(), name: z.string(), operation: z.string(),
     status: z.enum(['running', 'completed', 'failed']), startedAt: z.number(), finishedAt: z.number().optional(),

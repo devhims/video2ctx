@@ -1270,7 +1270,7 @@
         ],
         "operationId": "streamAgentRun",
         "summary": "Watch an agent run and its tool activity",
-        "description": "Streams persisted snapshots as SSE. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. The validated answer arrives in a terminal snapshot, not as unvalidated model tokens. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.",
+        "description": "Streams persisted snapshots as SSE. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.",
         "security": [
           {
             "bearerApiKey": []
@@ -8030,6 +8030,27 @@
               "failed",
               "cancelled"
             ]
+          },
+          "draft": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string",
+                "maxLength": 20000
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "streaming",
+                  "revising"
+                ]
+              }
+            },
+            "required": [
+              "answer",
+              "state"
+            ],
+            "additionalProperties": false
           },
           "tools": {
             "type": "array",

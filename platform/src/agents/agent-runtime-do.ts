@@ -1,7 +1,7 @@
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
-import { agentRunProgressSchema, toolTrace } from './runtime/run-progress';
+import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
 import { saveFramePreviews } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
@@ -91,6 +91,7 @@ interface RunRow {
   research_deadline_at: number | null;
   finalization_deadline_at: number | null;
   result_json: string | null;
+  draft_json: string | null;
   error: string | null;
   credits_remaining_at_admission: number;
   billing_settled: number;
@@ -364,6 +365,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       run: compactAgentRun(run, []),
       phase: terminal ? row.status : row.status === 'pending' ? 'queued'
         : row.phase === 'routing' ? 'classification' : row.phase === 'finalizing' ? 'finalization' : 'research',
+      ...(!terminal && row.phase === 'finalizing' && row.draft_json
+        ? { draft: agentDraftSchema.parse(JSON.parse(row.draft_json)) } : {}),
       tools: this.sql<ToolCallRow>`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} ORDER BY created_at, tool_call_id`
         .map(tool => toolTrace(tool, terminal)),
     });
@@ -413,7 +416,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const timestamp = Date.now();
     this.sql`
       UPDATE agent_runs
-      SET status = 'cancelled', phase = 'cancelled', updated_at = ${timestamp}
+      SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${timestamp}
       WHERE id = ${runId} AND status NOT IN ('completed', 'failed', 'cancelled')
     `;
     await this.cancelFiber(runId, 'Cancelled by caller.');
@@ -521,6 +524,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           fiber.stash({ runId, phase: 'finalizing' });
           await this.updatePhase(runId, 'finalizing', deadlineAt);
         },
+        onDraft: draft => this.updateDraft(runId, draft),
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
         saveFramePreviews: (frames, signal) => {
           this.assertRunActive(runId);
@@ -548,7 +552,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         const message = errorMessage(normalizedError);
         this.sql`
           UPDATE agent_runs
-          SET status = 'failed', phase = 'failed', error = ${message}, updated_at = ${Date.now()}
+          SET status = 'failed', phase = 'failed', draft_json = null, error = ${message}, updated_at = ${Date.now()}
           WHERE id = ${runId}
         `;
         this.recordEvent(runId, 'run.failed', { code: errorCode(normalizedError), message });
@@ -724,7 +728,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
     this.sql`
       UPDATE agent_runs
-      SET status = 'completed', phase = 'completed', result_json = ${serialized}, error = null, updated_at = ${timestamp}
+      SET status = 'completed', phase = 'completed', result_json = ${serialized}, draft_json = null, error = null, updated_at = ${timestamp}
       WHERE id = ${runId}
     `;
     this.sessionStore.search.upsertHistory({
@@ -788,7 +792,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           await this.scheduleRunReconciliation(run);
           return;
         }
-        this.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed',
+        this.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed', draft_json = null,
           error = 'Agent run did not finish before its deadline.', updated_at = ${Date.now()}
           WHERE id = ${runId}`;
         await this.cancelFiber(runId, 'Agent deadline reached.');
@@ -803,7 +807,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.#deleted = true;
     await this.ctx.storage.put('account-deleted', true);
     const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;
-    this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', updated_at = ${Date.now()}
+    this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${Date.now()}
       WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
     // Cancel every fiber before touching D1, even if settlement is unavailable.
     await Promise.all(runs.filter(run => !isTerminal(run.status))
@@ -1063,6 +1067,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     ];
   }
 
+  private updateDraft(runId: string, draft: AgentDraft): void {
+    const run = this.readRun(runId);
+    if (!run || run.status !== 'running' || run.phase !== 'finalizing') return;
+    const parsed = agentDraftSchema.parse(draft);
+    this.sql`UPDATE agent_runs SET draft_json = ${JSON.stringify(parsed)} WHERE id = ${runId}`;
+  }
+
   private async updatePhase(runId: string, phase: 'routing' | 'executing' | 'finalizing', deadlineAt: number): Promise<void> {
     this.assertRunActive(runId);
     if (phase === 'routing') {
@@ -1182,6 +1193,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         status TEXT NOT NULL,
         phase TEXT NOT NULL,
         result_json TEXT,
+        draft_json TEXT,
         error TEXT,
         credits_remaining_at_admission INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
@@ -1209,6 +1221,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       });
     }
 
+    if (!columns.some(column => column.name === 'draft_json')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN draft_json TEXT`;
+    }
     if (!columns.some(column => column.name === 'execution_message')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN execution_message TEXT`;
     }

@@ -248,6 +248,23 @@ test('progress restores the persisted phase and tool trace without inference or 
   expect(await runtime.getRunProgress(runId)).toMatchObject({ phase: 'failed', run: { status: 'failed' } });
 });
 
+test('progress restores a persisted draft and cancellation clears it', async () => {
+  const { runtime, runId } = await seed('agent-draft-progress-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET phase = 'finalizing' WHERE id = ${runId}`;
+    const writer = instance as unknown as { updateDraft(runId: string, draft: { answer: string; state: 'streaming' }): void };
+    writer.updateDraft(runId, { answer: 'A provisional answer', state: 'streaming' });
+  });
+  expect(await runtime.getRunProgress(runId)).toMatchObject({
+    phase: 'finalization', draft: { answer: 'A provisional answer', state: 'streaming' },
+  });
+  expect(await runtime.cancelRun(runId)).toBe(true);
+  expect(await runtime.getRunProgress(runId)).not.toHaveProperty('draft');
+  await runInDurableObject(runtime, async instance => {
+    expect(instance.sql`SELECT draft_json FROM agent_runs WHERE id = ${runId}`[0]).toEqual({ draft_json: null });
+  });
+});
+
 test('pre-billing terminal runs are not charged retroactively', async () => {
   const { runtime, userId, runId } = await seed('agent-legacy-runtime');
   await env.DB.prepare('DELETE FROM credit_ledger WHERE user_id = ? AND operation_id = ?')

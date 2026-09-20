@@ -228,7 +228,10 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
       {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
-      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{phaseLabel(progress?.phase)}</p>}
+      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
+      {progress?.draft?.answer && !result && <section className='agent-draft' aria-label='Draft answer' aria-busy='true'>
+        <span>Draft</span><AgentMarkdown>{progress.draft.answer}</AgentMarkdown>
+      </section>}
       {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div role='alert' className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
