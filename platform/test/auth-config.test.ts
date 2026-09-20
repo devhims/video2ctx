@@ -7,6 +7,7 @@ const captured = vi.hoisted(() => ({
   portal: undefined as Record<string, any> | undefined,
   webhooks: undefined as Record<string, any> | undefined,
   polar: undefined as Record<string, any> | undefined,
+  oauthProxy: undefined as Record<string, any> | undefined,
 }));
 
 vi.mock('@better-auth/api-key', () => ({
@@ -36,6 +37,10 @@ vi.mock('better-auth/plugins', () => ({
     return { id: 'device-authorization' };
   }),
   magicLink: vi.fn(() => ({ id: 'magic-link' })),
+  oAuthProxy: vi.fn((options: Record<string, any>) => {
+    captured.oauthProxy = options;
+    return { id: 'oauth-proxy' };
+  }),
 }));
 vi.mock('@polar-sh/sdk', () => ({
   Polar: vi.fn(class {
@@ -68,7 +73,9 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
+      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+      OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GITHUB_CLIENT_ID: 'github-client',
       GITHUB_CLIENT_SECRET: 'github-secret',
       GOOGLE_CLIENT_ID: 'google-client',
@@ -97,6 +104,19 @@ describe('Better Auth API-key configuration', () => {
       google: { clientId: 'google-client', clientSecret: 'google-secret', scope: ['openid', 'email', 'profile'] },
       github: { clientId: 'github-client', clientSecret: 'github-secret' },
     });
+    expect(captured.auth?.baseURL).toEqual({
+      allowedHosts: ['localhost:3000', 'all-things-youtube-web-*.vercel.app'],
+      fallback: 'http://localhost:3000',
+    });
+    expect(captured.auth?.trustedOrigins).toEqual([
+      'http://localhost:3000',
+      'https://all-things-youtube-web-*.vercel.app',
+    ]);
+    expect(captured.oauthProxy).toEqual({
+      productionURL: 'http://localhost:3000',
+      secret: 'test-oauth-proxy-secret-that-is-long-enough',
+      maxAge: 60,
+    });
     expect(captured.auth?.account).toEqual({ encryptOAuthTokens: true });
     expect(captured.auth?.session).toEqual({
       cookieCache: { enabled: true, maxAge: 60 * 5 },
@@ -107,7 +127,9 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
+      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+      OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
       POLAR_ACCESS_TOKEN: 'polar-token',
@@ -136,6 +158,7 @@ describe('Better Auth API-key configuration', () => {
     });
     expect(captured.bearer).toEqual({});
     expect(captured.auth?.plugins).toEqual(expect.arrayContaining([
+      { id: 'oauth-proxy' },
       { id: 'admin', options: { adminUserIds: [] } },
       { id: 'api-key' },
       { id: 'bearer' },
@@ -149,7 +172,9 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
+      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+      OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
       POLAR_ACCESS_TOKEN: 'polar-token',
