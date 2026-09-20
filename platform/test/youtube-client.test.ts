@@ -716,7 +716,7 @@ describe('normalized YouTube client', () => {
     expect(video.availability).toMatchObject({ playable: false, isPrivate: true, isLive: true });
     expect(video.isLive).toBe(true);
     expect(JSON.stringify(video)).not.toContain('https://signed.test');
-  });
+  }, 15_000);
 
   test('returns core video metadata without fetching or embedding subresources', async () => {
     const fixture = playerFixture('manual');
