@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
+import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
 import { FramePreviews } from './FramePreviews';
@@ -229,7 +230,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
       {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
-      {progress?.draft?.answer && !result && <AgentMarkdown>{progress.draft.answer}</AgentMarkdown>}
+      {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div role='alert' className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
