@@ -27,7 +27,7 @@ test('polls only active runs and accepts failed response envelopes without inven
 test('consumes split UTF-8 SSE and restores a terminal snapshot after live tool activity', async () => {
   const { consumeAgentStream } = await import('./agent-sessions.ts');
   const run = { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', runId: 'f1611a8b-cb84-4305-a365-328bd06bedac', status: 'running' };
-  const active = { run, phase: 'research', tools: [{ toolCallId: 't1', name: 'search_youtube', operation: 'search', status: 'running', startedAt: 1, input: { query: 'protéines' } }] };
+  const active = { run, phase: 'finalization', draft: { answer: 'Résumé en cours', state: 'streaming' }, tools: [{ toolCallId: 't1', name: 'search_youtube', operation: 'search', status: 'completed', startedAt: 1, finishedAt: 2, input: { query: 'protéines' } }] };
   const done = { run: { ...run, status: 'completed' }, phase: 'completed', tools: [] };
   const bytes = new TextEncoder().encode(`event: snapshot\r\ndata: ${JSON.stringify(active)}\r\n\r\nevent: heartbeat\ndata: {}\n\nevent: snapshot\ndata: ${JSON.stringify(done)}\n\n`);
   let offset = 0;

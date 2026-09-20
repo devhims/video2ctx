@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { simulateReadableStream, tool } from 'ai';
 import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
 import { executeResearchRun } from '../src/agents/research/research-agent';
@@ -69,6 +69,38 @@ it.each(['context_answer', 'clarification', 'rejected'] as const)('routes %s thr
   const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
   expect(prompt).toContain('The man is the interviewer.');
   expect(prompt.indexOf('conversationHistory')).toBeLessThan(prompt.lastIndexOf('Correct your previous statement.'));
+});
+
+it('streams provisional text, clears a rejected draft, and commits the repaired answer', async () => {
+  const { options, classifier, output } = setup('context_answer');
+  const stream = (value: unknown) => {
+    const encoded = JSON.stringify(value);
+    const split = Math.max(1, Math.floor(encoded.length / 2));
+    return { stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start' as const, warnings: [] },
+      { type: 'text-start' as const, id: 'answer' },
+      { type: 'text-delta' as const, id: 'answer', delta: encoded.slice(0, split) },
+      { type: 'text-delta' as const, id: 'answer', delta: encoded.slice(split) },
+      { type: 'text-end' as const, id: 'answer' },
+      { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
+    ], initialDelayInMs: null, chunkDelayInMs: null }) };
+  };
+  const invalid = { ...output, blocks: [{ text: 'The', evidenceIds: [] }] };
+  const finalizer = new MockLanguageModelV4({ doStream: [stream(invalid), stream(output)] });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  const drafts: Array<{ answer: string; state: string }> = [];
+  options.onDraft = draft => drafts.push(draft);
+
+  await executeResearchRun(options);
+
+  expect(finalizer.doStreamCalls).toHaveLength(2);
+  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
+  expect(drafts).toContainEqual({ answer: 'The', state: 'streaming' });
+  expect(drafts).toContainEqual({ answer: '', state: 'revising' });
+  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'revising' });
+  expect(options.finalize).toHaveBeenCalledOnce();
 });
 
 it('gives the router and finalizer earlier source evidence and validates its citations', async () => {

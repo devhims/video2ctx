@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, assertRequestedNumberedItems } from '../src/agents/structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, assertRequestedNumberedItems } from '../src/agents/structured-answer';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -19,6 +19,13 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('renders bounded provisional text without model-written source markers', () => {
+    expect(renderPartialAnswer({ blocks: [
+      { text: 'First draft [cite:ref_1]' },
+      { text: 'Second draft 【ref_2】' },
+    ] })).toBe('First draft\n\nSecond draft');
+    expect(renderPartialAnswer({ blocks: [{ text: 'x'.repeat(25_000) }] })).toHaveLength(20_000);
+  });
   it('rejects a schema-valid one-item answer for an explicit ten-item request', () => {
     const output = finalizationOutputSchema.parse({ confidence: 'medium', warnings: [],
       blocks: [{ text: '1. A single item that ends', evidenceIds: ['e1'] }] });

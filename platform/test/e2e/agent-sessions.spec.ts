@@ -78,6 +78,7 @@ test('new follow-ups receive focus and saved answers keep full Markdown styling'
 });
 
 const sessionId = 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
+const activeId = 'cd056140-7d4c-4516-bb9e-c97914439553';
 async function login(context: import('@playwright/test').BrowserContext, role: string) {
   await context.addCookies([{ name: 'agent-ui', value: role, domain: '127.0.0.1', path: '/' }]);
 }
@@ -153,6 +154,20 @@ test('missing sessions and access outages do not expose private content', async 
   await login(context, 'allowed');
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+});
+
+test('shows a provisional draft and replaces it with the validated answer', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await page.goto(`/dashboard/sessions/${activeId}`);
+  const latest = page.locator('.agent-assistant-message').last();
+  await expect(latest.getByRole('region', { name: 'Draft answer' })).toBeVisible();
+  await expect(latest.getByRole('heading', { name: 'Draft answer' })).toBeVisible();
+  await expect(latest.getByText('The agent is assembling the evidence-backed comparison.')).toBeVisible();
+  await expect(latest.getByRole('button', { name: 'Copy answer' })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('streaming-draft.png'), fullPage: true });
+  await expect(latest.locator('.agent-status')).toHaveText('completed');
+  await expect(latest.getByRole('region', { name: 'Draft answer' })).toHaveCount(0);
+  await expect(latest.getByText('The speaker prefers Fable for coding and Astra for broader tasks. [1]')).toBeVisible();
 });
 
 

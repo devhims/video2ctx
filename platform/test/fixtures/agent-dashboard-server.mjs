@@ -75,8 +75,9 @@ createServer(async (req, res) => {
         // End an active stream once to exercise restoration without a second POST.
         timers.push(setTimeout(() => res.end(), 700)); return;
       }
-      timers.push(setTimeout(() => send({ run: { sessionId: id, runId, status: 'running' }, phase: 'finalization', tools: [finishedTool] }), 600));
-      timers.push(setTimeout(() => { if (turn) turn.completed = true; send(completed); res.end(); }, 1400));
+      timers.push(setTimeout(() => send({ run: { sessionId: id, runId, status: 'running' }, phase: 'finalization',
+        draft: { answer: '## Draft answer\n\nThe agent is assembling the evidence-backed comparison.', state: 'streaming' }, tools: [finishedTool] }), 600));
+      timers.push(setTimeout(() => { if (turn) turn.completed = true; send(completed); res.end(); }, 2400));
       return;
     }
     if (url.pathname === '/v1/agent/access') return reply(200, { enabled: true });
