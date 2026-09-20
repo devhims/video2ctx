@@ -24,6 +24,37 @@ describe('social sign-in on the Worker runtime', () => {
       expect(scopes).not.toContain('repo');
     });
   }
+
+  test('proxies an allowed Vercel preview through the fixed production Google callback', async () => {
+    const previewOrigin = 'https://all-things-youtube-web-git-streaming-devhims.vercel.app';
+    const response = await worker.fetch(new Request('http://api.test/api/auth/sign-in/social', {
+      method: 'POST',
+      headers: jsonHeaders({
+        origin: previewOrigin,
+        'x-forwarded-host': new URL(previewOrigin).host,
+        'x-forwarded-proto': 'https',
+      }),
+      body: JSON.stringify({
+        provider: 'google',
+        callbackURL: `${previewOrigin}/dashboard/sessions`,
+        errorCallbackURL: `${previewOrigin}/login`,
+      }),
+    }));
+    expect(response.status).toBe(200);
+    const { url } = await response.json() as { url: string };
+    const authorization = new URL(url);
+    expect(authorization.searchParams.get('redirect_uri')).toBe(`${baseUrl}/api/auth/callback/google`);
+    expect(authorization.searchParams.get('state')?.length).toBeGreaterThan(100);
+    expect(response.headers.get('set-cookie')).toContain('better-auth.state=');
+
+    const untrustedOrigin = 'https://unrelated-project.vercel.app';
+    const rejected = await worker.fetch(new Request('http://api.test/api/auth/sign-in/social', {
+      method: 'POST',
+      headers: jsonHeaders({ origin: untrustedOrigin, 'x-forwarded-host': new URL(untrustedOrigin).host }),
+      body: JSON.stringify({ provider: 'google', callbackURL: `${untrustedOrigin}/dashboard` }),
+    }));
+    expect(rejected.status).toBe(403);
+  });
 });
 
 describe('Agent tester access with real D1 and browser sessions', () => {

@@ -2,7 +2,7 @@ import { APIError, betterAuth } from 'better-auth';
 import type { BetterAuthOptions } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
-import { admin, bearer, deviceAuthorization, magicLink } from 'better-auth/plugins';
+import { admin, bearer, deviceAuthorization, magicLink, oAuthProxy } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
@@ -18,15 +18,26 @@ export const DEVICE_AUTH_CLIENT_ID = 'video2ctx-cli';
 export const DEVICE_AUTH_SCOPE = 'data:read account:access';
 
 export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }, adminUserIds: string[] = []) {
+  const previewHostPattern = String(env.AUTH_PREVIEW_HOST_PATTERN ?? '').trim();
+  const allowedHosts = [...new Set([
+    new URL(env.AUTH_BASE_URL).host,
+    new URL(env.APP_ORIGIN).host,
+    ...(previewHostPattern ? [previewHostPattern] : []),
+  ])];
+  const trustedOrigins = [...new Set([
+    env.APP_ORIGIN,
+    env.AUTH_BASE_URL,
+    ...(previewHostPattern ? [`https://${previewHostPattern}`] : []),
+  ])];
   return {
     appName: 'video2ctx',
-    baseURL: env.AUTH_BASE_URL,
+    baseURL: { allowedHosts, fallback: env.AUTH_BASE_URL },
     basePath: '/api/auth',
     // User deletion must run our billing, durable-state and storage cleanup.
     disabledPaths: ['/admin/remove-user'],
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
-    trustedOrigins: [env.APP_ORIGIN],
+    trustedOrigins,
     session: {
       cookieCache: {
         enabled: true,
@@ -47,6 +58,11 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
     },
     verification: { storeIdentifier: 'hashed' },
     plugins: [
+      oAuthProxy({
+        productionURL: env.AUTH_BASE_URL,
+        secret: env.OAUTH_PROXY_SECRET,
+        maxAge: 60,
+      }),
       admin({ adminUserIds }),
       apiKey({
         apiKeyHeaders: 'x-api-key',

@@ -270,6 +270,8 @@ Local secret placeholders are documented in [`platform/.dev.vars.example`](./pla
 | Variable                                                            | Used by   | Purpose                                                                                              |
 | ------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
 | `BETTER_AUTH_SECRET`                                                | Platform  | Signs and secures authentication state; required for local auth initialization                       |
+| `OAUTH_PROXY_SECRET`                                                | Platform  | Encrypts short-lived OAuth state and profile handoffs between production and approved preview hosts  |
+| `AUTH_PREVIEW_HOST_PATTERN`                                         | Platform  | Restricts OAuth proxy redirects to this Vercel project's generated preview hostnames                  |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`                          | Platform  | Google sign-in and optional YouTube OAuth                                                            |
 | `YOUTUBE_OAUTH_ENCRYPTION_KEY`                                      | Platform  | Encrypts stored YouTube refresh tokens                                                               |
 | `TURNSTILE_SECRET`                                                  | Platform  | Protects selected production endpoints                                                               |
