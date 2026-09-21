@@ -170,7 +170,7 @@ const playlistSummary: Schema = {
 
 const trendVideo: Schema = {
   type: 'object',
-  required: ['id', 'title', 'channel', 'thumbnails', 'description', 'viewCount', 'signalSource', 'confidenceScore', 'hashtags', 'keywords', 'trendScore', 'trendBand', 'url'],
+  required: ['id', 'title', 'channel', 'thumbnails', 'description', 'viewCount', 'signalSource', 'confidenceScore', 'hashtags', 'keywords', 'effectiveViewsPerHour', 'velocityRank', 'percentiles', 'trendScore', 'trendBand', 'url'],
   properties: {
     id: { type: 'string' },
     title: { type: 'string' },
@@ -204,28 +204,69 @@ const trendVideo: Schema = {
     confidenceScore: { type: 'integer', minimum: 0, maximum: 100 },
     hashtags: { type: 'array', items: { type: 'string' } },
     keywords: { type: 'array', items: { type: 'string' } },
-    trendScore: { type: 'integer', minimum: 0, maximum: 100 },
-    trendBand: { type: 'string', enum: ['Breakout', 'Rising', 'Steady'] },
+    effectiveViewsPerHour: {
+      type: 'number', minimum: 0,
+      description: 'The velocity every score used: measured growth between snapshots when signalSource is observed, otherwise the lifetime average.',
+    },
+    velocityRank: {
+      type: 'integer', minimum: 1,
+      description: 'Position by effectiveViewsPerHour inside this sample, 1 being fastest.',
+    },
+    percentiles: {
+      type: 'object',
+      required: ['velocity', 'freshness', 'channelPerformance', 'engagement', 'acceleration'],
+      description: 'Each signal as a percentile rank inside this sample. A missing signal scores 50 so it neither helps nor hurts.',
+      properties: {
+        velocity: { type: 'number', minimum: 0, maximum: 100 },
+        freshness: { type: 'number', minimum: 0, maximum: 100 },
+        channelPerformance: { type: 'number', minimum: 0, maximum: 100 },
+        engagement: { type: 'number', minimum: 0, maximum: 100 },
+        acceleration: { type: 'number', minimum: 0, maximum: 100 },
+      },
+    },
+    trendScore: {
+      type: 'integer', minimum: 0, maximum: 100,
+      description: 'Weighted blend of the percentiles above, so 50 is the middle of this sample rather than an absolute rating.',
+    },
+    trendBand: {
+      type: 'string', enum: ['Breakout', 'Rising', 'Steady'],
+      description: 'Breakout requires signalSource observed and at least five enriched videos, because a lifetime average cannot evidence a breakout.',
+    },
     url: { type: 'string', format: 'uri' },
   },
 };
 
 const trendReport: Schema = {
   type: 'object',
-  required: ['provider', 'query', 'generatedAt', 'sampleSize', 'methodologyVersion', 'methodology', 'sample', 'confidence', 'summary', 'videos', 'hashtags', 'titlePatterns', 'durationMix', 'plan', 'warnings'],
+  required: ['provider', 'query', 'generatedAt', 'sampleSize', 'methodologyVersion', 'methodology', 'sample', 'window', 'confidence', 'summary', 'videos', 'hashtags', 'titlePatterns', 'durationMix', 'plan', 'warnings'],
   properties: {
     provider: { type: 'string', enum: PROVIDER_IDS },
     query: { type: 'string' },
     generatedAt: { type: 'string', format: 'date-time' },
     sampleSize: { type: 'integer', minimum: 0 },
-    methodologyVersion: { const: '2.0' },
+    methodologyVersion: { const: '3.0' },
     methodology: { type: 'string' },
     sample: {
       type: 'object',
-      required: ['candidateVideos', 'enrichedVideos', 'channels', 'observedVideos'],
+      required: ['candidateVideos', 'enrichedVideos', 'channels', 'observedVideos', 'recentCandidates', 'recentVideos'],
       properties: {
         candidateVideos: { type: 'integer', minimum: 0 }, enrichedVideos: { type: 'integer', minimum: 0 },
         channels: { type: 'integer', minimum: 0 }, observedVideos: { type: 'integer', minimum: 0 },
+        recentCandidates: {
+          type: 'integer', minimum: 0,
+          description: 'Candidates published inside the recency window. A lower bound: search ranking hides recent uploads that rank poorly.',
+        },
+        recentVideos: { type: 'integer', minimum: 0, description: 'Enriched videos published inside the recency window.' },
+      },
+    },
+    window: {
+      type: 'object',
+      required: ['days', 'recentCandidatesSampled', 'recentVideosEnriched'],
+      description: 'The recency window used to reserve sample slots for recent uploads.',
+      properties: {
+        days: { type: 'integer', minimum: 1 },
+        recentCandidatesSampled: { type: 'integer', minimum: 0 },
+        recentVideosEnriched: { type: 'integer', minimum: 0 },
       },
     },
     confidence: {
@@ -246,6 +287,14 @@ const trendReport: Schema = {
         breakoutCount: { type: 'integer', minimum: 0 },
         acceleratingCount: { type: 'integer', minimum: 0 },
         medianObservedViewsPerHour: { type: 'number', minimum: 0 },
+        medianRecentViewsPerHour: {
+          type: 'number', minimum: 0,
+          description: 'Median velocity of the sampled videos published inside the recency window.',
+        },
+        recentVelocityLift: {
+          type: 'number', minimum: 0,
+          description: 'medianRecentViewsPerHour over medianViewsPerHour. Above 1 means recent uploads are outpacing the established ones.',
+        },
       },
     },
     videos: { type: 'array', items: schemaRef('TrendVideo') },

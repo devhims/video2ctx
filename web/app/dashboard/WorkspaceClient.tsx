@@ -106,11 +106,15 @@ type TrendVideo = {
   id: string; title: string; channel: { id: string; name: string }; thumbnails: Thumbnail[];
   durationSeconds?: number; publishedTimeText?: string; publishDate?: string; ageHours?: number;
   viewCount: number; viewsPerHour?: number; commentCount?: number; hashtags: string[]; keywords: string[];
+  observedViewsPerHour?: number; effectiveViewsPerHour: number; velocityRank: number;
+  signalSource: 'observed' | 'estimated';
+  percentiles: { velocity: number; freshness: number; channelPerformance: number; engagement: number; acceleration: number };
   trendScore: number; trendBand: 'Breakout' | 'Rising' | 'Steady'; url: string;
 };
 type TrendReport = {
   provider: ProviderId; query: string; generatedAt: string; sampleSize: number; methodology: string;
-  summary: { totalViews: number; medianViewsPerHour: number; publishedLast7Days: number; breakoutCount: number };
+  summary: { totalViews: number; medianViewsPerHour: number; publishedLast7Days: number; breakoutCount: number; medianRecentViewsPerHour?: number; recentVelocityLift?: number };
+  window: { days: number; recentCandidatesSampled: number; recentVideosEnriched: number };
   videos: TrendVideo[];
   hashtags: Array<{ tag: string; videos: number; averageViewsPerHour: number; lift: number }>;
   titlePatterns: Array<{ term: string; videos: number; averageViewsPerHour: number }>;
@@ -935,7 +939,8 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
       summary: report.summary,
       videos: report.videos.map((video) => ({
         id: video.id, title: video.title, channel: video.channel.name,
-        viewsPerHour: video.viewsPerHour, viewCount: video.viewCount, ageHours: video.ageHours,
+        viewsPerHour: video.viewsPerHour, observedViewsPerHour: video.observedViewsPerHour,
+        viewCount: video.viewCount, ageHours: video.ageHours,
         durationSeconds: video.durationSeconds, trendBand: video.trendBand,
       })),
       hashtags: report.hashtags,
@@ -949,7 +954,8 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     } finally { setAiLoading(false); }
   };
 
-  const maxVelocity = Math.max(...(report?.videos.map((video) => video.viewsPerHour ?? 0) ?? [1]), 1);
+  const maxVelocity = Math.max(...(report?.videos.map((video) => video.effectiveViewsPerHour) ?? [1]), 1);
+  const measuredCount = report?.videos.filter((video) => video.signalSource === 'observed').length ?? 0;
   const maxDurationCount = Math.max(...(report?.durationMix.map((bucket) => bucket.videos) ?? [1]), 1);
 
   return <section className='trend-lab' data-report={Boolean(report)}>
@@ -968,16 +974,16 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
       {loading && <div className='trend-refresh-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>Refreshing the topic sample…</strong><small>The previous report remains visible.</small></div><button onClick={cancelTrend}>Cancel</button></div>}
       <div className='trend-report-head'><div><p className='panel-label'>Live sample · {report.sampleSize} videos</p><h3>{report.query}</h3></div><span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>
       <div className='trend-kpis'>
-        <article><span>Median views/hour</span><strong>{formatNumber(report.summary.medianViewsPerHour)}</strong><small>average views/hour</small></article>
+        <article><span>Median views/hour</span><strong>{formatNumber(report.summary.medianViewsPerHour)}</strong><small>{measuredCount ? `${measuredCount} of ${report.sampleSize} measured` : 'all estimated from lifetime views'}</small></article>
         <article><span>Published this week</span><strong>{report.summary.publishedLast7Days}/{report.sampleSize}</strong><small>sampled videos</small></article>
-        <article><span>Breakout signals</span><strong>{report.summary.breakoutCount}</strong><small>relative to sample</small></article>
-        <article><span>Total views</span><strong>{formatNumber(report.summary.totalViews)}</strong><small>current public views</small></article>
+        <article><span>Breakout signals</span><strong>{report.summary.breakoutCount}</strong><small>measured, relative to sample</small></article>
+        <article><span>Recent vs established</span><strong>{report.summary.recentVelocityLift ? `${report.summary.recentVelocityLift.toFixed(2)}×` : '—'}</strong><small>{report.summary.recentVelocityLift ? `last ${report.window.days} days vs whole sample` : `nothing from the last ${report.window.days} days ranked`}</small></article>
       </div>
 
       <div className='trend-dashboard-grid'>
         <article className='trend-card velocity-card'>
-          <div className='trend-card-head'><div><h4>Average views/hour since publish</h4></div><span>First-scan estimate</span></div>
-          <div className='velocity-chart'>{report.videos.slice(0,6).map((video) => <button key={video.id} onClick={() => onInspect(video.id)} title={video.title}><span>{video.title}</span><i><b style={{width:`${Math.max(4,((video.viewsPerHour ?? 0)/maxVelocity)*100)}%`}} /></i><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong></button>)}</div>
+          <div className='trend-card-head'><div><h4>Views/hour used for ranking</h4></div><span>{measuredCount ? `${measuredCount} measured, ${report.sampleSize - measuredCount} estimated` : 'all estimated'}</span></div>
+          <div className='velocity-chart'>{report.videos.slice(0,6).map((video) => <button key={video.id} onClick={() => onInspect(video.id)} title={`${video.title} · ${video.signalSource === 'observed' ? 'measured between scans' : 'lifetime average'}`}><span>{video.title}</span><i><b style={{width:`${Math.max(4,(video.effectiveViewsPerHour/maxVelocity)*100)}%`}} /></i><strong>{formatNumber(video.effectiveViewsPerHour)}/h{video.signalSource === 'estimated' ? ' est.' : ''}</strong></button>)}</div>
         </article>
 
         <article className='trend-card scatter-card'>
@@ -985,7 +991,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
           <div className='scatter-plot'><span className='axis-y'>More momentum</span><span className='axis-x'>Fresher →</span>{report.videos.map((video) => {
             const freshness = video.ageHours === undefined ? 10 : Math.max(5, 96 - Math.log10(video.ageHours + 1) * 29);
             const size = Math.max(12, Math.min(28, 12 + Math.log10(video.viewCount + 1) * 2.2));
-            return <button key={video.id} aria-label={`${video.title}: ${formatNumber(video.viewsPerHour ?? 0)} views per hour, ${video.trendBand}`} className={`trend-dot ${video.trendBand.toLowerCase()}`} style={{left:`${freshness}%`,bottom:`${Math.max(8,video.trendScore * .78)}%`,width:size,height:size}} title={`${video.title} · ${formatNumber(video.viewsPerHour ?? 0)} views/hour`} onClick={() => onInspect(video.id)}><span>{video.title}</span></button>;
+            return <button key={video.id} aria-label={`${video.title}: ${formatNumber(video.effectiveViewsPerHour)} views per hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}, ${video.trendBand}`} className={`trend-dot ${video.trendBand.toLowerCase()}`} style={{left:`${freshness}%`,bottom:`${Math.max(8,video.trendScore * .78)}%`,width:size,height:size}} title={`${video.title} · ${formatNumber(video.effectiveViewsPerHour)} views/hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}`} onClick={() => onInspect(video.id)}><span>{video.title}</span></button>;
           })}</div>
           <div className='scatter-legend'><span><i className='breakout' />Breakout</span><span><i className='rising' />Rising</span><span><i className='steady' />Steady</span></div>
         </article>
@@ -1005,7 +1011,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
       <div className='trend-bottom-grid'>
         <article className='trend-leaders'>
           <div className='trend-card-head'><div><h4>Top videos in this sample</h4></div><span>Open any source</span></div>
-          <div className='leader-list'>{report.videos.slice(0,5).map((video, index) => <button key={video.id} onClick={() => onInspect(video.id)}><span className='leader-rank'>{String(index+1).padStart(2,'0')}</span><div className='leader-thumb'>{video.thumbnails[0]?.url ? <img src={video.thumbnails[0].url} alt='' /> : <span>YT</span>}</div><div><strong>{video.title}</strong><small>{video.channel.name} · {video.publishedTimeText ?? video.publishDate ?? 'Published recently'}</small></div><span className={`signal-pill ${video.trendBand.toLowerCase()}`}>{video.trendBand}</span><div className='leader-metric'><strong>{formatNumber(video.viewsPerHour ?? 0)}/h</strong><small>{formatNumber(video.viewCount)} views</small></div></button>)}</div>
+          <div className='leader-list'>{report.videos.slice(0,5).map((video, index) => <button key={video.id} onClick={() => onInspect(video.id)}><span className='leader-rank'>{String(index+1).padStart(2,'0')}</span><div className='leader-thumb'>{video.thumbnails[0]?.url ? <img src={video.thumbnails[0].url} alt='' /> : <span>YT</span>}</div><div><strong>{video.title}</strong><small>{video.channel.name} · {video.publishedTimeText ?? video.publishDate ?? 'Published recently'}</small></div><span className={`signal-pill ${video.trendBand.toLowerCase()}`}>{video.trendBand}</span><div className='leader-metric'><strong>{formatNumber(video.effectiveViewsPerHour)}/h</strong><small>{video.signalSource === 'observed' ? 'measured' : 'lifetime avg'}</small></div></button>)}</div>
         </article>
 
         <aside className={`video-plan ${aiPlan ? 'ai-ready' : ''}`}>

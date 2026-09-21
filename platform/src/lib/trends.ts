@@ -19,6 +19,14 @@ export interface SnapshotSignals {
   accelerationPercent?: number;
 }
 
+export interface TrendPercentiles {
+  velocity: number;
+  freshness: number;
+  channelPerformance: number;
+  engagement: number;
+  acceleration: number;
+}
+
 export interface TrendVideo {
   id: string;
   title: string;
@@ -48,6 +56,9 @@ export interface TrendVideo {
   confidenceScore: number;
   hashtags: string[];
   keywords: string[];
+  effectiveViewsPerHour: number;
+  velocityRank: number;
+  percentiles: TrendPercentiles;
   trendScore: number;
   trendBand: 'Breakout' | 'Rising' | 'Steady';
   url: string;
@@ -57,13 +68,20 @@ export interface TrendReport {
   query: string;
   generatedAt: string;
   sampleSize: number;
-  methodologyVersion: '2.0';
+  methodologyVersion: '3.0';
   methodology: string;
   sample: {
     candidateVideos: number;
     enrichedVideos: number;
     channels: number;
     observedVideos: number;
+    recentCandidates: number;
+    recentVideos: number;
+  };
+  window: {
+    days: number;
+    recentCandidatesSampled: number;
+    recentVideosEnriched: number;
   };
   confidence: {
     score: number;
@@ -77,6 +95,8 @@ export interface TrendReport {
     breakoutCount: number;
     acceleratingCount: number;
     medianObservedViewsPerHour?: number;
+    medianRecentViewsPerHour?: number;
+    recentVelocityLift?: number;
   };
   videos: TrendVideo[];
   hashtags: Array<{ tag: string; videos: number; averageViewsPerHour: number; lift: number }>;
@@ -95,7 +115,19 @@ export interface TrendReport {
 
 type CollectedVideo = Omit<TrendVideo,
   'trendScore' | 'trendBand' | 'channelBaselineViewsPerHour' | 'channelLift' | 'confidenceScore'
+  | 'effectiveViewsPerHour' | 'velocityRank' | 'percentiles'
 >;
+
+/** Videos published inside this window are what the report treats as "recent supply". */
+const RECENCY_WINDOW_DAYS = 14;
+/** Share of the enrichment budget held back for recent candidates so evergreen winners cannot crowd them out. */
+const RECENT_SAMPLE_SHARE = 0.5;
+/** Videos per channel allowed in one sample, so a single creator cannot define the reference frame. */
+const CHANNEL_SAMPLE_CAP = 3;
+/** Below this many enriched videos the sample is too thin to call anything a breakout. */
+const MIN_BREAKOUT_SAMPLE = 5;
+/** Percentile handed to a video whose metric is missing, so an absent signal neither helps nor hurts. */
+const NEUTRAL_PERCENTILE = 50;
 
 const STOP_WORDS = new Set([
   'about', 'after', 'again', 'agents', 'best', 'build', 'building', 'course', 'does', 'from', 'full',
@@ -112,7 +144,9 @@ export async function researchTrendTopic(
   const limit = Math.min(Math.max(Math.trunc(requestedLimit), 8), 30);
   const candidates: VideoSummary[] = [];
   let continuation: string | undefined;
-  for (let page = 0; page < 3 && candidates.length < limit * 2; page += 1) {
+  // Relevance ranking favours videos that already won, so read deeper than the sample needs:
+  // recent uploads sit further down the list and would otherwise never be seen.
+  for (let page = 0; page < 4 && candidates.length < limit * 4; page += 1) {
     const response = await searchYouTube(env, query, {
       type: 'video',
       ...(continuation ? { continuation } : {}),
@@ -122,10 +156,16 @@ export async function researchTrendTopic(
     if (!continuation) break;
   }
   const uniqueCandidates = [...new Map(candidates.map((video) => [video.id, video])).values()];
-  const selected = diverseSample(uniqueCandidates, limit);
+  const relevanceRank = new Map(uniqueCandidates.map((video, index) => [video.id, index + 1]));
+  const windowHours = RECENCY_WINDOW_DAYS * 24;
+  const recentCandidates = uniqueCandidates.filter((video) => {
+    const age = parsePublishedAgeHours(video.publishedTimeText);
+    return age !== undefined && age <= windowHours;
+  });
+  const selected = composeSample(uniqueCandidates, recentCandidates, limit);
   const history = await loadSnapshotHistory(env, selected.map((video) => video.id));
   const capturedAt = Date.now();
-  const settled = await settleInBatches(selected, 6, async (candidate, searchRank): Promise<CollectedVideo> => {
+  const settled = await settleInBatches(selected, 6, async (candidate): Promise<CollectedVideo> => {
     const [video, signals] = await Promise.all([
       getVideo(env, candidate.id),
       getVideoSignals(env, candidate.id).catch(() => undefined),
@@ -157,7 +197,7 @@ export async function researchTrendTopic(
       commentCount: signals?.commentCount,
       likeCount: signals?.likeCount,
       engagementRate,
-      searchRank: searchRank + 1,
+      searchRank: relevanceRank.get(candidate.id),
       signalSource: snapshot.observedViewsPerHour === undefined ? 'estimated' : 'observed',
       hashtags: extractHashtags(`${video.title}\n${description}`),
       keywords: video.keywords,
@@ -171,7 +211,10 @@ export async function researchTrendTopic(
   await persistSnapshots(env, capturedAt, collected).catch((error) => {
     warnings.push(`Snapshot persistence failed: ${error instanceof Error ? error.message : String(error)}`);
   });
-  const report = buildTrendReport(query, collected, warnings, uniqueCandidates.length);
+  const report = buildTrendReport(query, collected, warnings, uniqueCandidates.length, {
+    days: RECENCY_WINDOW_DAYS,
+    recentCandidatesSampled: recentCandidates.length,
+  });
   if (includeAiInsights) {
     try {
       report.insights = await generateTrendInsights(env, query, report.videos.slice(0, 20).map((video) => ({
@@ -196,10 +239,13 @@ export function buildTrendReport(
   query: string,
   collected: CollectedVideo[],
   warnings: string[] = [],
-  candidateCount = collected.length
+  candidateCount = collected.length,
+  window: { days: number; recentCandidatesSampled: number } =
+    { days: RECENCY_WINDOW_DAYS, recentCandidatesSampled: 0 }
 ): TrendReport {
   const effectiveVelocity = (video: CollectedVideo) => video.observedViewsPerHour ?? video.viewsPerHour ?? 0;
   const medianVelocity = median(collected.map(effectiveVelocity).filter((value) => value > 0));
+  const windowHours = window.days * 24;
   const channelVelocities = new Map<string, number[]>();
   for (const video of collected) {
     if (!video.channel.id || !effectiveVelocity(video)) continue;
@@ -207,43 +253,67 @@ export function buildTrendReport(
     values.push(effectiveVelocity(video));
     channelVelocities.set(video.channel.id, values);
   }
+  // A channel baseline only means something when the sample holds more than one of its videos.
+  const channelBaselines = new Map<string, number>();
+  for (const [channel, values] of channelVelocities) {
+    if (values.length >= 2) channelBaselines.set(channel, median(values));
+  }
+  const liftFor = (video: CollectedVideo) => {
+    const baseline = channelBaselines.get(video.channel.id);
+    const velocity = effectiveVelocity(video);
+    return baseline && velocity ? round(velocity / baseline, 2) : undefined;
+  };
+
+  // Every component is a rank inside this sample rather than a fitted curve, so a score reads as
+  // "where in this sample" and stays comparable when the sample's absolute numbers move.
+  const velocityPercentile = percentileScale(collected.map(effectiveVelocity));
+  const freshnessPercentile = percentileScale(
+    collected.map((video) => video.ageHours === undefined ? undefined : -video.ageHours));
+  const channelPercentile = percentileScale(collected.map(liftFor));
+  const engagementPercentile = percentileScale(collected.map((video) => video.engagementRate));
+  const accelerationPercentile = percentileScale(collected.map((video) => video.accelerationPercent));
+
+  const velocityOrder = [...collected].sort((a, b) => effectiveVelocity(b) - effectiveVelocity(a))
+    .map((video) => video.id);
+  const bandable = collected.length >= MIN_BREAKOUT_SAMPLE;
+
   const videos = collected.map((video): TrendVideo => {
     const velocity = effectiveVelocity(video);
-    const relativeVelocity = velocity && medianVelocity
-      ? clamp(50 + 22 * Math.log2(velocity / medianVelocity), 0, 100) : 25;
-    const freshness = video.ageHours === undefined
-      ? 30 : clamp(100 * Math.exp(-video.ageHours / (24 * 21)), 0, 100);
-    const channelValues = channelVelocities.get(video.channel.id) ?? [];
-    const channelBaselineViewsPerHour = channelValues.length >= 2 ? median(channelValues) : undefined;
-    const channelLift = channelBaselineViewsPerHour && velocity
-      ? round(velocity / channelBaselineViewsPerHour, 2) : undefined;
-    const channelPerformance = channelLift === undefined
-      ? 50 : clamp(50 + 25 * Math.log2(channelLift), 0, 100);
-    const acceleration = video.accelerationPercent === undefined
-      ? 50 : clamp(50 + video.accelerationPercent / 4, 0, 100);
-    const engagement = video.engagementRate === undefined
-      ? 40 : clamp(video.engagementRate * 12, 0, 100);
+    const channelLift = liftFor(video);
     const observed = video.signalSource === 'observed';
+    const percentiles: TrendPercentiles = {
+      velocity: velocityPercentile(velocity),
+      freshness: freshnessPercentile(video.ageHours === undefined ? undefined : -video.ageHours),
+      channelPerformance: channelPercentile(channelLift),
+      engagement: engagementPercentile(video.engagementRate),
+      acceleration: accelerationPercentile(video.accelerationPercent),
+    };
     const trendScore = Math.round(
-      relativeVelocity * (observed ? 0.4 : 0.55) +
-      freshness * 0.15 + channelPerformance * 0.15 + engagement * 0.1 +
-      acceleration * (observed ? 0.2 : 0.05)
+      percentiles.velocity * (observed ? 0.4 : 0.55) +
+      percentiles.freshness * 0.15 + percentiles.channelPerformance * 0.15 +
+      percentiles.engagement * 0.1 +
+      percentiles.acceleration * (observed ? 0.2 : 0.05)
     );
     const confidenceScore = Math.round(clamp(
       25 + (observed ? 35 : 0) + (video.previousViewsPerHour !== undefined ? 15 : 0) +
-      (channelBaselineViewsPerHour !== undefined ? 10 : 0) +
+      (channelBaselines.has(video.channel.id) ? 10 : 0) +
       (video.likeCount !== undefined && video.commentCount !== undefined ? 10 : 0) +
       (collected.length >= 16 ? 5 : 0), 0, 100
     ));
     return {
       ...video,
-      channelBaselineViewsPerHour,
+      channelBaselineViewsPerHour: channelBaselines.get(video.channel.id),
       channelLift,
       confidenceScore,
+      effectiveViewsPerHour: velocity,
+      velocityRank: velocityOrder.indexOf(video.id) + 1,
+      percentiles,
       trendScore,
-      trendBand: trendScore >= 75 ? 'Breakout' : trendScore >= 55 ? 'Rising' : 'Steady',
+      // A lifetime average cannot evidence a breakout, and neither can a sample this thin.
+      trendBand: trendScore >= 75 && observed && bandable ? 'Breakout'
+        : trendScore >= 55 ? 'Rising' : 'Steady',
     };
-  }).sort((a, b) => b.trendScore - a.trendScore || effectiveVelocity(b) - effectiveVelocity(a));
+  }).sort((a, b) => b.trendScore - a.trendScore || b.effectiveViewsPerHour - a.effectiveViewsPerHour);
 
   const hashtags = aggregateLabels(videos, (video) => video.hashtags)
     .map((item) => ({
@@ -260,13 +330,19 @@ export function buildTrendReport(
     .slice(0, 8);
   const durationMix = durationBuckets(videos);
   const topVideos = videos.slice(0, 3);
+  const recentVideos = videos.filter((video) => video.ageHours !== undefined && video.ageHours <= windowHours);
   const topTerms = titlePatterns.filter((pattern) => pattern.videos > 1).slice(0, 2).map((pattern) => pattern.term);
-  const duration = median(topVideos.map((video) => video.durationSeconds ?? 0).filter(Boolean));
+  // Relevance search is dominated by long evergreen courses, so length advice comes from recent
+  // uploads when the window holds enough of them.
+  const durationPool = recentVideos.length >= 2 ? recentVideos : topVideos;
+  const duration = median(durationPool.map((video) => video.durationSeconds ?? 0).filter(Boolean));
   const velocityLeader = [...videos].sort((a, b) => effectiveVelocity(b) - effectiveVelocity(a))[0];
   const topicTitle = titleCase(query);
   const observedHashtags = hashtags.filter((item) => item.videos > 1).slice(0, 5).map((item) => item.tag);
 
   const observedVideos = videos.filter((video) => video.signalSource === 'observed').length;
+  const estimatedVideos = videos.length - observedVideos;
+  const medianRecentVelocity = median(recentVideos.map(effectiveVelocity).filter((value) => value > 0));
   const reportConfidence = Math.round(clamp(
     20 + Math.min(videos.length / 30, 1) * 25 + (observedVideos / Math.max(videos.length, 1)) * 45 +
     (new Set(videos.map((video) => video.channel.id)).size >= 8 ? 10 : 0), 0, 100
@@ -275,13 +351,20 @@ export function buildTrendReport(
     query,
     generatedAt: new Date().toISOString(),
     sampleSize: videos.length,
-    methodologyVersion: '2.0',
-    methodology: 'Momentum combines observed snapshot velocity and acceleration when history exists, otherwise lifetime average views per hour; it also considers freshness, engagement, and performance relative to other sampled videos from the same channel. This is topic-sample research, not YouTube CTR, retention, recommendation traffic, or proof of demand.',
+    methodologyVersion: '3.0',
+    methodology: `Each video is ranked against the others in this sample on five signals: momentum, freshness, engagement, acceleration, and performance against the same channel's other sampled videos. Momentum is measured growth between repeated snapshots when history exists, otherwise lifetime average views per hour, and only measured videos can be called a breakout. Up to half the sample is reserved for videos published in the last ${window.days} days. This is topic-sample research, not YouTube CTR, retention, recommendation traffic, or proof of demand.`,
     sample: {
       candidateVideos: candidateCount,
       enrichedVideos: videos.length,
       channels: new Set(videos.map((video) => video.channel.id || video.channel.name)).size,
       observedVideos,
+      recentCandidates: window.recentCandidatesSampled,
+      recentVideos: recentVideos.length,
+    },
+    window: {
+      days: window.days,
+      recentCandidatesSampled: window.recentCandidatesSampled,
+      recentVideosEnriched: recentVideos.length,
     },
     confidence: {
       score: reportConfidence,
@@ -289,9 +372,18 @@ export function buildTrendReport(
       reasons: [
         `${videos.length} videos across ${new Set(videos.map((video) => video.channel.id || video.channel.name)).size} channels were enriched.`,
         observedVideos
-          ? `${observedVideos} videos have repeated snapshots with observed growth.`
-          : 'No repeated snapshots exist yet; velocity is estimated from lifetime views and publication age.',
-        'Search ranking biases the sample toward relevance and established performance.',
+          ? `${observedVideos} videos have repeated snapshots with measured growth.`
+          : 'No repeated snapshots exist yet, so momentum is estimated from lifetime views and publication age.',
+        estimatedVideos
+          ? `${estimatedVideos} videos have no snapshot history, so their momentum is a lifetime average and they cannot be banded Breakout.`
+          : 'Every sampled video has measured growth.',
+        videos.length < MIN_BREAKOUT_SAMPLE
+          ? `Breakout is withheld below ${MIN_BREAKOUT_SAMPLE} enriched videos because the sample is its own reference frame.`
+          : `Scores are percentile ranks inside this ${videos.length} video sample, not absolute ratings.`,
+        recentVideos.length
+          ? `${recentVideos.length} of ${videos.length} sampled videos were published in the last ${window.days} days.`
+          : `No sampled video was published in the last ${window.days} days, so this reads as an established topic rather than an active one.`,
+        'Search ranking biases the sample toward relevance and established performance, so recent uploads that rank poorly are invisible here.',
       ],
     },
     summary: {
@@ -303,6 +395,10 @@ export function buildTrendReport(
       medianObservedViewsPerHour: observedVideos
         ? Math.round(median(videos.map((video) => video.observedViewsPerHour ?? 0).filter(Boolean)))
         : undefined,
+      medianRecentViewsPerHour: medianRecentVelocity ? Math.round(medianRecentVelocity) : undefined,
+      // Above 1 means recent uploads are outpacing the topic's established videos.
+      recentVelocityLift: medianRecentVelocity && medianVelocity
+        ? round(medianRecentVelocity / medianVelocity, 2) : undefined,
     },
     videos,
     hashtags,
@@ -320,7 +416,10 @@ export function buildTrendReport(
       evidence: [
         `${videos.filter((video) => video.ageHours !== undefined && video.ageHours <= 24 * 7).length} of ${videos.length} sampled videos were published in the last 7 days.`,
         `The median publish-age-normalized reach is ${formatCompact(Math.round(medianVelocity))} average views/hour.`,
-        velocityLeader ? `${velocityLeader.title} leads this sample at ${formatCompact(effectiveVelocity(velocityLeader))} ${velocityLeader.signalSource === 'observed' ? 'observed' : 'estimated'} views/hour.` : '',
+        medianRecentVelocity && medianVelocity
+          ? `Videos from the last ${window.days} days run at ${formatCompact(Math.round(medianRecentVelocity))} views/hour against ${formatCompact(Math.round(medianVelocity))} for the whole sample, so recent uploads are ${medianRecentVelocity >= medianVelocity ? 'outpacing' : 'trailing'} the established ones.`
+          : `No video from the last ${window.days} days made this sample, so there is no recent-supply signal to compare against.`,
+        velocityLeader ? `${velocityLeader.title} leads this sample at ${formatCompact(effectiveVelocity(velocityLeader))} ${velocityLeader.signalSource === 'observed' ? 'measured' : 'estimated'} views/hour.` : '',
       ].filter(Boolean),
     },
     warnings,
@@ -366,20 +465,63 @@ function delta(current?: number, previous?: number): number | undefined {
   return current === undefined || previous === undefined ? undefined : Math.max(current - previous, 0);
 }
 
-function diverseSample(candidates: VideoSummary[], limit: number): VideoSummary[] {
-  const selected: VideoSummary[] = [];
-  const deferred: VideoSummary[] = [];
+/**
+ * Builds the enrichment set. The first pass spends up to half the budget on videos published inside
+ * the recency window, so a topic's evergreen winners cannot take every slot. The second pass fills
+ * the rest in relevance order, and the last pass relaxes the per-channel cap rather than returning a
+ * short sample, because the sample size is what every score is measured against.
+ */
+export function composeSample(
+  relevance: VideoSummary[],
+  recent: VideoSummary[],
+  limit: number
+): VideoSummary[] {
+  const chosen = new Map<string, VideoSummary>();
   const perChannel = new Map<string, number>();
-  for (const video of candidates) {
+  const take = (video: VideoSummary, cap: number) => {
+    if (chosen.has(video.id)) return false;
     const channel = video.channel.id || video.channel.name;
-    const count = perChannel.get(channel) ?? 0;
-    if (count < 3) {
-      selected.push(video);
-      perChannel.set(channel, count + 1);
-    } else deferred.push(video);
-    if (selected.length === limit) return selected;
+    const used = perChannel.get(channel) ?? 0;
+    if (used >= cap) return false;
+    chosen.set(video.id, video);
+    perChannel.set(channel, used + 1);
+    return true;
+  };
+
+  const recentQuota = Math.floor(limit * RECENT_SAMPLE_SHARE);
+  let fromRecent = 0;
+  for (const video of recent) {
+    if (fromRecent >= recentQuota || chosen.size >= limit) break;
+    if (take(video, CHANNEL_SAMPLE_CAP)) fromRecent += 1;
   }
-  return [...selected, ...deferred].slice(0, limit);
+  for (const video of relevance) {
+    if (chosen.size >= limit) break;
+    take(video, CHANNEL_SAMPLE_CAP);
+  }
+  for (const video of [...recent, ...relevance]) {
+    if (chosen.size >= limit) break;
+    take(video, Number.POSITIVE_INFINITY);
+  }
+  return [...chosen.values()];
+}
+
+/**
+ * Returns a function placing a value inside the sample's own distribution, 0 to 100, with ties
+ * sharing the midpoint. Missing values are neither rewarded nor punished.
+ */
+export function percentileScale(values: Array<number | undefined>): (value: number | undefined) => number {
+  const known = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
+  if (!known.length) return () => NEUTRAL_PERCENTILE;
+  return (value) => {
+    if (value === undefined || !Number.isFinite(value)) return NEUTRAL_PERCENTILE;
+    let below = 0;
+    let equal = 0;
+    for (const item of known) {
+      if (item < value) below += 1;
+      else if (item === value) equal += 1;
+    }
+    return round(((below + equal / 2) / known.length) * 100, 1);
+  };
 }
 
 async function settleInBatches<T, R>(
