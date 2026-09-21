@@ -1049,13 +1049,21 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Comparing public video signals.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
+function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' | 'channel' }) {
+  return <div className={`source-skeleton source-skeleton-${variant}`} role='status' aria-live='polite'>
+    <span className='sr-only'>{label}</span>
+    {variant === 'channel' ? <span className='source-skeleton-media' aria-hidden='true' /> : null}
+    <div className='source-skeleton-lines' aria-hidden='true'>{Array.from({ length: lines }).map((_, index) => <i key={index} />)}</div>
+  </div>;
+}
+
 function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, failed }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean; failed: boolean }) {
   return <section className='source-results' aria-labelledby='source-results-title'>
     <header className={!items.length && !hasSearched ? 'sr-only' : undefined}>
       <h2 id='source-results-title'>{items.length ? 'Results' : failed ? 'Search could not finish' : hasSearched && !loading ? 'No matching videos' : 'Search results'}</h2>
       {items.length ? <span>{items.length} videos{loading ? ' · refreshing' : ''}</span> : null}
     </header>
-    {loading && !items.length ? <div className='source-result-skeletons' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : null}
+    {loading && !items.length ? <div className='source-result-skeletons' role='status' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index} aria-hidden='true'><i /><span><b /><small /></span></div>)}</div> : null}
     {!items.length && !loading && !failed ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>{hasSearched ? 'Try another search' : 'Your sources will appear here'}</h3><p>{hasSearched ? 'Try another topic or paste a YouTube URL.' : 'Open a result to view your selected datasets.'}</p>{hasSearched && <button className={pageStyles.textAction} onClick={onStart}>Edit search →</button>}</div></div> : null}
     {items.length ? <div className='source-result-list'>{items.map((item) => {
       const thumbnail = bestThumbnail(item.thumbnails);
@@ -1120,11 +1128,11 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
-    {inspector.loadingData?.includes('metadata') ? <p role='status'>Loading video details…</p> : null}
+    {inspector.loadingData?.includes('metadata') ? <SourceSkeleton label='Loading video details' lines={2} /> : null}
     {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />
-      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <p role='status'>Loading channel info…</p> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
+      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <SourceSkeleton label='Loading channel info' variant='channel' lines={4} /> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
     </div>
 
     {panelOptions.length ? <>
@@ -1133,7 +1141,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <p role='status'>Loading comments…</p> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
       </section>
     </> : null}
 
@@ -1219,7 +1227,7 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 }
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
-  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <p role='status'>Loading transcript…</p>;
+  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
   if (inspector.dataErrors.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>

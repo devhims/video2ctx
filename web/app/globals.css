@@ -1651,18 +1651,59 @@ html:has(.developer-page) body {
   gap: var(--space-lg);
 }
 
+/* Shared with the agent tab skeletons: identical 1.8s ease-in-out opacity pulse,
+   surface-muted for media blocks and rule for text lines. */
+@keyframes dashboardSkeletonPulse { 50% { opacity: .45; } }
+
 .source-result-skeletons i,
 .source-result-skeletons b,
-.source-result-skeletons small {
+.source-result-skeletons small,
+.source-skeleton-media,
+.source-skeleton-lines i {
+  display: block;
+  background: var(--color-dashboard-rule);
+  animation: dashboardSkeletonPulse 1.8s ease-in-out infinite;
+}
+
+.source-result-skeletons i,
+.source-skeleton-media {
   border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-surface-muted);
-  animation: pulse 1.2s infinite alternate;
 }
+
+.source-result-skeletons b,
+.source-result-skeletons small,
+.source-skeleton-lines i { border-radius: 4px; }
 
 .source-result-skeletons i { aspect-ratio: 16 / 9; }
 .source-result-skeletons span { display: grid; gap: var(--space-sm); }
-.source-result-skeletons b { width: 70%; height: 1rem; }
+.source-result-skeletons b { width: 70%; height: .8rem; }
 .source-result-skeletons small { width: 38%; height: .7rem; }
+
+.source-skeleton { display: grid; gap: var(--space-md); }
+.source-skeleton-lines { display: grid; gap: .7rem; }
+.source-skeleton-lines i { height: .75rem; }
+.source-skeleton-lines i:nth-child(2) { width: 92%; }
+.source-skeleton-lines i:last-child { width: 68%; }
+
+.source-skeleton-inline { padding-block: var(--space-xs); }
+.source-skeleton-panel { padding-block: var(--space-sm); gap: var(--space-lg); }
+
+.source-skeleton-channel {
+  grid-template-columns: 3rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-md) var(--space-lg);
+}
+
+.source-skeleton-channel .source-skeleton-media { width: 3rem; height: 3rem; border-radius: 50%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .source-result-skeletons i,
+  .source-result-skeletons b,
+  .source-result-skeletons small,
+  .source-skeleton-media,
+  .source-skeleton-lines i { animation: none; }
+}
 
 .source-inspector {
   padding-top: var(--space-lg);
