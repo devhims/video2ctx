@@ -133,6 +133,9 @@ type Usage = DashboardUsage;
 
 const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
+// Videos enriched per scan. Each one costs two provider calls, so this trades scan time for a
+// wider reference frame: every score is a rank inside this sample.
+const TREND_SAMPLE_SIZE = 10;
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
   transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
   comments: { shortLabel: 'Comments', description: 'Paginated public comments and replies' },
@@ -916,7 +919,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8&insights=deterministic`, { signal: controller.signal }));
+      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=${TREND_SAMPLE_SIZE}&insights=deterministic`, { signal: controller.signal }));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {
