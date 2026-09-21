@@ -907,6 +907,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const requestController = useRef<AbortController | null>(null);
+  const topicInputRef = useRef<HTMLInputElement>(null);
 
   const runTopic = useCallback(async (value: string) => {
     const nextTopic = value.trim();
@@ -962,10 +963,10 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     <header className='trend-command'>
       <div className={pageStyles.intro}><h2>Explore a topic</h2><p>Compare video performance and find patterns in a fresh sample.</p></div>
       <form className='trend-search' onSubmit={(event) => { event.preventDefault(); void runTopic(topic); }}>
-        <label htmlFor='trend-topic'>Topic or niche</label><div><input id='trend-topic' value={topic} onChange={(event) => setTopic(event.target.value)} placeholder='e.g. AI coding agents' /><button disabled={loading}>{loading ? 'Scanning…' : 'Research topic'} <span aria-hidden='true'>→</span></button></div>
+        <label htmlFor='trend-topic'>Topic or niche</label><div><input id='trend-topic' ref={topicInputRef} value={topic} onChange={(event) => setTopic(event.target.value)} placeholder='e.g. AI coding agents' /><button disabled={loading || !topic.trim()}>{loading ? 'Scanning…' : 'Research topic'} <span aria-hidden='true'>→</span></button></div>
       </form>
     </header>
-    <div className='trend-presets'><span>Quick scans</span>{['AI agents','Claude Code','faceless YouTube','personal finance'].map((preset) => <button key={preset} onClick={() => void runTopic(preset)}>{preset}</button>)}</div>
+    <div className='trend-presets'><span>Try a topic</span>{['AI agents','Claude Code','faceless YouTube','personal finance'].map((preset) => <button key={preset} type='button' onClick={() => { setTopic(preset); topicInputRef.current?.focus(); }}>{preset}</button>)}</div>
 
     {error && <div className='trend-alert' role='alert'><span>{error}</span><button onClick={() => void runTopic(topic)}>Retry scan</button></div>}
     {loading && !report && <TrendLoading onCancel={cancelTrend} />}
