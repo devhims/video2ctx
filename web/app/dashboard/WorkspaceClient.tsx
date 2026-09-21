@@ -126,6 +126,9 @@ type AiTrendPlan = {
 type Usage = DashboardUsage;
 
 const REQUEST_TIMEOUT_MS = 15_000;
+// A cold topic sample enriches eight videos through the provider container, which runs
+// past 30s when nothing is cached. Keep this above that floor so a first scan can finish.
+const TREND_SCAN_TIMEOUT_MS = 60_000;
 const PLATFORM_HEALTH_TIMEOUT_MS = 5_000;
 const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
@@ -902,7 +905,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8`, { signal: controller.signal }, 20_000));
+      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8&insights=deterministic`, { signal: controller.signal }, TREND_SCAN_TIMEOUT_MS));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {
