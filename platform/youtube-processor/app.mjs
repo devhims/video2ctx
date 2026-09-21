@@ -111,6 +111,10 @@ export function createProcessorApp(runtime, options = {}) {
       diagnostics.events.push(event);
     };
     const envelope = () => operation.kind === 'storyboard' ? { diagnostics } : {};
+    const startedAt = performance.now();
+    const cpuStarted = process.cpuUsage();
+    const activeAtStart = activeOperations;
+
     try {
       return c.json({ value: await runtime.run(operation, { extractionId, onDiagnostic }), ...envelope() });
     } catch (error) {
@@ -122,6 +126,19 @@ export function createProcessorApp(runtime, options = {}) {
         retryable: normalized.error.retryable,
       }));
       return c.json({ error: normalized.error, ...envelope() }, normalized.responseStatus);
+    } finally {
+      const cpu = process.cpuUsage(cpuStarted);
+      const memory = process.memoryUsage();
+      // CPU and memory are process-wide: concurrent operations can contribute.
+      // Log only measurements and the opaque correlation ID, never provider data.
+      console.log(JSON.stringify({
+        event: 'youtube_processor_timing', extractionId, operation: operation.kind,
+        durationMs: Math.round(performance.now() - startedAt),
+        processCpuMs: (cpu.user + cpu.system) / 1000,
+        rssBytes: memory.rss, heapUsedBytes: memory.heapUsed,
+        processUptimeSeconds: Math.round(process.uptime()), activeAtStart,
+        proxyConfigured: runtime.proxyConfigured === true,
+      }));
     }
   });
 

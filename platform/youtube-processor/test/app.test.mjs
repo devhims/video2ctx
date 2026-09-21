@@ -165,3 +165,19 @@ test('rejects excess concurrent operations and releases capacity after completio
   assert.equal((await app.request('/operations', operation)).status, 200);
   assert.equal(calls, 2);
 });
+
+
+test('timing diagnostics correlate operations without logging transcript content', async (t) => {
+  const logs = [];
+  t.mock.method(console, 'log', message => logs.push(JSON.parse(message)));
+  const app = createProcessorApp({ proxyConfigured: true, run: async () => ({ text: 'private fixture text' }) });
+  const response = await app.request('/operations', { method: 'POST', headers: {
+    'content-type': 'application/json', 'x-extraction-id': '00000000-0000-4000-8000-000000000002',
+  }, body: JSON.stringify({ kind: 'transcript', id: 'abcdefghijk' }) });
+  assert.equal(response.status, 200);
+  const timing = logs.find(event => event.event === 'youtube_processor_timing');
+  assert.equal(timing.extractionId, '00000000-0000-4000-8000-000000000002');
+  assert.equal(timing.proxyConfigured, true);
+  assert.ok(timing.durationMs >= 0 && timing.processCpuMs >= 0 && timing.rssBytes > 0);
+  assert.equal(JSON.stringify(logs).includes('private fixture text'), false);
+});

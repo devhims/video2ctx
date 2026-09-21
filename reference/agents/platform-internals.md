@@ -31,3 +31,10 @@ Use the fully local path by default. Preview and production migrations and Cloud
 ## After changes
 
 Run the relevant package, platform, and container tests. Regenerate and verify docs when a public route or the OpenAPI contract changes, and re-check the published skills when a route moves between permission tiers.
+
+
+## Provider retries and latency
+
+The processor timeout setting bounds the entire extraction operation, including response-body reads and retry delays. Production allows three attempts, visiting both configured slots before a repeat. Explicit transient failures are retryable; terminal transcript NOT_FOUND and partial empty track catalogs only probe each distinct slot once. Retry-After is honored within the total budget. Thirty-second health hints are local to a runtime isolate and may disappear on eviction; both processor slots share the configured outbound proxy, so fallback does not promise independent egress.
+
+`youtube_processor_attempt` logs include an extraction ID, attempt duration, and total elapsed time. The container's `youtube_processor_timing` event uses the same ID and records operation duration, process CPU time, RSS, heap use, uptime, and concurrency at entry. CPU and memory are process-wide, so concurrent operations can contribute. Compare processor duration against container duration to locate binding/startup overhead, and inspect CPU and memory measurements before attributing latency to container size. These measurements do not identify the outbound IP or YouTube's challenge criteria.

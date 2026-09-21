@@ -60,3 +60,53 @@ test('an access refresh outage preserves the last confirmed access and shows the
   await expect(page.getByText('The API cannot verify access right now.')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
 });
+
+
+test('transcript renders while metadata is pending, then survives its failure', async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let metadataReads = 0; let transcriptReads = 0;
+  await page.route(`**/videos/${videoId}`, async route => {
+    metadataReads++;
+    if (metadataReads === 1) {
+      await gate;
+      await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'YouTube blocked the metadata lookup.' } } });
+    } else await route.fulfill({ json: { id: videoId, title: 'Recovered metadata', channel: { id: 'channel', name: 'Creator' } } });
+  });
+  await page.route(`**/videos/${videoId}/transcript`, route => { transcriptReads++; return route.fulfill({ json: transcript }); });
+  await page.goto('/dashboard?section=discover');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  try {
+    await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+  } finally { release(); }
+  await expect(page.getByRole('alert').filter({ hasText: 'YouTube blocked the metadata lookup.' })).toBeVisible();
+  await expect(page.getByText('No matching videos', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry failed requests' }).click();
+  await expect(page.getByRole('heading', { name: 'Recovered metadata', exact: true })).toBeVisible();
+  expect(transcriptReads).toBe(1);
+  expect(metadataReads).toBe(2);
+});
+
+
+test('metadata renders before a pending transcript and cancel preserves it', async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0;
+  await page.route(`**/videos/${videoId}/transcript`, async route => {
+    if (++reads === 1) await gate;
+    await route.fulfill({ json: transcript }).catch(() => {});
+  });
+  await page.goto('/dashboard?section=discover');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await expect(page.getByRole('heading', { name: 'Transcript deadline regression', exact: true })).toBeVisible();
+  await expect(page.getByText('Loading transcript…', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save to project' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  release();
+  await expect(page.getByText('Request cancelled. Retry to finish loading.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry failed requests' }).click();
+  await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+});
