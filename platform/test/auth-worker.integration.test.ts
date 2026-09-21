@@ -26,7 +26,7 @@ describe('social sign-in on the Worker runtime', () => {
   }
 
   test('proxies an allowed Vercel preview through the fixed production Google callback', async () => {
-    const previewOrigin = 'https://all-things-youtube-web-git-streaming-devhims.vercel.app';
+    const previewOrigin = 'https://video2ctx-web-git-fix-trend-lab-empty-topic-devhims-projects.vercel.app';
     const response = await worker.fetch(new Request('http://api.test/api/auth/sign-in/social', {
       method: 'POST',
       headers: jsonHeaders({
