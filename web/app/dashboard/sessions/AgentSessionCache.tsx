@@ -25,7 +25,7 @@ function createSessionCache() {
       const pending = requests.get(query);
       if (pending) return pending;
       const startedAtGeneration = generation;
-      const request = fetchAgentData(`/sessions?${new URLSearchParams({ q: query, limit: '20' })}`, agentSessionListSchema, AbortSignal.timeout(15_000))
+      const request = fetchAgentData(`/sessions?${new URLSearchParams({ q: query, limit: '20' })}`, agentSessionListSchema)
         .then(page => { if (generation === startedAtGeneration) saveList(query, page); return page; })
         .finally(() => { requests.delete(query); });
       requests.set(query, request);

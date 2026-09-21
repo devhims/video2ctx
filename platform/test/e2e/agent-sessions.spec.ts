@@ -147,12 +147,12 @@ test('non-admin and signed-out accounts have no menu and cannot open a session d
 test('missing sessions and access outages do not expose private content', async ({ page, context }) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sessions/5a04cf06-ea91-4b07-b892-ce87f63954de');
-  await expect(page.getByText('This session or run was not found in your account.')).toBeVisible();
+  await expect(page.getByText('Agent session not found.')).toBeVisible();
   await login(context, 'unavailable');
   await page.goto('/dashboard/sessions');
-  await expect(page.getByRole('heading', { name: 'Sessions are temporarily unavailable' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Access verification is temporarily unavailable.' })).toBeVisible();
   await login(context, 'allowed');
-  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
 });
 
@@ -340,12 +340,12 @@ test('failed delivery removes the optimistic message, announces the error and re
   const draft = '  Preserve this message\nwith its original formatting.  ';
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/platform/v1/agent?*', async route => { await held; await route.fulfill({ status: 422, json: {} }); });
+  await page.route('**/api/platform/v1/agent?*', async route => { await held; await route.fulfill({ status: 422, json: { error: { code: 'VALIDATION_ERROR', message: 'The API rejected this message.' } } }); });
   await composer.fill(draft);
   await composer.press('Enter');
   try { await expect(page.locator('.agent-pending-message')).toBeVisible(); }
   finally { release(); }
-  await expect(page.locator('.agent-composer').getByRole('alert')).toContainText('This message could not be accepted');
+  await expect(page.locator('.agent-composer').getByRole('alert')).toContainText('The API rejected this message.');
   await expect(page.locator('.agent-pending-message')).toHaveCount(0);
   await expect(composer).toHaveValue(draft);
   await expect(composer).toBeEditable();

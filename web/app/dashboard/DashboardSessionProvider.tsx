@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
+import { platformRequest, PlatformApiError } from '../../lib/platform-request';
 import { authClient } from '../../lib/auth-client';
 import type { DashboardUser } from '../../lib/server-session';
 
@@ -21,12 +22,14 @@ export function DashboardSessionProvider({
   initialUser,
   initialAgentAccess = false,
   initialAdminAccess = false,
+  initialAccessError = '',
   demoEnabled,
 }: {
   children: React.ReactNode;
   initialUser: DashboardUser | null;
   initialAgentAccess?: boolean;
   initialAdminAccess?: boolean;
+  initialAccessError?: string;
   demoEnabled: boolean;
 }) {
   const pathname = usePathname();
@@ -35,27 +38,40 @@ export function DashboardSessionProvider({
   const [user, setUser] = useState(initialUser);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState('');
+  const [accessError, setAccessError] = useState(initialAccessError);
+  const [accessConfirmed, setAccessConfirmed] = useState(!initialAccessError);
 
   useEffect(() => setUser(initialUser), [initialUser]);
   useEffect(() => setAgentAccess(initialAgentAccess), [initialAgentAccess]);
   useEffect(() => setAdminAccess(initialAdminAccess), [initialAdminAccess]);
 
   useEffect(() => {
-    if (!user) { setAgentAccess(false); setAdminAccess(false); return; }
+    if (!user) { setAgentAccess(false); setAdminAccess(false); setAccessError(''); return; }
     const controller = new AbortController();
     let generation = 0;
     const checkAccess = async (path: string) => {
       try {
-        const response = await fetch(path, { credentials: 'include', cache: 'no-store', signal: controller.signal });
-        return response.ok && (await response.json()).enabled === true;
-      } catch { return false; }
+        const result = await platformRequest<{ enabled: unknown }>(path, { cache: 'no-store', signal: controller.signal });
+        if (typeof result.enabled !== 'boolean') throw new Error('The API returned an invalid access response.');
+        return result.enabled;
+      } catch (cause) {
+        if (cause instanceof PlatformApiError && [401, 403].includes(cause.status)) return false;
+        throw cause;
+      }
     };
+
     const check = async () => {
       const current = ++generation;
-      const [agent, admin] = await Promise.all([
-        checkAccess('/api/platform/v1/agent/access'), checkAccess('/api/platform/v1/admin/access'),
+      const [agent, admin] = await Promise.allSettled([
+        checkAccess('/v1/agent/access'), checkAccess('/v1/admin/access'),
       ]);
-      if (!controller.signal.aborted && current === generation) { setAgentAccess(agent); setAdminAccess(admin); }
+      if (!controller.signal.aborted && current === generation) {
+        if (agent.status === 'fulfilled') setAgentAccess(agent.value);
+        if (admin.status === 'fulfilled') setAdminAccess(admin.value);
+        const failure = [agent, admin].find(result => result.status === 'rejected');
+        if (!failure) setAccessConfirmed(true);
+        setAccessError(failure?.status === 'rejected' ? (failure.reason instanceof Error ? failure.reason.message : 'Access could not be checked.') : '');
+      }
     };
     void check();
     window.addEventListener('focus', check);
@@ -69,18 +85,18 @@ export function DashboardSessionProvider({
     setSignOutError('');
     try {
       const result = await authClient.signOut();
-      if (result.error) throw new Error('Sign out failed');
+      if (result.error) throw new Error(result.error.message ?? 'Could not sign out. Please try again.');
       // Keep the current screen intact until the new document loads. This also
       // discards cached authenticated routes instead of flashing a signed-out UI.
       window.location.replace('/');
-    } catch {
-      setSignOutError('Could not sign out. Please try again.');
+    } catch (cause) {
+      setSignOutError(cause instanceof Error ? cause.message : 'Could not sign out. Please try again.');
       setIsSigningOut(false);
     }
   }, [isSigningOut]);
 
   const value = useMemo(() => ({ user, demoEnabled, isSigningOut, agentAccess: !!user && agentAccess, adminAccess: !!user && adminAccess, signOut }), [demoEnabled, agentAccess, adminAccess, isSigningOut, signOut, user]);
-  return <DashboardSessionContext.Provider value={value}>{children}{signOutError && <div className='dashboard-signout-error' role='alert'>{signOutError}</div>}</DashboardSessionContext.Provider>;
+  return <DashboardSessionContext.Provider value={value}>{accessConfirmed ? children : null}{accessError && <div className='dashboard-signout-error' role='alert'>{accessError} <button onClick={() => accessConfirmed ? window.dispatchEvent(new Event('agent-access-changed')) : window.location.reload()}>Retry</button></div>}{signOutError && <div className='dashboard-signout-error' role='alert'>{signOutError}</div>}</DashboardSessionContext.Provider>;
 }
 
 export function useDashboardSession(): DashboardSessionContextValue {

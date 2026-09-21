@@ -76,12 +76,12 @@ type DashboardPreferenceMutation = (
 
 export async function loadDashboardAccountData(request: DashboardRequest): Promise<DashboardAccountData> {
   const [projectData, monitorData, usage, billing, notificationData, notificationPreferences] = await Promise.all([
-    request('/v1/projects').catch(() => ({ projects: [] })) as Promise<{ projects: DashboardProject[] }>,
-    request('/v1/monitors').catch(() => ({ monitors: [] })) as Promise<{ monitors: DashboardMonitor[] }>,
-    request('/v1/usage').catch(() => null) as Promise<DashboardUsage | null>,
-    request('/v1/billing').catch(() => null) as Promise<DashboardBilling | null>,
-    request('/v1/notifications').catch(() => ({ notifications: [] })) as Promise<{ notifications: DashboardNotification[] }>,
-    request('/v1/notification-preferences').catch(() => DEFAULT_NOTIFICATION_PREFERENCES) as Promise<DashboardNotificationPreferences>,
+    request('/v1/projects') as Promise<{ projects: DashboardProject[] }>,
+    request('/v1/monitors') as Promise<{ monitors: DashboardMonitor[] }>,
+    request('/v1/usage') as Promise<DashboardUsage | null>,
+    request('/v1/billing') as Promise<DashboardBilling | null>,
+    request('/v1/notifications') as Promise<{ notifications: DashboardNotification[] }>,
+    request('/v1/notification-preferences') as Promise<DashboardNotificationPreferences>,
   ]);
 
   return {

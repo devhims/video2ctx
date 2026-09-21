@@ -26,7 +26,7 @@ createServer(async (req, res) => {
     res.setHeader('Set-Cookie', 'agent-ui=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
     return reply(200, { success: true });
   }
-  if (url.pathname === '/health') return reply(200, { ok: true });
+  if (url.pathname === '/health') return reply(200, { status: 'ok' });
   if (url.pathname === '/api/auth/get-session') return reply(200, signedIn ? { user: { id: 'fixture-user', name: 'Fixture account', email: 'fixture@example.test' }, session: { id: 'fixture-auth-session' } } : null);
   if (url.pathname.startsWith('/v1/admin/')) {
     if (!signedIn || !admin) return reply(signedIn ? 403 : 401, { error: { code: 'ADMIN_REQUIRED', message: 'Admin access required.' } });
@@ -45,7 +45,7 @@ createServer(async (req, res) => {
     }
   }
   if (url.pathname.startsWith('/v1/agent')) {
-    if (cookie.includes('agent-ui=unavailable')) return reply(503, { error: { code: 'AUTH_UNAVAILABLE' } });
+    if (cookie.includes('agent-ui=unavailable')) return reply(503, { error: { code: 'AUTH_UNAVAILABLE', message: 'Access verification is temporarily unavailable.' } });
     if (!allowed) return reply(signedIn ? 403 : 401, { error: { code: 'AGENT_ACCESS_REQUIRED' } });
     if (url.pathname === '/v1/agent' && req.method === 'POST') {
       let raw = ''; for await (const chunk of req) raw += chunk;
@@ -88,7 +88,7 @@ createServer(async (req, res) => {
     }
     const detailId = /^\/v1\/agent\/sessions\/([^/]+)$/.exec(url.pathname)?.[1];
     if (detailId) {
-      if (detailId === otherId) return reply(404, { error: { code: 'AGENT_SESSION_NOT_FOUND' } });
+      if (detailId === otherId) return reply(404, { error: { code: 'AGENT_SESSION_NOT_FOUND', message: 'Agent session not found.' } });
       const current = summaries.find(row => row.sessionId === detailId);
       if (!current) return reply(404, {});
       const older = url.searchParams.has('cursor');
@@ -109,7 +109,8 @@ createServer(async (req, res) => {
   if (url.pathname === '/v1/projects') return reply(200, { projects: [] });
   if (url.pathname === '/v1/monitors') return reply(200, { monitors: [] });
   if (url.pathname === '/v1/notifications') return reply(200, { notifications: [] });
-  if (url.pathname === '/v1/billing' || url.pathname === '/v1/notification-preferences') return reply(404, {});
+  if (url.pathname === '/v1/billing') return reply(200, { plan: 'starter', status: 'active', creditBalance: 679, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false });
+  if (url.pathname === '/v1/notification-preferences') return reply(200, { inApp: true, emailAlerts: false, emailAlertsPending: false, emailDigest: 'off' });
   if (url.pathname === '/v1/usage') return reply(200, { creditBalance: 679 });
   return reply(200, {});
 }).listen(8797, '127.0.0.1', () => console.log('Agent dashboard fixture server ready'));

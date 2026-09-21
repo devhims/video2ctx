@@ -1,11 +1,13 @@
 'use client';
 
+import { platformRequest } from '../../../lib/platform-request';
+
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { redirect, useRouter } from 'next/navigation';
 import { KeyIcon, PlusIcon } from '@phosphor-icons/react';
 import { authClient } from '../../../lib/auth-client';
-import { loadDashboardAccountData, publishCreditBalance, type DashboardProject } from '../../../lib/dashboard-data';
+import { loadDashboardAccountData, type DashboardProject } from '../../../lib/dashboard-data';
 import { DashboardHeader } from '../DashboardHeader';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './DeveloperSettings.module.css';
@@ -45,14 +47,7 @@ export default function DeveloperSettingsClient() {
   }, []);
 
   const refreshSidebar = useCallback(async () => {
-    const data = await loadDashboardAccountData(async (path) => {
-      const headers = new Headers();
-      if (['localhost', '127.0.0.1'].includes(window.location.hostname)) headers.set('x-demo-user', 'local-beta');
-      const response = await fetch(`/api/platform${path}`, { credentials: 'include', headers });
-      publishCreditBalance(response.headers);
-      if (!response.ok) throw new Error(`Request failed (${response.status})`);
-      return response.json();
-    });
+    const data = await loadDashboardAccountData(platformRequest);
     setProjects(data.projects);
     setCredits(data.usage?.creditBalance);
   }, []);
