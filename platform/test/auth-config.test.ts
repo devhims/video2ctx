@@ -73,7 +73,7 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
-      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
+      AUTH_PREVIEW_HOST_PATTERN: 'video2ctx-web-*-devhims-projects.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
       OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GITHUB_CLIENT_ID: 'github-client',
@@ -105,12 +105,12 @@ describe('Better Auth API-key configuration', () => {
       github: { clientId: 'github-client', clientSecret: 'github-secret' },
     });
     expect(captured.auth?.baseURL).toEqual({
-      allowedHosts: ['localhost:3000', 'all-things-youtube-web-*.vercel.app'],
+      allowedHosts: ['localhost:3000', 'video2ctx-web-*-devhims-projects.vercel.app'],
       fallback: 'http://localhost:3000',
     });
     expect(captured.auth?.trustedOrigins).toEqual([
       'http://localhost:3000',
-      'https://all-things-youtube-web-*.vercel.app',
+      'https://video2ctx-web-*-devhims-projects.vercel.app',
     ]);
     expect(captured.oauthProxy).toEqual({
       productionURL: 'http://localhost:3000',
@@ -127,7 +127,7 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
-      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
+      AUTH_PREVIEW_HOST_PATTERN: 'video2ctx-web-*-devhims-projects.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
       OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GOOGLE_CLIENT_ID: 'google-client',
@@ -172,7 +172,7 @@ describe('Better Auth API-key configuration', () => {
     createAuth({
       AUTH_BASE_URL: 'http://localhost:3000',
       APP_ORIGIN: 'http://localhost:3000',
-      AUTH_PREVIEW_HOST_PATTERN: 'all-things-youtube-web-*.vercel.app',
+      AUTH_PREVIEW_HOST_PATTERN: 'video2ctx-web-*-devhims-projects.vercel.app',
       BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
       OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
       GOOGLE_CLIENT_ID: 'google-client',
