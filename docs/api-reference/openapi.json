@@ -6240,6 +6240,9 @@
           "confidenceScore",
           "hashtags",
           "keywords",
+          "effectiveViewsPerHour",
+          "velocityRank",
+          "percentiles",
           "trendScore",
           "trendBand",
           "url"
@@ -6372,10 +6375,59 @@
               "type": "string"
             }
           },
+          "effectiveViewsPerHour": {
+            "type": "number",
+            "minimum": 0,
+            "description": "The velocity every score used: measured growth between snapshots when signalSource is observed, otherwise the lifetime average."
+          },
+          "velocityRank": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Position by effectiveViewsPerHour inside this sample, 1 being fastest."
+          },
+          "percentiles": {
+            "type": "object",
+            "required": [
+              "velocity",
+              "freshness",
+              "channelPerformance",
+              "engagement",
+              "acceleration"
+            ],
+            "description": "Each signal as a percentile rank inside this sample. A missing signal scores 50 so it neither helps nor hurts.",
+            "properties": {
+              "velocity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "freshness": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "channelPerformance": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "engagement": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "acceleration": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          },
           "trendScore": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 100
+            "maximum": 100,
+            "description": "Weighted blend of the percentiles above, so 50 is the middle of this sample rather than an absolute rating."
           },
           "trendBand": {
             "type": "string",
@@ -6383,7 +6435,8 @@
               "Breakout",
               "Rising",
               "Steady"
-            ]
+            ],
+            "description": "Breakout requires signalSource observed and at least five enriched videos, because a lifetime average cannot evidence a breakout."
           },
           "url": {
             "type": "string",
@@ -6401,6 +6454,7 @@
           "methodologyVersion",
           "methodology",
           "sample",
+          "window",
           "confidence",
           "summary",
           "videos",
@@ -6429,7 +6483,7 @@
             "minimum": 0
           },
           "methodologyVersion": {
-            "const": "2.0"
+            "const": "3.0"
           },
           "methodology": {
             "type": "string"
@@ -6440,7 +6494,9 @@
               "candidateVideos",
               "enrichedVideos",
               "channels",
-              "observedVideos"
+              "observedVideos",
+              "recentCandidates",
+              "recentVideos"
             ],
             "properties": {
               "candidateVideos": {
@@ -6456,6 +6512,39 @@
                 "minimum": 0
               },
               "observedVideos": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recentCandidates": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Candidates published inside the recency window. A lower bound: search ranking hides recent uploads that rank poorly."
+              },
+              "recentVideos": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Enriched videos published inside the recency window."
+              }
+            }
+          },
+          "window": {
+            "type": "object",
+            "required": [
+              "days",
+              "recentCandidatesSampled",
+              "recentVideosEnriched"
+            ],
+            "description": "The recency window used to reserve sample slots for recent uploads.",
+            "properties": {
+              "days": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "recentCandidatesSampled": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recentVideosEnriched": {
                 "type": "integer",
                 "minimum": 0
               }
@@ -6523,6 +6612,16 @@
               "medianObservedViewsPerHour": {
                 "type": "number",
                 "minimum": 0
+              },
+              "medianRecentViewsPerHour": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Median velocity of the sampled videos published inside the recency window."
+              },
+              "recentVelocityLift": {
+                "type": "number",
+                "minimum": 0,
+                "description": "medianRecentViewsPerHour over medianViewsPerHour. Above 1 means recent uploads are outpacing the established ones."
               }
             }
           },
