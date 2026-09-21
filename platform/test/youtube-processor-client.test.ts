@@ -119,6 +119,88 @@ describe('YouTube processor client', () => {
     expect(requested).toHaveLength(1);
   });
 
+  test('recovers on a third attempt after both slots are challenged', async () => {
+    const { env, requested } = environment([
+      Response.json({ value: blockedVideo }), Response.json({ value: blockedVideo }),
+      Response.json({ value: { id: 'abcdefghijk', title: 'Recovered' } }),
+    ]);
+    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' })).resolves.toMatchObject({ title: 'Recovered' });
+    expect(requested).toHaveLength(3);
+    expect(requested[0]).not.toBe(requested[1]);
+  });
+
+  test('honors Retry-After on a transient throttling response', async () => {
+    vi.useFakeTimers();
+    try {
+      const { env, requested } = environment([
+        Response.json({ error: { code: 'RATE_LIMITED', message: 'Slow down', retryable: true } }, { status: 429, headers: { 'Retry-After': '2' } }),
+        Response.json({ value: { id: 'abcdefghijk' } }),
+      ]);
+      const pending = runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' });
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(requested).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({ id: 'abcdefghijk' });
+      expect(requested).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  test('bounds metadata body reads with the same operation deadline', async () => {
+    const { env, requested } = environment([new Response(new ReadableStream({ start() {} }))]);
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    try {
+      const pending = runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' });
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'PROCESSOR_UNAVAILABLE' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      controller.abort(new DOMException('Timed out', 'TimeoutError'));
+      await rejected;
+      expect(requested).toHaveLength(1);
+      expect(timeout).toHaveBeenCalledTimes(1);
+    } finally { timeout.mockRestore(); }
+  });
+
+  test('deprioritizes a recently challenged slot on subsequent reads in the same isolate', async () => {
+    const { env, requested } = environment([
+      Response.json({ value: blockedVideo }), Response.json({ value: { id: 'abcdefghijk' } }),
+      Response.json({ value: { id: 'other-video' } }),
+    ]);
+    const random = vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => { (array as Uint32Array).fill(0); return array; });
+    try {
+      await runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' });
+      await runYouTubeOperation(env, { kind: 'video', id: 'other-video' });
+      expect(requested).toEqual(['test-v1-0', 'test-v1-1', 'test-v1-1']);
+    } finally { random.mockRestore(); }
+  });
+
+  test('does not retry an explicit terminal upstream error even with a 503 envelope', async () => {
+    const { env, requested } = environment([Response.json({ error: { code: 'NOT_FOUND', message: 'Deleted', retryable: false } }, { status: 503 })]);
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(requested).toHaveLength(1);
+  });
+
+  test('does not restart the deadline while waiting for Retry-After', async () => {
+    const { env, requested } = environment([Response.json({ error: { code: 'RATE_LIMITED', retryable: true } }, { status: 429, headers: { 'Retry-After': '60' } })]);
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    try {
+      const pending = runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' });
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'PROCESSOR_UNAVAILABLE' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      controller.abort(new DOMException('Timed out', 'TimeoutError'));
+      await rejected;
+      expect(requested).toHaveLength(1);
+      expect(timeout).toHaveBeenCalledTimes(1);
+    } finally { timeout.mockRestore(); }
+  });
+
+  test('retries non-JSON upstream throttling responses', async () => {
+    const { env, requested } = environment([new Response('Too many requests', { status: 429 }), Response.json({ value: { id: 'abcdefghijk' } })]);
+    await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' })).resolves.toMatchObject({ id: 'abcdefghijk' });
+    expect(requested).toHaveLength(2);
+  });
+
   test('starts from the selected random slot and orders every fallback once', () => {
     expect(processorSlotOrder(4, 2)).toEqual([2, 3, 0, 1]);
     expect(processorSlotOrder(2, 1)).toEqual([1, 0]);
@@ -254,7 +336,7 @@ describe('YouTube processor client', () => {
     const failure = Response.json({ error: {
       code: 'RATE_LIMITED', message: 'YouTube rate limited the request.', status: 429, retryable: true,
     } }, { status: 429 });
-    const { env } = environment([failure]);
+    const { env } = environment([failure, failure.clone()]);
 
     await expect(runYouTubeOperation(env, operation)).rejects.toEqual(
       expect.objectContaining<Partial<YouTubeProcessorError>>({
