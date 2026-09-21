@@ -96,7 +96,7 @@ for (const retryMenuState of ['open', 'closed'] as const) {
     await accountSummary.click();
     await page.route('**/api/auth/sign-out', route => route.fulfill({ status: 503, json: { message: 'Unavailable' } }), { times: 1 });
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'Could not sign out' })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Unavailable' })).toBeVisible();
     await expect(page).toHaveURL('/dashboard/developer');
     await expect(signOutButton).toBeEnabled();
     // Disabling the focused button can leave the disclosure open or closed,

@@ -61,3 +61,21 @@ test('follow-ups send only the message and session and explain unconfirmed submi
   assert.deepEqual(JSON.parse(requests[0].body as string), { message: 'More detail', sessionId: 'existing-session' });
   assert.equal(new Headers(requests[1].headers).get('Idempotency-Key'), null);
 });
+
+test('agent submission and session reads preserve API explanations', async t => {
+  const { sendAgentMessage, fetchAgentData, agentSessionListSchema } = await import('./agent-sessions.ts');
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code: 'RATE_LIMITED', message: 'API says retry in 90 seconds.' } }, { status: 429 }));
+  await assert.rejects(sendAgentMessage('Hello'), /API says retry in 90 seconds/);
+  await assert.rejects(fetchAgentData('/sessions', agentSessionListSchema), /API says retry in 90 seconds/);
+});
+
+test('live stream preserves API interruption messages', async () => {
+  const { consumeAgentStream } = await import('./agent-sessions.ts');
+  await assert.rejects(consumeAgentStream(new Response('event: unavailable\ndata: {"message":"The API cannot read this run."}\n\n', { headers: { 'content-type': 'text/event-stream' } }), () => {}), /The API cannot read this run/);
+});
+
+test('an API rate-limit rejection is retryable but not an unconfirmed submission', async t => {
+  const { sendAgentMessage, AgentSendError } = await import('./agent-sessions.ts');
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code: 'RATE_LIMITED', message: 'Wait before sending again.' } }, { status: 429 }));
+  await assert.rejects(sendAgentMessage('Hello'), (error: unknown) => error instanceof AgentSendError && error.retryable && !error.unconfirmed && error.status === 429 && error.code === 'RATE_LIMITED');
+});

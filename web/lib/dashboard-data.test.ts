@@ -91,3 +91,8 @@ describe('email alert confirmation', () => {
     );
   });
 });
+
+test('account failures are not converted into empty projects or default preferences', async () => {
+  const failure = new Error('API temporarily unavailable');
+  await assert.rejects(loadDashboardAccountData(async () => { throw failure; }), error => error === failure);
+});

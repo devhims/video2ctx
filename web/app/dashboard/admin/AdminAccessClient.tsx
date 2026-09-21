@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { platformRequest } from '../../../lib/platform-request';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { PlusIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
@@ -48,13 +49,9 @@ export default function AdminAccessClient() {
   useEffect(() => {
     if (!user || !adminAccess) return;
     const controller = new AbortController();
-    void loadDashboardAccountData(async path => {
-      const response = await fetch(`/api/platform${path}`, { credentials: 'include', signal: controller.signal });
-      if (!response.ok) throw new Error('Could not load account.');
-      return response.json();
-    }).then(data => {
+    void loadDashboardAccountData(path => platformRequest(path, { signal: controller.signal })).then(data => {
       if (!controller.signal.aborted) { setProjects(data.projects); setCredits(data.usage?.creditBalance); }
-    }).catch(() => undefined);
+    }).catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load account data.'); });
     return () => controller.abort();
   }, [user?.id, adminAccess]);
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { z } from 'zod';
+import { platformRequest } from '@/lib/platform-request';
 import { fetchAgentData } from '@/lib/agent-sessions';
 
 const inventorySchema = z.object({
@@ -70,8 +71,8 @@ export function SessionAssets({
     try {
       const result = await fetchAgentData(`/sessions/${sessionId}/assets/${version}`, payloadSchema);
       setSelected({ version, data: result.data });
-    } catch {
-      setError('Could not load this asset. It may have been deleted.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not load this asset.');
     } finally {
       setBusy(false);
     }
@@ -81,17 +82,16 @@ export function SessionAssets({
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(`/api/platform/v1/agent/sessions/${sessionId}/${confirmation.path}`, {
+      await platformRequest(`/v1/agent/sessions/${sessionId}/${confirmation.path}`, {
         method: 'DELETE',
         credentials: 'include',
       });
-      if (!response.ok) throw new Error();
       setSelected(undefined);
       setConfirmation(undefined);
       setRefresh((value) => value + 1);
       onDeleted();
-    } catch {
-      setError('Deletion failed. Please try again.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Deletion failed. Please try again.');
     } finally {
       setBusy(false);
     }
