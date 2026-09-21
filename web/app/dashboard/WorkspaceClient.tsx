@@ -895,7 +895,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
 }
 
 function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
-  const [topic, setTopic] = useState('AI agents');
+  const [topic, setTopic] = useState('');
   const [report, setReport] = useState<TrendReport | null>(null);
   const [aiPlan, setAiPlan] = useState<AiTrendPlan | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -911,7 +911,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8`, { signal: controller.signal }));
+      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8&insights=deterministic`, { signal: controller.signal }));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {
