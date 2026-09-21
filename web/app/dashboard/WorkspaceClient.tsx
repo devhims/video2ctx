@@ -886,7 +886,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
 }
 
 function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
-  const [topic, setTopic] = useState('AI agents');
+  const [topic, setTopic] = useState('');
   const [report, setReport] = useState<TrendReport | null>(null);
   const [aiPlan, setAiPlan] = useState<AiTrendPlan | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
