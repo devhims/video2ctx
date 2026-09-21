@@ -1,3 +1,4 @@
+import { platformFetch, platformRequest, platformResponseError, type PlatformApiError } from './platform-request.ts';
 import { z } from 'zod';
 
 const statusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']);
@@ -65,25 +66,28 @@ export type AgentAdmission = z.infer<typeof admissionSchema>;
 
 export class AgentSendError extends Error {
   readonly retryable: boolean;
-  constructor(message: string, retryable: boolean) { super(message); this.retryable = retryable; }
+  readonly unconfirmed: boolean;
+  readonly status?: number;
+  readonly code?: string;
+  constructor(message: string, retryable: boolean, response?: PlatformApiError) {
+    super(message); this.retryable = retryable;
+    this.unconfirmed = response ? response.status >= 500 : retryable;
+    this.status = response?.status; this.code = response?.code;
+  }
 }
 
 export async function sendAgentMessage(message: string, sessionId?: string): Promise<AgentAdmission> {
   try {
-    const response = await fetch('/api/platform/v1/agent?include=diagnostics', {
-      method: 'POST', credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(15_000),
+    const response = await platformFetch('/v1/agent?include=diagnostics', {
+      method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }),
     });
     if (!response.ok) {
-      const messages: Record<number, string> = {
-        401: 'Please sign in again before sending a message.', 403: 'Your account does not currently have agent access.',
-        402: 'You do not have enough credits to start a run.',
-        409: 'A run is already active in this session. Refresh the session and wait for it to finish.',
-        422: 'This message could not be accepted. Check the request and try again.',
-        429: 'Too many requests. Wait a moment, then retry.',
-      };
-      throw new AgentSendError(messages[response.status] ?? 'Sending could not be confirmed. Check Sessions before sending again; another submission starts a new run.', response.status >= 500 || response.status === 429);
+      const error = await platformResponseError(response, response.status >= 500
+        ? 'Sending could not be confirmed. Check Sessions before sending again; another submission starts a new run.'
+        : `Request failed (${response.status}).`);
+      throw new AgentSendError(error.message, response.status >= 500 || response.status === 429, error);
     }
     return admissionSchema.parse(await response.json());
   } catch (cause) {
@@ -96,7 +100,8 @@ export async function sendAgentMessage(message: string, sessionId?: string): Pro
 // both LF and CRLF; schemas keep invalid stream content out of the view.
 export async function consumeAgentStream(response: Response, receive: (value: AgentProgress) => void): Promise<boolean> {
   if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
-    throw new Error(response.status === 401 || response.status === 403 ? 'Your account no longer has access to this session.' : 'Could not connect to live updates.');
+    if (!response.ok) throw await platformResponseError(response);
+    throw new Error('The API did not return a live update stream. Reconnect to resume.');
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -114,7 +119,10 @@ export async function consumeAgentStream(response: Response, receive: (value: Ag
         const lines = block.split(/\r?\n/);
         const event = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
         const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-        if (event === 'unavailable') throw new Error('Live updates were interrupted. Reconnect to resume the saved run.');
+        if (event === 'unavailable') {
+          const failure = z.object({ message: z.string().optional() }).parse(JSON.parse(data));
+          throw new Error(failure.message ?? 'Live updates were interrupted. Reconnect to resume the saved run.');
+        }
         if (event !== 'snapshot') continue;
         const snapshot = agentProgressSchema.parse(JSON.parse(data));
         receive(snapshot);
@@ -129,10 +137,10 @@ export async function watchAgentRun(sessionId: string, runId: string, signal: Ab
   let failures = 0;
   while (!signal.aborted) {
     try {
-      const response = await fetch(`/api/platform/v1/agent/${sessionId}/runs/${runId}/events`, {
-        credentials: 'include', cache: 'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+      const response = await platformFetch(`/v1/agent/${sessionId}/runs/${runId}/events`, {
+        credentials: 'include', cache: 'no-store', signal,
       });
-      if ([401, 403, 404].includes(response.status)) throw new AgentSendError('This run is no longer accessible to your account.', false);
+      if ([401, 403, 404].includes(response.status)) throw new AgentSendError((await platformResponseError(response)).message, false);
       let received = false;
       if (await consumeAgentStream(response, snapshot => {
         if (snapshot.run.sessionId !== sessionId || snapshot.run.runId !== runId) throw new Error('Live update does not match this run.');
@@ -153,13 +161,7 @@ export async function watchAgentRun(sessionId: string, runId: string, signal: Ab
 }
 
 export async function fetchAgentData<T>(path: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/api/platform/v1/agent${path}`, { credentials: 'include', cache: 'no-store', signal });
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new Error('Your account does not currently have access to agent sessions.');
-    if (response.status === 404) throw new Error('This session or run was not found in your account.');
-    throw new Error('Could not load agent sessions. Please try again.');
-  }
-  return schema.parse(await response.json());
+  return schema.parse(await platformRequest(`/v1/agent${path}`, { cache: 'no-store', signal }));
 }
 
 export function mergeAgentMessages(current: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {

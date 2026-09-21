@@ -3,6 +3,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { platformRequest as api, isAbortError } from '../../lib/platform-request';
+import { loadSourceData } from '../../lib/source-data';
 import { loginPath } from '../../lib/login-redirect';
 import {
   canDeleteAccount,
@@ -13,7 +15,6 @@ import {
   emailConsentToConfirm,
   loadDashboardAccountData,
   pathWithoutEmailConsent,
-  publishCreditBalance,
   type DashboardBilling,
   type DashboardUsage,
   type DashboardNotification,
@@ -95,7 +96,8 @@ type Inspector = {
   id: string;
   data: Record<string, unknown>;
   requestedData: SourceDataOption[];
-  unavailableData: SourceDataOption[];
+  dataErrors: Partial<Record<SourceDataOption | 'metadata', string>>;
+  loadingData?: Array<SourceDataOption | 'metadata'>;
   transcript?: Transcript;
   comments?: CommentPage;
   channel?: ChannelInfo;
@@ -125,11 +127,6 @@ type AiTrendPlan = {
 };
 type Usage = DashboardUsage;
 
-const REQUEST_TIMEOUT_MS = 15_000;
-// A cold topic sample enriches eight videos through the provider container, which runs
-// past 30s when nothing is cached. Keep this above that floor so a first scan can finish.
-const TREND_SCAN_TIMEOUT_MS = 60_000;
-const PLATFORM_HEALTH_TIMEOUT_MS = 5_000;
 const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
@@ -146,49 +143,20 @@ const MONITOR_INTERVAL_OPTIONS = [
   { minutes: 10080, label: 'Week' },
 ] as const;
 
-async function api<T>(path: string, options: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
-  const headers = new Headers(options.headers);
-  if (['localhost', '127.0.0.1'].includes(window.location.hostname)) headers.set('x-demo-user', 'local-beta');
-  if (options.body) headers.set('content-type', 'application/json');
-  const controller = new AbortController();
-  const parentSignal = options.signal;
-  let timedOut = false;
-  const forwardAbort = () => controller.abort();
-  if (parentSignal?.aborted) controller.abort();
-  else parentSignal?.addEventListener('abort', forwardAbort, { once: true });
-  const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-  try {
-    const response = await fetch(`/api/platform${path}`, { ...options, headers, credentials: 'include', signal: controller.signal });
-    publishCreditBalance(response.headers);
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
-      const code = payload?.error?.code;
-      const message = response.status === 401 ? 'Sign in to continue.'
-        : response.status === 402 ? 'Your credit balance is too low for this operation.'
-        : response.status === 429 ? 'Too many requests. Wait a moment and try again.'
-        : payload?.error?.message ?? `Request failed (${response.status})`;
-      throw new PlatformApiError(response.status, code, message);
-    }
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
-  } catch (cause) {
-    if (controller.signal.aborted) {
-      if (timedOut) throw new Error('This is taking longer than expected. Check the connection and try again.');
-      throw new DOMException('Request cancelled.', 'AbortError');
-    }
-    throw cause;
-  } finally {
-    window.clearTimeout(timeout);
-    parentSignal?.removeEventListener('abort', forwardAbort);
-  }
-}
 
-class PlatformApiError extends Error {
-  constructor(readonly status: number, readonly code: string | undefined, message: string) { super(message); }
-}
-
-function isAbortError(cause: unknown) {
-  return cause instanceof DOMException && cause.name === 'AbortError';
+async function fetchSourceData(inspector: Inspector, option: SourceDataOption, signal: AbortSignal) {
+  const providerApi = `/v1/providers/${inspector.provider}`;
+  const result = await loadSourceData(async () => {
+    if (option === 'transcript') inspector.transcript = await api<Transcript>(`${providerApi}/videos/${inspector.id}/transcript`, { signal });
+    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments`, { signal });
+    if (option === 'channel') {
+      const channelId = String((inspector.data.channel as { id?: string } | undefined)?.id ?? '');
+      if (!channelId) throw new Error('The video response did not include a channel ID.');
+      inspector.channel = await api<ChannelInfo>(`${providerApi}/channels/${encodeURIComponent(channelId)}`, { signal });
+    }
+  });
+  if (result.error !== undefined) inspector.dataErrors[option] = result.error;
+  else delete inspector.dataErrors[option];
 }
 
 export default function WorkspaceClient({ initialSection = 'trends', emailConsent }: { initialSection?: Section; emailConsent?: string }) {
@@ -203,6 +171,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [notificationPreferences, setNotificationPreferences] = useState<DashboardNotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
   const [accountDataReady, setAccountDataReady] = useState(false);
+  const [accountError, setAccountError] = useState('');
   const [inspector, setInspector] = useState<Inspector | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -241,7 +210,12 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     const hadActiveOperation = Boolean(operationController.current);
     operationController.current?.abort();
     operationController.current = null; setLoading(false); setOperationLabel('');
-    if (hadActiveOperation) setNotice('Cancelled. Your previous results are still here.');
+    if (hadActiveOperation) {
+      setInspector(current => current ? { ...current, loadingData: [], dataErrors: {
+        ...current.dataErrors, ...Object.fromEntries((current.loadingData ?? []).map(item => [item, 'Request cancelled. Retry to finish loading.'])),
+      } } : current);
+      setNotice('Cancelled. Completed results are still available.');
+    }
   }, []);
 
   const navigateTo = useCallback((nextSection: Section) => {
@@ -257,22 +231,23 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   const refreshPrivateData = useCallback(async () => {
     if (!authenticated) return;
-    const data = await loadDashboardAccountData((path) => api(path));
+    const data = await loadDashboardAccountData((path) => api(path)).catch(cause => {
+      setAccountError(cause instanceof Error ? cause.message : 'Could not load account data.');
+      throw cause;
+    });
+    setAccountError('');
     setProjects(data.projects);
     setMonitors(data.monitors);
     setUsage(data.usage);
     setBilling(data.billing);
     setNotifications(data.notifications);
     setNotificationPreferences(data.notificationPreferences);
+    setAccountDataReady(true);
   }, [authenticated]);
 
   useEffect(() => {
     if (!authenticated) { setAccountDataReady(false); return; }
-    let cancelled = false;
-    void refreshPrivateData().finally(() => {
-      if (!cancelled) setAccountDataReady(true);
-    });
-    return () => { cancelled = true; };
+    void refreshPrivateData().catch(() => {});
   }, [authenticated, refreshPrivateData]);
 
   useEffect(() => {
@@ -322,7 +297,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       checking = true;
       controller = new AbortController();
       try {
-        const health = await api<{ status?: string }>('/health', { cache: 'no-store', signal: controller.signal }, PLATFORM_HEALTH_TIMEOUT_MS);
+        const health = await api<{ status?: string }>('/health', { cache: 'no-store', signal: controller.signal });
         if (!cancelled) setPlatformHealth(health.status === 'ok' ? 'healthy' : 'unavailable');
       } catch (cause) {
         if (!cancelled && !isAbortError(cause)) setPlatformHealth('unavailable');
@@ -399,39 +374,67 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     } finally { finishOperation(controller); }
   };
 
+  // Publish each independent result immediately. Only channel info needs metadata.
+  const loadVideoData = async (next: Inspector, datasets: Array<SourceDataOption | 'metadata'>, controller: AbortController) => {
+    next.loadingData = [...datasets];
+    const publish = () => {
+      if (operationController.current === controller && !controller.signal.aborted) {
+        setInspector({ ...next, dataErrors: { ...next.dataErrors }, loadingData: [...(next.loadingData ?? [])] });
+      }
+    };
+    publish();
+    const load = async (dataset: SourceDataOption | 'metadata', work: () => Promise<void>) => {
+      try { await work(); }
+      finally {
+        next.loadingData = next.loadingData?.filter(item => item !== dataset);
+        publish();
+      }
+    };
+    const metadata = datasets.includes('metadata') ? load('metadata', async () => {
+      const result = await loadSourceData(() => api<Record<string, unknown>>(`/v1/providers/${next.provider}/videos/${encodeURIComponent(next.id)}`, { signal: controller.signal }));
+      if (result.error !== undefined) next.dataErrors.metadata = result.error;
+      else { next.data = result.value; delete next.dataErrors.metadata; }
+    }) : Promise.resolve();
+    await Promise.all([metadata, ...datasets.filter((item): item is SourceDataOption => item !== 'metadata').map(option => load(option, async () => {
+      if (option === 'channel') {
+        await metadata;
+        if (next.dataErrors.metadata) {
+          next.dataErrors.channel = next.dataErrors.metadata;
+          return;
+        }
+      }
+      await fetchSourceData(next, option, controller.signal);
+    }))]);
+  };
+
   const inspect = async (
-    type: EntityType,
-    id: string,
-    activeController?: AbortController,
-    provider: ProviderId = 'youtube',
-    requestedData: SourceDataOption[] = selectedData,
+    type: EntityType, id: string, activeController?: AbortController,
+    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData,
   ) => {
-    const controller = activeController ?? beginOperation(type === 'video' ? 'Opening the video and fetching your selected data…' : 'Opening the source…');
+    const controller = activeController ?? beginOperation('Fetching your selected data…');
     setError('');
     try {
-      const plural = type === 'video' ? 'videos' : type === 'channel' ? 'channels' : 'playlists';
-      const providerApi = `/v1/providers/${provider}`;
-      const data = await api<Record<string, unknown>>(`${providerApi}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
-      const next: Inspector = { provider, type, id, data, requestedData: type === 'video' ? [...requestedData] : [], unavailableData: [] };
       if (type === 'video') {
-        setOperationLabel(`Fetching ${requestedData.map((option) => SOURCE_DATA_OPTIONS[option].shortLabel.toLowerCase()).join(', ')}…`);
-        const channelId = String((data.channel as { id?: string } | undefined)?.id ?? '');
-        await Promise.all(requestedData.map(async (option) => {
-          try {
-            if (option === 'transcript') next.transcript = await api<Transcript>(`${providerApi}/videos/${id}/transcript`, { signal: controller.signal });
-            if (option === 'comments') {
-              next.comments = await api<CommentPage>(`${providerApi}/videos/${id}/comments`, { signal: controller.signal });
-            }
-            if (option === 'channel' && channelId) next.channel = await api<ChannelInfo>(`${providerApi}/channels/${encodeURIComponent(channelId)}`, { signal: controller.signal });
-          } catch (cause) {
-            if (isAbortError(cause)) throw cause;
-            next.unavailableData.push(option);
-          }
-        }));
+        const next: Inspector = { provider, type, id, data: { id, url: `https://youtube.com/watch?v=${encodeURIComponent(id)}` }, requestedData: [...requestedData], dataErrors: {} };
+        await loadVideoData(next, ['metadata', ...requestedData], controller);
+      } else {
+        const plural = type === 'channel' ? 'channels' : 'playlists';
+        const data = await api<Record<string, unknown>>(`/v1/providers/${provider}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
+        if (!controller.signal.aborted) setInspector({ provider, type, id, data, requestedData: [], dataErrors: {} });
       }
-      setInspector(next);
     } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
     finally { finishOperation(controller); }
+  };
+
+  const retrySourceData = async () => {
+    if (!inspector || loading) return;
+    const controller = beginOperation('Retrying failed source requests…');
+    const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
+    try {
+      await loadVideoData(next, Object.keys(next.dataErrors) as Array<SourceDataOption | 'metadata'>, controller);
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'The request failed.');
+    } finally { finishOperation(controller); }
   };
 
   const openProject = async (project: Project) => {
@@ -450,7 +453,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   const createProject = async (name: string) => {
     const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
-    await refreshPrivateData(); setShowNewProject(false); setNotice(`Created ${project.name}`);
+    await refreshPrivateData().catch(() => {}); setShowNewProject(false); setNotice(`Created ${project.name}`);
     return project;
   };
 
@@ -465,10 +468,11 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
           content: inspector.transcript?.segments.map((segment) => `[${segment.startMs}] ${segment.text}`).join('\n'),
         }),
       });
+      setNotice(`Saved to ${project.name}`);
       await api('/v1/imports', {
         method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),
-      }).catch(() => null);
-      setNotice(`Saved to ${project.name}`); await refreshPrivateData();
+      });
+      await refreshPrivateData().catch(() => {});
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
   };
 
@@ -574,6 +578,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             onSettings={() => navigateTo('settings')}
           />
         </DashboardHeader>
+        {accountError ? <div className='alert error' role='alert'>{accountError} <button onClick={() => void refreshPrivateData().catch(() => {})}>Retry account data</button></div> : !accountDataReady ? <p role='status'>Loading account data…</p> : null}
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
         <div className='workspace-view' hidden={section !== 'discover'}>
@@ -610,15 +615,15 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
             {inspector ? (
-              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => setInspector(null)} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
-              <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} />
+              <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
             )}
           </>
         </div>
-        <div className='workspace-view' hidden={section !== 'projects'}><ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} /></div>
-        <div className='workspace-view' hidden={section !== 'monitors'}><MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} /></div>
-        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
+        <div className='workspace-view' hidden={section !== 'projects'}>{accountDataReady && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
+        <div className='workspace-view' hidden={section !== 'monitors'}>{accountDataReady && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
+        <div className='workspace-view' hidden={section !== 'settings'}>{accountDataReady && <SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} />}</div>
       </div>
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
@@ -722,8 +727,9 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
           setBillingMessage('Builder is active and your credit balance is ready.');
           return;
         }
-      } catch {
-        // Polar may still be delivering the signed webhook. Retry briefly.
+      } catch (cause) {
+        if (!cancelled) setBillingMessage(cause instanceof Error ? cause.message : 'Could not confirm billing status.');
+        return;
       }
       if (!cancelled && attempts < 8) window.setTimeout(() => void reconcile(), 1_500);
       else if (!cancelled) setBillingMessage('Payment is still syncing. Refresh in a moment if Builder does not appear.');
@@ -797,7 +803,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
     setDeleting(true);
     setDeleteError('');
     try {
-      await api<void>('/v1/account', { method: 'DELETE' }, 60_000);
+      await api<void>('/v1/account', { method: 'DELETE' });
       window.location.replace('/');
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
@@ -905,7 +911,7 @@ function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8&insights=deterministic`, { signal: controller.signal }, TREND_SCAN_TIMEOUT_MS));
+      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=8&insights=deterministic`, { signal: controller.signal }));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {
@@ -1033,14 +1039,14 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Comparing public video signals.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean }) {
+function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, failed }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean; failed: boolean }) {
   return <section className='source-results' aria-labelledby='source-results-title'>
     <header className={!items.length && !hasSearched ? 'sr-only' : undefined}>
-      <h2 id='source-results-title'>{items.length ? 'Results' : hasSearched ? 'No matching videos' : 'Search results'}</h2>
+      <h2 id='source-results-title'>{items.length ? 'Results' : failed ? 'Search could not finish' : hasSearched && !loading ? 'No matching videos' : 'Search results'}</h2>
       {items.length ? <span>{items.length} videos{loading ? ' · refreshing' : ''}</span> : null}
     </header>
     {loading && !items.length ? <div className='source-result-skeletons' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : null}
-    {!items.length && !loading ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>{hasSearched ? 'Try another search' : 'Your sources will appear here'}</h3><p>{hasSearched ? 'Try another topic or paste a YouTube URL.' : 'Open a result to view your selected datasets.'}</p>{hasSearched && <button className={pageStyles.textAction} onClick={onStart}>Edit search →</button>}</div></div> : null}
+    {!items.length && !loading && !failed ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>{hasSearched ? 'Try another search' : 'Your sources will appear here'}</h3><p>{hasSearched ? 'Try another topic or paste a YouTube URL.' : 'Open a result to view your selected datasets.'}</p>{hasSearched && <button className={pageStyles.textAction} onClick={onStart}>Edit search →</button>}</div></div> : null}
     {items.length ? <div className='source-result-list'>{items.map((item) => {
       const thumbnail = bestThumbnail(item.thumbnails);
       return <button key={`${item.provider ?? 'youtube'}-${item.id}`} onClick={() => onInspect(item.id, item.provider)}>
@@ -1052,7 +1058,7 @@ function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched }:
   </section>;
 }
 
-function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
+function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
@@ -1061,6 +1067,7 @@ function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQue
   const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentsError, setCommentsError] = useState('');
+  useEffect(() => { setCommentPage(inspector.comments); setCommentPagesLoaded(inspector.comments ? 1 : 0); setCommentsError(''); }, [inspector.comments]);
 
   const loadMoreComments = async () => {
     const continuation = commentPage?.continuation;
@@ -1097,15 +1104,17 @@ function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQue
   if (inspector.type !== 'video') return <section className='inspector'><div className='inspector-head'><button className='back' onClick={onClose}>← Back to Sources</button></div><div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{String(inspector.data.description ?? '').slice(0,160)}</p></div></div><CatalogEntity inspector={inspector} /></section>;
 
   return <section className='source-inspector' aria-labelledby='source-detail-title'>
-    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave}><Icon name='plus' size={15} />Save to project</button></div></div>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
     <header className='source-detail-head'>
       <div><p className='panel-label'>Video result</p><h2 id='source-detail-title'>{title}</h2><p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p></div>
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
+    {inspector.loadingData?.includes('metadata') ? <p role='status'>Loading video details…</p> : null}
+    {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />
-      {inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} unavailable={inspector.unavailableData.includes('channel')} /> : null}
+      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <p role='status'>Loading channel info…</p> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
     </div>
 
     {panelOptions.length ? <>
@@ -1114,10 +1123,11 @@ function InspectorPanel({ inspector, segments, transcriptQuery, setTranscriptQue
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' ? <CommentsDataPanel unavailable={inspector.unavailableData.includes('comments')} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <p role='status'>Loading comments…</p> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
       </section>
     </> : null}
 
+    {Object.keys(inspector.dataErrors).length > 0 ? <button type='button' disabled={retrying} onClick={onRetry}>{retrying ? 'Retrying…' : 'Retry failed requests'}</button> : null}
     <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />
   </section>;
 }
@@ -1173,7 +1183,7 @@ function SourceVideoPreview({ inspector, title }: { inspector: Inspector; title:
   </article>;
 }
 
-function SourceChannelOverview({ channel, fallback, unavailable }: { channel?: ChannelInfo; fallback?: { id?: string; name?: string; url?: string }; unavailable: boolean }) {
+function SourceChannelOverview({ channel, fallback, error }: { channel?: ChannelInfo; fallback?: { id?: string; name?: string; url?: string }; error?: string }) {
   const about = channel?.about;
   const info = about?.moreInfo;
   const identity = { id: String(channel?.id ?? fallback?.id ?? ''), name: String(channel?.name ?? fallback?.name ?? 'YouTube channel'), url: String(channel?.url ?? fallback?.url ?? '') };
@@ -1189,7 +1199,7 @@ function SourceChannelOverview({ channel, fallback, unavailable }: { channel?: C
 
   return <aside className='source-channel-overview' aria-label='Channel information'>
     <div className='source-channel-identity'>{avatar ? <img src={avatar.url} alt='' /> : <span aria-hidden='true'>{identity.name.slice(0, 1).toUpperCase()}</span>}<div><p>Channel</p><h3>{identity.name}</h3>{channel?.handle ? <small>{String(channel.handle)}</small> : null}</div></div>
-    {unavailable ? <p className='source-data-unavailable'>Channel details could not be returned for this video.</p> : <>
+    {error ? <p role='alert' className='source-data-unavailable'>{error}</p> : <>
       {about?.description ? <p className='source-channel-description'>{about.description}</p> : null}
       {facts.length ? <dl className='source-channel-facts'>{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : null}
       <div className='source-channel-links'>{identity.url ? <a href={identity.url} target='_blank' rel='noreferrer'>{info?.displayCanonicalChannelUrl || 'View channel'} ↗</a> : null}{about?.links.map((link) => <a key={link.url} href={link.url} target='_blank' rel='noreferrer'>{link.title || link.displayUrl} ↗</a>)}</div>
@@ -1199,7 +1209,8 @@ function SourceChannelOverview({ channel, fallback, unavailable }: { channel?: C
 }
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
-  if (inspector.unavailableData.includes('transcript')) return <p className='source-data-unavailable'>A transcript is not available for this video.</p>;
+  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <p role='status'>Loading transcript…</p>;
+  if (inspector.dataErrors.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>
     <header className='source-panel-head'><div><h3>{inspector.transcript.track.name}</h3><p>{inspector.transcript.meta.partial ? 'Partial transcript' : 'Complete transcript'} · {inspector.transcript.track.languageCode.toUpperCase()} · {inspector.transcript.track.kind} · {inspector.transcript.segments.length.toLocaleString()} moments</p></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.target.value)} placeholder='Filter transcript…' /></label></header>
@@ -1209,8 +1220,8 @@ function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscri
   </>;
 }
 
-function CommentsDataPanel({ unavailable, page, pagesLoaded, loading, error, onLoadMore }: { unavailable: boolean; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void }) {
-  if (unavailable) return <p className='source-data-unavailable'>Comments are unavailable or turned off for this video.</p>;
+function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, onLoadMore }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void }) {
+  if (initialError) return <p role='alert' className='source-data-unavailable'>{initialError}</p>;
   const comments = page?.comments ?? [];
   if (!comments.length) return <p className='source-data-unavailable'>No public comments were returned.</p>;
   return <>

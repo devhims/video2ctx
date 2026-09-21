@@ -8,7 +8,7 @@
     "ENVIRONMENT": "development",
     "APP_ORIGIN": "http://auth.test",
     "AUTH_BASE_URL": "http://auth.test",
-    "AUTH_PREVIEW_HOST_PATTERN": "all-things-youtube-web-*.vercel.app",
+    "AUTH_PREVIEW_HOST_PATTERN": "video2ctx-web-*-devhims-projects.vercel.app",
     "BETTER_AUTH_SECRET": "test-only-better-auth-secret-000000000000",
     "OAUTH_PROXY_SECRET": "test-only-oauth-proxy-secret-0000000000",
     "GITHUB_CLIENT_ID": "test-github-client",

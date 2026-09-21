@@ -8,12 +8,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const demoEnabled = isLocalDashboardDemoEnabled(requestHeaders);
   const session = await requireDashboardSession();
 
-  const [agentAccess, adminAccess] = session ? await Promise.all([
-    fetchServerAgentAccess(requestHeaders).catch(() => false),
-    fetchServerAdminAccess(requestHeaders).catch(() => false),
-  ]) : [false, false];
+  const access = session ? await Promise.allSettled([
+    fetchServerAgentAccess(requestHeaders),
+    fetchServerAdminAccess(requestHeaders),
+  ]) : [];
+  const [agent, admin] = access;
+  const failure = access.find(result => result.status === 'rejected');
+  const accessError = failure?.status === 'rejected' ? (failure.reason instanceof Error ? failure.reason.message : 'Access could not be checked.') : '';
+  const agentAccess = agent?.status === 'fulfilled' && agent.value;
+  const adminAccess = admin?.status === 'fulfilled' && admin.value;
 
-  return <DashboardSessionProvider initialAdminAccess={adminAccess} initialAgentAccess={agentAccess} initialUser={session?.user ?? null} demoEnabled={demoEnabled}>
+  return <DashboardSessionProvider initialAccessError={accessError} initialAdminAccess={adminAccess} initialAgentAccess={agentAccess} initialUser={session?.user ?? null} demoEnabled={demoEnabled}>
     {children}
   </DashboardSessionProvider>;
 }

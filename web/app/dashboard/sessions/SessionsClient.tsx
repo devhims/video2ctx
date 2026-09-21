@@ -1,5 +1,7 @@
 'use client';
 
+import { platformRequest } from '../../../lib/platform-request';
+
 import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -26,19 +28,21 @@ export function AgentShell({ children }: { children: ReactNode }) {
   const { user, agentAccess, signOut } = useDashboardSession();
   const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [credits, setCredits] = useState<number>();
+  const [accountError, setAccountError] = useState('');
   useEffect(() => {
     if (!user || !agentAccess) return;
     const controller = new AbortController();
     const load = async () => {
-      const get = async (path: string) => {
-        const response = await fetch(`/api/platform/v1/${path}`, { credentials: 'include', cache: 'no-store', signal: controller.signal });
-        if (!response.ok) throw new Error('Account information unavailable');
-        return response.json();
-      };
-      const [projectData, usage] = await Promise.allSettled([get('projects'), get('usage')]);
+      const options = { cache: 'no-store' as const, signal: controller.signal };
+      const [projectData, usage] = await Promise.allSettled([
+        platformRequest<{ projects: DashboardProject[] }>('/v1/projects', options),
+        platformRequest<{ creditBalance: number }>('/v1/usage', options),
+      ]);
       if (controller.signal.aborted) return;
       if (projectData.status === 'fulfilled') setProjects(projectData.value.projects);
       if (usage.status === 'fulfilled') setCredits(usage.value.creditBalance);
+      const failure = [projectData, usage].find(result => result.status === 'rejected');
+      setAccountError(failure?.status === 'rejected' ? errorMessage(failure.reason) : '');
     };
     void load();
     return () => controller.abort();
@@ -52,6 +56,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
       <DashboardHeader title='Agent'><Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></DashboardHeader>
+      {accountError && <p role='alert'>{accountError}</p>}
       {children}
     </div>
   </main>;
@@ -295,9 +300,9 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, o
         });
         setUncertain(false);
       } catch (cause) {
-        const retryable = cause instanceof AgentSendError && cause.retryable;
+        const unconfirmed = cause instanceof AgentSendError && cause.unconfirmed;
         setDraft(request.draft);
-        setError(errorMessage(cause)); setUncertain(retryable);
+        setError(errorMessage(cause)); setUncertain(unconfirmed);
       } finally { inFlight.current = false; onSending?.(false); }
     });
   };

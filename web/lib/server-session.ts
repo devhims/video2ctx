@@ -1,3 +1,4 @@
+import { platformResponseError } from './platform-request.ts';
 export type DashboardUser = {
   id: string;
   email: string;
@@ -36,7 +37,7 @@ export async function fetchServerSession(
   });
 
   if (response.status === 401) return null;
-  if (!response.ok) throw new Error(`Session lookup failed (${response.status})`);
+  if (!response.ok) throw await platformResponseError(response);
 
   const session = await response.json() as DashboardSession | null;
   return session?.user ? session : null;
@@ -81,10 +82,9 @@ async function fetchServerAccess(requestHeaders: Headers, path: string, options:
   const response = await (options.fetch ?? fetch)(new URL(path, platformBaseUrl), {
     cache: 'no-store',
     headers: { accept: 'application/json', cookie, ...(origin ? { origin } : {}) },
-    signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 401 || response.status === 403) return false;
-  if (!response.ok) throw new Error('Access could not be checked. Please try again.');
+  if (!response.ok) throw await platformResponseError(response);
   const result = await response.json() as { enabled?: unknown };
   return result.enabled === true;
 }
