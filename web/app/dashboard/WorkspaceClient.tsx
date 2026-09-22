@@ -21,6 +21,7 @@ import {
   type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
+import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
@@ -604,14 +605,16 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
                     {(Object.keys(SOURCE_DATA_OPTIONS) as SourceDataOption[]).map((option) => {
                       const selected = selectedData.includes(option);
                       const isOnlySelection = selected && selectedData.length === 1;
-                      return <label key={option} data-selected={selected} data-locked={isOnlySelection} title={isOnlySelection ? 'Choose another dataset before removing this one' : SOURCE_DATA_OPTIONS[option].description}>
-                        <input type='checkbox' checked={selected} disabled={isOnlySelection} onChange={() => toggleSelectedData(option)} />
-                        <span aria-hidden='true'>{selected ? '✓' : '+'}</span>
-                        <b>{SOURCE_DATA_OPTIONS[option].shortLabel}</b>
-                      </label>;
+                      return <Checkbox
+                        key={option}
+                        checked={selected}
+                        onCheckedChange={() => toggleSelectedData(option)}
+                        disabled={isOnlySelection}
+                        label={SOURCE_DATA_OPTIONS[option].shortLabel}
+                        title={isOnlySelection ? 'Choose another dataset before removing this one' : SOURCE_DATA_OPTIONS[option].description}
+                      />;
                     })}
                   </div>
-                  <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span></p>
                 </fieldset>
               </form>
             </section>
@@ -1049,13 +1052,46 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Comparing public video signals.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
+function SourceChannelSkeleton() {
+  return <aside className='source-channel-overview source-channel-skeleton' role='status' aria-label='Loading channel info'>
+    <span className='sr-only'>Loading channel info</span>
+    <div className='source-channel-identity' aria-hidden='true'>
+      <span className='source-skeleton-media' />
+      <div>
+        <p><i className='ui-bar' data-width='short' /></p>
+        <h3><i className='ui-bar' data-width='long' /></h3>
+        <small><i className='ui-bar' data-width='medium' /></small>
+      </div>
+    </div>
+    <p className='source-channel-description' aria-hidden='true'>
+      <i className='ui-bar' /><i className='ui-bar' /><i className='ui-bar' data-width='medium' />
+    </p>
+    <dl className='source-channel-facts' aria-hidden='true'>
+      {Array.from({ length: 6 }).map((_, index) => <div key={index}>
+        <dt><i className='ui-bar' data-width='medium' /></dt>
+        <dd><i className='ui-bar' data-width='long' /></dd>
+      </div>)}
+    </dl>
+    <div className='source-channel-links' aria-hidden='true'>
+      <i className='ui-bar' /><i className='ui-bar' /><i className='ui-bar' />
+    </div>
+  </aside>;
+}
+
+function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' }) {
+  return <div className={`source-skeleton source-skeleton-${variant}`} role='status' aria-label={label}>
+    <span className='sr-only'>{label}</span>
+    <div className='source-skeleton-lines' aria-hidden='true'>{Array.from({ length: lines }).map((_, index) => <i key={index} />)}</div>
+  </div>;
+}
+
 function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, failed }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean; failed: boolean }) {
   return <section className='source-results' aria-labelledby='source-results-title'>
     <header className={!items.length && !hasSearched ? 'sr-only' : undefined}>
       <h2 id='source-results-title'>{items.length ? 'Results' : failed ? 'Search could not finish' : hasSearched && !loading ? 'No matching videos' : 'Search results'}</h2>
       {items.length ? <span>{items.length} videos{loading ? ' · refreshing' : ''}</span> : null}
     </header>
-    {loading && !items.length ? <div className='source-result-skeletons' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : null}
+    {loading && !items.length ? <div className='source-result-skeletons' role='status' aria-label='Loading videos'>{Array.from({ length: 5 }).map((_, index) => <div key={index} aria-hidden='true'><i /><span><b /><small /></span></div>)}</div> : null}
     {!items.length && !loading && !failed ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>{hasSearched ? 'Try another search' : 'Your sources will appear here'}</h3><p>{hasSearched ? 'Try another topic or paste a YouTube URL.' : 'Open a result to view your selected datasets.'}</p>{hasSearched && <button className={pageStyles.textAction} onClick={onStart}>Edit search →</button>}</div></div> : null}
     {items.length ? <div className='source-result-list'>{items.map((item) => {
       const thumbnail = bestThumbnail(item.thumbnails);
@@ -1072,6 +1108,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
+  const metadataLoading = Boolean(inspector.loadingData?.includes('metadata'));
   const [activePanel, setActivePanel] = useState<SourceDataOption>(panelOptions[0] ?? 'channel');
   const [commentPage, setCommentPage] = useState(inspector.comments);
   const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
@@ -1116,15 +1153,22 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
   return <section className='source-inspector' aria-labelledby='source-detail-title'>
     <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
     <header className='source-detail-head'>
-      <div><p className='panel-label'>Video result</p><h2 id='source-detail-title'>{title}</h2><p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p></div>
+      <div>
+        <p className='panel-label'>Video result</p>
+        <h2 id='source-detail-title'>{metadataLoading
+          ? <><span className='sr-only'>{title}</span><i className='ui-bar' aria-hidden='true' /><i className='ui-bar' data-width='medium' aria-hidden='true' /></>
+          : title}</h2>
+        {metadataLoading
+          ? <p role='status' aria-label='Loading video details'><span className='sr-only'>Loading video details</span><i className='ui-bar' data-width='medium' aria-hidden='true' /></p>
+          : <p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p>}
+      </div>
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
-    {inspector.loadingData?.includes('metadata') ? <p role='status'>Loading video details…</p> : null}
     {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />
-      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <p role='status'>Loading channel info…</p> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
+      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <SourceChannelSkeleton /> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
     </div>
 
     {panelOptions.length ? <>
@@ -1133,7 +1177,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <p role='status'>Loading comments…</p> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
       </section>
     </> : null}
 
@@ -1219,7 +1263,7 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 }
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
-  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <p role='status'>Loading transcript…</p>;
+  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
   if (inspector.dataErrors.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>

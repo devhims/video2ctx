@@ -101,7 +101,7 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
   await page.getByRole('button', { name: /Open video|Search videos/ }).click();
   await expect(page.getByRole('heading', { name: 'Transcript deadline regression', exact: true })).toBeVisible();
-  await expect(page.getByText('Loading transcript…', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Loading transcript' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save to project' })).toBeDisabled();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   release();
