@@ -60,6 +60,8 @@ jobs:
             web/package-lock.json
       - name: Install platform dependencies
         run: npm ci
+      - name: Install library dependencies for caption recovery integration tests
+        run: npm ci --prefix ../packages/all-things-youtube
       - name: Install hosted CLI dependencies
         run: npm ci
         working-directory: packages/video2ctx-cli
