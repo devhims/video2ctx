@@ -7,6 +7,7 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: './test/auth/wrangler.jsonc' },
       miniflare: {
+        d1Databases: { CREDIT_MIGRATION_DB: 'credit-migration-test' },
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'migrations')),
         },

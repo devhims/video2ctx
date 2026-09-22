@@ -2,7 +2,9 @@ import { AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from '.
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
 import { env as workerEnv } from 'cloudflare:workers';
-import { describe, expect, test } from 'vitest';
+import { applyD1Migrations } from 'cloudflare:test';
+import type { D1Migration } from '@cloudflare/vitest-pool-workers';
+import { afterEach, describe, expect, test } from 'vitest';
 import {
   creditBalance,
   entitlements,
@@ -25,6 +27,159 @@ const env = {
 } satisfies CreditEnv;
 
 describe('credit queries on D1', () => {
+  afterEach(async () => {
+    const discrepancies = await env.DB.prepare(`
+      SELECT u.id, a.available_credits, COALESCE(SUM(l.credits), 0) AS ledger_balance
+      FROM user AS u
+      LEFT JOIN credit_accounts AS a ON a.user_id = u.id
+      LEFT JOIN credit_ledger AS l ON l.user_id = u.id
+      GROUP BY u.id
+      HAVING a.user_id IS NULL OR a.available_credits != COALESCE(SUM(l.credits), 0)
+    `).all();
+    expect(discrepancies.results).toEqual([]);
+  });
+
+  test('backfills historical balances and reservations without changing the ledger', async () => {
+    const migrationEnv = workerEnv as typeof workerEnv & {
+      CREDIT_MIGRATION_DB: D1Database;
+      TEST_MIGRATIONS: D1Migration[];
+    };
+    const db = migrationEnv.CREDIT_MIGRATION_DB;
+    const migrationIndex = migrationEnv.TEST_MIGRATIONS.findIndex(m => m.name === '0017_credit_accounts.sql');
+    expect(migrationIndex).toBeGreaterThan(0);
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS.slice(0, migrationIndex));
+    for (const id of ['historical', 'empty', 'negative']) {
+      await db.prepare(`INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?,?,?,0,0)`)
+        .bind(id, id, `${id}@migration.test`).run();
+    }
+    await db.prepare(`INSERT INTO credit_ledger
+      (id,user_id,operation_id,entry_type,credits,created_at) VALUES
+      ('grant','historical','onboarding:v1','grant',1000,0),
+      ('reserve','historical','in-progress','reserve',-22,0),
+      ('adjustment','negative','legacy','adjustment',-5,0)`
+    ).run();
+    const before = await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all();
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
+    expect((await db.prepare('SELECT * FROM credit_accounts ORDER BY user_id').all()).results).toEqual([
+      { user_id: 'empty', available_credits: 0 },
+      { user_id: 'historical', available_credits: 978 },
+      { user_id: 'negative', available_credits: -5 },
+    ]);
+    expect((await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all()).results).toEqual(before.results);
+    await settleAgentCredits({ ...env, DB: db }, 'historical', 'unreserved-cancel', 0, 0);
+    await settleCredits({ ...env, DB: db }, 'historical', 'in-progress', 22, 3, 0);
+    expect(await creditBalance({ ...env, DB: db }, 'historical')).toBe(997);
+  });
+
+  test('manual grants update the stored balance once even when retried concurrently', async () => {
+    const id = 'manual-bonus';
+    await createUser(id);
+    await creditBalance(env, id);
+    const grant = () => env.DB.prepare(`INSERT INTO credit_ledger
+      (id,user_id,operation_id,entry_type,credits,created_at)
+      VALUES (?,?,'manual-bonus','adjustment',10000,?)
+      ON CONFLICT(user_id,operation_id,entry_type) DO NOTHING`
+    ).bind(crypto.randomUUID(), id, Date.now()).run();
+    await Promise.all([grant(), grant()]);
+    expect(await creditBalance(env, id)).toBe(11000);
+    expect(await operationCount(id, 'manual-bonus', 'adjustment')).toBe(1);
+  });
+
+  test('parallel data reservations cannot overdraw an account', async () => {
+    const id = 'data-parallel-balance';
+    await createUser(id);
+    await setBuilderPlan(id);
+    await addCredits(id, 10, 'opening');
+    const attempts = await Promise.allSettled([
+      reserveCredits(env, id, 'request-a', 7, {}),
+      reserveCredits(env, id, 'request-b', 7, {}),
+    ]);
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.find(result => result.status === 'rejected')).toMatchObject({
+      reason: { status: 402, code: 'INSUFFICIENT_CREDITS' },
+    });
+    expect(await creditBalance(env, id)).toBe(3);
+  });
+
+  test('parallel retries reserve data credits once even when the first attempt spends the balance', async () => {
+    const id = 'data-parallel-retry';
+    await createUser(id);
+    await Promise.all([
+      reserveCredits(env, id, 'request', 1000, {}),
+      reserveCredits(env, id, 'request', 1000, {}),
+    ]);
+    expect(await creditBalance(env, id)).toBe(0);
+    expect(await operationCount(id, 'request', 'reserve')).toBe(1);
+    await Promise.all([
+      releaseCredits(env, id, 'request', 1000),
+      releaseCredits(env, id, 'request', 1000),
+    ]);
+    expect(await creditBalance(env, id)).toBe(1000);
+  });
+
+  test('a failed balance update rolls back the ledger insertion', async () => {
+    const id = 'balance-update-failure';
+    await createUser(id);
+    await creditBalance(env, id);
+    await env.DB.prepare(`CREATE TRIGGER test_reject_balance_update
+      BEFORE UPDATE ON credit_accounts WHEN NEW.user_id = 'balance-update-failure'
+      BEGIN SELECT RAISE(ABORT, 'test balance failure'); END`).run();
+    try {
+      await expect(reserveCredits(env, id, 'failed-request', 7, {})).rejects.toThrow('test balance failure');
+      expect(await operationCount(id, 'failed-request', 'reserve')).toBe(0);
+      expect((await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?')
+        .bind(id).first())?.available_credits).toBe(1000);
+    } finally {
+      await env.DB.prepare('DROP TRIGGER test_reject_balance_update').run();
+    }
+  });
+
+  test('failed batches roll back both the ledger and balance', async () => {
+    const id = 'balance-batch-failure';
+    await createUser(id);
+    await creditBalance(env, id);
+    await expect(env.DB.batch([
+      env.DB.prepare(`INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at)
+        VALUES ('rollback-entry',?,'rollback','adjustment',10000,0)`).bind(id),
+      env.DB.prepare('INSERT INTO credit_accounts (user_id) VALUES (?)').bind('nonexistent-user'),
+    ])).rejects.toThrow();
+    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await operationCount(id, 'rollback', 'adjustment')).toBe(0);
+  });
+
+  test('maintenance edits, transfers, and deletions keep balances in sync', async () => {
+    const id = 'maintenance-source';
+    const other = 'maintenance-target';
+    await createUser(id);
+    await createUser(other);
+    await setBuilderPlan(id);
+    await setBuilderPlan(other);
+    await addCredits(id, 100, 'maintenance');
+    await env.DB.prepare('UPDATE credit_ledger SET credits=250 WHERE user_id=?').bind(id).run();
+    expect(await creditBalance(env, id)).toBe(250);
+    await env.DB.prepare('UPDATE credit_ledger SET user_id=? WHERE user_id=?').bind(other, id).run();
+    expect(await creditBalance(env, id)).toBe(0);
+    expect(await creditBalance(env, other)).toBe(250);
+    await env.DB.prepare('DELETE FROM credit_ledger WHERE user_id=?').bind(other).run();
+    expect(await creditBalance(env, other)).toBe(0);
+    await addCredits(other, 50, 'delete-account');
+    await env.DB.prepare('DELETE FROM user WHERE id=?').bind(other).run();
+    expect(await env.DB.prepare('SELECT * FROM credit_accounts WHERE user_id=?').bind(other).first()).toBeNull();
+    expect(await operationCount(other, 'delete-account', 'adjustment')).toBe(0);
+  });
+
+  test('balance lookups read bounded rows even with a long ledger history', async () => {
+    const id = 'long-credit-history';
+    await createUser(id);
+    await env.DB.prepare(`WITH RECURSIVE entries(n) AS (
+      SELECT 1 UNION ALL SELECT n+1 FROM entries WHERE n<1000
+    ) INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at)
+      SELECT 'history-' || n, ?, 'history-' || n, 'adjustment', 1, 0 FROM entries`).bind(id).run();
+    const result = await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).all();
+    expect(result.results).toEqual([{ available_credits: 1000 }]);
+    expect(result.meta.rows_read).toBeLessThanOrEqual(3);
+  });
+
   test('agent retries settle once and refund unused credits', async () => {
     const id = 'agent-settlement';
     await createUser(id);

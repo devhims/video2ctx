@@ -96,10 +96,14 @@ async function addCredits(userId: string, credits: number, operationId: string):
 }
 
 async function balance(userId: string): Promise<number> {
+  const account = await env.DB.prepare(
+    'SELECT available_credits AS balance FROM credit_accounts WHERE user_id=?'
+  ).bind(userId).first<{ balance: number }>();
   const row = await env.DB.prepare(
     'SELECT COALESCE(SUM(credits),0) AS balance FROM credit_ledger WHERE user_id=?'
   ).bind(userId).first<{ balance: number }>();
-  return Number(row?.balance ?? 0);
+  expect(account?.balance).toBe(row?.balance ?? 0);
+  return Number(account?.balance ?? 0);
 }
 
 async function account(userId: string): Promise<{ plan: string; status: string } | null> {

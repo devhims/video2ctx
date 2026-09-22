@@ -13,7 +13,7 @@ export async function reserveAgentCredits(env: CreditEnv, userId: string, runId:
     INSERT OR IGNORE INTO credit_ledger
       (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
     SELECT ?, ?, ?, 'reserve', ?, ?, ?
-    WHERE (SELECT COALESCE(SUM(credits), 0) FROM credit_ledger WHERE user_id = ?) >= ?
+    WHERE (SELECT available_credits FROM credit_accounts WHERE user_id = ?) >= ?
       AND NOT EXISTS (SELECT 1 FROM credit_ledger WHERE user_id = ? AND operation_id = ? AND entry_type = 'settle')
   `).bind(crypto.randomUUID(), userId, operationId, -AGENT_CREDIT_RESERVE,
     JSON.stringify({ operation: 'agent', runId }), Date.now(), userId, AGENT_CREDIT_RESERVE,
@@ -49,7 +49,7 @@ export async function settleAgentCredits(
   `).bind(crypto.randomUUID(), userId, `agent:${runId}`, userId, `agent:${runId}`, actual, providerCostMicros,
     JSON.stringify({ operation: 'agent', actual, reserved: AGENT_CREDIT_RESERVE }),
     Date.now()).run();
-  const row = await env.DB.prepare('SELECT COALESCE(SUM(credits), 0) AS balance FROM credit_ledger WHERE user_id = ?')
+  const row = await env.DB.prepare('SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?')
     .bind(userId).first<{ balance: number }>();
   return Number(row?.balance ?? 0);
 }

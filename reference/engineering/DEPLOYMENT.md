@@ -33,6 +33,11 @@ Configure branch control to build only `main` for now. Do not enable automatic W
 
 The production deploy command applies pending D1 migrations before deploying the Worker. Runtime secrets remain attached to the existing Worker and must not be added to Git build variables.
 
+The repository's `deploy` script enables `--minify --upload-source-maps`.
+Minification reduces bundle size and startup work; source maps let Cloudflare
+map production stack traces back to the original source. The dashboard deploy
+command remains `npm run deploy:production`.
+
 The anonymous landing-page inspection fails closed in production unless
 `LANDING_DEMO_RATE_LIMIT_MODE=disabled` is explicitly configured for testing.
 Before a production launch, set the mode to `enforced` and add these Worker runtime secrets:
