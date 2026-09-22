@@ -1,7 +1,7 @@
 import { timeAgentAdmission } from '../lib/agent-admission-timing';
 import type { Context, MiddlewareHandler } from 'hono';
 import type { App, AppUser, AuthPrincipal } from '../types';
-import { createAuth } from '../lib/auth';
+import { createRequestAuth } from '../lib/request-auth';
 import { DEFAULT_API_KEY_PERMISSIONS, hasApiKeyPermission } from '../lib/api-key-permissions';
 import { ApiError, now, sha256 } from '../lib/http';
 
@@ -29,7 +29,7 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
   try {
     const credential = suppliedCredential(c);
     if (credential?.kind === 'api-key') {
-      const auth = createAuth(c.env, c.executionCtx);
+      const auth = await createRequestAuth(c.env, c.executionCtx);
       c.set('auth', auth);
       if (credential.value.length > 256) throw new ApiError(401, 'INVALID_API_KEY', 'The API key is invalid.');
       const verification = await timeAgentAdmission(c, 'api_key', () => auth.api.verifyApiKey({
@@ -59,7 +59,7 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
     }
 
     if (credential?.kind === 'cli-session') {
-      const auth = createAuth(c.env, c.executionCtx);
+      const auth = await createRequestAuth(c.env, c.executionCtx);
       c.set('auth', auth);
       if (credential.value.length > 512) {
         throw new ApiError(401, 'INVALID_SESSION_TOKEN', 'The CLI session is invalid.');
@@ -81,7 +81,7 @@ export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
     }
 
     if (c.req.header('cookie')) {
-      const auth = createAuth(c.env, c.executionCtx);
+      const auth = await createRequestAuth(c.env, c.executionCtx);
       c.set('auth', auth);
       const session = await auth.api.getSession({ headers: c.req.raw.headers });
       if (session?.user) {

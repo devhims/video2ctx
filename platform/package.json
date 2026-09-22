@@ -28,7 +28,8 @@
     "db:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
     "db:migrate:production": "wrangler d1 migrations apply DB --remote",
     "dev:agent": "MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM=linux/amd64 wrangler dev src/index.local.ts --config wrangler.agent-postman.local.jsonc --var ENVIRONMENT:development --var APP_ORIGIN:http://localhost:3000 --var AUTH_BASE_URL:http://localhost:3000 --var LOCAL_AUTH_BYPASS_ENABLED:true --var AGENT_RUNTIME_ENABLED:true --var AGENT_ACCESS_MODE:all",
-    "test:frames": "npm --prefix youtube-frames test"
+    "test:frames": "npm --prefix youtube-frames test",
+    "check:startup": "wrangler check startup --args=\"--containers-rollout=none --minify\" --outfile .wrangler/startup.cpuprofile"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",
