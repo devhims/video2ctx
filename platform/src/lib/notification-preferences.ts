@@ -1,5 +1,4 @@
 import type { EmailMessage } from '../types';
-import { renderNotificationOptInEmail } from './email-templates';
 import { ApiError, base64Url, now } from './http';
 
 const EMAIL_ALERT_CONFIRMATION_TTL_MS = 24 * 60 * 60_000;
@@ -133,6 +132,7 @@ async function requestEmailAlertConfirmation(
   const token = await emailAlertConfirmationToken(env, userId, account.email, requestedAt);
   const confirmation = `${requestedAt}.${token}`;
   const confirmationUrl = `${env.APP_ORIGIN}/dashboard?section=settings&emailConsent=${encodeURIComponent(confirmation)}`;
+  const { renderNotificationOptInEmail } = await import('./email-templates');
   const content = await renderNotificationOptInEmail({ recipientName: account.name, confirmationUrl });
 
   await env.DB.prepare(

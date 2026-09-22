@@ -73,6 +73,13 @@ jobs:
         run: npm ci --prefix youtube-processor && npm --prefix youtube-processor run bundle:check
       - name: Verify platform
         run: npm run verify
+      - name: Profile Worker startup (local CPU, no deployment)
+        run: npm run check:startup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-startup-profile
+          path: platform/.wrangler/startup.cpuprofile
+          include-hidden-files: true
       - name: Verify processor Linux image
         run: |
           docker build --platform linux/amd64 -t youtube-processor:test -f youtube-processor/Dockerfile youtube-processor

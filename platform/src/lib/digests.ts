@@ -1,6 +1,5 @@
 import type { EmailMessage } from '../types';
 import { base64Url, now, sha256 } from './http';
-import { renderDigestEmail } from './email-templates';
 
 export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promise<void> {
   const users = await env.DB.prepare(
@@ -18,6 +17,7 @@ export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promi
     if (!notifications.results.length) continue;
     const token = await unsubscribeToken(env, user.id);
     const unsubscribeUrl = `${env.APP_ORIGIN}/api/platform/v1/email/unsubscribe?user=${encodeURIComponent(user.id)}&token=${encodeURIComponent(token)}`;
+    const { renderDigestEmail } = await import('./email-templates');
     const content = await renderDigestEmail({
       recipientName: user.name,
       cadence,
