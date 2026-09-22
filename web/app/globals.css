@@ -1500,25 +1500,6 @@ html:has(.developer-page) body {
   white-space: nowrap;
 }
 
-.source-data-picker > p {
-  margin: var(--space-sm) 0 0;
-  color: var(--color-dashboard-muted);
-  font-size: .68rem;
-  line-height: 1.5;
-}
-
-.source-data-picker > p span {
-  margin-right: var(--space-sm);
-  color: var(--color-dashboard-ink-soft);
-  font-weight: 600;
-}
-
-.source-data-picker > p span::before {
-  margin-right: .35rem;
-  color: var(--color-dashboard-success);
-  content: '✓';
-}
-
 .source-results {
   padding-top: var(--space-xl);
   padding-bottom: var(--space-3xl);

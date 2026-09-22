@@ -615,7 +615,6 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
                       />;
                     })}
                   </div>
-                  <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span></p>
                 </fieldset>
               </form>
             </section>
