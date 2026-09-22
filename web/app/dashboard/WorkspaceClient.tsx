@@ -21,6 +21,7 @@ import {
   type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
+import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
@@ -604,11 +605,14 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
                     {(Object.keys(SOURCE_DATA_OPTIONS) as SourceDataOption[]).map((option) => {
                       const selected = selectedData.includes(option);
                       const isOnlySelection = selected && selectedData.length === 1;
-                      return <label key={option} data-selected={selected} data-locked={isOnlySelection} title={isOnlySelection ? 'Choose another dataset before removing this one' : SOURCE_DATA_OPTIONS[option].description}>
-                        <input type='checkbox' checked={selected} disabled={isOnlySelection} onChange={() => toggleSelectedData(option)} />
-                        <span aria-hidden='true'>{selected ? '✓' : '+'}</span>
-                        <b>{SOURCE_DATA_OPTIONS[option].shortLabel}</b>
-                      </label>;
+                      return <Checkbox
+                        key={option}
+                        checked={selected}
+                        onCheckedChange={() => toggleSelectedData(option)}
+                        disabled={isOnlySelection}
+                        label={SOURCE_DATA_OPTIONS[option].shortLabel}
+                        title={isOnlySelection ? 'Choose another dataset before removing this one' : SOURCE_DATA_OPTIONS[option].description}
+                      />;
                     })}
                   </div>
                   <p><span>{playlistInput ? 'Playlist details and video index included' : 'Video details included'}</span></p>
