@@ -291,8 +291,8 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       if (outcome !== 'success') logProcessorAttempt(operation.kind, slot, index, status,
         outcome === 'fallback' ? 'fallback' : outcome === 'transport_error' ? 'transport-error' : 'processor-error',
         startedAt, reason, extractionId, operationStartedAt, failureKind);
-      if (operation.kind === 'storyboard') emitExtractionDiagnostic(onDiagnostic, {
-        version: 1, kind: 'storyboard', videoId: operation.id, extractionId, attempt: index + 1, slot,
+      if (operation.kind === 'storyboard' || operation.kind === 'transcript') emitExtractionDiagnostic(onDiagnostic, {
+        version: 1, kind: operation.kind, videoId: operation.id, extractionId, attempt: index + 1, slot,
         recordedAt: Date.now(), elapsedMs: Date.now() - startedAt, status,
         outcome, failureKind, ...capture,
       });

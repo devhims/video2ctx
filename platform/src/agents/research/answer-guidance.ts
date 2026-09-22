@@ -13,6 +13,7 @@ Select only necessary evidenceIds, usually one to three per point. Keep the answ
 
 /** Shared writing guidance for both natural tool answers and reserved synthesis. */
 export const ANSWER_SCOPE_GUIDANCE = `
+When explaining retrieval failures, state only the observed error and documented attempts. An unavailable caption response or Invalid URL message does not prove that a video permanently lacks captions, the caller supplied a bad video ID, retries cannot help, or the retry implementation is correct. Distinguish tool calls from internal provider attempts. If the diagnostics do not establish a cause, say the cause is unknown.
 Honor the user's requested count, format, subquestions and level of detail. Never pad a list with unsupported or repetitive items. If evidence or the response budget prevents fulfilling the requested scope, explain the shortfall and add ANSWER_SCOPE_SHORTFALL to warnings.
 Never use em dashes (--) in responses. End the sentence or use a comma. Do not substitute parentheses or en dashes, which trade one AI tell for another. See writing-style.md for the full punctuation rules.
 For ordinary requests, give a concise answer with the strongest distinct points. Combine each recommendation with a concrete use and benefit. Group comparisons by decision-relevant dimensions; omit secondary anecdotes, overlapping advice and repeated conclusions. Explicit requests for detailed reports or extensive examples warrant more explanation. Shorten each requested item before reducing the count.

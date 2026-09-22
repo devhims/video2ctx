@@ -54,7 +54,7 @@ test('accepts every internal YouTube operation kind', async () => {
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { value: { operation: kind },
-      ...(kind === 'storyboard' ? { diagnostics: { version: 1, events: [], droppedEvents: 0 } } : {}) });
+      ...(['storyboard', 'transcript'].includes(kind) ? { diagnostics: { version: 1, events: [], droppedEvents: 0 } } : {}) });
   }
 
   assert.deepEqual(seen, [...OPERATION_KINDS]);

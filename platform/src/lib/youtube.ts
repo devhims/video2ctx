@@ -1,3 +1,4 @@
+import { emitExtractionDiagnostic, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import type {
   BrowseOptions,
   ChannelPlaylistSort,
@@ -101,6 +102,7 @@ async function cached<T extends YouTubeOperation>(
   id: string,
   maxAgeMs: number,
   operation: T,
+  onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<CachedResult<YouTubeOperationResult<T> & { freshness?: Record<string, unknown> }>> {
   const cacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
   const existing = await readYouTubeCacheEntry<YouTubeOperationResult<T>>(env, cacheKey, type);
@@ -126,6 +128,9 @@ async function cached<T extends YouTubeOperation>(
       'CACHE_COORDINATOR_UNAVAILABLE',
       error instanceof Error ? error.message : 'The YouTube cache coordinator is unavailable.',
     );
+  }
+  if (Array.isArray(response.diagnostics)) {
+    for (const event of response.diagnostics.slice(0, 4)) emitExtractionDiagnostic(onDiagnostic, event);
   }
   if (!response.ok && response.error) {
     throw processorError(new YouTubeProcessorError(
@@ -316,10 +321,10 @@ export async function getTranscript(env: Env, id: string, lang?: string): Promis
   return (await getTranscriptWithCache(env, id, lang)).value;
 }
 
-export function getTranscriptWithCache(env: Env, id: string, lang?: string) {
+export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink) {
   return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
     kind: 'transcript', id, lang, granularity: 'word',
-  });
+  }, onDiagnostic);
 }
 
 export async function getCaptionTracks(env: Env, id: string) {

@@ -25,7 +25,7 @@ export function sessionProvider(
   const transcriptKey = (id: string, language?: string) => `transcript:${id}:${language?.toLowerCase() ?? 'default'}`;
   return {
     ...provider,
-    transcript: async (id, language, options) => {
+    transcript: async (id, language, options, diagnostic) => {
       const key = transcriptKey(id, language);
       const fresh = (refresh && !refreshed.has(key)) || !!options?.refresh;
       const result = await store.retrieve(
@@ -33,7 +33,7 @@ export function sessionProvider(
         'transcript',
         id,
         fresh,
-        () => provider.transcript(id, language, { refresh: fresh }),
+        () => provider.transcript(id, language, { refresh: fresh }, diagnostic),
         (value) => ({
           language: value.translatedTo?.languageCode ?? value.track.languageCode,
           trackId: value.track.id,

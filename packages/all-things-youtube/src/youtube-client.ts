@@ -850,6 +850,16 @@ function captionTrackInfo(track: InternalCaptionTrack, index: number, defaultInd
   };
 }
 
+// Caption URLs come from upstream metadata, never from the caller. Do not let
+// native URL errors (which may retain signed inputs) escape this boundary.
+function captionUrl(value: string): URL | undefined {
+  if (!value || /[\s\u0000-\u001f\u007f\u200b-\u200d\ufeff]/u.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url : undefined;
+  } catch { return undefined; }
+}
+
 function parseCaptionTracks(player: JsonObject): CaptionCatalog {
   const renderer = object(object(player.captions).playerCaptionsTracklistRenderer);
   const audioTracks = array(renderer.audioTracks).map(object);
@@ -868,8 +878,7 @@ function parseCaptionTracks(player: JsonObject): CaptionCatalog {
       track: InternalCaptionTrack;
     }> => {
       const track = object(item);
-      const baseUrl = string(track.baseUrl);
-      if (!baseUrl) return [];
+      const baseUrl = string(track.baseUrl) ?? ''; // Preserve unusable tracks for typed recovery.
       return [{
         sourceIndex,
         track: {
@@ -911,7 +920,11 @@ function mergeCaptionCatalog(primary: CaptionCatalog, desktop?: CaptionCatalog):
   const seenTracks = new Set<string>();
   for (const track of [...primary.internal, ...desktop.internal]) {
     const key = track.vssId ?? track.languageCode ?? track.baseUrl;
-    if (seenTracks.has(key)) continue;
+    if (seenTracks.has(key)) {
+      const index = internal.findIndex(item => (item.vssId ?? item.languageCode ?? item.baseUrl) === key);
+      if (!captionUrl(internal[index]!.baseUrl) && captionUrl(track.baseUrl)) internal[index] = track;
+      continue;
+    }
     seenTracks.add(key);
     internal.push(track);
   }
@@ -1214,7 +1227,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         firstResponse ??= response;
         const status = string(object(response.playabilityStatus).status);
         const tracks = parseCaptionTracks(response).internal;
-        if (status === 'OK' && (!requireCaptionTrack || tracks.length)) return response;
+        if (status === 'OK' && (!requireCaptionTrack || tracks.some(track => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? 'UNKNOWN'}`);
       } catch (error) {
         attempts.push(
@@ -1274,6 +1287,9 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     captions: CaptionCatalog;
     captionCookies?: string;
   }> => {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
+    }
     const [raw, desktop] = await Promise.all([player(videoId, true), desktopPlayer(videoId)]);
     return {
       raw,
@@ -1750,13 +1766,17 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
 
     async getCaptionTracks(videoId) {
       const { captions } = await playerWithCaptionCatalog(videoId);
+      const tracks = captions.public.filter((_, index) => captionUrl(captions.internal[index]!.baseUrl));
+      const defaultTrackId = tracks.find(track => track.isDefault)?.id ?? tracks[0]?.id;
+      const available = tracks.map(track => ({ ...track, isDefault: track.id === defaultTrackId }));
       return {
-        tracks: captions.public,
-        sourceTracks: captions.public,
+        tracks: available,
+        sourceTracks: available,
         translationLanguages: captions.translations,
         autoTranslationTargets: captions.translations,
-        defaultTrackId: captions.defaultTrackId,
-        meta: meta([], captions.public.length === 0),
+        defaultTrackId,
+        meta: meta(tracks.length < captions.public.length ? ['Some caption tracks had unusable URLs.'] : [],
+          tracks.length === 0 || tracks.length < captions.public.length),
       };
     },
 
@@ -1764,8 +1784,23 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       const requestedTranslation = transcriptOptions.translateTo?.trim();
       const prepareRequest = async () => {
         const { captions, captionCookies } = await playerWithCaptionCatalog(transcriptOptions.videoId);
+        const sourceLanguage = transcriptOptions.language ??
+          (requestedTranslation && captions.internal.some(track => track.languageCode === requestedTranslation)
+            ? requestedTranslation
+            : chooseCaptionTrack(captions.internal, undefined, transcriptOptions.trackId, captions.defaultTrackId)?.track.languageCode);
+        const eligible = captions.internal.filter(track =>
+          transcriptOptions.trackId
+            ? (track.vssId ?? track.languageCode) === transcriptOptions.trackId
+            : !sourceLanguage || track.languageCode === sourceLanguage);
+        if (!eligible.length) {
+          throw new YouTubeClientError('NOT_FOUND', 'No matching caption track is available.');
+        }
+        const usable = eligible.filter(track => captionUrl(track.baseUrl));
+        if (!usable.length) {
+          throw new YouTubeClientError('INVALID_RESPONSE', 'YouTube returned an unusable caption URL.', { retryable: true });
+        }
         const selected = chooseCaptionTrack(
-          captions.internal,
+          usable,
           transcriptOptions.language,
           transcriptOptions.trackId,
           captions.defaultTrackId,
@@ -1782,10 +1817,10 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
             `Translation language ${requestedTranslation} is not available.`,
           );
         }
-        const url = new URL(selected.track.baseUrl);
+        const url = captionUrl(selected.track.baseUrl)!;
         url.searchParams.set('fmt', 'json3');
         if (translatedTo) url.searchParams.set('tlang', translatedTo.languageCode);
-        const selectedTrackInfo = captions.public[selected.index] ??
+        const selectedTrackInfo = captions.public[captions.internal.indexOf(selected.track)] ??
           captionTrackInfo(selected.track, selected.index);
         return { selected, selectedTrackInfo, translatedTo, url, captionCookies };
       };

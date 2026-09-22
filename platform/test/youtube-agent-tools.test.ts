@@ -114,7 +114,7 @@ describe('YouTube agent evidence tools', () => {
     }, context, 'call-transcript-1');
 
     expect(transcript).toHaveBeenCalledTimes(1);
-    expect(transcript).toHaveBeenCalledWith('abcdefghijk', undefined);
+    expect(transcript).toHaveBeenCalledWith('abcdefghijk', undefined, undefined, expect.any(Function));
     expect(analyzeTranscript).toHaveBeenCalledWith(expect.objectContaining({
       videoId: 'abcdefghijk',
       researchQuestion: 'Which design practices help an agent produce a better interface?',

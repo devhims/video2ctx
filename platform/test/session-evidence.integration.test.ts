@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
@@ -93,7 +94,7 @@ test('refresh bypasses provider cache once per run and preserves complete data a
     const updated = await fresh.transcript(id);
     await fresh.transcript(id);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch.mock.calls[1]).toEqual([id, undefined, { refresh: true }]);
+    expect(fetch.mock.calls[1]).toEqual([id, undefined, { refresh: true }, undefined]);
     fetch.mockResolvedValueOnce({ value: transcript('Partial', true), cacheStatus: 'miss' });
     await sessionProvider(p, store, true).transcript(id);
     const cached = await sessionProvider(p, store).transcript(id);
@@ -698,4 +699,20 @@ test('loads full saved comparison transcripts once and preserves citations acros
     await store.delete(version);
     await expect(reopen().readTranscriptEvidence(version)).rejects.toThrow('unavailable');
     expect(reopen().evidenceForCitations([citation])).toEqual([]);
+  }));
+
+
+test('forwards transcript diagnostics through session retrieval even when fetching fails', async () =>
+  within('transcript-diagnostic-failure', async store => {
+    const diagnostic = { ...extractionFixture, kind: 'transcript' as const, outcome: 'failed' as const };
+    const fetchTranscript: YouTubeAgentProvider['transcript'] = async (_id, _language, _options, sink) => {
+      sink?.(diagnostic);
+      throw new Error('YouTube returned an unusable caption URL.');
+    };
+    const p = { transcript: fetchTranscript } as unknown as YouTubeAgentProvider;
+    const ctx = context(store, sessionProvider(p, store));
+    ctx.onExtractionDiagnostic = vi.fn();
+    await expect(executeGetVideoTranscript({ videoId: id }, ctx, 'failed-transcript')).rejects.toThrow('TRANSCRIPT_FETCH_FAILED');
+    expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...diagnostic, toolCallId: 'failed-transcript' });
+    expect(store.brief().assets).toHaveLength(0);
   }));

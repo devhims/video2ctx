@@ -1,3 +1,4 @@
+import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import {
   runYouTubeOperation,
   YouTubeProcessorError,
@@ -24,6 +25,7 @@ export interface YouTubeCacheRequest {
 }
 
 export interface YouTubeCacheResponse {
+  diagnostics?: ExtractionAttempt[];
   ok: boolean;
   value?: unknown;
   fetchedAt?: number;
@@ -36,7 +38,7 @@ export interface YouTubeCacheResponse {
   };
 }
 
-type OperationLoader = (env: Env, operation: YouTubeOperation) => Promise<unknown>;
+type OperationLoader = (env: Env, operation: YouTubeOperation, onDiagnostic?: ExtractionDiagnosticSink) => Promise<unknown>;
 
 const CACHE_READ_TTL_SECONDS = 60;
 const MINIMUM_CACHE_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -105,8 +107,16 @@ export class YouTubeCacheCoordinatorCore {
     const timestamp = Date.now();
     if (existing && existing.freshUntil > timestamp) return successFromEntry(existing, 'hit');
 
+    const diagnostics: ExtractionAttempt[] = [];
+    const onDiagnostic: ExtractionDiagnosticSink = event => {
+      if (request.operation.kind === 'transcript' && diagnostics.length < 4) {
+        emitExtractionDiagnostic(item => { diagnostics.push(item); }, event);
+      }
+    };
+    const withDiagnostics = (response: YouTubeCacheResponse): YouTubeCacheResponse =>
+      diagnostics.length ? { ...response, diagnostics } : response;
     try {
-      const value = await this.loadOperation(this.env, request.operation);
+      const value = await this.loadOperation(this.env, request.operation, onDiagnostic);
       // Defense in depth: a resolved provider response can still be a failed
       // lookup. Preserve the last good value instead of overwriting it.
       if (request.operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {
@@ -126,10 +136,10 @@ export class YouTubeCacheCoordinatorCore {
       } catch (error) {
         logCacheFailure('youtube_cache_write_failed', request.resourceType, error);
       }
-      return successFromEntry(entry, 'miss');
+      return withDiagnostics(successFromEntry(entry, 'miss'));
     } catch (error) {
-      if (existing) return successFromEntry(existing, 'stale');
-      return failureFrom(error);
+      if (existing) return withDiagnostics(successFromEntry(existing, 'stale'));
+      return withDiagnostics(failureFrom(error));
     }
   }
 }
