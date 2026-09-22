@@ -1080,6 +1080,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
+  const metadataLoading = Boolean(inspector.loadingData?.includes('metadata'));
   const [activePanel, setActivePanel] = useState<SourceDataOption>(panelOptions[0] ?? 'channel');
   const [commentPage, setCommentPage] = useState(inspector.comments);
   const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
@@ -1124,11 +1125,19 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
   return <section className='source-inspector' aria-labelledby='source-detail-title'>
     <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
     <header className='source-detail-head'>
-      <div><p className='panel-label'>Video result</p><h2 id='source-detail-title'>{title}</h2><p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p></div>
+      <div>
+        <p className='panel-label'>Video result</p>
+        <h2 id='source-detail-title' className={metadataLoading ? 'sr-only' : undefined}>{title}</h2>
+        {metadataLoading
+          ? <div className='source-head-skeleton' role='status' aria-label='Loading video details'>
+            <span className='sr-only'>Loading video details</span>
+            <i aria-hidden='true' /><i aria-hidden='true' /><small aria-hidden='true' />
+          </div>
+          : <p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p>}
+      </div>
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
-    {inspector.loadingData?.includes('metadata') ? <SourceSkeleton label='Loading video details' lines={2} /> : null}
     {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />

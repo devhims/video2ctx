@@ -1697,12 +1697,43 @@ html:has(.developer-page) body {
 
 .source-skeleton-channel .source-skeleton-media { width: 3rem; height: 3rem; border-radius: 50%; }
 
+/* Reserves the loaded header's box: the h2's own margin, two title line boxes at
+   the h2's clamped font size, then the meta line. Without this the preview below
+   jumps when a one-line placeholder title is replaced by a wrapped real one. */
+.source-head-skeleton { margin-top: var(--space-xs); }
+
+.source-head-skeleton i,
+.source-head-skeleton small { display: grid; align-items: center; }
+
+.source-head-skeleton i {
+  max-width: 34ch;
+  height: 1.15em;
+  font-size: clamp(var(--text-md), 2.4vw, var(--text-xl));
+}
+
+.source-head-skeleton small { margin-top: var(--space-sm); height: 1.2em; font-size: .72rem; }
+
+.source-head-skeleton i::before,
+.source-head-skeleton small::before {
+  content: '';
+  display: block;
+  height: .6em;
+  border-radius: 4px;
+  background: var(--color-dashboard-rule);
+  animation: dashboardSkeletonPulse 1.8s ease-in-out infinite;
+}
+
+.source-head-skeleton i:nth-of-type(2)::before { width: 62%; }
+.source-head-skeleton small::before { width: min(14rem, 60%); height: .7em; }
+
 @media (prefers-reduced-motion: reduce) {
   .source-result-skeletons i,
   .source-result-skeletons b,
   .source-result-skeletons small,
   .source-skeleton-media,
-  .source-skeleton-lines i { animation: none; }
+  .source-skeleton-lines i,
+  .source-head-skeleton i::before,
+  .source-head-skeleton small::before { animation: none; }
 }
 
 .source-inspector {
