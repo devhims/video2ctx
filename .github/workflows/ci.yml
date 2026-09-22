@@ -54,14 +54,13 @@ jobs:
           cache: npm
           cache-dependency-path: |
             platform/package-lock.json
+            packages/all-things-youtube/package-lock.json
             platform/youtube-processor/package-lock.json
             platform/youtube-frames/package-lock.json
             packages/video2ctx-cli/package-lock.json
             web/package-lock.json
       - name: Install platform dependencies
         run: npm ci
-      - name: Install library dependencies for caption recovery integration tests
-        run: npm ci --prefix ../packages/all-things-youtube
       - name: Install hosted CLI dependencies
         run: npm ci
         working-directory: packages/video2ctx-cli
