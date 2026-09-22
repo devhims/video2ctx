@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const signedIn = { name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' };
 
-test('signed-out dashboard visits redirect to login and preserve the destination', async ({ page, context }) => {
+test('signed-out dashboard visits redirect to login and preserve the destination', { tag: '@smoke' }, async ({ page, context }) => {
   for (const path of ['/dashboard', '/dashboard?section=settings', '/dashboard/developer', '/dashboard/sessions', '/dashboard/sessions/7e1a0b53-8366-4299-bc10-689a2d519942']) {
     await page.goto(path);
     await expect(page).toHaveURL(path === '/dashboard' ? '/login' : `/login?returnTo=${encodeURIComponent(path)}`);

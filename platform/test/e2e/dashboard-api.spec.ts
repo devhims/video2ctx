@@ -34,7 +34,7 @@ test('slow transcript finishes after the old browser deadline', async ({ page })
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
 });
 
-test('source errors mirror the API and retry only the failed dataset', async ({ page }) => {
+test('source errors mirror the API and retry only the failed dataset', { tag: '@smoke' }, async ({ page }) => {
   let attempts = 0; let videoReads = 0;
   page.on('request', request => { if (request.url().endsWith(`/videos/${videoId}`)) videoReads++; });
   await page.route(`**/videos/${videoId}/transcript`, route => ++attempts === 1

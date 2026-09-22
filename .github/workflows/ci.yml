@@ -8,6 +8,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dashboard-changes:
+    name: Detect dashboard changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      changed: ${{ steps.filter.outputs.changed }}
+    steps:
+      - uses: actions/github-script@v7
+        id: filter
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            const isDashboardPath = filename =>
+              filename.startsWith('web/') ||
+              filename.startsWith('platform/') ||
+              filename.startsWith('.github/workflows/') ||
+              filename === 'package.json' ||
+              filename === 'package-lock.json';
+            const changed = files.some(({ filename, previous_filename }) =>
+              isDashboardPath(filename) ||
+              (previous_filename && isDashboardPath(previous_filename))
+            );
+            core.setOutput('changed', String(changed));
+
   library-and-skill:
     name: Library and skill bundle
     runs-on: ubuntu-latest
@@ -88,11 +118,37 @@ jobs:
       - name: Install web dependencies for auth E2E
         run: npm ci --prefix ../web
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Run CLI and browser auth E2E
         run: npm --prefix .. run test:auth:e2e
-      - name: Run agent dashboard E2E
-        run: npm run test:agent:dashboard
+
+  dashboard-smoke:
+    name: Dashboard smoke E2E
+    needs: dashboard-changes
+    if: needs.dashboard-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            web/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix ../web
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run test:agent:dashboard:smoke
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dashboard-smoke-results
+          path: .scratch/agent-sessions-dashboard/playwright-results
+          retention-days: 7
 
   web:
     name: Web
