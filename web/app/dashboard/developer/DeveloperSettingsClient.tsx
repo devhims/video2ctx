@@ -1,15 +1,12 @@
 'use client';
 
-import { platformRequest } from '../../../lib/platform-request';
-
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { redirect, useRouter } from 'next/navigation';
 import { KeyIcon, PlusIcon } from '@phosphor-icons/react';
 import { authClient } from '../../../lib/auth-client';
-import { loadDashboardAccountData, type DashboardProject } from '../../../lib/dashboard-data';
+import { useAccountResource } from '../DashboardDataProvider';
 import { DashboardHeader } from '../DashboardHeader';
-import { DashboardSkeleton } from '../DashboardSkeleton';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './DeveloperSettings.module.css';
 import { DashboardSidebar, type DashboardSection } from '../DashboardSidebar';
@@ -35,8 +32,9 @@ export default function DeveloperSettingsClient() {
   } : null);
   const [keys, setKeys] = useState<ManagedApiKey[]>([]);
   const [keysState, setKeysState] = useState<'loading' | 'ready' | 'error'>(localPreview ? 'ready' : 'loading');
-  const [projects, setProjects] = useState<DashboardProject[]>([]);
-  const [credits, setCredits] = useState<number>();
+  const { data: projects } = useAccountResource('projects', []);
+  const { data: usage } = useAccountResource('usage', null);
+  const credits = usage?.creditBalance;
   const [name, setName] = useState('');
   const [createdSecret, setCreatedSecret] = useState('');
   const [loading, setLoading] = useState(false);
@@ -56,19 +54,9 @@ export default function DeveloperSettingsClient() {
     }
   }, []);
 
-  const refreshSidebar = useCallback(async () => {
-    const data = await loadDashboardAccountData(platformRequest);
-    setProjects(data.projects);
-    setCredits(data.usage?.creditBalance);
-  }, []);
-
   useEffect(() => {
-    if (user) {
-      void Promise.all([refresh(), refreshSidebar()]).catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
-      return;
-    }
-    if (demoEnabled) void refreshSidebar().catch(() => undefined);
-  }, [demoEnabled, refresh, refreshSidebar, user]);
+    if (user) void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
+  }, [refresh, user?.id]);
 
   const navigateToDashboard = (section: DashboardSection) => {
     router.push(`/dashboard?section=${section}`);
@@ -161,7 +149,11 @@ export default function DeveloperSettingsClient() {
             <span>Only key prefixes are shown</span>
           </header>
           <div className={styles.keyList} aria-busy={keysState === 'loading'}>
-            {keysState === 'loading' && <DashboardSkeleton label='Loading API keys' variant='panel' lines={6} />}
+            {keysState === 'loading' && <div role='status' aria-label='Loading API keys'>{Array.from({ length: 3 }, (_, index) => <div className={styles.keyRow} key={index} aria-hidden='true'>
+              <span className={styles.keyIcon} />
+              <div className={styles.keyIdentity}><strong><i className='ui-bar' data-width='medium' /></strong><code><i className='ui-bar' data-width='short' /></code><dl><div><dt>Created</dt><dd className='skeleton-action'><i className='ui-bar' /></dd></div><div><dt>Last used</dt><dd className='skeleton-action'><i className='ui-bar' /></dd></div></dl></div>
+              <span className={styles.revoke}><i className='ui-bar skeleton-key-action' /></span>
+            </div>)}</div>}
             {keysState === 'error' && <button onClick={() => {
               setError('');
               void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));

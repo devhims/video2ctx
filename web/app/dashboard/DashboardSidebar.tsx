@@ -1,5 +1,7 @@
 'use client';
 
+import { useAccountResource } from './DashboardDataProvider';
+
 import Link from 'next/link';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -45,6 +47,7 @@ const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
   const { agentAccess, adminAccess, isSigningOut } = useDashboardSession();
+  const projectsResource = useAccountResource('projects', []);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -86,7 +89,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Workspace</p>
-          {navButton('projects', 'Projects', 'folder', <span className={styles.count}>{projects.length}</span>)}
+          {navButton('projects', 'Projects', 'folder', projectsResource.ready ? <span className={styles.count}>{projects.length}</span> : undefined)}
           {navButton('monitors', 'Monitors', 'monitor')}
         </div>
         <div className={styles.group}>
@@ -99,7 +102,8 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       <section className={styles.projects} aria-label='Recent projects'>
         <div className={styles.projectHeading}><span>Recent projects</span><button type='button' aria-label='Create a new project' onClick={() => run(onNewProject)}><Icon name='plus' size={15} /></button></div>
         {projects.slice(0, 5).map(project => <button type='button' className={styles.project} key={project.id} title={project.name} onClick={() => run(() => onOpenProject(project))}><span className={styles.projectDot} /><span>{project.name}</span></button>)}
-        {!projects.length && <p>Save a source to start a project.</p>}
+        {!projectsResource.ready && !projectsResource.error && <div role='status' aria-label='Loading recent projects'>{[0, 1, 2].map(index => <div className={styles.project} key={index} aria-hidden='true'><span className={styles.projectDot} /><span className='skeleton-action'><i className='ui-bar' /></span></div>)}</div>}
+        {projectsResource.ready && !projects.length && <p>Save a source to start a project.</p>}
       </section>
       <button type='button' className={styles.item + ' ' + styles.quickCreate} aria-label='Create a new project' title='New project' data-tooltip='New project' onClick={() => run(onNewProject)}><span className={styles.iconTile}><Icon name='plus' /></span></button>
     </div>
@@ -107,7 +111,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       <a className={styles.item} href='https://docs.video2ctx.dev/' target='_blank' rel='noreferrer' aria-label='Documentation (opens in a new tab)' data-tooltip='Documentation'><span className={styles.footerIcon}><BookOpenIcon size={18} aria-hidden='true' /></span><span className={styles.label}>Documentation</span></a>
       {accountName ? <>
         <button type='button' className={styles.item + ' ' + styles.balance} aria-label={credits === undefined ? 'Credit balance loading' : credits.toLocaleString() + ' credits remaining'} data-tooltip={credits === undefined ? 'Credit balance loading' : credits.toLocaleString() + ' credits'} onClick={() => run(() => onNavigate('settings'))}>
-          <span className={styles.footerIcon}><CoinsIcon size={18} aria-hidden='true' /></span><span className={styles.label}>Credits</span><span className={styles.creditAmount}>{credits === undefined ? '…' : credits.toLocaleString()}</span>
+          <span className={styles.footerIcon}><CoinsIcon size={18} aria-hidden='true' /></span><span className={styles.label}>Credits</span><span className={styles.creditAmount}>{credits === undefined ? <i className='ui-bar skeleton-credit' aria-hidden='true' /> : credits.toLocaleString()}</span>
         </button>
         <details className={styles.account} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.stopPropagation(); event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}>
           <summary className={styles.item} aria-label={'Account: ' + accountName} data-tooltip={accountName}><span className={styles.avatar}>{accountName.trim().slice(0, 2).toUpperCase()}</span><span className={styles.label}>{accountName}</span><CaretDownIcon className={styles.accountCaret} size={14} aria-hidden='true' /></summary>

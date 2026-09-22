@@ -3819,3 +3819,14 @@ html:has(.developer-page) body {
 .workspace-shell .topbar { position: static; top: auto; z-index: auto; }
 
 .dashboard-signout-error{position:fixed;bottom:1.5rem;right:1.5rem;z-index:100;max-width:calc(100vw - 3rem);padding:1rem 1.25rem;border:1px solid var(--color-dashboard-rule);border-radius:6px;background:var(--color-dashboard-surface);color:var(--color-dashboard-ink);font-size:.85rem}
+
+/* Skeleton controls share the dimensions of the real buttons and switches. */
+.skeleton-control { display: block; width: 112px; height: 40px; border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-rule); animation: dashboardSkeletonPulse 1.8s ease-in-out infinite; }
+.skeleton-control-wide { width: 132px; height: 44px; }
+@media (max-width: 700px) { .skeleton-control-wide { width: 100%; } }
+.skeleton-toggle { display: block; width: 2.5rem; height: 1.4rem; border-radius: 999px; background: var(--color-dashboard-rule); animation: dashboardSkeletonPulse 1.8s ease-in-out infinite; }
+.skeleton-action { width: 100px; }
+@media (prefers-reduced-motion: reduce) { .skeleton-control, .skeleton-toggle { animation: none; } }
+
+.skeleton-square { width: 36px; height: 36px; }
+.skeleton-chevron { width: 12px; }

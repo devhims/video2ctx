@@ -13,7 +13,7 @@ import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
 import { DashboardSkeleton } from '../DashboardSkeleton';
 import { FramePreviews } from './FramePreviews';
-import type { DashboardProject } from '../../../lib/dashboard-data';
+import { useAccountResource } from '../DashboardDataProvider';
 import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -27,27 +27,11 @@ import {
 export function AgentShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, agentAccess, signOut } = useDashboardSession();
-  const [projects, setProjects] = useState<DashboardProject[]>([]);
-  const [credits, setCredits] = useState<number>();
-  const [accountError, setAccountError] = useState('');
-  useEffect(() => {
-    if (!user || !agentAccess) return;
-    const controller = new AbortController();
-    const load = async () => {
-      const options = { cache: 'no-store' as const, signal: controller.signal };
-      const [projectData, usage] = await Promise.allSettled([
-        platformRequest<{ projects: DashboardProject[] }>('/v1/projects', options),
-        platformRequest<{ creditBalance: number }>('/v1/usage', options),
-      ]);
-      if (controller.signal.aborted) return;
-      if (projectData.status === 'fulfilled') setProjects(projectData.value.projects);
-      if (usage.status === 'fulfilled') setCredits(usage.value.creditBalance);
-      const failure = [projectData, usage].find(result => result.status === 'rejected');
-      setAccountError(failure?.status === 'rejected' ? errorMessage(failure.reason) : '');
-    };
-    void load();
-    return () => controller.abort();
-  }, [user?.id, agentAccess]);
+  const projectsResource = useAccountResource('projects', []);
+  const usageResource = useAccountResource('usage', null);
+  const projects = projectsResource.data;
+  const credits = usageResource.data?.creditBalance;
+  const accountError = projectsResource.error || usageResource.error;
   return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
       onNavigate={section => router.push(`/dashboard?section=${section}`)}

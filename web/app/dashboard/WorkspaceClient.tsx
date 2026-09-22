@@ -9,20 +9,18 @@ import { loginPath } from '../../lib/login-redirect';
 import {
   canDeleteAccount,
   confirmDashboardEmailConsent,
-  CREDIT_BALANCE_EVENT,
   DEFAULT_NOTIFICATION_PREFERENCES,
   DELETE_ACCOUNT_CONFIRMATION,
   emailConsentToConfirm,
-  loadDashboardAccountData,
   pathWithoutEmailConsent,
   type DashboardBilling,
-  type DashboardUsage,
   type DashboardNotification,
   type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
 import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
+import { useAccountResource } from './DashboardDataProvider';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
@@ -131,7 +129,6 @@ type AiTrendPlan = {
   titleIdeas: string[]; hashtags: string[]; differentiation: string[];
   evidence: Array<{ claim: string; videoIds: string[] }>; caveats: string[];
 };
-type Usage = DashboardUsage;
 
 const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
@@ -175,12 +172,14 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [selectedData, setSelectedData] = useState<SourceDataOption[]>(['transcript']);
   const [items, setItems] = useState<SearchItem[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [monitors, setMonitors] = useState<Monitor[]>([]);
-  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
-  const [notificationPreferences, setNotificationPreferences] = useState<DashboardNotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
-  const [accountDataReady, setAccountDataReady] = useState(false);
-  const [accountError, setAccountError] = useState('');
+  const projectsResource = useAccountResource('projects', []);
+  const { data: projects } = projectsResource;
+  const monitorsResource = useAccountResource('monitors', []);
+  const { data: monitors, setData: setMonitors } = monitorsResource;
+  const notificationsResource = useAccountResource('notifications', []);
+  const { data: notifications, setData: setNotifications } = notificationsResource;
+  const preferencesResource = useAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES);
+  const { data: notificationPreferences, setData: setNotificationPreferences } = preferencesResource;
   const [inspector, setInspector] = useState<Inspector | null>(null);
   const [transcriptQuery, setTranscriptQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -192,8 +191,12 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
-  const [usage, setUsage] = useState<Usage | null>(null);
-  const [billing, setBilling] = useState<DashboardBilling | null>(null);
+  const usageResource = useAccountResource('usage', null);
+  const { data: usage } = usageResource;
+  const billingResource = useAccountResource('billing', null);
+  const { data: billing, setData: setBilling } = billingResource;
+  const accountResources = [projectsResource, monitorsResource, usageResource, billingResource, notificationsResource, preferencesResource];
+  const accountError = accountResources.find(resource => resource.error)?.error;
   const [monitorSavingId, setMonitorSavingId] = useState<string>();
   const operationController = useRef<AbortController | null>(null);
   const projectController = useRef<AbortController | null>(null);
@@ -238,36 +241,9 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [cancelOperation, section]);
 
-  const refreshPrivateData = useCallback(async () => {
-    if (!authenticated) return;
-    const data = await loadDashboardAccountData((path) => api(path)).catch(cause => {
-      setAccountError(cause instanceof Error ? cause.message : 'Could not load account data.');
-      throw cause;
-    });
-    setAccountError('');
-    setProjects(data.projects);
-    setMonitors(data.monitors);
-    setUsage(data.usage);
-    setBilling(data.billing);
-    setNotifications(data.notifications);
-    setNotificationPreferences(data.notificationPreferences);
-    setAccountDataReady(true);
-  }, [authenticated]);
-
-  useEffect(() => {
-    if (!authenticated) { setAccountDataReady(false); return; }
-    void refreshPrivateData().catch(() => {});
-  }, [authenticated, refreshPrivateData]);
-
-  useEffect(() => {
-    const updateCreditBalance = (event: Event) => {
-      const balance = (event as CustomEvent<number>).detail;
-      setUsage((current) => current ? { ...current, creditBalance: balance } : current);
-      setBilling((current) => current ? { ...current, creditBalance: balance } : current);
-    };
-    window.addEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
-    return () => window.removeEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
-  }, []);
+  const refreshPrivateData = async () => {
+    await Promise.all(accountResources.map(resource => resource.refresh()));
+  };
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -462,7 +438,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   const createProject = async (name: string) => {
     const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
-    await refreshPrivateData().catch(() => {}); setShowNewProject(false); setNotice(`Created ${project.name}`);
+    await projectsResource.refresh(); setShowNewProject(false); setNotice(`Created ${project.name}`);
     return project;
   };
 
@@ -481,7 +457,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       await api('/v1/imports', {
         method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),
       });
-      await refreshPrivateData().catch(() => {});
+      await projectsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
   };
 
@@ -498,7 +474,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       const existing = monitors.find((monitor) => monitor.provider === inspector.provider && monitor.target === target);
       if (existing) await api(`/v1/monitors/${existing.id}`, { method: 'PATCH', body: JSON.stringify({ query }) });
       else await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: 'channel', target, query }) });
-      setNotice(existing ? `Already monitoring ${label}` : `Monitoring ${label} for new uploads`); await refreshPrivateData();
+      setNotice(existing ? `Already monitoring ${label}` : `Monitoring ${label} for new uploads`); await monitorsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
   };
 
@@ -632,20 +608,32 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             )}
           </>
         </div>
-        <div className='workspace-view' hidden={section !== 'projects'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='projects' />}{accountDataReady && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
-        <div className='workspace-view' hidden={section !== 'monitors'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='monitors' />}{accountDataReady && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
-        <div className='workspace-view' hidden={section !== 'settings'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='settings' />}{accountDataReady && <SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} />}</div>
+        <div className='workspace-view' hidden={section !== 'projects'}>{!projectsResource.ready && !projectsResource.error && <AccountSectionSkeleton section='projects' />}{projectsResource.ready && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
+        <div className='workspace-view' hidden={section !== 'monitors'}>{!monitorsResource.ready && !monitorsResource.error && <AccountSectionSkeleton section='monitors' />}{monitorsResource.ready && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
+        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} billingReady={billingResource.ready} preferencesReady={preferencesResource.ready} billingError={billingResource.error} preferencesError={preferencesResource.error} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
   );
 }
 
-function AccountSectionSkeleton({ section }: { section: 'projects' | 'monitors' | 'settings' }) {
-  const title = { projects: 'Your projects', monitors: 'Watch for new videos', settings: 'Settings' }[section];
-  return <section className='content-section standalone' aria-busy='true'>
-    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>{title}</h2><p aria-hidden='true'><i className='ui-bar' /></p></div></header>
-    <SourceSkeleton label={`Loading ${section}`} variant='panel' lines={6} />
+function AccountSectionSkeleton({ section, detail = false }: { section: 'projects' | 'monitors'; detail?: boolean }) {
+  const projects = section === 'projects';
+  return <section className='content-section standalone' role='status' aria-label={`Loading ${detail ? 'project' : section}`} aria-busy='true'>
+    <span className='sr-only'>Loading {detail ? 'project' : section}</span>
+    <div aria-hidden='true'>
+      {detail && <span className='back'><i className='ui-bar' data-width='short' /></span>}
+      <header className={pageStyles.pageHeading}>
+        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Get updates from channels and searches you follow.'}</p></div>
+        <span className='skeleton-control' />
+      </header>
+      <div className={pageStyles.listHeading}><h3>{detail ? 'Saved sources' : projects ? 'Projects' : 'Monitors'}</h3></div>
+      <div className={pageStyles.recordList}>{Array.from({ length: 3 }, (_, index) => <div key={index} className={`${projects ? pageStyles.projectRow : pageStyles.monitorRow} ${pageStyles.skeletonRow}`}>
+        <span className={pageStyles.rowIcon} />
+        <div className={pageStyles.recordCopy}><strong><i className='ui-bar' data-width='medium' /></strong><small><i className='ui-bar' data-width='long' /></small>{!projects && <><p><i className='ui-bar' data-width='medium' /></p><div className={pageStyles.rowActions}><i className='ui-bar skeleton-action' /></div></>}</div>
+        {projects ? <span className={pageStyles.recordMeta}>{!detail && <i className='ui-bar skeleton-action' />}<i className='ui-bar skeleton-chevron' /></span> : <div className={pageStyles.monitorSchedule}><label><span>Check every</span><span className='skeleton-control' /></label><span className='skeleton-control skeleton-square' /></div>}
+      </div>)}</div>
+    </div>
   </section>;
 }
 
@@ -677,10 +665,13 @@ function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSetting
   </div>;
 }
 
-function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, onBillingChange, preferences, onPreferencesChange }: {
+function SettingsView({ email, emailConsent, billingReady, preferencesReady, billingError, preferencesError, isDemo, billing, onBillingChange, preferences, onPreferencesChange }: {
   email?: string;
   emailConsent?: string;
-  accountDataReady: boolean;
+  billingReady: boolean;
+  preferencesReady: boolean;
+  billingError: string;
+  preferencesError: string;
   isDemo: boolean;
   billing: DashboardBilling | null;
   onBillingChange: (billing: DashboardBilling) => void;
@@ -803,7 +794,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
     const confirmationToken = emailConsentToConfirm(
       emailConsent,
       email,
-      accountDataReady,
+      preferencesReady,
       attemptedEmailConsent.current,
     );
     if (!confirmationToken) return;
@@ -815,7 +806,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
       return;
     }
     void confirmEmailDelivery(confirmationToken);
-  }, [accountDataReady, confirmEmailDelivery, email, emailConsent, preferences.emailAlerts]);
+  }, [preferencesReady, confirmEmailDelivery, email, emailConsent, preferences.emailAlerts]);
 
   const deleteAccount = async () => {
     if (!email || !confirmed || deleting) return;
@@ -832,6 +823,8 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
 
   return <section className='content-section standalone settings-page'><header className={pageStyles.intro}><h2>Workspace settings</h2><p>Manage your plan, notifications, and account.</p></header>
     <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
+      {!billingReady && billingError ? <p>Billing could not be loaded. Use Retry account data to try again.</p> : !billingReady ? <><div role='status' aria-label='Loading billing'><span className='panel-label'>Billing</span><h3 className='settings-card-title mt-2 mb-0'><i className='ui-bar' data-width='medium' /></h3><p className='settings-card-copy mt-2 mb-0'><i className='ui-bar' /><i className='ui-bar' data-width='long' /></p></div><span className='skeleton-control skeleton-control-wide' aria-hidden='true' /></> : <>
+
       <div>
         <span className='panel-label'>Billing</span>
         <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
@@ -849,6 +842,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
           : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
         {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
       </div>
+      </>}
     </article>
     <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
       <div className='settings-notification-intro'>
@@ -856,6 +850,8 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
         <p className='settings-card-copy'>Updates from your monitors.</p>
       </div>
       <div className='settings-toggle-list'>
+        {!preferencesReady && preferencesError ? <p>Notification preferences could not be loaded. Use Retry account data to try again.</p> : !preferencesReady ? <div role='status' aria-label='Loading notification preferences'>{['In-app alerts', 'Email alerts'].map(label => <div className='settings-toggle-row' key={label} aria-hidden='true'><span><strong>{label}</strong><small><i className='ui-bar' /><i className='ui-bar' data-width='medium' /></small></span><span className='skeleton-toggle' /></div>)}</div> : <>
+
         {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
           <span><strong>{confirmationState === 'confirming' ? 'Confirming email alerts…' : confirmationState === 'success' ? 'Email alerts enabled' : 'Email confirmation failed'}</strong><small>{confirmationState === 'confirming' ? <>Checking the approval for <b>{email}</b>.</> : confirmationMessage}</small></span>
         </div>}
@@ -878,6 +874,7 @@ function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, 
         {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
         {isDemo && <p className='settings-demo-note'>Email delivery is unavailable in local preview.</p>}
         {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
+        </>}
       </div>
     </article>
     <article className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1'>
@@ -1316,6 +1313,7 @@ function CatalogEntity({ inspector }: { inspector: Inspector }) {
 }
 
 function ProjectsView({ projects, selectedProject, loading, error, onCreate, onOpen, onBack, onFindSources, onOpenItem }: { projects: Project[]; selectedProject: ProjectDetail | null; loading: boolean; error: string; onCreate:()=>void; onOpen:(project:Project)=>void; onBack:()=>void; onFindSources:()=>void; onOpenItem:(item:ProjectItem)=>void }) {
+  if (loading) return <AccountSectionSkeleton section='projects' detail />;
   if (selectedProject) return <section className='content-section standalone project-detail'>
     <button className='back' onClick={onBack}>← All projects</button>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>{selectedProject.name}</h2>{selectedProject.description && <p>{selectedProject.description}</p>}</div><button className={pageStyles.primaryAction} onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></header>
@@ -1327,7 +1325,6 @@ function ProjectsView({ projects, selectedProject, loading, error, onCreate, onO
   </section>;
   return <section className='content-section standalone'>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Your projects</h2><p>Keep related sources and saved moments together.</p></div><button className={pageStyles.primaryAction} onClick={onCreate}><Icon name='plus' size={15} />New project</button></header>
-    {loading && <SourceSkeleton label='Opening project' />}
     {error && <div className='alert error' role='alert'>{error}</div>}
     <div className={pageStyles.listHeading}><h3>Projects <span>{projects.length}</span></h3></div>
     <div className={pageStyles.recordList}>{projects.map(project => <button className={pageStyles.projectRow} key={project.id} onClick={() => onOpen(project)}>

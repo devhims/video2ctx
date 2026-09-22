@@ -91,3 +91,5 @@
   .keyIdentity dl { flex-direction: column; }
   .secret > div { align-items: stretch; flex-direction: column; }
 }
+
+.keyRow :global(.skeleton-key-action) { width: 40px; }
