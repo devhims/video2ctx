@@ -13,7 +13,7 @@ class CreditDatabase {
       bind: (...values: unknown[]) => ({
         first: async () => {
           if (sql.includes('SELECT plan FROM billing_accounts')) return this.plan === 'builder' ? { plan: 'builder' } : null;
-          if (sql.includes('SUM(credits)')) return { balance: this.balance };
+          if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
           return null;
         },
         run: async () => {

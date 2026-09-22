@@ -64,7 +64,7 @@ export async function enforceCount(
 
 export async function creditBalance(env: CreditEnv, userId: string): Promise<number> {
   await ensureCreditGrant(env, userId);
-  const row = await env.DB.prepare('SELECT COALESCE(SUM(credits), 0) AS balance FROM credit_ledger WHERE user_id = ?')
+  const row = await env.DB.prepare('SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?')
     .bind(userId)
     .first<{ balance: number }>();
   return Number(row?.balance ?? 0);
@@ -83,8 +83,8 @@ async function ensureOnboardingGrant(env: CreditEnv, userId: string, limits: Ent
        CASE WHEN current_balance < ? THEN ? - current_balance ELSE 0 END,
        ?, ?
      FROM (
-       SELECT COALESCE(SUM(credits), 0) AS current_balance
-       FROM credit_ledger
+       SELECT available_credits AS current_balance
+       FROM credit_accounts
        WHERE user_id = ?
      )`
   ).bind(
@@ -101,19 +101,21 @@ export async function reserveCredits(
   metadata: Record<string, unknown>
 ): Promise<void> {
   await ensureCreditGrant(env, userId);
-  const existing = await env.DB.prepare(
-    `SELECT 1 FROM credit_ledger WHERE user_id=? AND operation_id=? AND entry_type='reserve'`
-  ).bind(userId, operationId).first();
-  if (existing) return;
+  // The conditional insert and balance trigger execute as one atomic statement.
+  // Check duplicates after a no-op so simultaneous retries also succeed once.
   const result = await env.DB.prepare(
-    `INSERT INTO credit_ledger
+    `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
      SELECT ?, ?, ?, 'reserve', ?, ?, ?
-     WHERE (SELECT COALESCE(SUM(credits),0) FROM credit_ledger WHERE user_id=?) >= ?`
+     WHERE (SELECT available_credits FROM credit_accounts WHERE user_id=?) >= ?`
   ).bind(
     crypto.randomUUID(), userId, operationId, -amount, JSON.stringify(metadata), now(), userId, amount
   ).run();
   if (!result.meta.changes) {
+    const existing = await env.DB.prepare(
+      `SELECT 1 FROM credit_ledger WHERE user_id=? AND operation_id=? AND entry_type='reserve'`
+    ).bind(userId, operationId).first();
+    if (existing) return;
     throw new ApiError(402, 'INSUFFICIENT_CREDITS', 'Not enough credits for this operation.');
   }
 }

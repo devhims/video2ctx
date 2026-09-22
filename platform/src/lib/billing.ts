@@ -127,8 +127,8 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
        (id,user_id,operation_id,entry_type,credits,metadata_json,created_at)
        SELECT ?,?,?,'grant',CASE WHEN current_balance < ? THEN ? - current_balance ELSE 0 END,?,?
        FROM (
-         SELECT COALESCE(SUM(credits),0) AS current_balance
-         FROM credit_ledger WHERE user_id=?
+         SELECT available_credits AS current_balance
+         FROM credit_accounts WHERE user_id=?
        )
        WHERE EXISTS (
          SELECT 1 FROM billing_accounts
@@ -244,8 +244,8 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
        (id,user_id,operation_id,entry_type,credits,metadata_json,created_at)
        SELECT ?,?,?,'adjustment',? - current_balance,?,?
        FROM (
-         SELECT COALESCE(SUM(credits),0) AS current_balance
-         FROM credit_ledger WHERE user_id=?
+         SELECT available_credits AS current_balance
+         FROM credit_accounts WHERE user_id=?
        )
        WHERE EXISTS (
          SELECT 1 FROM billing_accounts
