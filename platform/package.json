@@ -22,7 +22,7 @@
     "types": "wrangler types",
     "docs:generate": "tsx scripts/generate-docs.ts",
     "docs:check": "tsx scripts/generate-docs.ts --check",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --minify --upload-source-maps",
     "deploy:production": "npm run db:migrate:production && npm run deploy",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
