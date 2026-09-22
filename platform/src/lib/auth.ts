@@ -5,11 +5,11 @@ import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
 import { admin, bearer, deviceAuthorization, magicLink, oAuthProxy } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
 import { escapeHtml } from './http';
+import { polarClient } from './polar-client';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
 import {
   applyPaidOrder,
   applyRefundedOrder,
-  polarClient,
   syncCustomerState,
   syncRevokedSubscription,
 } from './billing';

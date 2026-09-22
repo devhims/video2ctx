@@ -1,4 +1,3 @@
-import { Polar } from '@polar-sh/sdk';
 import type { WebhookCustomerStateChangedPayload } from '@polar-sh/sdk/models/components/webhookcustomerstatechangedpayload';
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload';
 import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
@@ -45,13 +44,6 @@ export interface PaymentWebhookEnv {
   POLAR_BUILDER_PRODUCT_ID: string;
   BUILDER_MONTHLY_CREDITS: string;
   STARTER_ONBOARDING_CREDITS: string;
-}
-
-export function polarClient(env: Env): Polar {
-  return new Polar({
-    accessToken: env.POLAR_ACCESS_TOKEN,
-    server: String(env.POLAR_ENVIRONMENT) === 'sandbox' ? 'sandbox' : 'production',
-  });
 }
 
 export async function getBillingSummary(env: Env, userId: string): Promise<BillingSummary> {
@@ -262,6 +254,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
 
 export async function closeBillingAccount(env: Env, userId: string): Promise<void> {
   try {
+    const { polarClient } = await import('./polar-client');
     await polarClient(env).customers.deleteExternal({ externalId: userId, anonymize: true });
   } catch (cause) {
     if (isHttpStatus(cause, 404)) return;

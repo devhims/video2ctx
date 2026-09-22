@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import type { App } from '../types';
-import { createAuth } from './auth';
+import { createRequestAuth } from './request-auth';
 import { ApiError } from './http';
 
 /** Administrative operations always use a live browser session, never cached roles. */
@@ -13,7 +13,7 @@ export function requireAdminBrowserRequest(c: Context<App>): void {
 
 export async function requireAdminSession(c: Context<App>): Promise<string> {
   requireAdminBrowserRequest(c);
-  const auth = c.get('auth') ?? createAuth(c.env, c.executionCtx);
+  const auth = c.get('auth') ?? await createRequestAuth(c.env, c.executionCtx);
   let session;
   try {
     session = await auth.api.getSession({ headers: c.req.raw.headers, query: { disableCookieCache: true, disableRefresh: true } });

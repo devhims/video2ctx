@@ -1,5 +1,4 @@
 import type { EmailMessage } from '../types';
-import { renderMonitorAlertEmail } from './email-templates';
 import { unsubscribeToken } from './digests';
 
 interface MonitorAlertInput {
@@ -22,6 +21,7 @@ export async function queueMonitorAlertEmail(env: Env, input: MonitorAlertInput)
   const unsubscribeUrl = `${env.APP_ORIGIN}/api/platform/v1/email/unsubscribe?user=${encodeURIComponent(input.userId)}&token=${encodeURIComponent(token)}`;
   const settingsUrl = `${env.APP_ORIGIN}/dashboard?section=settings`;
   const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(input.videoId)}`;
+  const { renderMonitorAlertEmail } = await import('./email-templates');
   const content = await renderMonitorAlertEmail({
     recipientName: account.name,
     monitorLabel: input.monitorLabel,

@@ -1,5 +1,4 @@
 import type { EmailMessage } from '../types';
-import { renderScaleInquiryEmail } from './email-templates';
 import { ApiError, now, sha256, text } from './http';
 
 export const COMPANY_SIZES = [
@@ -96,6 +95,7 @@ export async function submitScaleInquiry(
   // Local submissions exercise the complete validation and persistence path
   // without sending a real email through the remote Email Service binding.
   if (env.ENVIRONMENT === 'production') {
+    const { renderScaleInquiryEmail } = await import('./email-templates');
     const rendered = await renderScaleInquiryEmail(inquiry);
     const message: EmailMessage = {
       type: 'scale-inquiry',
