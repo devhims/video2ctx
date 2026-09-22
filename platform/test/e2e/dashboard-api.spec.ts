@@ -130,3 +130,38 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   await page.getByRole('button', { name: 'Retry failed requests' }).click();
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
 });
+
+for (const hasKeys of [true, false]) {
+  test(`API keys wait for a confirmed ${hasKeys ? 'populated' : 'empty'} response`, async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/auth/api-key/list', async route => {
+      await gate;
+      await route.fulfill({ json: { apiKeys: hasKeys ? [{ id: 'key-1', name: 'Production integration', start: 'aty_test', prefix: 'aty_', createdAt: '2026-09-22T00:00:00Z', lastRequest: null }] : [], total: hasKeys ? 1 : 0 } });
+    });
+    await page.goto('/dashboard/developer');
+    const skeleton = page.getByRole('status', { name: 'Loading API keys' });
+    try {
+      await expect(skeleton).toBeVisible();
+      await expect(page.getByText('No API keys yet', { exact: true })).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: 'Active keys 0', exact: true })).toHaveCount(0);
+    } finally { release(); }
+    await expect(skeleton).toHaveCount(0);
+    if (hasKeys) {
+      await expect(page.getByText('Production integration', { exact: true })).toBeVisible();
+      await expect(page.getByText('No API keys yet', { exact: true })).toHaveCount(0);
+    } else await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
+  });
+}
+
+test('API key failures show retry instead of an empty account', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/auth/api-key/list', route => ++attempts === 1
+    ? route.fulfill({ status: 503, json: { message: 'Keys unavailable' } })
+    : route.fulfill({ json: { apiKeys: [], total: 0 } }));
+  await page.goto('/dashboard/developer');
+  await expect(page.getByRole('alert').filter({ hasText: 'Keys unavailable' })).toBeVisible();
+  await expect(page.getByText('No API keys yet', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry API keys' }).click();
+  await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
+});

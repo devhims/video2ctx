@@ -9,6 +9,7 @@ import { KeyIcon, PlusIcon } from '@phosphor-icons/react';
 import { authClient } from '../../../lib/auth-client';
 import { loadDashboardAccountData, type DashboardProject } from '../../../lib/dashboard-data';
 import { DashboardHeader } from '../DashboardHeader';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './DeveloperSettings.module.css';
 import { DashboardSidebar, type DashboardSection } from '../DashboardSidebar';
@@ -33,6 +34,7 @@ export default function DeveloperSettingsClient() {
     email: 'local@video2ctx.dev',
   } : null);
   const [keys, setKeys] = useState<ManagedApiKey[]>([]);
+  const [keysState, setKeysState] = useState<'loading' | 'ready' | 'error'>(localPreview ? 'ready' : 'loading');
   const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [credits, setCredits] = useState<number>();
   const [name, setName] = useState('');
@@ -41,9 +43,17 @@ export default function DeveloperSettingsClient() {
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
-    const result = await authClient.apiKey.list();
-    if (result.error) throw new Error(result.error.message ?? 'Could not load API keys.');
-    setKeys(result.data?.apiKeys ?? []);
+    setKeysState('loading');
+    try {
+      const result = await authClient.apiKey.list();
+      if (result.error) throw new Error(result.error.message ?? 'Could not load API keys.');
+      if (!result.data?.apiKeys) throw new Error('Could not load API keys.');
+      setKeys(result.data.apiKeys);
+      setKeysState('ready');
+    } catch (cause) {
+      setKeysState('error');
+      throw cause;
+    }
   }, []);
 
   const refreshSidebar = useCallback(async () => {
@@ -147,11 +157,16 @@ export default function DeveloperSettingsClient() {
 
         <section className={styles.keys} aria-labelledby='active-keys-title'>
           <header className={styles.listHeading}>
-            <h2 id='active-keys-title'>Active keys <span>{keys.length}</span></h2>
+            <h2 id='active-keys-title'>Active keys {keysState === 'ready' && <span>{keys.length}</span>}</h2>
             <span>Only key prefixes are shown</span>
           </header>
-          <div className={styles.keyList}>
-            {keys.map((key) => <article key={key.id} className={styles.keyRow}>
+          <div className={styles.keyList} aria-busy={keysState === 'loading'}>
+            {keysState === 'loading' && <DashboardSkeleton label='Loading API keys' variant='panel' lines={6} />}
+            {keysState === 'error' && <button onClick={() => {
+              setError('');
+              void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
+            }}>Retry API keys</button>}
+            {keysState === 'ready' && keys.map((key) => <article key={key.id} className={styles.keyRow}>
               <span className={styles.keyIcon}><KeyIcon size={19} aria-hidden='true' /></span>
               <div className={styles.keyIdentity}>
                 <strong>{key.name ?? 'Unnamed key'}</strong>
@@ -160,7 +175,7 @@ export default function DeveloperSettingsClient() {
               </div>
               <button className={styles.revoke} disabled={loading} onClick={() => void revoke(key)} aria-label={`Revoke ${key.name ?? 'unnamed key'}`}>Revoke</button>
             </article>)}
-            {!keys.length && <div className={styles.empty}>
+            {keysState === 'ready' && !keys.length && <div className={styles.empty}>
               <span className={styles.keyIcon}><KeyIcon size={21} aria-hidden='true' /></span>
               <div><h3>{localPreview ? 'Your keys will appear here' : 'No API keys yet'}</h3><p>{localPreview ? 'Sign in to see your integrations.' : 'Create a key above to connect your first integration.'}</p></div>
             </div>}
