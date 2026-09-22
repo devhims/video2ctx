@@ -11,6 +11,7 @@ import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import { FramePreviews } from './FramePreviews';
 import type { DashboardProject } from '../../../lib/dashboard-data';
 import { useRouter } from 'next/navigation';
@@ -194,7 +195,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     {session && <SessionAssets sessionId={sessionId} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
-    {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}
+    {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
     <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {session?.messages.map(message => message.role === 'user'
         ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
@@ -233,7 +234,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
-      {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
+      {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}

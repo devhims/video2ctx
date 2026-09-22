@@ -23,6 +23,7 @@ import {
 import { authClient } from '../../lib/auth-client';
 import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
+import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
@@ -586,7 +587,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             onSettings={() => navigateTo('settings')}
           />
         </DashboardHeader>
-        {accountError ? <div className='alert error' role='alert'>{accountError} <button onClick={() => void refreshPrivateData().catch(() => {})}>Retry account data</button></div> : !accountDataReady ? <p role='status'>Loading account data…</p> : null}
+        {accountError ? <div className='alert error' role='alert'>{accountError} <button onClick={() => void refreshPrivateData().catch(() => {})}>Retry account data</button></div> : null}
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
         <div className='workspace-view' hidden={section !== 'discover'}>
@@ -1078,13 +1079,6 @@ function SourceChannelSkeleton() {
   </aside>;
 }
 
-function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' }) {
-  return <div className={`source-skeleton source-skeleton-${variant}`} role='status' aria-label={label}>
-    <span className='sr-only'>{label}</span>
-    <div className='source-skeleton-lines' aria-hidden='true'>{Array.from({ length: lines }).map((_, index) => <i key={index} />)}</div>
-  </div>;
-}
-
 function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, failed }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean; failed: boolean }) {
   return <section className='source-results' aria-labelledby='source-results-title'>
     <header className={!items.length && !hasSearched ? 'sr-only' : undefined}>
@@ -1288,7 +1282,7 @@ function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, on
     })}</ol>
     <div className='source-comments-pagination'>
       <span>{page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
-      {page?.continuation ? <button type='button' disabled={loading} onClick={onLoadMore}>{loading ? 'Loading…' : 'Load next page'}</button> : null}
+      {page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page</button> : null}
     </div>
     {error ? <p className='source-data-warning' role='alert'>{error}</p> : null}
   </>;
@@ -1325,7 +1319,7 @@ function ProjectsView({ projects, selectedProject, loading, error, onCreate, onO
   </section>;
   return <section className='content-section standalone'>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Your projects</h2><p>Keep related sources and saved moments together.</p></div><button className={pageStyles.primaryAction} onClick={onCreate}><Icon name='plus' size={15} />New project</button></header>
-    {loading && <div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}
+    {loading && <SourceSkeleton label='Opening project' />}
     {error && <div className='alert error' role='alert'>{error}</div>}
     <div className={pageStyles.listHeading}><h3>Projects <span>{projects.length}</span></h3></div>
     <div className={pageStyles.recordList}>{projects.map(project => <button className={pageStyles.projectRow} key={project.id} onClick={() => onOpen(project)}>

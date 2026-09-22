@@ -8,6 +8,7 @@ import { PlusIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { adminAccessRequest, type AgentAccessPage } from '../../../lib/admin-access';
 import { loadDashboardAccountData, type DashboardProject } from '../../../lib/dashboard-data';
 import { DashboardHeader } from '../DashboardHeader';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import pageStyles from '../DashboardPages.module.css';
@@ -102,7 +103,7 @@ export default function AdminAccessClient() {
               <label className={styles.search}><MagnifyingGlassIcon size={17} aria-hidden='true' /><span className='sr-only'>Search approved emails</span><input type='search' placeholder='Search emails' value={search} onChange={event => { setSearch(event.target.value); setOffset(0); setRemoving(null); }} /></label>
             </div>
             <div className={styles.list} aria-busy={loading}>
-              {loading ? <p className={styles.empty} role='status'>Loading approved emails…</p> : page?.entries.map(entry => <article key={entry.email} className={styles.row}>
+              {loading ? <DashboardSkeleton label='Loading approved emails' variant='panel' lines={6} /> : page?.entries.map(entry => <article key={entry.email} className={styles.row}>
                 <div className={styles.identity}><strong>{entry.email}</strong><span>Added {new Date(entry.createdAt).toLocaleDateString()}</span></div>
                 {removing === entry.email ? <div className={styles.confirm}>
                   <span>Remove Agent access?</span>

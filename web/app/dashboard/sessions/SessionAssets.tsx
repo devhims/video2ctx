@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import { z } from 'zod';
 import { platformRequest } from '@/lib/platform-request';
 import { fetchAgentData } from '@/lib/agent-sessions';
@@ -110,7 +111,7 @@ export function SessionAssets({
               {error}
             </p>
           )}
-          {!inventory && !error && <p role='status'>Loading assets…</p>}
+          {!inventory && !error && <DashboardSkeleton label='Loading assets' variant='panel' lines={6} />}
           {inventory && (
             <>
               <div className='agent-asset-actions'>
