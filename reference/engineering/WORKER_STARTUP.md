@@ -20,8 +20,9 @@ Measured locally with Wrangler 4.120.0 on 2026-09-23, using the production minif
 | Deferred dependencies, run 1 | 158.5 ms | 28.9 ms | 1116.39 KiB |
 | Deferred dependencies, run 2 | 132.0 ms | 29.0 ms | 1116.47 KiB |
 | Deferred dependencies, run 3 | 109.5 ms | 27.7 ms | 1116.47 KiB |
+| Deferred dependencies, CI command verification | 239.7 ms | 28.9 ms | 1116.47 KiB |
 
-Local active CPU fell approximately 39-58%. These are sampled local measurements, not Cloudflare deployment startup times. Run 1 preceded import-order formatting; runs 2 and 3 use the final source. The bundle grows slightly because deferring initialization introduces wrappers. Minification alone did not materially reduce startup CPU. Deferring auth alone also left the billing SDK reachable through an eager import, so both paths needed changing.
+Local active CPU fell approximately 8-58%, with a median of 145.3 ms across the four final measurements. The wider range illustrates local scheduling and profiling variance; the GC reduction is more consistent. These are sampled local measurements, not Cloudflare deployment startup times. Run 1 preceded import-order formatting; the remaining measurements use the final source. The bundle grows slightly because deferring initialization introduces wrappers. Minification alone did not materially reduce startup CPU. Deferring auth alone also left the billing SDK reachable through an eager import, so both paths needed changing.
 
 ## Reproduce and guard
 
