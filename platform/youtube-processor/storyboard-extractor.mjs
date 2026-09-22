@@ -348,7 +348,23 @@ function createYouTubeTransport(options) {
       const retryStatuses = new Set(policy.retryStatuses);
       let lastNetworkError;
       for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
-        const request = await requestFactory(attempt);
+        let request;
+        try {
+          request = await requestFactory(attempt);
+        } catch (error) {
+          if (!(error instanceof YouTubeClientError) || !error.retryable || attempt === policy.maxAttempts) throw error;
+          const delayMs2 = retryDelay(void 0, attempt, policy, random, now);
+          options.onRetry?.({
+            operation,
+            attempt,
+            maxAttempts: policy.maxAttempts,
+            delayMs: delayMs2,
+            reason: "preparation",
+            code: error.code
+          });
+          await wait(delayMs2);
+          continue;
+        }
         let response;
         try {
           response = await fetchImpl(request.input, {

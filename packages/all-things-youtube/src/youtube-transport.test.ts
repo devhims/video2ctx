@@ -1,3 +1,4 @@
+import { YouTubeClientError } from './youtube-types';
 import { describe, expect, test, vi } from 'vitest';
 import { createYouTubeTransport } from './youtube-transport';
 
@@ -98,4 +99,20 @@ describe('YouTube transport', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(wait).toHaveBeenCalledOnce();
   });
+});
+
+
+test.each([
+  new YouTubeClientError('INVALID_INPUT', 'Invalid video ID.'),
+  new TypeError('Invalid URL'),
+  new DOMException('Canceled', 'AbortError'),
+])('never retries unclassified or terminal request preparation failures', async error => {
+  const prepare = vi.fn(() => { throw error; });
+  const fetch = vi.fn();
+  const wait = vi.fn();
+  const transport = createYouTubeTransport({ fetch, wait });
+  await expect(transport.fetch('captions', prepare)).rejects.toBe(error);
+  expect(prepare).toHaveBeenCalledTimes(1);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(wait).not.toHaveBeenCalled();
 });

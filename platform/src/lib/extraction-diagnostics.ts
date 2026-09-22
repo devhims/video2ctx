@@ -5,7 +5,7 @@ const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Deliberately no free-form strings, error messages, URLs, headers, or stderr.
 export const extractionEventSchema = z.object({
   stage: z.enum(['player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
-    'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success']),
+    'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success']),
   profile: z.enum(['IOS', 'ANDROID_VR', 'MWEB', 'WEB', 'ios', 'android', 'android_vr', 'mweb', 'web']).optional(),
   outcome: z.enum(['selected', 'skipped', 'error', 'success']).optional(),
   playabilityStatus: z.enum(['OK', 'LOGIN_REQUIRED', 'UNPLAYABLE', 'ERROR', 'LIVE_STREAM_OFFLINE', 'CONTENT_CHECK_REQUIRED', 'AGE_CHECK_REQUIRED', 'UNKNOWN']).optional(),
@@ -22,7 +22,7 @@ export const extractionEventSchema = z.object({
 });
 
 export const extractionAttemptSchema = z.object({
-  version: z.literal(1), kind: z.enum(['storyboard', 'frames']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(4), slot: z.number().int().min(0).max(3),
   recordedAt: count, elapsedMs: metric, status: z.number().int().min(100).max(599).optional(),
   outcome: z.enum(['success', 'failed', 'fallback', 'transport_error']),

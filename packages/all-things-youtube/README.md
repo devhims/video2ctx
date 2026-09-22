@@ -518,7 +518,7 @@ Retries are enabled for network failures and these statuses by default:
 408  425  429  500  502  503  504
 ```
 
-The default policy gives each attempt a ten-second deadline, makes up to five attempts, applies exponential backoff with full jitter, caps delays at two seconds, and honors `Retry-After` within that cap. A timed-out attempt is retried as a network failure; exhausted timeouts reject with a retryable `UPSTREAM_ERROR`.
+The default policy gives each attempt a ten-second deadline, makes up to five attempts, applies exponential backoff with full jitter, caps delays at two seconds, and honors `Retry-After` within that cap. A timed-out attempt is retried as a network failure; exhausted timeouts reject with a retryable `UPSTREAM_ERROR`. Unusable caption URLs trigger fresh metadata retrieval within the same retry limit. Exhausted malformed-metadata recovery returns retryable `INVALID_RESPONSE`; invalid caller input remains terminal. Retry events use `reason: "preparation"` and a safe `code` for these failures, without including caption URLs.
 
 ```ts
 import { getDetails } from 'all-things-youtube';

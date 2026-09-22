@@ -83,13 +83,29 @@ export function createYouTubeRuntime(environment = process.env) {
             });
           case 'caption-tracks':
             return youtube.getTracks({ ...options, videoId: operation.id });
-          case 'transcript':
-            return youtube.getTranscript({
-              ...options,
-              videoId: operation.id,
-              lang: operation.lang,
-              granularity: operation.granularity,
-            });
+          case 'transcript': {
+            const startedAt = Date.now();
+            const record = event => {
+              try { diagnostics.onDiagnostic?.({ ...event, elapsedMs: Date.now() - startedAt }); } catch { /* Best effort. */ }
+            };
+            const safeCode = error => ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'].includes(error?.code) ? error.code : 'UNKNOWN';
+            try {
+              const value = await youtube.getTranscript({
+                ...options, videoId: operation.id, lang: operation.lang, granularity: operation.granularity,
+                retry: { onRetry: event => {
+                  retry.onRetry(event);
+                  record({ stage: event.reason === 'preparation' ? 'caption_metadata' : 'caption_retry',
+                    outcome: 'error', attempt: event.attempt, status: event.status,
+                    delayMs: event.delayMs, ...(event.code ? { code: safeCode(event) } : {}) });
+                } },
+              });
+              record({ stage: 'complete', outcome: 'success' });
+              return value;
+            } catch (error) {
+              record({ stage: 'request', outcome: 'error', code: safeCode(error) });
+              throw error;
+            }
+          }
           case 'storyboard': {
             const storyboardId = diagnostics.extractionId ?? randomUUID();
             const onDiagnostic = event => {

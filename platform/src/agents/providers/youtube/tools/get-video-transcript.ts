@@ -48,7 +48,7 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       let response;
       try {
-        response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language));
+        response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })));
       } catch (error) {
         if (context.signal.aborted) throw error;
         throw new TranscriptToolStageError('TRANSCRIPT_FETCH_FAILED', error);

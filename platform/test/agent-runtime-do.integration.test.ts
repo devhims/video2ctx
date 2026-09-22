@@ -31,14 +31,15 @@ async function seed(name: string, status = 'failed') {
   return { runtime, userId, runId, conversationId };
 }
 
-test('persists extraction diagnostics across RPCs, isolates owners, and bounds run storage', async () => {
-  const { runtime, runId } = await seed('extraction-diagnostics-owner');
-  const other = await seed('extraction-diagnostics-other');
+test.each(['storyboard', 'transcript'] as const)('persists %s diagnostics across RPCs, isolates owners, and bounds run storage', async kind => {
+  const fixture = { ...extractionFixture, kind };
+  const { runtime, runId } = await seed(`extraction-diagnostics-${kind}-owner`);
+  const other = await seed(`extraction-diagnostics-${kind}-other`);
   await runInDurableObject(runtime, async instance => {
     const writer = instance as unknown as { recordExtractionDiagnostic(runId: string, event: unknown): void };
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const event = { ...extractionFixture, toolCallId: 'storyboard-call', url: 'SECRET' };
+      const event = { ...fixture, toolCallId: 'storyboard-call', url: 'SECRET' };
       writer.recordExtractionDiagnostic(runId, event);
       writer.recordExtractionDiagnostic(other.runId, event);
       writer.recordExtractionDiagnostic(runId, { ...event, events: [{ stage: 'https://SECRET' }] });
@@ -47,7 +48,7 @@ test('persists extraction diagnostics across RPCs, isolates owners, and bounds r
     } finally { log.mockRestore(); }
   });
   const first = await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null;
-  expect(first?.extractionDiagnostics).toEqual([{ ...extractionFixture, toolCallId: 'storyboard-call' }]);
+  expect(first?.extractionDiagnostics).toEqual([{ ...fixture, toolCallId: 'storyboard-call' }]);
   expect((await runtime.getRun(runId) as import('../src/agents/agent-runtime-do').AgentRunView | null)?.extractionDiagnostics).toEqual(first?.extractionDiagnostics);
   expect(await other.runtime.getRun(runId)).toBeNull();
   expect(JSON.stringify(await runtime.getRunProgress(runId))).not.toContain('extractionId');
@@ -55,7 +56,7 @@ test('persists extraction diagnostics across RPCs, isolates owners, and bounds r
     const writer = instance as unknown as { recordExtractionDiagnostic(runId: string, event: unknown): void };
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      for (let i = 0; i < 70; i++) writer.recordExtractionDiagnostic(runId, { ...extractionFixture, toolCallId: `call-${i}` });
+      for (let i = 0; i < 70; i++) writer.recordExtractionDiagnostic(runId, { ...fixture, toolCallId: `call-${i}` });
     } finally { log.mockRestore(); }
     expect(instance.sql`SELECT * FROM agent_events WHERE type = 'extraction.truncated'`).toHaveLength(1);
   });

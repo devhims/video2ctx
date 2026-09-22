@@ -123,7 +123,7 @@ stream unvalidated model tokens.
 
 ## Stored extraction diagnostics
 
-To inspect storyboard and frame extraction attempts for a run you own, request:
+To inspect transcript, storyboard, and frame extraction attempts for a run you own, request:
 
 ```http
 GET /v1/agent/{sessionId}/runs/{runId}?include=diagnostics
@@ -133,7 +133,7 @@ GET /v1/agent/{sessionId}/runs/{runId}?include=diagnostics
 `extractionId`. Each summary records the container slot, attempt number, duration,
 HTTP status when available, outcome, and safe stage details such as player profile,
 media format and resolution, WebP conversion, retries, and FFmpeg exit code.
-These records remain available when extraction or subsequent visual analysis fails.
+Transcript records include caption metadata preparation failures and retry events. These records remain available when extraction or subsequent analysis fails. Cache hits and session reuse do not replay historical attempts as new diagnostics.
 
 The `capture` field explains how much detail reached the Worker:
 

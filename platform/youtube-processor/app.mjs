@@ -110,7 +110,7 @@ export function createProcessorApp(runtime, options = {}) {
       if (diagnostics.events.length === 64) { diagnostics.events.splice(16, 1); diagnostics.droppedEvents++; }
       diagnostics.events.push(event);
     };
-    const envelope = () => operation.kind === 'storyboard' ? { diagnostics } : {};
+    const envelope = () => ['storyboard', 'transcript'].includes(operation.kind) ? { diagnostics } : {};
     const startedAt = performance.now();
     const cpuStarted = process.cpuUsage();
     const activeAtStart = activeOperations;
@@ -121,6 +121,7 @@ export function createProcessorApp(runtime, options = {}) {
       const normalized = normalizeProcessorError(error);
       console.error(JSON.stringify({
         event: 'youtube_processor_failure',
+        extractionId,
         operation: operation.kind,
         code: normalized.error.code,
         retryable: normalized.error.retryable,

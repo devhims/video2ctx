@@ -14,7 +14,8 @@ export interface YouTubeRetryEvent {
   maxAttempts: number;
   status?: number;
   delayMs: number;
-  reason: 'response' | 'network';
+  reason: 'response' | 'network' | 'preparation';
+  code?: string;
 }
 
 export interface YouTubeRetryOptions {
@@ -129,7 +130,19 @@ export function createYouTubeTransport(options: YouTubeRetryOptions & { fetch: t
       let lastNetworkError: unknown;
 
       for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
-        const request = await requestFactory(attempt);
+        let request: YouTubeRequestAttempt;
+        try {
+          request = await requestFactory(attempt);
+        } catch (error) {
+          // Only explicitly classified upstream preparation failures may retry.
+          // Invalid caller input, cancellation, and programming errors stay terminal.
+          if (!(error instanceof YouTubeClientError) || !error.retryable || attempt === policy.maxAttempts) throw error;
+          const delayMs = retryDelay(undefined, attempt, policy, random, now);
+          options.onRetry?.({ operation, attempt, maxAttempts: policy.maxAttempts,
+            delayMs, reason: 'preparation', code: error.code });
+          await wait(delayMs);
+          continue;
+        }
         let response: Response | undefined;
         try {
           response = await fetchImpl(request.input, {

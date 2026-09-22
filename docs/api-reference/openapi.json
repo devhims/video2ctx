@@ -7817,7 +7817,8 @@
                           "type": "string",
                           "enum": [
                             "storyboard",
-                            "frames"
+                            "frames",
+                            "transcript"
                           ]
                         },
                         "videoId": {
@@ -7897,6 +7898,8 @@
                                   "complete",
                                   "request",
                                   "image_normalized",
+                                  "caption_metadata",
+                                  "caption_retry",
                                   "media_candidates",
                                   "media_http",
                                   "media_transfer",
@@ -9170,7 +9173,8 @@
                       "type": "string",
                       "enum": [
                         "storyboard",
-                        "frames"
+                        "frames",
+                        "transcript"
                       ]
                     },
                     "videoId": {
@@ -9250,6 +9254,8 @@
                               "complete",
                               "request",
                               "image_normalized",
+                              "caption_metadata",
+                              "caption_retry",
                               "media_candidates",
                               "media_http",
                               "media_transfer",
@@ -9982,7 +9988,8 @@
                       "type": "string",
                       "enum": [
                         "storyboard",
-                        "frames"
+                        "frames",
+                        "transcript"
                       ]
                     },
                     "videoId": {
@@ -10062,6 +10069,8 @@
                               "complete",
                               "request",
                               "image_normalized",
+                              "caption_metadata",
+                              "caption_retry",
                               "media_candidates",
                               "media_http",
                               "media_transfer",

@@ -47,6 +47,34 @@ try {
   console.log(JSON.stringify({ test: 'packed-fixture', version, integrity: packed.integrity,
     commonjs: true, esm: true, calls, passed: true }));
 
+  for (const api of [commonjs, esm]) {
+    let playerCalls = 0;
+    const retryEvents = [];
+    const captionRequests = [];
+    const result = await api.getTranscript({ videoId: 'AR1Gi3RHanE', lang: 'en',
+      retry: { policy: { maxAttempts: 2 }, wait: async () => {}, onRetry: event => retryEvents.push(event) },
+      fetch: async input => {
+        const url = String(input);
+        if (url.includes('/youtubei/v1/player')) return Response.json({ playabilityStatus: { status: 'OK' }, captions: {
+          playerCaptionsTracklistRenderer: { captionTracks: [
+            { baseUrl: ++playerCalls === 1 ? 'bad?token=secret' : 'https://captions.test/en', languageCode: 'en', vssId: '.en' },
+            { baseUrl: 'https://captions.test/fr', languageCode: 'fr', vssId: '.fr' },
+          ] },
+        } });
+        if (url.includes('/watch?')) return new Response('', { status: 404 });
+        captionRequests.push(url);
+        return Response.json({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'Recovered transcript' }] }] });
+      },
+    });
+    assert.equal(result.track.languageCode, 'en');
+    assert.equal(result.segments[0].text, 'Recovered transcript');
+    assert.equal(playerCalls, 2);
+    assert.deepEqual(captionRequests, ['https://captions.test/en?fmt=json3']);
+    assert.equal(retryEvents[0].reason, 'preparation');
+    assert(!JSON.stringify(retryEvents).includes('token'));
+  }
+  console.log(JSON.stringify({ test: 'packed-caption-recovery', commonjs: true, esm: true, passed: true }));
+
   if (process.argv.includes('--live')) {
     const requests = [];
     const result = await esm.getStoryboard({
