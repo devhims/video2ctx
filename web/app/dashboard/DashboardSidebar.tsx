@@ -3,6 +3,7 @@
 import { useAccountResource } from './DashboardDataProvider';
 
 import Link from 'next/link';
+import { dashboardPath } from './dashboard-routes';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon } from '@phosphor-icons/react';
@@ -66,19 +67,15 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
     try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* Keep the toggle usable without storage. */ }
   };
   const run = (action: () => void) => { dialog.current?.close(); action(); };
-  const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => section === 'settings' ? (
-    <Link href='/dashboard/settings' aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => dialog.current?.close()}>
-      <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>
-    </Link>
-  ) : (
-    <button type='button' aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => run(() => onNavigate(section))}>
+  const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
+    <Link href={dashboardPath(section)} prefetch={false} aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => dialog.current?.close()}>
       <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}
-    </button>
+    </Link>
   );
   const brand = <><img src='/brand/logo-120.png' alt='' width='28' height='28' /><span className={styles.wordmark}>video2<span>ctx</span></span></>;
   const content = (mobile = false) => <>
     <div className={styles.header}>
-      {(mobile || !collapsed) && <Link className={styles.brand} aria-label='video2ctx home' href='/'>{brand}</Link>}
+      {(mobile || !collapsed) && <Link className={styles.brand} aria-label='video2ctx home' href='/' prefetch={false}>{brand}</Link>}
       <button type='button' className={!mobile && collapsed ? styles.expand : styles.toggle} aria-label={mobile ? 'Close navigation' : collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={mobile ? true : !collapsed} data-tooltip={!mobile && collapsed ? 'Expand sidebar' : undefined} onClick={mobile ? () => dialog.current?.close() : toggleCollapsed}>
         {!mobile && collapsed && <img src='/brand/logo-120.png' alt='' width='28' height='28' />}
         {mobile ? <XIcon size={18} aria-hidden='true' /> : <SidebarSimpleIcon size={18} aria-hidden='true' />}
@@ -89,7 +86,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         <div className={styles.group}>
           {navButton('trends', 'Trend Lab', 'trend')}
           {navButton('discover', 'Sources', 'search')}
-          {agentAccess && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
+          {agentAccess && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Workspace</p>
@@ -98,9 +95,9 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Manage</p>
-          <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span></Link>
+          <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span></Link>
           {navButton('settings', 'Settings', 'settings')}
-          {adminAccess && <Link aria-label='Admin' title={collapsed ? 'Admin' : undefined} data-tooltip='Admin' aria-current={activeSection === 'admin' ? 'page' : undefined} className={styles.item} href='/dashboard/admin' onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='user' /></span><span className={styles.label}>Admin</span></Link>}
+          {adminAccess && <Link aria-label='Admin' title={collapsed ? 'Admin' : undefined} data-tooltip='Admin' aria-current={activeSection === 'admin' ? 'page' : undefined} className={styles.item} href='/dashboard/admin' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='user' /></span><span className={styles.label}>Admin</span></Link>}
         </div>
       </nav>
       <section className={styles.projects} aria-label='Recent projects'>
@@ -127,7 +124,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
 
   return <>
     <aside className={styles.sidebar} data-dashboard-sidebar data-collapsed={collapsed} aria-label='Workspace sidebar'>{content()}</aside>
-    <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' aria-label='video2ctx home'>{brand}</Link></div>
+    <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' prefetch={false} aria-label='video2ctx home'>{brand}</Link></div>
     <dialog ref={dialog} className={styles.drawer} aria-label='Dashboard navigation' onClose={() => setMobileOpen(false)} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}><div className={styles.drawerContent}>{content(true)}</div></dialog>
   </>;
 }

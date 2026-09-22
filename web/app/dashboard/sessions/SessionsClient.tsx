@@ -34,7 +34,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
   const accountError = projectsResource.error || usageResource.error;
   return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
-      onNavigate={section => router.push(`/dashboard?section=${section}`)}
+      onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
       onNewProject={() => router.push('/dashboard?section=projects')}
       onOpenProject={() => router.push('/dashboard?section=projects')}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fsessions')} accountName={user?.name ?? user?.email}
@@ -48,9 +48,9 @@ export function AgentShell({ children }: { children: ReactNode }) {
 }
 
 export default function SessionsClient({ sessionId }: { sessionId?: string }) {
-  const { agentAccess } = useDashboardSession();
+  const { agentAccess, accessReady } = useDashboardSession();
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
-    {!agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
+    {!accessReady ? <SessionLoading /> : !agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
       : sessionId ? <SessionHistory key={sessionId} sessionId={sessionId} /> : <SessionList />}
   </section>;
 }

@@ -1,27 +1,20 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import { FormEvent, useState } from 'react';
 import { redirect, useRouter } from 'next/navigation';
 import { KeyIcon, PlusIcon } from '@phosphor-icons/react';
 import { authClient } from '../../../lib/auth-client';
-import { useAccountResource } from '../DashboardDataProvider';
+import { useAccountResource, useStreamedAccountResource } from '../DashboardDataProvider';
 import { DashboardHeader } from '../DashboardHeader';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './DeveloperSettings.module.css';
 import { DashboardSidebar, type DashboardSection } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
 
-type ManagedApiKey = {
-  id: string;
-  name: string | null;
-  start: string | null;
-  prefix: string | null;
-  createdAt: Date;
-  lastRequest: Date | null;
-};
+import type { DashboardApiKey as ManagedApiKey } from '../../../lib/dashboard-data';
+import type { ResourceResult } from '../../../lib/dashboard-cache';
 
-export default function DeveloperSettingsClient() {
+export default function DeveloperSettingsClient({promise}:{promise:Promise<ResourceResult<ManagedApiKey[]>>}) {
   const router = useRouter();
   const { user, demoEnabled, signOut } = useDashboardSession();
   const localPreview = !user && demoEnabled;
@@ -30,8 +23,9 @@ export default function DeveloperSettingsClient() {
     name: 'Local preview',
     email: 'local@video2ctx.dev',
   } : null);
-  const [keys, setKeys] = useState<ManagedApiKey[]>([]);
-  const [keysState, setKeysState] = useState<'loading' | 'ready' | 'error'>(localPreview ? 'ready' : 'loading');
+  const keysResource = useStreamedAccountResource('apiKeys', [], promise);
+  const keys = keysResource.data;
+  const keysState = keysResource.error ? 'error' : keysResource.ready ? 'ready' : 'loading';
   const { data: projects } = useAccountResource('projects', []);
   const { data: usage } = useAccountResource('usage', null);
   const credits = usage?.creditBalance;
@@ -40,26 +34,10 @@ export default function DeveloperSettingsClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const refresh = useCallback(async () => {
-    setKeysState('loading');
-    try {
-      const result = await authClient.apiKey.list();
-      if (result.error) throw new Error(result.error.message ?? 'Could not load API keys.');
-      if (!result.data?.apiKeys) throw new Error('Could not load API keys.');
-      setKeys(result.data.apiKeys);
-      setKeysState('ready');
-    } catch (cause) {
-      setKeysState('error');
-      throw cause;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (user) void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
-  }, [refresh, user?.id]);
+  const refresh = keysResource.refresh;
 
   const navigateToDashboard = (section: DashboardSection) => {
-    router.push(`/dashboard?section=${section}`);
+    router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`);
   };
 
   const createKey = async (event: FormEvent) => {
@@ -107,8 +85,8 @@ export default function DeveloperSettingsClient() {
       activeSection='developer'
       projects={projects}
       onNavigate={navigateToDashboard}
-      onNewProject={() => navigateToDashboard('projects')}
-      onOpenProject={() => navigateToDashboard('projects')}
+      onNewProject={() => router.push('/dashboard/projects?newProject=1')}
+      onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fdeveloper')}
       accountName={displayUser.name ?? displayUser.email}
       credits={credits}
@@ -140,7 +118,7 @@ export default function DeveloperSettingsClient() {
             <p>The full value will not be shown again.</p>
             <div><code>{createdSecret}</code><button onClick={() => void copySecret()}>Copy key</button></div>
           </div>}
-          {error && <p className='alert error' role='alert'>{error}</p>}
+          {(error || keysResource.error) && <p className='alert error' role='alert'>{error || keysResource.error}</p>}
         </section>
 
         <section className={styles.keys} aria-labelledby='active-keys-title'>

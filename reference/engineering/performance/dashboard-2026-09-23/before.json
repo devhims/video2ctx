@@ -1,0 +1,188 @@
+{
+  "base": "http://127.0.0.1:3022",
+  "legacy": true,
+  "measuredAt": "2026-09-22T22:19:28.211Z",
+  "environment": "Headless desktop Chrome, localhost production webpack build, no throttling, fresh browser context per cold sample, deterministic API fixtures. Timings are lab measurements, not field vitals.",
+  "results": [
+    {
+      "section": "settings",
+      "run": 0,
+      "ttfb": 98.89999999990687,
+      "fcp": 192,
+      "lcp": 192,
+      "jsBytes": 274003,
+      "jsFiles": 19,
+      "fontBytes": 272852,
+      "fontFiles": 7,
+      "returnMs": [
+        30.700000000186265,
+        31.199999999720603,
+        31.899999999906868
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 1,
+      "ttfb": 17,
+      "fcp": 108,
+      "lcp": 108,
+      "jsBytes": 274003,
+      "jsFiles": 19,
+      "fontBytes": 272852,
+      "fontFiles": 7,
+      "returnMs": [
+        32,
+        31.299999999813735,
+        31.399999999906868
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 2,
+      "ttfb": 12.400000000372529,
+      "fcp": 72,
+      "lcp": 72,
+      "jsBytes": 274003,
+      "jsFiles": 19,
+      "fontBytes": 272852,
+      "fontFiles": 7,
+      "returnMs": [
+        30.899999999906868,
+        31.600000000093132,
+        31.799999999813735
+      ]
+    },
+    {
+      "section": "projects",
+      "run": 0,
+      "ttfb": 21.399999999906868,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "projects",
+      "run": 1,
+      "ttfb": 10.5,
+      "fcp": 56,
+      "lcp": 56,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "projects",
+      "run": 2,
+      "ttfb": 11.600000000093132,
+      "fcp": 88,
+      "lcp": 124,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "monitors",
+      "run": 0,
+      "ttfb": 10.399999999906868,
+      "fcp": 92,
+      "lcp": 120,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "monitors",
+      "run": 1,
+      "ttfb": 11.5,
+      "fcp": 68,
+      "lcp": 136,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "monitors",
+      "run": 2,
+      "ttfb": 12.200000000186265,
+      "fcp": 64,
+      "lcp": 132,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "sources",
+      "run": 0,
+      "ttfb": 10.899999999906868,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "sources",
+      "run": 1,
+      "ttfb": 12.900000000372529,
+      "fcp": 96,
+      "lcp": 96,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "sources",
+      "run": 2,
+      "ttfb": 9.899999999906868,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "trends",
+      "run": 0,
+      "ttfb": 11,
+      "fcp": 88,
+      "lcp": 88,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "trends",
+      "run": 1,
+      "ttfb": 8.299999999813735,
+      "fcp": 56,
+      "lcp": 56,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    },
+    {
+      "section": "trends",
+      "run": 2,
+      "ttfb": 9.199999999720603,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 291784,
+      "jsFiles": 20,
+      "fontBytes": 272852,
+      "fontFiles": 7
+    }
+  ]
+}

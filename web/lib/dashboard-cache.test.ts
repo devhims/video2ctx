@@ -127,3 +127,13 @@ test('a stale browser entry reuses a new route server read for revalidation', as
   await cache.load('projects', false, Promise.resolve({ data: [{ id: 'fresh', name: 'Fresh from route' }], updatedAt: Date.now() }));
   assert.equal(cache.read('projects').data?.[0].id, 'fresh');
 });
+
+test('API key cache keeps only display metadata and rejects a malformed list', async () => {
+  const cache = createDashboardCache(async () => ({ apiKeys: [{ id: 'key', name: 'Production', start: 'aty_', prefix: 'aty_', createdAt: '2026-09-23', lastRequest: null, key: 'secret', hash: 'private' }] }));
+  await cache.load('apiKeys');
+  assert.deepEqual(Object.keys(cache.read('apiKeys').data![0]).sort(), ['createdAt', 'id', 'lastRequest', 'name', 'prefix', 'start']);
+  const invalid = createDashboardCache(async () => ({}));
+  await invalid.load('apiKeys');
+  assert.equal(invalid.read('apiKeys').data, undefined);
+  assert.match(invalid.read('apiKeys').error, /invalid API keys/);
+});

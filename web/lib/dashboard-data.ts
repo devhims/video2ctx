@@ -61,7 +61,13 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: DashboardNotificationPreferences 
   emailDigest: 'off',
 };
 
+export interface DashboardApiKey {
+  id: string; name: string | null; start: string | null; prefix: string | null;
+  createdAt: string; lastRequest: string | null;
+}
+
 export interface DashboardAccountData {
+  apiKeys: DashboardApiKey[];
   projects: DashboardProject[];
   monitors: DashboardMonitor[];
   usage: DashboardUsage | null;
@@ -76,7 +82,7 @@ type DashboardPreferenceMutation = (
   options: RequestInit,
 ) => Promise<DashboardNotificationPreferences>;
 
-export async function loadDashboardAccountData(request: DashboardRequest): Promise<DashboardAccountData> {
+export async function loadDashboardAccountData(request: DashboardRequest): Promise<Omit<DashboardAccountData, 'apiKeys'>> {
   const [projectData, monitorData, usage, billing, notificationData, notificationPreferences] = await Promise.all([
     request('/v1/projects') as Promise<{ projects: DashboardProject[] }>,
     request('/v1/monitors') as Promise<{ monitors: DashboardMonitor[] }>,
