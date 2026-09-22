@@ -28,6 +28,8 @@ export interface DashboardMonitor {
   provider: 'youtube';
   kind: string;
   target: string;
+  query_json?: string;
+  cadence?: string;
   enabled: number;
   last_checked_at?: number;
   interval_minutes?: number;

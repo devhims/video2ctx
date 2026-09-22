@@ -110,7 +110,11 @@ export function SessionAssets({
               {error}
             </p>
           )}
-          {!inventory && !error && <p role='status'>Loading assets…</p>}
+          {!inventory && !error && <div role='status' aria-label='Loading assets'><div aria-hidden='true'>
+            <div className='agent-asset-actions'><span className='skeleton-control' /><span className='skeleton-control' /></div>
+            <h3>Evidence</h3><ul>{[0, 1].map(index => <li key={index}><strong><i className='ui-bar' data-width='medium' /></strong><p><i className='ui-bar' data-width='short' /></p><div className='agent-asset-actions'><span className='skeleton-control' /><span className='skeleton-control' /></div></li>)}</ul>
+            <h3>Memory</h3><ul><li><strong><i className='ui-bar' data-width='medium' /></strong><p><i className='ui-bar' /><i className='ui-bar' data-width='long' /></p></li></ul>
+          </div></div>}
           {inventory && (
             <>
               <div className='agent-asset-actions'>

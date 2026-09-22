@@ -119,3 +119,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) { .item { transition: none; } }
+
+.creditAmount :global(.skeleton-credit) { width: 32px; }

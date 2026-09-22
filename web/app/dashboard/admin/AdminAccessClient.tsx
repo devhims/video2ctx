@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { platformRequest } from '../../../lib/platform-request';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { PlusIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { adminAccessRequest, type AgentAccessPage } from '../../../lib/admin-access';
-import { loadDashboardAccountData, type DashboardProject } from '../../../lib/dashboard-data';
+import { useAccountResource } from '../DashboardDataProvider';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
@@ -26,8 +25,9 @@ export default function AdminAccessClient() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [removing, setRemoving] = useState<string | null>(null);
-  const [projects, setProjects] = useState<DashboardProject[]>([]);
-  const [credits, setCredits] = useState<number>();
+  const { data: projects } = useAccountResource('projects', []);
+  const { data: usage } = useAccountResource('usage', null);
+  const credits = usage?.creditBalance;
 
   useEffect(() => {
     if (!user || !adminAccess) { setPage(null); setLoading(false); return; }
@@ -45,15 +45,6 @@ export default function AdminAccessClient() {
     }, search ? 200 : 0);
     return () => { clearTimeout(timeout); controller.abort(); };
   }, [user?.id, adminAccess, search, offset, revision]);
-
-  useEffect(() => {
-    if (!user || !adminAccess) return;
-    const controller = new AbortController();
-    void loadDashboardAccountData(path => platformRequest(path, { signal: controller.signal })).then(data => {
-      if (!controller.signal.aborted) { setProjects(data.projects); setCredits(data.usage?.creditBalance); }
-    }).catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load account data.'); });
-    return () => controller.abort();
-  }, [user?.id, adminAccess]);
 
   async function updateAccess(address: string, enabled: boolean) {
     if (busy) return;
@@ -102,7 +93,7 @@ export default function AdminAccessClient() {
               <label className={styles.search}><MagnifyingGlassIcon size={17} aria-hidden='true' /><span className='sr-only'>Search approved emails</span><input type='search' placeholder='Search emails' value={search} onChange={event => { setSearch(event.target.value); setOffset(0); setRemoving(null); }} /></label>
             </div>
             <div className={styles.list} aria-busy={loading}>
-              {loading ? <p className={styles.empty} role='status'>Loading approved emails…</p> : page?.entries.map(entry => <article key={entry.email} className={styles.row}>
+              {loading ? <div role='status' aria-label='Loading approved emails'>{Array.from({ length: 3 }, (_, index) => <div className={styles.row} key={index} aria-hidden='true'><div className={styles.identity}><strong className='skeleton-email'><i className='ui-bar' /></strong><span><i className='ui-bar' data-width='medium' /></span></div><span className='skeleton-control' /></div>)}</div> : page?.entries.map(entry => <article key={entry.email} className={styles.row}>
                 <div className={styles.identity}><strong>{entry.email}</strong><span>Added {new Date(entry.createdAt).toLocaleDateString()}</span></div>
                 {removing === entry.email ? <div className={styles.confirm}>
                   <span>Remove Agent access?</span>

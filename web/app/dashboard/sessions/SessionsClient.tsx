@@ -11,8 +11,9 @@ import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import { FramePreviews } from './FramePreviews';
-import type { DashboardProject } from '../../../lib/dashboard-data';
+import { useAccountResource } from '../DashboardDataProvider';
 import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -26,27 +27,11 @@ import {
 export function AgentShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { user, agentAccess, signOut } = useDashboardSession();
-  const [projects, setProjects] = useState<DashboardProject[]>([]);
-  const [credits, setCredits] = useState<number>();
-  const [accountError, setAccountError] = useState('');
-  useEffect(() => {
-    if (!user || !agentAccess) return;
-    const controller = new AbortController();
-    const load = async () => {
-      const options = { cache: 'no-store' as const, signal: controller.signal };
-      const [projectData, usage] = await Promise.allSettled([
-        platformRequest<{ projects: DashboardProject[] }>('/v1/projects', options),
-        platformRequest<{ creditBalance: number }>('/v1/usage', options),
-      ]);
-      if (controller.signal.aborted) return;
-      if (projectData.status === 'fulfilled') setProjects(projectData.value.projects);
-      if (usage.status === 'fulfilled') setCredits(usage.value.creditBalance);
-      const failure = [projectData, usage].find(result => result.status === 'rejected');
-      setAccountError(failure?.status === 'rejected' ? errorMessage(failure.reason) : '');
-    };
-    void load();
-    return () => controller.abort();
-  }, [user?.id, agentAccess]);
+  const projectsResource = useAccountResource('projects', []);
+  const usageResource = useAccountResource('usage', null);
+  const projects = projectsResource.data;
+  const credits = usageResource.data?.creditBalance;
+  const accountError = projectsResource.error || usageResource.error;
   return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
       onNavigate={section => router.push(`/dashboard?section=${section}`)}
@@ -194,7 +179,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     {session && <SessionAssets sessionId={sessionId} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
-    {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} onClick={() => void loadOlder()}>{olderLoading ? 'Loading…' : 'Load older messages'}</button>}
+    {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
     <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {session?.messages.map(message => message.role === 'user'
         ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
@@ -233,7 +218,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
-      {!run && !error && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{message.content ? 'Loading source details…' : 'Getting started…'}</p>}
+      {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}

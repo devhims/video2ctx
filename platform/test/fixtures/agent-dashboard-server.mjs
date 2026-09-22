@@ -15,6 +15,7 @@ const tool = { toolCallId: 'transcript-1', name: 'get_video_transcript', operati
   input: { videoId: 'P7bxbDSnZRM', language: 'en' } };
 const finishedTool = { ...tool, status: 'completed', finishedAt: stamp + 3800,
   output: { sourceCount: 1, excerptCount: 4, sources: [{ title: 'Fable Vs Astra Debate Is Over', videoId: 'P7bxbDSnZRM' }], warningCodes: [] } };
+const accountScenarios = new Map();
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:8797');
   const cookie = req.headers.cookie ?? '';
@@ -22,6 +23,32 @@ createServer(async (req, res) => {
   const signedIn = /agent-ui=(allowed|denied|unavailable)/.test(cookie);
   const admin = cookie.includes('admin-ui=allowed');
   const reply = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+  if (url.pathname.startsWith('/__test__/account/')) {
+    const id = url.pathname.split('/')[3];
+    if (req.method === 'POST') {
+      let raw = ''; for await (const chunk of req) raw += chunk;
+      const input = JSON.parse(raw || '{}');
+      const gates = new Map((input.delays ?? []).map(path => {
+        let release; const promise = new Promise(resolve => { release = resolve; });
+        return [path, { promise, release }];
+      }));
+      accountScenarios.set(id, { gates, responses: input.responses ?? {}, reads: {} });
+    }
+    const scenario = accountScenarios.get(id);
+    if (req.method === 'DELETE') {
+      scenario?.gates.forEach(gate => gate.release());
+      accountScenarios.delete(id);
+    }
+    if (req.method === 'PATCH') scenario?.gates.forEach(gate => gate.release());
+    return reply(200, { reads: scenario?.reads ?? {} });
+  }
+  const scenario = accountScenarios.get(cookie.match(/account-test=([^;]+)/)?.[1]);
+  if (scenario && req.method === 'GET' && url.pathname.startsWith('/v1/')) {
+    scenario.reads[url.pathname] = (scenario.reads[url.pathname] ?? 0) + 1;
+    await scenario.gates.get(url.pathname)?.promise;
+    const override = scenario.responses[url.pathname];
+    if (override) return reply(override.status ?? 200, override.body);
+  }
   if (url.pathname === '/api/auth/sign-out' && req.method === 'POST') {
     res.setHeader('Set-Cookie', 'agent-ui=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
     return reply(200, { success: true });

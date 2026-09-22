@@ -37,3 +37,5 @@
   .search, .search input { width: 100%; max-width: none; }
   .row { align-items: flex-start; flex-direction: column; gap: 12px; }
 }
+
+.identity :global(.skeleton-email) { width: min(240px, 40vw); }

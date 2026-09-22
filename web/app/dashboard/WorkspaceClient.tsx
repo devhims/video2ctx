@@ -2,27 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
+import { redirect, useRouter } from 'next/navigation';
 import { platformRequest as api, isAbortError } from '../../lib/platform-request';
 import { loadSourceData } from '../../lib/source-data';
 import { loginPath } from '../../lib/login-redirect';
 import {
-  canDeleteAccount,
-  confirmDashboardEmailConsent,
-  CREDIT_BALANCE_EVENT,
   DEFAULT_NOTIFICATION_PREFERENCES,
-  DELETE_ACCOUNT_CONFIRMATION,
-  emailConsentToConfirm,
-  loadDashboardAccountData,
-  pathWithoutEmailConsent,
-  type DashboardBilling,
-  type DashboardUsage,
   type DashboardNotification,
-  type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
 import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
+import { useAccountResource, useDashboardDraft } from './DashboardDataProvider';
+import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
@@ -130,7 +122,6 @@ type AiTrendPlan = {
   titleIdeas: string[]; hashtags: string[]; differentiation: string[];
   evidence: Array<{ claim: string; videoIds: string[] }>; caveats: string[];
 };
-type Usage = DashboardUsage;
 
 const PLATFORM_HEALTH_INTERVAL_MS = 5 * 60_000;
 const YOUTUBE_API = '/v1/providers/youtube';
@@ -167,32 +158,37 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   else delete inspector.dataErrors[option];
 }
 
-export default function WorkspaceClient({ initialSection = 'trends', emailConsent }: { initialSection?: Section; emailConsent?: string }) {
+export default function WorkspaceClient({ initialSection = 'trends' }: { initialSection?: Section }) {
+  const router = useRouter();
   const { user, demoEnabled, signOut } = useDashboardSession();
   const [section, setSection] = useState<Section>(initialSection);
-  const [query, setQuery] = useState('');
-  const [selectedData, setSelectedData] = useState<SourceDataOption[]>(['transcript']);
-  const [items, setItems] = useState<SearchItem[]>([]);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [monitors, setMonitors] = useState<Monitor[]>([]);
-  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
-  const [notificationPreferences, setNotificationPreferences] = useState<DashboardNotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
-  const [accountDataReady, setAccountDataReady] = useState(false);
-  const [accountError, setAccountError] = useState('');
-  const [inspector, setInspector] = useState<Inspector | null>(null);
-  const [transcriptQuery, setTranscriptQuery] = useState('');
+  const [query, setQuery] = useDashboardDraft('source-query', '');
+  const [selectedData, setSelectedData] = useDashboardDraft<SourceDataOption[]>('source-options', ['transcript']);
+  const [items, setItems] = useDashboardDraft<SearchItem[]>('source-results', []);
+  const [hasSearched, setHasSearched] = useDashboardDraft('source-searched', false);
+  const projectsResource = useAccountResource('projects', []);
+  const { data: projects } = projectsResource;
+  const monitorsResource = useAccountResource('monitors', []);
+  const { data: monitors, setData: setMonitors } = monitorsResource;
+  const notificationsResource = useAccountResource('notifications', []);
+  const { data: notifications, setData: setNotifications } = notificationsResource;
+  const preferencesResource = useAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES);
+  const { data: notificationPreferences } = preferencesResource;
+  const [inspector, setInspector] = useDashboardDraft<Inspector | null>('source-inspector', null);
+  const [transcriptQuery, setTranscriptQuery] = useDashboardDraft('transcript-query', '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showNewProject, setShowNewProject] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
   const [platformHealth, setPlatformHealth] = useState<PlatformHealthState>('checking');
-  const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
+  const [selectedProject, setSelectedProject] = useDashboardDraft<ProjectDetail | null>('selected-project', null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
-  const [usage, setUsage] = useState<Usage | null>(null);
-  const [billing, setBilling] = useState<DashboardBilling | null>(null);
+  const usageResource = useAccountResource('usage', null);
+  const { data: usage } = usageResource;
+  const accountResources = [projectsResource, monitorsResource, usageResource, notificationsResource, preferencesResource];
+  const accountError = accountResources.find(resource => resource.error)?.error;
   const [monitorSavingId, setMonitorSavingId] = useState<string>();
   const operationController = useRef<AbortController | null>(null);
   const projectController = useRef<AbortController | null>(null);
@@ -227,6 +223,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   }, []);
 
   const navigateTo = useCallback((nextSection: Section) => {
+    if (nextSection === 'settings') { router.push('/dashboard/settings'); return; }
     if (nextSection !== section) cancelOperation();
     setSection(nextSection);
     const params = new URLSearchParams(window.location.search);
@@ -235,38 +232,11 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     const suffix = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}`);
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-  }, [cancelOperation, section]);
+  }, [cancelOperation, section, router]);
 
-  const refreshPrivateData = useCallback(async () => {
-    if (!authenticated) return;
-    const data = await loadDashboardAccountData((path) => api(path)).catch(cause => {
-      setAccountError(cause instanceof Error ? cause.message : 'Could not load account data.');
-      throw cause;
-    });
-    setAccountError('');
-    setProjects(data.projects);
-    setMonitors(data.monitors);
-    setUsage(data.usage);
-    setBilling(data.billing);
-    setNotifications(data.notifications);
-    setNotificationPreferences(data.notificationPreferences);
-    setAccountDataReady(true);
-  }, [authenticated]);
-
-  useEffect(() => {
-    if (!authenticated) { setAccountDataReady(false); return; }
-    void refreshPrivateData().catch(() => {});
-  }, [authenticated, refreshPrivateData]);
-
-  useEffect(() => {
-    const updateCreditBalance = (event: Event) => {
-      const balance = (event as CustomEvent<number>).detail;
-      setUsage((current) => current ? { ...current, creditBalance: balance } : current);
-      setBilling((current) => current ? { ...current, creditBalance: balance } : current);
-    };
-    window.addEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
-    return () => window.removeEventListener(CREDIT_BALANCE_EVENT, updateCreditBalance);
-  }, []);
+  const refreshPrivateData = async () => {
+    await Promise.all(accountResources.map(resource => resource.refresh()));
+  };
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -294,6 +264,17 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   useEffect(() => () => {
     operationController.current?.abort(); projectController.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    // A restored result may have been left while a dataset was still pending.
+    // Preserve completed data and offer retry instead of an orphaned skeleton.
+    setInspector(current => current?.loadingData?.length ? {
+      ...current, loadingData: [], dataErrors: {
+        ...current.dataErrors,
+        ...Object.fromEntries(current.loadingData.map(key => [key, 'Request cancelled. Retry to finish loading.'])),
+      },
+    } : current);
   }, []);
 
   useEffect(() => {
@@ -445,23 +426,34 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     } finally { finishOperation(controller); }
   };
 
-  const openProject = async (project: Project) => {
+  const openProject = useCallback(async (project: Project) => {
     projectController.current?.abort();
     const controller = new AbortController(); projectController.current = controller;
     setSection('projects'); setSelectedProject(null); setProjectLoading(true); setProjectError('');
     try {
-      const detail = await api<ProjectDetail>(`/v1/projects/${project.id}`, { signal: controller.signal });
+      const detail = await api<ProjectDetail>(`/v1/projects/${encodeURIComponent(project.id)}`, { signal: controller.signal });
       setSelectedProject({ ...detail, item_count: detail.items.length });
     } catch (cause) {
       if (!isAbortError(cause)) setProjectError(cause instanceof Error ? cause.message : 'Could not open this project.');
     } finally {
       if (projectController.current === controller) { projectController.current = null; setProjectLoading(false); }
     }
-  };
+  }, [setSelectedProject]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const project = params.get('project');
+    const create = params.get('newProject') === '1';
+    if (!project && !create) return;
+    if (create) setShowNewProject(true);
+    else if (project) void openProject({ id: project, name: '' });
+    params.delete('project'); params.delete('newProject');
+    window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+  }, [openProject]);
 
   const createProject = async (name: string) => {
     const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
-    await refreshPrivateData().catch(() => {}); setShowNewProject(false); setNotice(`Created ${project.name}`);
+    await projectsResource.refresh(); setShowNewProject(false); setNotice(`Created ${project.name}`);
     return project;
   };
 
@@ -480,7 +472,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       await api('/v1/imports', {
         method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),
       });
-      await refreshPrivateData().catch(() => {});
+      await projectsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
   };
 
@@ -497,7 +489,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
       const existing = monitors.find((monitor) => monitor.provider === inspector.provider && monitor.target === target);
       if (existing) await api(`/v1/monitors/${existing.id}`, { method: 'PATCH', body: JSON.stringify({ query }) });
       else await api('/v1/monitors', { method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: 'channel', target, query }) });
-      setNotice(existing ? `Already monitoring ${label}` : `Monitoring ${label} for new uploads`); await refreshPrivateData();
+      setNotice(existing ? `Already monitoring ${label}` : `Monitoring ${label} for new uploads`); await monitorsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
   };
 
@@ -586,7 +578,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             onSettings={() => navigateTo('settings')}
           />
         </DashboardHeader>
-        {accountError ? <div className='alert error' role='alert'>{accountError} <button onClick={() => void refreshPrivateData().catch(() => {})}>Retry account data</button></div> : !accountDataReady ? <p role='status'>Loading account data…</p> : null}
+        {accountError ? <div className='alert error' role='alert'>{accountError} <button onClick={() => void refreshPrivateData().catch(() => {})}>Retry account data</button></div> : null}
 
         <div className='workspace-view' hidden={section !== 'trends'}><TrendLab onInspect={(id) => { navigateTo('discover'); void inspect('video', id); }} /></div>
         <div className='workspace-view' hidden={section !== 'discover'}>
@@ -631,13 +623,32 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             )}
           </>
         </div>
-        <div className='workspace-view' hidden={section !== 'projects'}>{accountDataReady && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
-        <div className='workspace-view' hidden={section !== 'monitors'}>{accountDataReady && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
-        <div className='workspace-view' hidden={section !== 'settings'}>{accountDataReady && <SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} />}</div>
+        <div className='workspace-view' hidden={section !== 'projects'}>{!projectsResource.ready && !projectsResource.error && <AccountSectionSkeleton section='projects' />}{projectsResource.ready && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
+        <div className='workspace-view' hidden={section !== 'monitors'}>{!monitorsResource.ready && !monitorsResource.error && <AccountSectionSkeleton section='monitors' />}{monitorsResource.ready && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
       </div>
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
   );
+}
+
+function AccountSectionSkeleton({ section, detail = false }: { section: 'projects' | 'monitors'; detail?: boolean }) {
+  const projects = section === 'projects';
+  return <section className='content-section standalone' role='status' aria-label={`Loading ${detail ? 'project' : section}`} aria-busy='true'>
+    <span className='sr-only'>Loading {detail ? 'project' : section}</span>
+    <div aria-hidden='true'>
+      {detail && <span className='back'><i className='ui-bar' data-width='short' /></span>}
+      <header className={pageStyles.pageHeading}>
+        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Get updates from channels and searches you follow.'}</p></div>
+        <span className='skeleton-control' />
+      </header>
+      <div className={pageStyles.listHeading}><h3>{detail ? 'Saved sources' : projects ? 'Projects' : 'Monitors'}</h3></div>
+      <div className={pageStyles.recordList}>{Array.from({ length: 3 }, (_, index) => <div key={index} className={`${projects ? pageStyles.projectRow : pageStyles.monitorRow} ${pageStyles.skeletonRow}`}>
+        <span className={pageStyles.rowIcon} />
+        <div className={pageStyles.recordCopy}><strong><i className='ui-bar' data-width='medium' /></strong><small><i className='ui-bar' data-width='long' /></small>{!projects && <><p><i className='ui-bar' data-width='medium' /></p><div className={pageStyles.rowActions}><i className='ui-bar skeleton-action' /></div></>}</div>
+        {projects ? <span className={pageStyles.recordMeta}>{!detail && <i className='ui-bar skeleton-action' />}<i className='ui-bar skeleton-chevron' /></span> : <div className={pageStyles.monitorSchedule}><label><span>Check every</span><span className='skeleton-control' /></label><span className='skeleton-control skeleton-square' /></div>}
+      </div>)}</div>
+    </div>
+  </section>;
 }
 
 function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSettings }: {
@@ -668,246 +679,11 @@ function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSetting
   </div>;
 }
 
-function SettingsView({ email, emailConsent, accountDataReady, isDemo, billing, onBillingChange, preferences, onPreferencesChange }: {
-  email?: string;
-  emailConsent?: string;
-  accountDataReady: boolean;
-  isDemo: boolean;
-  billing: DashboardBilling | null;
-  onBillingChange: (billing: DashboardBilling) => void;
-  preferences: DashboardNotificationPreferences;
-  onPreferencesChange: (preferences: DashboardNotificationPreferences) => void;
-}) {
-  const [confirmation, setConfirmation] = useState('');
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  const [preferenceSaving, setPreferenceSaving] = useState<'inApp' | 'emailAlerts'>();
-  const [preferenceMessage, setPreferenceMessage] = useState('');
-  const [confirmationState, setConfirmationState] = useState<'idle' | 'confirming' | 'success' | 'error'>('idle');
-  const [confirmationMessage, setConfirmationMessage] = useState('');
-  const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
-  const [billingMessage, setBillingMessage] = useState('');
-  const attemptedEmailConsent = useRef<string | undefined>(undefined);
-  const confirmed = canDeleteAccount(confirmation);
-
-  const startCheckout = async () => {
-    if (billingAction || isDemo) return;
-    setBillingAction('checkout');
-    setBillingMessage('');
-    try {
-      const result = await authClient.checkout({ slug: 'builder' });
-      if (result.error) throw new Error(result.error.message ?? 'Could not start checkout.');
-    } catch (cause) {
-      setBillingMessage(cause instanceof Error ? cause.message : 'Could not start checkout.');
-      setBillingAction(undefined);
-    }
-  };
-
-  const openBillingPortal = async () => {
-    if (billingAction || isDemo) return;
-    setBillingAction('portal');
-    setBillingMessage('');
-    try {
-      const result = await authClient.customer.portal();
-      if (result.error) throw new Error(result.error.message ?? 'Could not open billing management.');
-    } catch (cause) {
-      setBillingMessage(cause instanceof Error ? cause.message : 'Could not open billing management.');
-      setBillingAction(undefined);
-    }
-  };
-
-  useEffect(() => {
-    const checkout = new URLSearchParams(window.location.search).get('checkout');
-    if (checkout === 'cancelled') {
-      setBillingMessage('Checkout was cancelled. Your current plan has not changed.');
-      return;
-    }
-    if (checkout !== 'success') return;
-
-    let cancelled = false;
-    let attempts = 0;
-    setBillingMessage('Payment received. Confirming your Builder plan and credits...');
-    const reconcile = async () => {
-      attempts += 1;
-      try {
-        const next = await api<DashboardBilling>('/v1/billing', { cache: 'no-store' });
-        if (cancelled) return;
-        onBillingChange(next);
-        if (next.plan === 'builder') {
-          setBillingMessage('Builder is active and your credit balance is ready.');
-          return;
-        }
-      } catch (cause) {
-        if (!cancelled) setBillingMessage(cause instanceof Error ? cause.message : 'Could not confirm billing status.');
-        return;
-      }
-      if (!cancelled && attempts < 8) window.setTimeout(() => void reconcile(), 1_500);
-      else if (!cancelled) setBillingMessage('Payment is still syncing. Refresh in a moment if Builder does not appear.');
-    };
-    void reconcile();
-    return () => { cancelled = true; };
-  }, [onBillingChange]);
-
-  const savePreference = async (key: 'inApp' | 'emailAlerts', value: boolean) => {
-    const previous = preferences;
-    const next = key === 'emailAlerts' && value
-      ? { ...preferences, emailAlerts: false, emailAlertsPending: true }
-      : { ...preferences, [key]: value, ...(key === 'emailAlerts' ? { emailAlertsPending: false } : {}) };
-    onPreferencesChange(next);
-    setPreferenceSaving(key);
-    setPreferenceMessage('');
-    try {
-      const saved = await api<DashboardNotificationPreferences>('/v1/notification-preferences', {
-        method: 'PUT', body: JSON.stringify({ [key]: value }),
-      });
-      onPreferencesChange(saved);
-      setPreferenceMessage(key === 'emailAlerts' && value
-        ? `Confirmation sent to ${email}. Email alerts remain off until you approve them.`
-        : 'Notification preferences saved.');
-    } catch (cause) {
-      onPreferencesChange(previous);
-      setPreferenceMessage(cause instanceof Error ? cause.message : 'Could not save notification preferences.');
-    } finally {
-      setPreferenceSaving(undefined);
-    }
-  };
-
-  const confirmEmailDelivery = useCallback(async (confirmationToken: string) => {
-    setConfirmationState('confirming');
-    setConfirmationMessage('');
-    try {
-      const saved = await confirmDashboardEmailConsent(
-        (path, options) => api<DashboardNotificationPreferences>(path, options),
-        confirmationToken,
-      );
-      onPreferencesChange(saved);
-      setConfirmationState('success');
-      setConfirmationMessage(`Email alerts are now enabled for ${email}.`);
-      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
-    } catch (cause) {
-      setConfirmationState('error');
-      setConfirmationMessage(cause instanceof Error ? cause.message : 'Could not confirm email alerts.');
-    }
-  }, [email, onPreferencesChange]);
-
-  useEffect(() => {
-    const confirmationToken = emailConsentToConfirm(
-      emailConsent,
-      email,
-      accountDataReady,
-      attemptedEmailConsent.current,
-    );
-    if (!confirmationToken) return;
-    attemptedEmailConsent.current = confirmationToken;
-    if (preferences.emailAlerts) {
-      setConfirmationState('success');
-      setConfirmationMessage(`Email alerts are already enabled for ${email}.`);
-      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
-      return;
-    }
-    void confirmEmailDelivery(confirmationToken);
-  }, [accountDataReady, confirmEmailDelivery, email, emailConsent, preferences.emailAlerts]);
-
-  const deleteAccount = async () => {
-    if (!email || !confirmed || deleting) return;
-    setDeleting(true);
-    setDeleteError('');
-    try {
-      await api<void>('/v1/account', { method: 'DELETE' });
-      window.location.replace('/');
-    } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
-      setDeleting(false);
-    }
-  };
-
-  return <section className='content-section standalone settings-page'><header className={pageStyles.intro}><h2>Workspace settings</h2><p>Manage your plan, notifications, and account.</p></header>
-    <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
-      <div>
-        <span className='panel-label'>Billing</span>
-        <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
-          ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
-          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 20,000 credit monthly allowance and higher workspace limits.'}</p>
-        {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
-          ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
-          : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}
-        {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
-      </div>
-      <div className='grid gap-2'>
-        {billing?.plan === 'builder' || billing?.canManageBilling
-          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction) || isDemo} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
-        {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
-      </div>
-    </article>
-    <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
-      <div className='settings-notification-intro'>
-        <h3 className='settings-card-title' id='notification-settings-heading'>Notifications</h3>
-        <p className='settings-card-copy'>Updates from your monitors.</p>
-      </div>
-      <div className='settings-toggle-list'>
-        {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
-          <span><strong>{confirmationState === 'confirming' ? 'Confirming email alerts…' : confirmationState === 'success' ? 'Email alerts enabled' : 'Email confirmation failed'}</strong><small>{confirmationState === 'confirming' ? <>Checking the approval for <b>{email}</b>.</> : confirmationMessage}</small></span>
-        </div>}
-        <label className='settings-toggle-row'>
-          <span><strong>In-app alerts</strong><small>Show new monitor matches in the notification inbox.</small></span>
-          <input type='checkbox' role='switch' checked={preferences.inApp} disabled={Boolean(preferenceSaving)} onChange={(event) => void savePreference('inApp', event.target.checked)} />
-          <i aria-hidden='true' />
-        </label>
-        <label className='settings-toggle-row' data-disabled={!email}>
-          <span><strong>Email alerts</strong><small>{email
-            ? preferences.emailAlerts
-              ? <>Confirmed for <b>{email}</b>. New monitor matches can be emailed immediately.</>
-              : preferences.emailAlertsPending
-                ? <>Waiting for confirmation from <b>{email}</b>. Monitor emails remain off.</>
-                : <>Off by default. Enabling sends a confirmation message to <b>{email}</b>.</>
-            : 'Sign in with an account to enable email delivery.'}</small></span>
-          <input type='checkbox' role='switch' checked={Boolean(email && (preferences.emailAlerts || preferences.emailAlertsPending))} disabled={!email || Boolean(preferenceSaving)} onChange={(event) => void savePreference('emailAlerts', event.target.checked)} />
-          <i aria-hidden='true' />
-        </label>
-        {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
-        {isDemo && <p className='settings-demo-note'>Email delivery is unavailable in local preview.</p>}
-        {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
-      </div>
-    </article>
-    <article className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1'>
-      <div><span className='panel-label'>Signed-in account</span><h3 className='settings-card-title mt-2 mb-0'>{email ?? 'Local demo account'}</h3></div>
-      <Link className='button secondary no-underline max-[43.75rem]:w-full' href='/dashboard/developer'>Manage API keys</Link>
-    </article>
-    <article className='mt-6 grid grid-cols-[minmax(0,1fr)_minmax(17rem,24rem)] items-start gap-10 rounded-[var(--radius-dashboard-md)] border border-[color-mix(in_srgb,var(--color-dashboard-danger)_45%,var(--color-dashboard-rule))] bg-[color-mix(in_srgb,var(--color-dashboard-danger)_4%,var(--color-dashboard-surface))] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='delete-account-heading'>
-      <div>
-        <span className='panel-label !text-[var(--color-dashboard-danger)]'>Danger zone</span>
-        <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
-      </div>
-      {email ? <div className='grid gap-2'>
-        <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
-        <input
-          className='settings-confirm-input min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[var(--color-dashboard-ink)]'
-          id='delete-account-confirmation'
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-          autoComplete='off'
-          spellCheck={false}
-          placeholder={DELETE_ACCOUNT_CONFIRMATION}
-          aria-describedby='delete-account-help'
-          disabled={deleting}
-        />
-        <small className='text-[.7rem] text-[var(--color-dashboard-muted)]' id='delete-account-help'>The confirmation is case-sensitive.</small>
-        <button className='settings-delete-button mt-2 min-h-11 cursor-pointer rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-danger)] bg-[var(--color-dashboard-danger)] text-white hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-45' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
-          {deleting ? 'Deleting account…' : 'Delete account permanently'}
-        </button>
-        {deleteError && <p className='settings-danger-message' role='alert'>{deleteError}</p>}
-      </div> : <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Account deletion is unavailable for the local demo identity.</p>}
-    </article>
-  </section>;
-}
 
 function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
-  const [topic, setTopic] = useState('');
-  const [report, setReport] = useState<TrendReport | null>(null);
-  const [aiPlan, setAiPlan] = useState<AiTrendPlan | null>(null);
+  const [topic, setTopic] = useDashboardDraft('trend-topic', '');
+  const [report, setReport] = useDashboardDraft<TrendReport | null>('trend-report', null);
+  const [aiPlan, setAiPlan] = useDashboardDraft<AiTrendPlan | null>('trend-ai-plan', null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1076,13 +852,6 @@ function SourceChannelSkeleton() {
       <i className='ui-bar' /><i className='ui-bar' /><i className='ui-bar' />
     </div>
   </aside>;
-}
-
-function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' }) {
-  return <div className={`source-skeleton source-skeleton-${variant}`} role='status' aria-label={label}>
-    <span className='sr-only'>{label}</span>
-    <div className='source-skeleton-lines' aria-hidden='true'>{Array.from({ length: lines }).map((_, index) => <i key={index} />)}</div>
-  </div>;
 }
 
 function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, failed }: { items: SearchItem[]; onInspect: (id: string, provider?: ProviderId) => void; onStart: () => void; loading: boolean; hasSearched: boolean; failed: boolean }) {
@@ -1288,7 +1057,7 @@ function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, on
     })}</ol>
     <div className='source-comments-pagination'>
       <span>{page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
-      {page?.continuation ? <button type='button' disabled={loading} onClick={onLoadMore}>{loading ? 'Loading…' : 'Load next page'}</button> : null}
+      {page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page</button> : null}
     </div>
     {error ? <p className='source-data-warning' role='alert'>{error}</p> : null}
   </>;
@@ -1314,6 +1083,7 @@ function CatalogEntity({ inspector }: { inspector: Inspector }) {
 }
 
 function ProjectsView({ projects, selectedProject, loading, error, onCreate, onOpen, onBack, onFindSources, onOpenItem }: { projects: Project[]; selectedProject: ProjectDetail | null; loading: boolean; error: string; onCreate:()=>void; onOpen:(project:Project)=>void; onBack:()=>void; onFindSources:()=>void; onOpenItem:(item:ProjectItem)=>void }) {
+  if (loading) return <AccountSectionSkeleton section='projects' detail />;
   if (selectedProject) return <section className='content-section standalone project-detail'>
     <button className='back' onClick={onBack}>← All projects</button>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>{selectedProject.name}</h2>{selectedProject.description && <p>{selectedProject.description}</p>}</div><button className={pageStyles.primaryAction} onClick={onFindSources}><Icon name='plus' size={15} />Add sources</button></header>
@@ -1325,7 +1095,6 @@ function ProjectsView({ projects, selectedProject, loading, error, onCreate, onO
   </section>;
   return <section className='content-section standalone'>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Your projects</h2><p>Keep related sources and saved moments together.</p></div><button className={pageStyles.primaryAction} onClick={onCreate}><Icon name='plus' size={15} />New project</button></header>
-    {loading && <div className='inline-status' role='status'><span className='status-spinner' aria-hidden='true'/>Opening project…</div>}
     {error && <div className='alert error' role='alert'>{error}</div>}
     <div className={pageStyles.listHeading}><h3>Projects <span>{projects.length}</span></h3></div>
     <div className={pageStyles.recordList}>{projects.map(project => <button className={pageStyles.projectRow} key={project.id} onClick={() => onOpen(project)}>
@@ -1425,7 +1194,6 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
 
 function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;}
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
-function formatBillingDate(timestamp:number){return new Date(timestamp).toLocaleDateString([],{dateStyle:'medium'});}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}
 function relativeNotificationTime(timestamp:number){
   const elapsed = Math.max(0, Date.now() - timestamp);

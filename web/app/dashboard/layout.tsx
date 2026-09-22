@@ -1,3 +1,5 @@
+import { DashboardDataProvider } from './DashboardDataProvider';
+import { startDashboardData } from '../../lib/server-dashboard-data';
 import { requireDashboardSession } from '../../lib/dashboard-auth';
 import { headers } from 'next/headers';
 import { DashboardSessionProvider } from './DashboardSessionProvider';
@@ -8,6 +10,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const demoEnabled = isLocalDashboardDemoEnabled(requestHeaders);
   const session = await requireDashboardSession();
 
+  const seeds = startDashboardData(requestHeaders);
   const access = session ? await Promise.allSettled([
     fetchServerAgentAccess(requestHeaders),
     fetchServerAdminAccess(requestHeaders),
@@ -19,6 +22,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const adminAccess = admin?.status === 'fulfilled' && admin.value;
 
   return <DashboardSessionProvider initialAccessError={accessError} initialAdminAccess={adminAccess} initialAgentAccess={agentAccess} initialUser={session?.user ?? null} demoEnabled={demoEnabled}>
-    {children}
+    <DashboardDataProvider key={session?.user.id ?? 'demo'} seeds={seeds}>{children}</DashboardDataProvider>
   </DashboardSessionProvider>;
 }

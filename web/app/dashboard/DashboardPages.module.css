@@ -210,3 +210,6 @@
   .pages :global(.trend-search button) { min-height: 2.75rem; }
   .pages :global(.source-data-options label) { min-height: 2.75rem; }
 }
+
+.skeletonRow, .skeletonRow:hover { cursor: default; background: transparent; }
+.skeletonRow .monitorSchedule :global(.skeleton-control) { height: 36px; }
