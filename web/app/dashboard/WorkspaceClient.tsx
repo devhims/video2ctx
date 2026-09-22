@@ -632,13 +632,21 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
             )}
           </>
         </div>
-        <div className='workspace-view' hidden={section !== 'projects'}>{accountDataReady && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
-        <div className='workspace-view' hidden={section !== 'monitors'}>{accountDataReady && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
-        <div className='workspace-view' hidden={section !== 'settings'}>{accountDataReady && <SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} />}</div>
+        <div className='workspace-view' hidden={section !== 'projects'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='projects' />}{accountDataReady && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
+        <div className='workspace-view' hidden={section !== 'monitors'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='monitors' />}{accountDataReady && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
+        <div className='workspace-view' hidden={section !== 'settings'}>{!accountDataReady && !accountError && <AccountSectionSkeleton section='settings' />}{accountDataReady && <SettingsView email={user?.email} emailConsent={emailConsent} accountDataReady={accountDataReady} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} />}</div>
       </div>
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
   );
+}
+
+function AccountSectionSkeleton({ section }: { section: 'projects' | 'monitors' | 'settings' }) {
+  const title = { projects: 'Your projects', monitors: 'Watch for new videos', settings: 'Settings' }[section];
+  return <section className='content-section standalone' aria-busy='true'>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>{title}</h2><p aria-hidden='true'><i className='ui-bar' /></p></div></header>
+    <SourceSkeleton label={`Loading ${section}`} variant='panel' lines={6} />
+  </section>;
 }
 
 function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSettings }: {

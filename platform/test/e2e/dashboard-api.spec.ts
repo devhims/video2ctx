@@ -42,6 +42,26 @@ test('source errors mirror the API and retry only the failed dataset', async ({ 
   expect(videoReads).toBe(1);
 });
 
+for (const section of ['projects', 'monitors', 'settings']) {
+  test(`${section} shows a skeleton while account data is pending`, async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/platform/v1/projects', async route => {
+      await gate;
+      await route.continue();
+    });
+    await page.goto(`/dashboard?section=${section}`);
+    const skeleton = page.getByRole('status', { name: `Loading ${section}`, exact: true });
+    try {
+      await expect(skeleton).toBeVisible();
+      await expect(skeleton.locator('.source-skeleton-lines')).toBeVisible();
+      await expect(page.getByText('Loading account data…', { exact: true })).toHaveCount(0);
+      await expect(page.getByText('No projects yet', { exact: true })).toHaveCount(0);
+    } finally { release(); }
+    await expect(skeleton).toHaveCount(0);
+  });
+}
+
 test('account errors do not show fabricated empty project results', async ({ page }) => {
   await page.route('**/api/platform/v1/projects', route => route.fulfill({ status: 503, json: { error: { code: 'TEMPORARY', message: 'Projects are temporarily unavailable.' } } }));
   await page.goto('/dashboard?section=projects');
