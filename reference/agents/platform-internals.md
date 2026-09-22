@@ -32,6 +32,8 @@ Use the fully local path by default. Preview and production migrations and Cloud
 
 Run the relevant package, platform, and container tests. Regenerate and verify docs when a public route or the OpenAPI contract changes, and re-check the published skills when a route moves between permission tiers.
 
+`npm --prefix platform run build` includes test type checking. Caption recovery integration tests import extraction-library source, so the platform `prebuild` hook installs that package's locked dependencies, including development types, before running TypeScript. `npm run verify` uses the same build path. Cloudflare builds must use `npm run build` from `platform/`, rather than invoking `tsc` directly or disabling npm lifecycle scripts. This setup requires npm registry access or a populated npm cache and does not change the processor's published-library pin.
+
 
 ## Provider retries and latency
 
