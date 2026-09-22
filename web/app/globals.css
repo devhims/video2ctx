@@ -1742,42 +1742,41 @@ html:has(.developer-page) body {
 .source-skeleton-inline { padding-block: var(--space-xs); }
 .source-skeleton-panel { padding-block: var(--space-sm); gap: var(--space-lg); }
 
-.source-skeleton-channel {
-  grid-template-columns: 3rem minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-md) var(--space-lg);
+/* One line of placeholder text. Sized in `lh`, so it reserves exactly one line
+   box of whatever element hosts it and the real margins and font metrics do the
+   rest. Put these inside the loaded markup rather than rebuilding the layout:
+   that is what keeps a skeleton from drifting away from what replaces it.
+   The `em` height is the fallback for browsers without `lh`. */
+.ui-bar {
+  display: grid;
+  align-items: center;
+  height: 1.45em;
+  height: 1lh;
 }
 
-.source-skeleton-channel .source-skeleton-media { width: 3rem; height: 3rem; border-radius: 50%; }
-
-/* Reserves the loaded header's box: the h2's own margin, two title line boxes at
-   the h2's clamped font size, then the meta line. Without this the preview below
-   jumps when a one-line placeholder title is replaced by a wrapped real one. */
-.source-head-skeleton { margin-top: var(--space-xs); }
-
-.source-head-skeleton i,
-.source-head-skeleton small { display: grid; align-items: center; }
-
-.source-head-skeleton i {
-  max-width: 34ch;
-  height: 1.15em;
-  font-size: clamp(var(--text-md), 2.4vw, var(--text-xl));
-}
-
-.source-head-skeleton small { margin-top: var(--space-sm); height: 1.2em; font-size: .72rem; }
-
-.source-head-skeleton i::before,
-.source-head-skeleton small::before {
+.ui-bar::before {
   content: '';
   display: block;
-  height: .6em;
+  width: 100%;
+  height: .7em;
   border-radius: 4px;
   background: var(--color-dashboard-rule);
   animation: dashboardSkeletonPulse 1.8s ease-in-out infinite;
 }
 
-.source-head-skeleton i:nth-of-type(2)::before { width: 62%; }
-.source-head-skeleton small::before { width: min(14rem, 60%); height: .7em; }
+.ui-bar[data-width='short']::before { width: 34%; }
+.ui-bar[data-width='medium']::before { width: 62%; }
+.ui-bar[data-width='long']::before { width: 88%; }
+
+/* The channel skeleton reuses .source-channel-overview and its children, so the
+   panel padding, the 3.5rem avatar and every gap are the loaded panel's own. */
+.source-channel-skeleton .source-skeleton-media { animation: dashboardSkeletonPulse 1.8s ease-in-out infinite; }
+.source-channel-skeleton .source-channel-identity > div { min-width: 0; flex: 1; }
+.source-channel-skeleton .source-channel-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  font-size: .7rem;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .source-result-skeletons i,
@@ -1785,8 +1784,7 @@ html:has(.developer-page) body {
   .source-result-skeletons small,
   .source-skeleton-media,
   .source-skeleton-lines i,
-  .source-head-skeleton i::before,
-  .source-head-skeleton small::before { animation: none; }
+  .ui-bar::before { animation: none; }
 }
 
 .source-inspector {

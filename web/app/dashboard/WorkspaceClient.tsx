@@ -1053,10 +1053,35 @@ function TrendLoading({ onCancel }: { onCancel: () => void }) {
   return <div className='trend-loading' role='status' aria-live='polite'><div className='loading-dots' aria-hidden='true'><i /><i /><i /></div><p><strong>Building a fresh topic sample…</strong><span>Comparing public video signals.</span></p><button onClick={onCancel}>Cancel scan</button></div>;
 }
 
-function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' | 'channel' }) {
+function SourceChannelSkeleton() {
+  return <aside className='source-channel-overview source-channel-skeleton' role='status' aria-label='Loading channel info'>
+    <span className='sr-only'>Loading channel info</span>
+    <div className='source-channel-identity' aria-hidden='true'>
+      <span className='source-skeleton-media' />
+      <div>
+        <p><i className='ui-bar' data-width='short' /></p>
+        <h3><i className='ui-bar' data-width='long' /></h3>
+        <small><i className='ui-bar' data-width='medium' /></small>
+      </div>
+    </div>
+    <p className='source-channel-description' aria-hidden='true'>
+      <i className='ui-bar' /><i className='ui-bar' /><i className='ui-bar' data-width='medium' />
+    </p>
+    <dl className='source-channel-facts' aria-hidden='true'>
+      {Array.from({ length: 6 }).map((_, index) => <div key={index}>
+        <dt><i className='ui-bar' data-width='medium' /></dt>
+        <dd><i className='ui-bar' data-width='long' /></dd>
+      </div>)}
+    </dl>
+    <div className='source-channel-links' aria-hidden='true'>
+      <i className='ui-bar' /><i className='ui-bar' /><i className='ui-bar' />
+    </div>
+  </aside>;
+}
+
+function SourceSkeleton({ label, lines = 3, variant = 'inline' }: { label: string; lines?: number; variant?: 'inline' | 'panel' }) {
   return <div className={`source-skeleton source-skeleton-${variant}`} role='status' aria-label={label}>
     <span className='sr-only'>{label}</span>
-    {variant === 'channel' ? <span className='source-skeleton-media' aria-hidden='true' /> : null}
     <div className='source-skeleton-lines' aria-hidden='true'>{Array.from({ length: lines }).map((_, index) => <i key={index} />)}</div>
   </div>;
 }
@@ -1131,12 +1156,11 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
     <header className='source-detail-head'>
       <div>
         <p className='panel-label'>Video result</p>
-        <h2 id='source-detail-title' className={metadataLoading ? 'sr-only' : undefined}>{title}</h2>
+        <h2 id='source-detail-title'>{metadataLoading
+          ? <><span className='sr-only'>{title}</span><i className='ui-bar' aria-hidden='true' /><i className='ui-bar' data-width='medium' aria-hidden='true' /></>
+          : title}</h2>
         {metadataLoading
-          ? <div className='source-head-skeleton' role='status' aria-label='Loading video details'>
-            <span className='sr-only'>Loading video details</span>
-            <i aria-hidden='true' /><i aria-hidden='true' /><small aria-hidden='true' />
-          </div>
+          ? <p role='status' aria-label='Loading video details'><span className='sr-only'>Loading video details</span><i className='ui-bar' data-width='medium' aria-hidden='true' /></p>
           : <p>{[videoChannel?.name, String(inspector.data.publishedTimeText ?? ''), String(inspector.data.viewCountText ?? '')].filter(Boolean).join(' · ')}</p>}
       </div>
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
@@ -1145,7 +1169,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
     {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />
-      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <SourceSkeleton label='Loading channel info' variant='channel' lines={4} /> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
+      {inspector.requestedData.includes('channel') && inspector.loadingData?.includes('channel') ? <SourceChannelSkeleton /> : inspector.requestedData.includes('channel') ? <SourceChannelOverview channel={inspector.channel} fallback={videoChannel} error={inspector.dataErrors.channel} /> : null}
     </div>
 
     {panelOptions.length ? <>
