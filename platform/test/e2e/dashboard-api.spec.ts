@@ -81,7 +81,7 @@ test('an access refresh outage preserves the last confirmed access and shows the
   await page.goto('/dashboard/sessions');
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 503, json: { error: { code: 'AUTH_UNAVAILABLE', message: 'The API cannot verify access right now.' } } }));
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.evaluate("window.dispatchEvent(new Event('focus'))");
   await expect(page.getByRole('alert').filter({ hasText: 'The API cannot verify access right now.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.unroute('**/api/platform/v1/agent/access');
@@ -387,11 +387,11 @@ test('API key metadata is server rendered without serializing key material',asyn
 
 test('homepage pixel font is absent from settings downloads and present on the homepage',async({page})=>{
  const fonts:string[]=[];page.on('request',req=>{if(req.resourceType()==='font')fonts.push(req.url());});
- await page.goto('/dashboard/settings');await page.evaluate(()=>document.fonts.ready);await page.waitForLoadState('networkidle');
+ await page.goto('/dashboard/settings');await page.evaluate("document.fonts.ready.then(() => undefined)");await page.waitForLoadState('networkidle');
  const settingsFonts=[...fonts];expect(settingsFonts).toHaveLength(2);
- expect(await page.evaluate(()=>Array.from(document.fonts).some(font=>/pixel/i.test(font.family)))).toBe(false);
- await page.goto('/');await page.evaluate(()=>document.fonts.ready);
- const pixelFamily=await page.locator('.homepage-fonts').evaluate(el=>getComputedStyle(el).getPropertyValue('--font-home-pixel'));
+ expect(await page.evaluate<boolean>("Array.from(document.fonts).some(font => /pixel/i.test(font.family))")).toBe(false);
+ await page.goto('/');await page.evaluate("document.fonts.ready.then(() => undefined)");
+ const pixelFamily=await page.evaluate<string>("getComputedStyle(document.querySelector('.homepage-fonts')).getPropertyValue('--font-home-pixel')");
  expect(pixelFamily).toMatch(/pixelGrid/);
  expect(fonts.filter(url=>!settingsFonts.includes(url))).toHaveLength(1);
 });
