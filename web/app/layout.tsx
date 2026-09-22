@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
-import { GeistPixelGrid } from 'geist/font/pixel';
 import { Analytics } from '@vercel/analytics/next';
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '../lib/site';
 import './globals.css';
@@ -19,7 +18,7 @@ export default function RootLayout({
   return (
     <html
       lang='en'
-      className={`${GeistSans.variable} ${GeistMono.variable} ${GeistPixelGrid.variable}`}
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
     >
       {/* suppressHydrationWarning silences benign mismatches caused by browser
           extensions (Grammarly, 1Password, etc.) that mutate <body> attributes

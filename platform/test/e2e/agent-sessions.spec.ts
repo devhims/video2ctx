@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 
 test('session loading uses one compact placeholder and dashboard headers scroll away', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
+  // Streaming can retain hidden fallback and completed headers in the DOM.
+  const header = page.locator('.topbar:visible');
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => { await pending; await route.continue(); });
@@ -10,14 +12,17 @@ test('session loading uses one compact placeholder and dashboard headers scroll 
     await expect(page.getByRole('status', { name: 'Loading session' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Loading session…' })).toHaveCount(0);
     await expect(page.getByText('Loading messages…')).toHaveCount(0);
-    await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+    await expect(header).toHaveCount(1);
+    await expect(header).toHaveCSS('position', 'static');
     await page.screenshot({ path: testInfo.outputPath('session-loading.png') });
   } finally { release(); }
   await expect(page.locator('.agent-markdown').first()).toBeVisible();
   await page.goto('/dashboard/developer');
-  await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+  await expect(header).toHaveCount(1);
+  await expect(header).toHaveCSS('position', 'static');
   await page.goto('/dashboard?section=monitors');
-  await expect(page.locator('.topbar')).toHaveCSS('position', 'static');
+  await expect(header).toHaveCount(1);
+  await expect(header).toHaveCSS('position', 'static');
 });
 
 test('returning to all sessions shows the remembered list without waiting for another fetch', async ({ page, context }, testInfo) => {

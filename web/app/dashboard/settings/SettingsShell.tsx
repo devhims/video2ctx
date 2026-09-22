@@ -13,11 +13,11 @@ export function SettingsShell({ children }: { children: ReactNode }) {
   const { user, demoEnabled, signOut } = useDashboardSession();
   const { data: projects } = useAccountResource('projects', []);
   const { data: usage } = useAccountResource('usage', null);
-  const navigate = (section: DashboardSection) => router.push(section === 'settings' ? '/dashboard/settings' : `/dashboard?section=${section}`);
+  const navigate = (section: DashboardSection) => router.push(section === 'settings' ? '/dashboard/settings' : `/dashboard/${section === 'discover' ? 'sources' : section}`);
   return <main className='workspace-shell'>
     <DashboardSidebar activeSection='settings' projects={projects} onNavigate={navigate}
-      onNewProject={() => router.push('/dashboard?section=projects&newProject=1')}
-      onOpenProject={project => router.push(`/dashboard?section=projects&project=${encodeURIComponent(project.id)}`)}
+      onNewProject={() => router.push('/dashboard/projects?newProject=1')}
+      onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
       onSignIn={() => router.push('/login')} accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
       credits={usage?.creditBalance} onSignOut={() => void signOut()} />
     <div className={`workspace-main ${styles.pages}`}>

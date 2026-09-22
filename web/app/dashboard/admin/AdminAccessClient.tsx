@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { PlusIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 import { adminAccessRequest, type AgentAccessPage } from '../../../lib/admin-access';
 import { useAccountResource } from '../DashboardDataProvider';
+import { DashboardSkeleton } from '../DashboardSkeleton';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
@@ -14,7 +15,7 @@ import styles from './AdminAccess.module.css';
 
 export default function AdminAccessClient() {
   const router = useRouter();
-  const { user, adminAccess, signOut } = useDashboardSession();
+  const { user, adminAccess, accessReady, signOut } = useDashboardSession();
   const [email, setEmail] = useState('');
   const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
@@ -64,15 +65,15 @@ export default function AdminAccessClient() {
 
   return <main className={'workspace-shell ' + pageStyles.pages}>
     <DashboardSidebar activeSection='admin' projects={projects}
-      onNavigate={section => router.push(`/dashboard?section=${section}`)}
+      onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
       onNewProject={() => router.push('/dashboard?section=projects')}
-      onOpenProject={project => router.push(`/dashboard?section=projects&project=${encodeURIComponent(project.id)}`)}
+      onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       credits={credits} onSignOut={() => void signOut()} />
     <div className='workspace-main'>
       <DashboardHeader title='Admin' />
       <section className={styles.content}>
-        {!user || !adminAccess ? <div className={styles.empty}>
+        {!accessReady ? <DashboardSkeleton label='Checking admin access' variant='panel' /> : !user || !adminAccess ? <div className={styles.empty}>
           <h2>Admin access required</h2><p>Sign in with an authorized admin account to manage Agent access.</p>
           <Link href='/dashboard'>Back to dashboard</Link>
         </div> : <>

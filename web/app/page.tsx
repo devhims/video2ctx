@@ -1,4 +1,12 @@
 import type { Metadata } from 'next';
+import localFont from 'next/font/local';
+
+// Import only the homepage variant; geist/font/pixel initializes all five.
+const pixelGrid = localFont({
+  src: '../node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Grid.woff2',
+  variable: '--font-geist-pixel-grid', weight: '500', display: 'swap',
+  adjustFontFallback: false, fallback: ['monospace'],
+});
 import { HOME_TITLE, SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '../lib/site';
 import { CraftDirection } from './_directions/craft';
 
@@ -46,7 +54,7 @@ export default function HomePage() {
           __html: JSON.stringify(websiteStructuredData).replace(/</g, '\\u003c'),
         }}
       />
-      <CraftDirection />
+      <div className={`${pixelGrid.variable} homepage-fonts`}><CraftDirection /></div>
     </>
   );
 }

@@ -25,7 +25,7 @@ export function DashboardDataProvider({ children, seeds }: { children: ReactNode
 }
 
 // Research survives route navigation, but never persists beyond this user's
-// provider or a full document reload. In-flight operations are not retained.
+// provider or a full document reload. ResearchHost retains active operations.
 export function useDashboardDraft<T>(key: string, initial: T) {
   const drafts = useContext(DraftContext);
   if (!drafts) throw new Error('DashboardDataProvider is missing');
@@ -66,4 +66,10 @@ export function useStreamedAccountResource<K extends AccountResource>(key: K, fa
   // cold rendering suspends only this card until its server result arrives.
   const initial = cached.data !== undefined || cached.error ? undefined : use(promise);
   return useAccountResource(key, fallback, initial, promise);
+}
+
+export function useDashboardCache() {
+  const cache = useContext(Context);
+  if (!cache) throw new Error('DashboardDataProvider is missing');
+  return cache;
 }
