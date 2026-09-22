@@ -2,25 +2,18 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
+import { redirect, useRouter } from 'next/navigation';
 import { platformRequest as api, isAbortError } from '../../lib/platform-request';
 import { loadSourceData } from '../../lib/source-data';
 import { loginPath } from '../../lib/login-redirect';
 import {
-  canDeleteAccount,
-  confirmDashboardEmailConsent,
   DEFAULT_NOTIFICATION_PREFERENCES,
-  DELETE_ACCOUNT_CONFIRMATION,
-  emailConsentToConfirm,
-  pathWithoutEmailConsent,
-  type DashboardBilling,
   type DashboardNotification,
-  type DashboardNotificationPreferences,
 } from '../../lib/dashboard-data';
 import { authClient } from '../../lib/auth-client';
 import { Checkbox } from './Checkbox';
 import { DashboardHeader } from './DashboardHeader';
-import { useAccountResource } from './DashboardDataProvider';
+import { useAccountResource, useDashboardDraft } from './DashboardDataProvider';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 import pageStyles from './DashboardPages.module.css';
 import { DashboardSidebar, Icon, type DashboardSection } from './DashboardSidebar';
@@ -165,13 +158,14 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   else delete inspector.dataErrors[option];
 }
 
-export default function WorkspaceClient({ initialSection = 'trends', emailConsent }: { initialSection?: Section; emailConsent?: string }) {
+export default function WorkspaceClient({ initialSection = 'trends' }: { initialSection?: Section }) {
+  const router = useRouter();
   const { user, demoEnabled, signOut } = useDashboardSession();
   const [section, setSection] = useState<Section>(initialSection);
-  const [query, setQuery] = useState('');
-  const [selectedData, setSelectedData] = useState<SourceDataOption[]>(['transcript']);
-  const [items, setItems] = useState<SearchItem[]>([]);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [query, setQuery] = useDashboardDraft('source-query', '');
+  const [selectedData, setSelectedData] = useDashboardDraft<SourceDataOption[]>('source-options', ['transcript']);
+  const [items, setItems] = useDashboardDraft<SearchItem[]>('source-results', []);
+  const [hasSearched, setHasSearched] = useDashboardDraft('source-searched', false);
   const projectsResource = useAccountResource('projects', []);
   const { data: projects } = projectsResource;
   const monitorsResource = useAccountResource('monitors', []);
@@ -179,23 +173,21 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   const notificationsResource = useAccountResource('notifications', []);
   const { data: notifications, setData: setNotifications } = notificationsResource;
   const preferencesResource = useAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES);
-  const { data: notificationPreferences, setData: setNotificationPreferences } = preferencesResource;
-  const [inspector, setInspector] = useState<Inspector | null>(null);
-  const [transcriptQuery, setTranscriptQuery] = useState('');
+  const { data: notificationPreferences } = preferencesResource;
+  const [inspector, setInspector] = useDashboardDraft<Inspector | null>('source-inspector', null);
+  const [transcriptQuery, setTranscriptQuery] = useDashboardDraft('transcript-query', '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showNewProject, setShowNewProject] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
   const [platformHealth, setPlatformHealth] = useState<PlatformHealthState>('checking');
-  const [selectedProject, setSelectedProject] = useState<ProjectDetail | null>(null);
+  const [selectedProject, setSelectedProject] = useDashboardDraft<ProjectDetail | null>('selected-project', null);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState('');
   const usageResource = useAccountResource('usage', null);
   const { data: usage } = usageResource;
-  const billingResource = useAccountResource('billing', null);
-  const { data: billing, setData: setBilling } = billingResource;
-  const accountResources = [projectsResource, monitorsResource, usageResource, billingResource, notificationsResource, preferencesResource];
+  const accountResources = [projectsResource, monitorsResource, usageResource, notificationsResource, preferencesResource];
   const accountError = accountResources.find(resource => resource.error)?.error;
   const [monitorSavingId, setMonitorSavingId] = useState<string>();
   const operationController = useRef<AbortController | null>(null);
@@ -231,6 +223,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
   }, []);
 
   const navigateTo = useCallback((nextSection: Section) => {
+    if (nextSection === 'settings') { router.push('/dashboard/settings'); return; }
     if (nextSection !== section) cancelOperation();
     setSection(nextSection);
     const params = new URLSearchParams(window.location.search);
@@ -239,7 +232,7 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     const suffix = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}`);
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-  }, [cancelOperation, section]);
+  }, [cancelOperation, section, router]);
 
   const refreshPrivateData = async () => {
     await Promise.all(accountResources.map(resource => resource.refresh()));
@@ -271,6 +264,17 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
 
   useEffect(() => () => {
     operationController.current?.abort(); projectController.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    // A restored result may have been left while a dataset was still pending.
+    // Preserve completed data and offer retry instead of an orphaned skeleton.
+    setInspector(current => current?.loadingData?.length ? {
+      ...current, loadingData: [], dataErrors: {
+        ...current.dataErrors,
+        ...Object.fromEntries(current.loadingData.map(key => [key, 'Request cancelled. Retry to finish loading.'])),
+      },
+    } : current);
   }, []);
 
   useEffect(() => {
@@ -422,19 +426,30 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
     } finally { finishOperation(controller); }
   };
 
-  const openProject = async (project: Project) => {
+  const openProject = useCallback(async (project: Project) => {
     projectController.current?.abort();
     const controller = new AbortController(); projectController.current = controller;
     setSection('projects'); setSelectedProject(null); setProjectLoading(true); setProjectError('');
     try {
-      const detail = await api<ProjectDetail>(`/v1/projects/${project.id}`, { signal: controller.signal });
+      const detail = await api<ProjectDetail>(`/v1/projects/${encodeURIComponent(project.id)}`, { signal: controller.signal });
       setSelectedProject({ ...detail, item_count: detail.items.length });
     } catch (cause) {
       if (!isAbortError(cause)) setProjectError(cause instanceof Error ? cause.message : 'Could not open this project.');
     } finally {
       if (projectController.current === controller) { projectController.current = null; setProjectLoading(false); }
     }
-  };
+  }, [setSelectedProject]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const project = params.get('project');
+    const create = params.get('newProject') === '1';
+    if (!project && !create) return;
+    if (create) setShowNewProject(true);
+    else if (project) void openProject({ id: project, name: '' });
+    params.delete('project'); params.delete('newProject');
+    window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+  }, [openProject]);
 
   const createProject = async (name: string) => {
     const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
@@ -610,7 +625,6 @@ export default function WorkspaceClient({ initialSection = 'trends', emailConsen
         </div>
         <div className='workspace-view' hidden={section !== 'projects'}>{!projectsResource.ready && !projectsResource.error && <AccountSectionSkeleton section='projects' />}{projectsResource.ready && <ProjectsView projects={projects} selectedProject={selectedProject} loading={projectLoading} error={projectError} onCreate={() => setShowNewProject(true)} onOpen={(project) => void openProject(project)} onBack={() => { setSelectedProject(null); setProjectError(''); }} onFindSources={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenItem={(item) => { navigateTo('discover'); void inspect(item.entity_type, item.entity_id, undefined, item.provider); }} />}</div>
         <div className='workspace-view' hidden={section !== 'monitors'}>{!monitorsResource.ready && !monitorsResource.error && <AccountSectionSkeleton section='monitors' />}{monitorsResource.ready && <MonitorsView monitors={monitors} knownChannel={inspectorChannel(inspector)} savingId={monitorSavingId} onFindSource={() => { navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onOpenTarget={(target) => { setQuery(target); navigateTo('discover'); window.requestAnimationFrame(() => searchInput.current?.focus()); }} onSchedule={(id, intervalMinutes) => void updateMonitorSchedule(id, intervalMinutes)} onRemove={(id) => void removeMonitor(id)} />}</div>
-        <div className='workspace-view' hidden={section !== 'settings'}><SettingsView email={user?.email} emailConsent={emailConsent} billingReady={billingResource.ready} preferencesReady={preferencesResource.ready} billingError={billingResource.error} preferencesError={preferencesResource.error} isDemo={demoEnabled} billing={billing} onBillingChange={setBilling} preferences={notificationPreferences} onPreferencesChange={setNotificationPreferences} /></div>
       </div>
       {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreate={(name) => void createProject(name)} />}
     </main>
@@ -665,255 +679,11 @@ function NotificationMenu({ notifications, enabled, onOpen, onMarkAll, onSetting
   </div>;
 }
 
-function SettingsView({ email, emailConsent, billingReady, preferencesReady, billingError, preferencesError, isDemo, billing, onBillingChange, preferences, onPreferencesChange }: {
-  email?: string;
-  emailConsent?: string;
-  billingReady: boolean;
-  preferencesReady: boolean;
-  billingError: string;
-  preferencesError: string;
-  isDemo: boolean;
-  billing: DashboardBilling | null;
-  onBillingChange: (billing: DashboardBilling) => void;
-  preferences: DashboardNotificationPreferences;
-  onPreferencesChange: (preferences: DashboardNotificationPreferences) => void;
-}) {
-  const [confirmation, setConfirmation] = useState('');
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  const [preferenceSaving, setPreferenceSaving] = useState<'inApp' | 'emailAlerts'>();
-  const [preferenceMessage, setPreferenceMessage] = useState('');
-  const [confirmationState, setConfirmationState] = useState<'idle' | 'confirming' | 'success' | 'error'>('idle');
-  const [confirmationMessage, setConfirmationMessage] = useState('');
-  const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
-  const [billingMessage, setBillingMessage] = useState('');
-  const attemptedEmailConsent = useRef<string | undefined>(undefined);
-  const confirmed = canDeleteAccount(confirmation);
-
-  const startCheckout = async () => {
-    if (billingAction || isDemo) return;
-    setBillingAction('checkout');
-    setBillingMessage('');
-    try {
-      const result = await authClient.checkout({ slug: 'builder' });
-      if (result.error) throw new Error(result.error.message ?? 'Could not start checkout.');
-    } catch (cause) {
-      setBillingMessage(cause instanceof Error ? cause.message : 'Could not start checkout.');
-      setBillingAction(undefined);
-    }
-  };
-
-  const openBillingPortal = async () => {
-    if (billingAction || isDemo) return;
-    setBillingAction('portal');
-    setBillingMessage('');
-    try {
-      const result = await authClient.customer.portal();
-      if (result.error) throw new Error(result.error.message ?? 'Could not open billing management.');
-    } catch (cause) {
-      setBillingMessage(cause instanceof Error ? cause.message : 'Could not open billing management.');
-      setBillingAction(undefined);
-    }
-  };
-
-  useEffect(() => {
-    const checkout = new URLSearchParams(window.location.search).get('checkout');
-    if (checkout === 'cancelled') {
-      setBillingMessage('Checkout was cancelled. Your current plan has not changed.');
-      return;
-    }
-    if (checkout !== 'success') return;
-
-    let cancelled = false;
-    let attempts = 0;
-    setBillingMessage('Payment received. Confirming your Builder plan and credits...');
-    const reconcile = async () => {
-      attempts += 1;
-      try {
-        const next = await api<DashboardBilling>('/v1/billing', { cache: 'no-store' });
-        if (cancelled) return;
-        onBillingChange(next);
-        if (next.plan === 'builder') {
-          setBillingMessage('Builder is active and your credit balance is ready.');
-          return;
-        }
-      } catch (cause) {
-        if (!cancelled) setBillingMessage(cause instanceof Error ? cause.message : 'Could not confirm billing status.');
-        return;
-      }
-      if (!cancelled && attempts < 8) window.setTimeout(() => void reconcile(), 1_500);
-      else if (!cancelled) setBillingMessage('Payment is still syncing. Refresh in a moment if Builder does not appear.');
-    };
-    void reconcile();
-    return () => { cancelled = true; };
-  }, [onBillingChange]);
-
-  const savePreference = async (key: 'inApp' | 'emailAlerts', value: boolean) => {
-    const previous = preferences;
-    const next = key === 'emailAlerts' && value
-      ? { ...preferences, emailAlerts: false, emailAlertsPending: true }
-      : { ...preferences, [key]: value, ...(key === 'emailAlerts' ? { emailAlertsPending: false } : {}) };
-    onPreferencesChange(next);
-    setPreferenceSaving(key);
-    setPreferenceMessage('');
-    try {
-      const saved = await api<DashboardNotificationPreferences>('/v1/notification-preferences', {
-        method: 'PUT', body: JSON.stringify({ [key]: value }),
-      });
-      onPreferencesChange(saved);
-      setPreferenceMessage(key === 'emailAlerts' && value
-        ? `Confirmation sent to ${email}. Email alerts remain off until you approve them.`
-        : 'Notification preferences saved.');
-    } catch (cause) {
-      onPreferencesChange(previous);
-      setPreferenceMessage(cause instanceof Error ? cause.message : 'Could not save notification preferences.');
-    } finally {
-      setPreferenceSaving(undefined);
-    }
-  };
-
-  const confirmEmailDelivery = useCallback(async (confirmationToken: string) => {
-    setConfirmationState('confirming');
-    setConfirmationMessage('');
-    try {
-      const saved = await confirmDashboardEmailConsent(
-        (path, options) => api<DashboardNotificationPreferences>(path, options),
-        confirmationToken,
-      );
-      onPreferencesChange(saved);
-      setConfirmationState('success');
-      setConfirmationMessage(`Email alerts are now enabled for ${email}.`);
-      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
-    } catch (cause) {
-      setConfirmationState('error');
-      setConfirmationMessage(cause instanceof Error ? cause.message : 'Could not confirm email alerts.');
-    }
-  }, [email, onPreferencesChange]);
-
-  useEffect(() => {
-    const confirmationToken = emailConsentToConfirm(
-      emailConsent,
-      email,
-      preferencesReady,
-      attemptedEmailConsent.current,
-    );
-    if (!confirmationToken) return;
-    attemptedEmailConsent.current = confirmationToken;
-    if (preferences.emailAlerts) {
-      setConfirmationState('success');
-      setConfirmationMessage(`Email alerts are already enabled for ${email}.`);
-      window.history.replaceState(null, '', pathWithoutEmailConsent(window.location.pathname, window.location.search));
-      return;
-    }
-    void confirmEmailDelivery(confirmationToken);
-  }, [preferencesReady, confirmEmailDelivery, email, emailConsent, preferences.emailAlerts]);
-
-  const deleteAccount = async () => {
-    if (!email || !confirmed || deleting) return;
-    setDeleting(true);
-    setDeleteError('');
-    try {
-      await api<void>('/v1/account', { method: 'DELETE' });
-      window.location.replace('/');
-    } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
-      setDeleting(false);
-    }
-  };
-
-  return <section className='content-section standalone settings-page'><header className={pageStyles.intro}><h2>Workspace settings</h2><p>Manage your plan, notifications, and account.</p></header>
-    <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
-      {!billingReady && billingError ? <p>Billing could not be loaded. Use Retry account data to try again.</p> : !billingReady ? <><div role='status' aria-label='Loading billing'><span className='panel-label'>Billing</span><h3 className='settings-card-title mt-2 mb-0'><i className='ui-bar' data-width='medium' /></h3><p className='settings-card-copy mt-2 mb-0'><i className='ui-bar' /><i className='ui-bar' data-width='long' /></p></div><span className='skeleton-control skeleton-control-wide' aria-hidden='true' /></> : <>
-
-      <div>
-        <span className='panel-label'>Billing</span>
-        <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
-          ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
-          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 20,000 credit monthly allowance and higher workspace limits.'}</p>
-        {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
-          ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
-          : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}
-        {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
-      </div>
-      <div className='grid gap-2'>
-        {billing?.plan === 'builder' || billing?.canManageBilling
-          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction) || isDemo} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
-        {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
-      </div>
-      </>}
-    </article>
-    <article className='settings-notification-card' aria-labelledby='notification-settings-heading'>
-      <div className='settings-notification-intro'>
-        <h3 className='settings-card-title' id='notification-settings-heading'>Notifications</h3>
-        <p className='settings-card-copy'>Updates from your monitors.</p>
-      </div>
-      <div className='settings-toggle-list'>
-        {!preferencesReady && preferencesError ? <p>Notification preferences could not be loaded. Use Retry account data to try again.</p> : !preferencesReady ? <div role='status' aria-label='Loading notification preferences'>{['In-app alerts', 'Email alerts'].map(label => <div className='settings-toggle-row' key={label} aria-hidden='true'><span><strong>{label}</strong><small><i className='ui-bar' /><i className='ui-bar' data-width='medium' /></small></span><span className='skeleton-toggle' /></div>)}</div> : <>
-
-        {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
-          <span><strong>{confirmationState === 'confirming' ? 'Confirming email alerts…' : confirmationState === 'success' ? 'Email alerts enabled' : 'Email confirmation failed'}</strong><small>{confirmationState === 'confirming' ? <>Checking the approval for <b>{email}</b>.</> : confirmationMessage}</small></span>
-        </div>}
-        <label className='settings-toggle-row'>
-          <span><strong>In-app alerts</strong><small>Show new monitor matches in the notification inbox.</small></span>
-          <input type='checkbox' role='switch' checked={preferences.inApp} disabled={Boolean(preferenceSaving)} onChange={(event) => void savePreference('inApp', event.target.checked)} />
-          <i aria-hidden='true' />
-        </label>
-        <label className='settings-toggle-row' data-disabled={!email}>
-          <span><strong>Email alerts</strong><small>{email
-            ? preferences.emailAlerts
-              ? <>Confirmed for <b>{email}</b>. New monitor matches can be emailed immediately.</>
-              : preferences.emailAlertsPending
-                ? <>Waiting for confirmation from <b>{email}</b>. Monitor emails remain off.</>
-                : <>Off by default. Enabling sends a confirmation message to <b>{email}</b>.</>
-            : 'Sign in with an account to enable email delivery.'}</small></span>
-          <input type='checkbox' role='switch' checked={Boolean(email && (preferences.emailAlerts || preferences.emailAlertsPending))} disabled={!email || Boolean(preferenceSaving)} onChange={(event) => void savePreference('emailAlerts', event.target.checked)} />
-          <i aria-hidden='true' />
-        </label>
-        {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
-        {isDemo && <p className='settings-demo-note'>Email delivery is unavailable in local preview.</p>}
-        {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
-        </>}
-      </div>
-    </article>
-    <article className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1'>
-      <div><span className='panel-label'>Signed-in account</span><h3 className='settings-card-title mt-2 mb-0'>{email ?? 'Local demo account'}</h3></div>
-      <Link className='button secondary no-underline max-[43.75rem]:w-full' href='/dashboard/developer'>Manage API keys</Link>
-    </article>
-    <article className='mt-6 grid grid-cols-[minmax(0,1fr)_minmax(17rem,24rem)] items-start gap-10 rounded-[var(--radius-dashboard-md)] border border-[color-mix(in_srgb,var(--color-dashboard-danger)_45%,var(--color-dashboard-rule))] bg-[color-mix(in_srgb,var(--color-dashboard-danger)_4%,var(--color-dashboard-surface))] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='delete-account-heading'>
-      <div>
-        <span className='panel-label !text-[var(--color-dashboard-danger)]'>Danger zone</span>
-        <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
-      </div>
-      {email ? <div className='grid gap-2'>
-        <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
-        <input
-          className='settings-confirm-input min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[var(--color-dashboard-ink)]'
-          id='delete-account-confirmation'
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-          autoComplete='off'
-          spellCheck={false}
-          placeholder={DELETE_ACCOUNT_CONFIRMATION}
-          aria-describedby='delete-account-help'
-          disabled={deleting}
-        />
-        <small className='text-[.7rem] text-[var(--color-dashboard-muted)]' id='delete-account-help'>The confirmation is case-sensitive.</small>
-        <button className='settings-delete-button mt-2 min-h-11 cursor-pointer rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-danger)] bg-[var(--color-dashboard-danger)] text-white hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-45' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
-          {deleting ? 'Deleting account…' : 'Delete account permanently'}
-        </button>
-        {deleteError && <p className='settings-danger-message' role='alert'>{deleteError}</p>}
-      </div> : <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Account deletion is unavailable for the local demo identity.</p>}
-    </article>
-  </section>;
-}
 
 function TrendLab({ onInspect }: { onInspect: (id: string) => void }) {
-  const [topic, setTopic] = useState('');
-  const [report, setReport] = useState<TrendReport | null>(null);
-  const [aiPlan, setAiPlan] = useState<AiTrendPlan | null>(null);
+  const [topic, setTopic] = useDashboardDraft('trend-topic', '');
+  const [report, setReport] = useDashboardDraft<TrendReport | null>('trend-report', null);
+  const [aiPlan, setAiPlan] = useDashboardDraft<AiTrendPlan | null>('trend-ai-plan', null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1424,7 +1194,6 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void) {
 
 function formatTime(ms:number){const total=Math.floor(ms/1000);return `${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;}
 function formatNumber(value:unknown){const number=Number(value);return Number.isFinite(number)?Intl.NumberFormat('en',{notation:'compact'}).format(number):'—';}
-function formatBillingDate(timestamp:number){return new Date(timestamp).toLocaleDateString([],{dateStyle:'medium'});}
 function formatDuration(seconds:number){const minutes=Math.round(seconds/60);return minutes >= 60 ? `${Math.floor(minutes/60)}h ${minutes%60}m` : `${minutes} minutes`;}
 function relativeNotificationTime(timestamp:number){
   const elapsed = Math.max(0, Date.now() - timestamp);

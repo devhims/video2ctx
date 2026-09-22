@@ -94,3 +94,36 @@ test('a mutation refresh supersedes a pending read taken before the mutation', a
   await refresh;
   assert.equal(cache.read('projects').data?.[0].id, 'new');
 });
+
+test('rendered server results seed once without replacing newer browser data', async () => {
+  let reads = 0;
+  const cache = createDashboardCache(async () => { reads++; return { projects: [] }; });
+  cache.initialize('projects', { data: [{ id: 'server', name: 'Server' }], updatedAt: Date.now() });
+  await cache.load('projects');
+  assert.equal(reads, 0);
+  cache.set('projects', [{ id: 'new', name: 'Just created' }]);
+  cache.initialize('projects', { data: [] });
+  assert.equal(cache.read('projects').data?.[0].id, 'new');
+});
+
+test('streamed failures remain errors until retry and stale rendered data revalidates', async () => {
+  let reads = 0;
+  const cache = createDashboardCache(async () => { reads++; return { projects: [] }; });
+  cache.initialize('projects', { error: 'Unavailable' });
+  await cache.load('projects');
+  assert.equal(reads, 0);
+  assert.equal(cache.read('projects').error, 'Unavailable');
+  await cache.load('projects', true);
+  assert.deepEqual(cache.read('projects').data, []);
+  const stale = createDashboardCache(async () => ({ projects: [{ id: 'fresh', name: 'Fresh' }] }));
+  stale.initialize('projects', { data: [], updatedAt: Date.now() - 61_000 });
+  await stale.load('projects');
+  assert.equal(stale.read('projects').data?.[0].id, 'fresh');
+});
+
+test('a stale browser entry reuses a new route server read for revalidation', async () => {
+  const cache = createDashboardCache(async () => { throw new Error('Unexpected duplicate browser request'); });
+  cache.initialize('projects', { data: [], updatedAt: Date.now() - 61_000 });
+  await cache.load('projects', false, Promise.resolve({ data: [{ id: 'fresh', name: 'Fresh from route' }], updatedAt: Date.now() }));
+  assert.equal(cache.read('projects').data?.[0].id, 'fresh');
+});

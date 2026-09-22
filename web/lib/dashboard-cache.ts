@@ -31,7 +31,7 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
   function read<K extends AccountResource>(key: K): ResourceSnapshot<DashboardAccountData[K]> {
     return (snapshots.get(key) ?? initial) as ResourceSnapshot<DashboardAccountData[K]>;
   }
-  function load(key: AccountResource, force = false): Promise<void> {
+  function load(key: AccountResource, force = false, serverSeed?: Promise<ResourceResult<DashboardAccountData[AccountResource]>>): Promise<void> {
     const running = pending.get(key);
     if (running && !force) return running;
     if (force) versions.set(key, (versions.get(key) ?? 0) + 1);
@@ -39,7 +39,7 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
     if (!force && previous.updatedAt && Date.now() - previous.updatedAt < FRESH_MS) return Promise.resolve();
     const version = versions.get(key) ?? 0;
     snapshots.set(key, { ...previous, loading: true, error: '' });
-    const seed = force ? undefined : seeds[key];
+    const seed = force ? undefined : serverSeed ?? seeds[key];
     delete seeds[key];
     let task!: Promise<void>;
     task = (async () => {
@@ -62,7 +62,14 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
     snapshots.set(key, { data, error: '', loading: false, updatedAt: Date.now() });
     emit();
   }
+  function initialize<K extends AccountResource>(key: K, result: ResourceResult<DashboardAccountData[K]>) {
+    // A streamed page must never replace a mutation or an existing browser read.
+    if (snapshots.has(key) || pending.has(key)) return;
+    delete seeds[key];
+    snapshots.set(key, { data: result.data, error: result.error ?? '', loading: false, updatedAt: result.updatedAt ?? Date.now() });
+    emit();
+  }
   // Hydration always starts from the same empty snapshot as the server render.
   function readServer<K extends AccountResource>(_key: K): ResourceSnapshot<DashboardAccountData[K]> { return initial; }
-  return { read, readServer, load, set, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { read, readServer, load, set, initialize, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }

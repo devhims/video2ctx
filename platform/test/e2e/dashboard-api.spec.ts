@@ -215,12 +215,14 @@ test('dashboard navigation reuses account data without browser refetches', async
   await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
   await page.getByRole('link', { name: 'API keys', exact: true }).click();
   await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
   expect(reads).toEqual([]);
   const serverReads = await scenario.reads();
   await scenario.clear();
-  expect(serverReads['/v1/billing']).toBe(1);
+  // Dynamic page navigation may start a fresh server read on the return visit.
+  // The warm browser cache stays visible and never duplicates it with an API read.
+  expect(serverReads['/v1/billing']).toBeLessThanOrEqual(2);
   expect(serverReads['/v1/projects']).toBe(1);
 });
 
@@ -233,7 +235,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
     try {
       await expect(page.getByRole('status', { name: 'Loading billing' })).toBeVisible();
       await expect(page.getByRole('status', { name: 'Loading notification preferences' })).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
       await page.screenshot({ path: testInfo.outputPath('settings-mobile-loading.png'), fullPage: true });
       await scenario.release();
       await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
@@ -249,5 +251,87 @@ test('a failed settings card does not keep pulsing or block the other card', asy
     await expect(page.getByRole('alert').filter({ hasText: 'Billing unavailable' })).toBeVisible();
     await expect(page.getByRole('status', { name: 'Loading billing' })).toHaveCount(0);
     await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
+  } finally { await scenario.clear(); }
+});
+
+test('settings renders account data on the server and requests only its own resources', async ({ page }) => {
+  const scenario = await accountScenario(page, {});
+  try {
+    const response = await page.request.get('/dashboard/settings');
+    const document = await response.text();
+    expect(document).not.toMatch(/src="[^"]*\/app\/dashboard\/page-/);
+    const html = document.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    expect(html).toMatch(/<h3[^>]*>Starter plan<\/h3>/);
+    expect(html).toContain('Show new monitor matches in the notification inbox.');
+    const reads = await scenario.reads();
+    expect(reads['/v1/billing']).toBe(1);
+    expect(reads['/v1/notification-preferences']).toBe(1);
+    expect(reads['/v1/monitors'] ?? 0).toBe(0);
+    expect(reads['/v1/notifications'] ?? 0).toBe(0);
+  } finally { await scenario.clear(); }
+});
+
+test('research drafts survive a visit to the settings route', async ({ page }) => {
+  await page.goto('/dashboard?section=discover');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill('a draft research query');
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard\/settings$/);
+  await page.getByRole('button', { name: 'Sources', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('a draft research query');
+});
+
+test('legacy settings links preserve checkout and email confirmation parameters', async ({ page }) => {
+  await page.route('**/api/platform/v1/notification-preferences/confirm-email', route => route.fulfill({ json: { inApp: true, emailAlerts: true, emailAlertsPending: false, emailDigest: 'off' } }));
+  await page.goto('/dashboard?section=settings&checkout=cancelled&emailConsent=test-confirmation');
+  await expect(page).toHaveURL(/\/dashboard\/settings\?checkout=cancelled$/);
+  await expect(page.getByText('Checkout was cancelled. Your current plan has not changed.')).toBeVisible();
+  await expect(page.getByText('Email alerts enabled', { exact: true })).toBeVisible();
+});
+
+test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/billing': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Billing unavailable' } } } } });
+  try {
+    await page.route('**/api/platform/v1/billing', route => route.fulfill({ json: { plan: 'builder', creditBalance: 1200, includedCredits: 20000 } }));
+    await page.route('**/api/platform/v1/notification-preferences', route => route.fulfill({ json: { inApp: false, emailAlerts: false, emailAlertsPending: false, emailDigest: 'off' } }));
+    await page.route('**/api/auth/api-key/list', route => route.fulfill({ json: { apiKeys: [], total: 0 } }));
+    await page.goto('/dashboard/settings');
+    await page.getByRole('button', { name: 'Retry billing' }).click();
+    await expect(page.getByRole('heading', { name: 'Builder plan' })).toBeVisible();
+    await page.getByRole('switch', { name: /In-app alerts/ }).uncheck();
+    await expect(page.getByText('Notification preferences saved.', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'API keys', exact: true }).click();
+    await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await expect(page.getByRole('switch', { name: /In-app alerts/ })).not.toBeChecked();
+    await expect(page.getByRole('heading', { name: 'Builder plan' })).toBeVisible();
+  } finally { await scenario.clear(); }
+});
+
+test('warm settings stays usable while a return visit server read is delayed', async ({ page }) => {
+  await page.route('**/api/auth/api-key/list', route => route.fulfill({ json: { apiKeys: [], total: 0 } }));
+  await page.goto('/dashboard/settings');
+  await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
+  await page.getByRole('link', { name: 'API keys', exact: true }).click();
+  await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
+  const scenario = await accountScenario(page, { delays: ['/v1/billing', '/v1/notification-preferences'] });
+  try {
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Upgrade to Builder' })).toBeEnabled();
+    await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
+    await expect(page.getByRole('status', { name: 'Loading billing' })).toHaveCount(0);
+    await expect.poll(async () => (await scenario.reads())['/v1/billing'] ?? 0).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('settings sidebar opens the selected project and the new-project dialog', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [{ id: 'research', name: 'Saved research' }] } } } });
+  try {
+    await page.route('**/api/platform/v1/projects/research', route => route.fulfill({ json: { id: 'research', name: 'Saved research', items: [] } }));
+    await page.goto('/dashboard/settings');
+    await page.getByRole('button', { name: 'Saved research', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved research', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Create a new project', exact: true }).first().click();
+    await expect(page.getByRole('dialog', { name: 'Name this line of inquiry' })).toBeVisible();
   } finally { await scenario.clear(); }
 });

@@ -66,7 +66,11 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
     try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* Keep the toggle usable without storage. */ }
   };
   const run = (action: () => void) => { dialog.current?.close(); action(); };
-  const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
+  const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => section === 'settings' ? (
+    <Link href='/dashboard/settings' aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => dialog.current?.close()}>
+      <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>
+    </Link>
+  ) : (
     <button type='button' aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => run(() => onNavigate(section))}>
       <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}
     </button>
