@@ -72,14 +72,16 @@ test('account errors do not show fabricated empty project results', async ({ pag
   try {
     await page.goto('/dashboard?section=projects');
     await expect(page.getByRole('alert').filter({ hasText: 'Projects are temporarily unavailable.' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Retry account data' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry projects' })).toBeVisible();
     await expect(page.getByText('No projects yet', { exact: true })).toHaveCount(0);
   } finally { await scenario.clear(); }
 });
 
 test('an access refresh outage preserves the last confirmed access and shows the API error', async ({ page }) => {
-  await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 503, json: { error: { code: 'AUTH_UNAVAILABLE', message: 'The API cannot verify access right now.' } } }));
   await page.goto('/dashboard/sessions');
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 503, json: { error: { code: 'AUTH_UNAVAILABLE', message: 'The API cannot verify access right now.' } } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('alert').filter({ hasText: 'The API cannot verify access right now.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.unroute('**/api/platform/v1/agent/access');
@@ -140,20 +142,15 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
 
 for (const hasKeys of [true, false]) {
   test(`API keys wait for a confirmed ${hasKeys ? 'populated' : 'empty'} response`, async ({ page }, testInfo) => {
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    await page.route('**/api/auth/api-key/list', async route => {
-      await gate;
-      await route.fulfill({ json: { apiKeys: hasKeys ? [{ id: 'key-1', name: 'Production integration', start: 'aty_test', prefix: 'aty_', createdAt: '2026-09-22T00:00:00Z', lastRequest: null }] : [], total: hasKeys ? 1 : 0 } });
-    });
-    await page.goto('/dashboard/developer');
+    const scenario = await accountScenario(page, { delays: ['/api/auth/api-key/list'], responses: {'/api/auth/api-key/list': {body: {apiKeys: hasKeys ? [{id:'key-1',name:'Production integration',start:'aty_test',prefix:'aty_',createdAt:'2026-09-22T00:00:00Z',lastRequest:null}]:[],total:hasKeys?1:0}}}});
+    await page.goto('/dashboard/developer', {waitUntil:'commit'});
     const skeleton = page.getByRole('status', { name: 'Loading API keys' });
     try {
       await expect(skeleton).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath('api-keys-loading.png'), fullPage: true });
       await expect(page.getByText('No API keys yet', { exact: true })).toHaveCount(0);
       await expect(page.getByRole('heading', { name: 'Active keys 0', exact: true })).toHaveCount(0);
-    } finally { release(); }
+    } finally { await scenario.release(); }
     await expect(skeleton).toHaveCount(0);
     if (hasKeys) {
       await expect(page.getByText('Production integration', { exact: true })).toBeVisible();
@@ -164,15 +161,15 @@ for (const hasKeys of [true, false]) {
 }
 
 test('API key failures show retry instead of an empty account', async ({ page }) => {
-  let attempts = 0;
-  await page.route('**/api/auth/api-key/list', route => ++attempts === 1
-    ? route.fulfill({ status: 503, json: { message: 'Keys unavailable' } })
-    : route.fulfill({ json: { apiKeys: [], total: 0 } }));
-  await page.goto('/dashboard/developer');
-  await expect(page.getByRole('alert').filter({ hasText: 'Keys unavailable' })).toBeVisible();
-  await expect(page.getByText('No API keys yet', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Retry API keys' }).click();
-  await expect(page.getByText('No API keys yet', { exact: true })).toBeVisible();
+ const scenario=await accountScenario(page,{responses:{'/api/auth/api-key/list':{status:503,body:{error:{message:'Keys unavailable'}}}}});
+ try {
+ await page.goto('/dashboard/developer');
+ await expect(page.getByRole('alert').filter({hasText:'Keys unavailable'})).toBeVisible();
+ await expect(page.getByText('No API keys yet',{exact:true})).toHaveCount(0);
+ await page.route('**/api/platform/api/auth/api-key/list',route=>route.fulfill({json:{apiKeys:[],total:0}}));
+ await page.getByRole('button',{name:'Retry API keys'}).click();
+ await expect(page.getByText('No API keys yet',{exact:true})).toBeVisible();
+ } finally {await scenario.clear();}
 });
 
 test('settings become usable without waiting for projects', async ({ page }) => {
@@ -276,7 +273,7 @@ test('research drafts survive a visit to the settings route', async ({ page }) =
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill('a draft research query');
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/settings$/);
-  await page.getByRole('button', { name: 'Sources', exact: true }).click();
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('a draft research query');
 });
 
@@ -334,4 +331,76 @@ test('settings sidebar opens the selected project and the new-project dialog', a
     await page.getByRole('button', { name: 'Create a new project', exact: true }).first().click();
     await expect(page.getByRole('dialog', { name: 'Name this line of inquiry' })).toBeVisible();
   } finally { await scenario.clear(); }
+});
+
+test('settings renders while navigation access checks are pending', async ({page})=>{
+ const scenario=await accountScenario(page,{delays:['/v1/agent/access','/v1/admin/access']});
+ try{
+  await page.goto('/dashboard/settings',{waitUntil:'commit'});
+  await expect(page.getByRole('switch',{name:/In-app alerts/})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Upgrade to Builder'})).toBeEnabled();
+  await expect(page.getByRole('link',{name:'Agent',exact:true})).toHaveCount(0);
+  await scenario.release();
+  await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
+ }finally{await scenario.clear();}
+});
+
+test('an active transcript finishes while settings is open and is reused on return',async({page})=>{
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
+ await page.route(`**/videos/${videoId}/transcript`,async route=>{reads++;await gate;await route.fulfill({json:transcript});});
+ await page.goto('/dashboard/sources');
+ await page.getByRole('textbox',{name:'Video search or YouTube URL'}).fill(`https://youtube.com/watch?v=${videoId}`);
+ await page.getByRole('button',{name:/Search videos/}).click();
+ await expect.poll(()=>reads).toBe(1);
+ await page.getByRole('link',{name:'Settings',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Workspace settings'})).toBeVisible();
+ release();
+ await page.getByRole('link',{name:'Sources',exact:true}).click();
+ await expect(page.getByText('Transcript arrived successfully.',{exact:true})).toBeVisible();
+ expect(reads).toBe(1);
+});
+
+test('an active trend request survives projects navigation without restarting',async({page})=>{
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
+ await page.route('**/v1/providers/youtube/trends?**',async route=>{reads++;await gate;await route.fulfill({status:503,json:{error:{message:'Retained scan completed with a provider error.'}}});});
+ await page.goto('/dashboard/trends');
+ await page.getByRole('textbox',{name:'Topic or niche'}).fill('test topic');
+ await page.getByRole('button',{name:/Research topic/}).click();
+ await expect.poll(()=>reads).toBe(1);
+ await page.getByRole('link',{name:'Projects',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Your projects'})).toBeVisible();
+ release();
+ await page.getByRole('link',{name:'Trend Lab',exact:true}).click();
+ await expect(page.getByRole('alert').filter({hasText:'Retained scan completed'})).toBeVisible();
+ expect(reads).toBe(1);
+});
+
+test('API key metadata is server rendered without serializing key material',async({page})=>{
+ const scenario=await accountScenario(page,{responses:{'/api/auth/api-key/list':{body:{apiKeys:[{id:'ssr-key',name:'Server-rendered integration',start:'aty_test',prefix:'aty_',createdAt:'2026-09-22T00:00:00Z',lastRequest:null,key:'never-send-this-key',hash:'never-send-this-hash'}]}}}});
+ try{
+  const response=await page.request.get('/dashboard/developer');const document=await response.text();
+  const html=document.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
+  expect(html).toContain('Server-rendered integration');expect(document).not.toContain('never-send-this');
+  expect((await scenario.reads())['/api/auth/api-key/list']).toBe(1);
+ }finally{await scenario.clear();}
+});
+
+test('homepage pixel font is absent from settings downloads and present on the homepage',async({page})=>{
+ const fonts:string[]=[];page.on('request',req=>{if(req.resourceType()==='font')fonts.push(req.url());});
+ await page.goto('/dashboard/settings');await page.evaluate(()=>document.fonts.ready);await page.waitForLoadState('networkidle');
+ const settingsFonts=[...fonts];expect(settingsFonts).toHaveLength(2);
+ expect(await page.evaluate(()=>Array.from(document.fonts).some(font=>/pixel/i.test(font.family)))).toBe(false);
+ await page.goto('/');await page.evaluate(()=>document.fonts.ready);
+ const pixelFamily=await page.locator('.homepage-fonts').evaluate(el=>getComputedStyle(el).getPropertyValue('--font-home-pixel'));
+ expect(pixelFamily).toMatch(/pixelGrid/);
+ expect(fonts.filter(url=>!settingsFonts.includes(url))).toHaveLength(1);
+});
+
+test('a cold settings visit does not download source or trend tool code',async({page})=>{
+ const scripts:Promise<string>[]=[];
+ page.on('response',response=>{if(response.request().resourceType()==='script')scripts.push(response.text());});
+ await page.goto('/dashboard/settings');await page.waitForLoadState('networkidle');
+ const code=(await Promise.all(scripts)).join('\n');
+ expect(code).not.toContain('Resolving your query');
+ expect(code).not.toContain('Recent vs established');
 });

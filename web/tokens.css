@@ -29,7 +29,7 @@
   --font-home-body: var(--font-geist-sans);
   --font-home-wordmark: var(--font-geist-sans);
   --font-home-mono: var(--font-geist-mono);
-  --font-home-pixel: var(--font-geist-pixel-grid);
+  --font-home-pixel: var(--font-geist-mono), ui-monospace, monospace;
 
   --space-3xs: 0.125rem;
   --space-2xs: 0.25rem;
@@ -167,3 +167,6 @@
     --color-home-danger: oklch(74% 0.16 31);
   }
 }
+
+/* Resolve the variable where the homepage font is defined, not at :root. */
+.homepage-fonts { --font-home-pixel: var(--font-geist-pixel-grid), monospace; --font-pixel-grid: var(--font-geist-pixel-grid), monospace; }

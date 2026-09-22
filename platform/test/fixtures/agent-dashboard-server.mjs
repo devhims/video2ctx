@@ -43,7 +43,7 @@ createServer(async (req, res) => {
     return reply(200, { reads: scenario?.reads ?? {} });
   }
   const scenario = accountScenarios.get(cookie.match(/account-test=([^;]+)/)?.[1]);
-  if (scenario && req.method === 'GET' && url.pathname.startsWith('/v1/')) {
+  if (scenario && req.method === 'GET' && (url.pathname.startsWith('/v1/') || url.pathname === '/api/auth/api-key/list')) {
     scenario.reads[url.pathname] = (scenario.reads[url.pathname] ?? 0) + 1;
     await scenario.gates.get(url.pathname)?.promise;
     const override = scenario.responses[url.pathname];
@@ -53,6 +53,7 @@ createServer(async (req, res) => {
     res.setHeader('Set-Cookie', 'agent-ui=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
     return reply(200, { success: true });
   }
+  if (url.pathname === '/api/auth/api-key/list') return reply(signedIn ? 200 : 401, signedIn ? { apiKeys: [], total: 0 } : { message: 'Unauthorized' });
   if (url.pathname === '/health') return reply(200, { status: 'ok' });
   if (url.pathname === '/api/auth/get-session') return reply(200, signedIn ? { user: { id: 'fixture-user', name: 'Fixture account', email: 'fixture@example.test' }, session: { id: 'fixture-auth-session' } } : null);
   if (url.pathname.startsWith('/v1/admin/')) {

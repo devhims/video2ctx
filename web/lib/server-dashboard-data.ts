@@ -14,9 +14,8 @@ export function startDashboardData(requestHeaders: Headers, requestedResources?:
     if (!response.ok) throw await platformResponseError(response);
     return response.json();
   };
-  const url = new URL(requestHeaders.get('x-dashboard-path') ?? '/dashboard', 'https://dashboard.internal');
-  const legacySettings = url.pathname === '/dashboard' && url.searchParams.get('section') === 'settings';
-  const resources: AccountResource[] = requestedResources ?? (legacySettings ? [] : url.pathname === '/dashboard' ? ['projects', 'monitors', 'usage', 'notifications', 'notificationPreferences'] : ['projects', 'usage']);
+  const path = new URL(requestHeaders.get('x-dashboard-path') ?? '/dashboard', 'https://dashboard.internal').pathname;
+  const resources: AccountResource[] = requestedResources ?? (path === '/dashboard' ? [] : ['projects', 'usage']);
   return Object.fromEntries(resources.map(key => [key,
     readAccountResource(key, request).then(data => ({ data, updatedAt: Date.now() }), cause => ({ error: cause instanceof Error ? cause.message : 'Could not load account data.' })),
   ])) as AccountSeeds;

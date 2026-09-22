@@ -1,0 +1,57 @@
+{
+  "base": "http://127.0.0.1:3021",
+  "legacy": false,
+  "accessDelayMs": 1000,
+  "measuredAt": "2026-09-22T22:21:53.380Z",
+  "environment": "Headless desktop Chrome, localhost production webpack build, no throttling, fresh browser context per cold sample, deterministic API fixtures. Timings are lab measurements, not field vitals.",
+  "results": [
+    {
+      "section": "settings",
+      "run": 0,
+      "ttfb": 22.399999999906868,
+      "fcp": 80,
+      "lcp": 376,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        31.100000000093132,
+        31.699999999720603,
+        31.899999999906868
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 1,
+      "ttfb": 9.200000000186265,
+      "fcp": 84,
+      "lcp": 84,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        31.100000000093132,
+        31.600000000093132,
+        31.399999999906868
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 2,
+      "ttfb": 10.5,
+      "fcp": 48,
+      "lcp": 344,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        30.700000000186265,
+        32.10000000009313,
+        32
+      ]
+    }
+  ]
+}

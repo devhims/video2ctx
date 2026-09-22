@@ -1,0 +1,188 @@
+{
+  "base": "http://127.0.0.1:3021",
+  "legacy": false,
+  "measuredAt": "2026-09-22T22:19:42.678Z",
+  "environment": "Headless desktop Chrome, localhost production webpack build, no throttling, fresh browser context per cold sample, deterministic API fixtures. Timings are lab measurements, not field vitals.",
+  "results": [
+    {
+      "section": "settings",
+      "run": 0,
+      "ttfb": 101.40000000037253,
+      "fcp": 192,
+      "lcp": 192,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        31,
+        31.600000000093132,
+        32
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 1,
+      "ttfb": 16.800000000279397,
+      "fcp": 64,
+      "lcp": 132,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        31.799999999813735,
+        31.399999999906868,
+        31.600000000093132
+      ]
+    },
+    {
+      "section": "settings",
+      "run": 2,
+      "ttfb": 14.399999999906868,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 177576,
+      "jsFiles": 13,
+      "fontBytes": 141020,
+      "fontFiles": 2,
+      "returnMs": [
+        31.199999999720603,
+        32.200000000186265,
+        32.700000000186265
+      ]
+    },
+    {
+      "section": "projects",
+      "run": 0,
+      "ttfb": 16.299999999813735,
+      "fcp": 72,
+      "lcp": 72,
+      "jsBytes": 172481,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "projects",
+      "run": 1,
+      "ttfb": 11.399999999906868,
+      "fcp": 56,
+      "lcp": 56,
+      "jsBytes": 172481,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "projects",
+      "run": 2,
+      "ttfb": 12.100000000093132,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 172481,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "monitors",
+      "run": 0,
+      "ttfb": 14.800000000279397,
+      "fcp": 64,
+      "lcp": 112,
+      "jsBytes": 172041,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "monitors",
+      "run": 1,
+      "ttfb": 12.099999999627471,
+      "fcp": 60,
+      "lcp": 108,
+      "jsBytes": 172041,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "monitors",
+      "run": 2,
+      "ttfb": 11.200000000186265,
+      "fcp": 56,
+      "lcp": 124,
+      "jsBytes": 172041,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "sources",
+      "run": 0,
+      "ttfb": 15.300000000279397,
+      "fcp": 108,
+      "lcp": 400,
+      "jsBytes": 176910,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "sources",
+      "run": 1,
+      "ttfb": 13,
+      "fcp": 68,
+      "lcp": 68,
+      "jsBytes": 176910,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "sources",
+      "run": 2,
+      "ttfb": 9.799999999813735,
+      "fcp": 84,
+      "lcp": 400,
+      "jsBytes": 176910,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "trends",
+      "run": 0,
+      "ttfb": 11.700000000186265,
+      "fcp": 104,
+      "lcp": 404,
+      "jsBytes": 171939,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "trends",
+      "run": 1,
+      "ttfb": 9.299999999813735,
+      "fcp": 72,
+      "lcp": 72,
+      "jsBytes": 171939,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    },
+    {
+      "section": "trends",
+      "run": 2,
+      "ttfb": 10.600000000093132,
+      "fcp": 100,
+      "lcp": 408,
+      "jsBytes": 171939,
+      "jsFiles": 12,
+      "fontBytes": 141020,
+      "fontFiles": 2
+    }
+  ]
+}

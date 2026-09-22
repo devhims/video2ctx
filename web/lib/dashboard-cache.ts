@@ -2,6 +2,7 @@ import type { DashboardAccountData } from './dashboard-data.ts';
 
 export type AccountResource = keyof DashboardAccountData;
 export const ACCOUNT_PATHS: Record<AccountResource, string> = {
+  apiKeys: '/api/auth/api-key/list',
   projects: '/v1/projects', monitors: '/v1/monitors', usage: '/v1/usage', billing: '/v1/billing',
   notifications: '/v1/notifications', notificationPreferences: '/v1/notification-preferences',
 };
@@ -12,6 +13,12 @@ const FRESH_MS = 60_000;
 
 export async function readAccountResource<K extends AccountResource>(key: K, request: (path: string) => Promise<unknown>): Promise<DashboardAccountData[K]> {
   const response = await request(ACCOUNT_PATHS[key]);
+  if (key === 'apiKeys') {
+    const keys = (response as { apiKeys?: unknown } | null)?.apiKeys;
+    if (!Array.isArray(keys)) throw new Error('The API returned an invalid API keys response.');
+    // Only display metadata crosses the RSC boundary, never key material.
+    return keys.map(({id, name, start, prefix, createdAt, lastRequest}) => ({id, name, start, prefix, createdAt, lastRequest})) as DashboardAccountData[K];
+  }
   if (key === 'projects' || key === 'monitors' || key === 'notifications') {
     const data = (response as Record<string, unknown> | null)?.[key];
     if (!Array.isArray(data)) throw new Error(`The API returned an invalid ${key} response.`);
