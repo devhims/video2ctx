@@ -8,36 +8,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dashboard-changes:
-    name: Detect dashboard changes
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    outputs:
-      changed: ${{ steps.filter.outputs.changed }}
-    steps:
-      - uses: actions/github-script@v7
-        id: filter
-        with:
-          script: |
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              per_page: 100,
-            });
-            const isDashboardPath = filename =>
-              filename.startsWith('web/') ||
-              filename.startsWith('platform/') ||
-              filename.startsWith('.github/workflows/') ||
-              filename === 'package.json' ||
-              filename === 'package-lock.json';
-            const changed = files.some(({ filename, previous_filename }) =>
-              isDashboardPath(filename) ||
-              (previous_filename && isDashboardPath(previous_filename))
-            );
-            core.setOutput('changed', String(changed));
-
   library-and-skill:
     name: Library and skill bundle
     runs-on: ubuntu-latest
@@ -174,7 +144,7 @@ jobs:
   platform-gate:
     name: Platform + Auth E2E
     if: always()
-    needs: [platform-checks, platform-integration, auth-e2e, dashboard-changes, dashboard-e2e]
+    needs: [platform-checks, platform-integration, auth-e2e, dashboard-e2e]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
@@ -182,8 +152,6 @@ jobs:
 
   dashboard-e2e:
     name: Dashboard E2E (${{ matrix.shard }}/4)
-    needs: dashboard-changes
-    if: needs.dashboard-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
