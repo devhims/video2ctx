@@ -181,14 +181,14 @@ jobs:
         run: exit 1
 
   dashboard-e2e:
-    name: Dashboard E2E (${{ matrix.shard }}/3)
+    name: Dashboard E2E (${{ matrix.shard }}/4)
     needs: dashboard-changes
     if: needs.dashboard-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: platform
@@ -221,7 +221,7 @@ jobs:
         run: npm ci && npm ci --prefix ../web
       # The runner image already has Chromium's system libraries; --with-deps only adds extra fonts.
       - run: npx playwright install --only-shell chromium
-      - run: npm run test:agent:dashboard -- --shard=${{ matrix.shard }}/3 --fully-parallel
+      - run: npm run test:agent:dashboard -- --shard=${{ matrix.shard }}/4 --fully-parallel
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
