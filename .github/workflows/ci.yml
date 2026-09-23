@@ -201,10 +201,27 @@ jobs:
           cache-dependency-path: |
             platform/package-lock.json
             web/package-lock.json
-      - run: npm ci
-      - run: npm ci --prefix ../web
-      - run: npx playwright install --with-deps --only-shell chromium
-      - run: npm run test:agent:dashboard -- --shard=${{ matrix.shard }}/3
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web/.next/cache
+          key: next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-${{ hashFiles('web/**/*.[jt]s', 'web/**/*.[jt]sx', 'web/**/*.css', '!web/node_modules/**', '!web/.next/**') }}
+          restore-keys: |
+            next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-
+      - name: Restore installed dependencies
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            platform/node_modules
+            web/node_modules
+          key: dashboard-modules-${{ runner.os }}-node22-${{ hashFiles('platform/package-lock.json', 'web/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci && npm ci --prefix ../web
+      # The runner image already has Chromium's system libraries; --with-deps only adds extra fonts.
+      - run: npx playwright install --only-shell chromium
+      - run: npm run test:agent:dashboard -- --shard=${{ matrix.shard }}/3 --fully-parallel
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
