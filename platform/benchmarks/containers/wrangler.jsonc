@@ -1,0 +1,18 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-container-benchmark",
+  "main": "worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "containers": [
+    { "class_name": "LiteProcessor", "image": "../../youtube-processor/Dockerfile", "image_build_context": "../../youtube-processor", "instance_type": "lite", "max_instances": 1 },
+    { "class_name": "BasicProcessor", "image": "../../youtube-processor/Dockerfile", "image_build_context": "../../youtube-processor", "instance_type": "basic", "max_instances": 1 }
+  ],
+  "durable_objects": { "bindings": [
+    { "name": "LITE", "class_name": "LiteProcessor" },
+    { "name": "BASIC", "class_name": "BasicProcessor" }
+  ] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiteProcessor", "BasicProcessor"] }],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

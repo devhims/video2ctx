@@ -1,0 +1,236 @@
+{
+  "data": {
+    "viewer": {
+      "accounts": [
+        {
+          "basic": [
+            {
+              "avg": {
+                "cpuUtilization": 0.2542412884982547,
+                "memory": 199400106.66666666
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:03:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.3304008171603376,
+                "memory": 204894208
+              },
+              "sum": {
+                "cpuTimeSec": 3.813655999999998
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.0419421473408935,
+                "memory": 196657152
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:02:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.10486438022607046,
+                "memory": 198033408
+              },
+              "sum": {
+                "cpuTimeSec": 0.26213400000000053
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.3015393151351772,
+                "memory": 206518954.66666666
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:04:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.44677585079117477,
+                "memory": 209096704
+              },
+              "sum": {
+                "cpuTimeSec": 2.261584000000001
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.2784337871021604,
+                "memory": 107784192
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:05:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.2784337871021604,
+                "memory": 215568384
+              },
+              "sum": {
+                "cpuTimeSec": 0.6961639999999996
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.07876254483301026,
+                "memory": 182497689.6
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:01:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.4261158236652679,
+                "memory": 195301376
+              },
+              "sum": {
+                "cpuTimeSec": 0.9845599999999994
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0,
+                "memory": 18034688
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T14:59:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0,
+                "memory": 18034688
+              },
+              "sum": {
+                "cpuTimeSec": 0.016348
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.25176998426434216,
+                "memory": 182290064.41025642
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:00:00Z",
+                "location": "cmh01"
+              },
+              "max": {
+                "cpuUtilization": 0.9346051978409812,
+                "memory": 193826816
+              },
+              "sum": {
+                "cpuTimeSec": 11.958124
+              }
+            }
+          ],
+          "lite": [
+            {
+              "avg": {
+                "cpuUtilization": 0.2960648750390847,
+                "memory": 186667008
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:04:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 0.2960648750390847,
+                "memory": 186667008
+              },
+              "sum": {
+                "cpuTimeSec": 0.09406099999999995
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.13286855227672953,
+                "memory": 182131825.7777778
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:02:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 0.9171868475485223,
+                "memory": 182812672
+              },
+              "sum": {
+                "cpuTimeSec": 0.37436099999999994
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.04192681899985807,
+                "memory": 87263704.61538461
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T14:59:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 0.029110690920600497,
+                "memory": 179666944
+              },
+              "sum": {
+                "cpuTimeSec": 0.07861199999999946
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.08325655435559415,
+                "memory": 184627200
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:03:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 0.11055417078850528,
+                "memory": 185487360
+              },
+              "sum": {
+                "cpuTimeSec": 0.21072599999999575
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 0.33123601209735726,
+                "memory": 181340795.58620688
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:01:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 0.9142309126522418,
+                "memory": 182927360
+              },
+              "sum": {
+                "cpuTimeSec": 3.0120829999999987
+              }
+            },
+            {
+              "avg": {
+                "cpuUtilization": 1.4652200797536914,
+                "memory": 188334080
+              },
+              "dimensions": {
+                "datetimeMinute": "2026-09-23T15:05:00Z",
+                "location": "iad16"
+              },
+              "max": {
+                "cpuUtilization": 1.4652200797536914,
+                "memory": 188334080
+              },
+              "sum": {
+                "cpuTimeSec": 1.8015919999999994
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "errors": null
+}

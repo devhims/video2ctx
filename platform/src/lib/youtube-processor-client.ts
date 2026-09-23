@@ -75,7 +75,7 @@ interface ProcessorFailure {
 
 const DEFAULT_INSTANCE_COUNT = 2;
 const MAX_INSTANCE_COUNT = 4;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_ATTEMPTS = 4;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRY_BASE_MS = 250;
 
@@ -185,10 +185,10 @@ function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boo
 }
 
 function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
-  // A transcript NOT_FOUND can mean that one YouTube response omitted its
-  // caption catalog. Try an independent processor slot before treating it as
-  // a genuine captionless video.
-  return error.retryable || (operation.kind === 'transcript' && error.code === 'NOT_FOUND');
+  // Upstream transcript error labels are not reliable proof of permanent failure.
+  // Retry across the pool within the call/time budgets, except invalid caller input.
+  if (operation.kind === 'transcript') return error.code !== 'INVALID_INPUT';
+  return error.retryable;
 }
 
 async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload?: (payload: unknown) => void): Promise<T> {
@@ -242,13 +242,10 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   order.sort((a, b) => Number((health.get(a) ?? 0) > operationStartedAt) - Number((health.get(b) ?? 0) > operationStartedAt));
   const attempts = maxAttempts(env);
   const deadline = AbortSignal.timeout(processorTimeoutMs(env));
-  const missingTranscriptSlots = new Set<number>();
   let lastFailure: unknown;
   for (let index = 0; index < attempts; index += 1) {
-    // Probe every slot before repeating, then revisit only inconclusive slots.
-    const repeatSlots = order.filter(slot => !missingTranscriptSlots.has(slot));
-    const slot = index < order.length ? order[index]!
-      : repeatSlots[(index - order.length) % repeatSlots.length]!;
+    // Visit every configured slot before starting the next pass.
+    const slot = order[index % order.length]!;
     const startedAt = Date.now();
     let outcome: ExtractionAttempt['outcome'] = 'transport_error';
     let capture: Pick<ExtractionAttempt, 'capture' | 'events' | 'droppedEvents'> = { capture: 'unavailable', events: [], droppedEvents: 0 };
@@ -283,12 +280,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       failureKind = extractionFailureKind(error, deadline);
       const classified = error instanceof YouTubeProcessorError;
       if (classified) status = error.status;
-      if (classified && operation.kind === 'transcript' && error.code === 'NOT_FOUND' && !error.retryable)
-        missingTranscriptSlots.add(slot);
-      // Missing captions are conclusive only after every slot agrees. A prior
-      // transient failure must retain its opportunity to recover on a repeat.
-      const canRetry = !classified || (shouldFallbackError(operation, error)
-        && (error.retryable || missingTranscriptSlots.size < count));
+      const canRetry = !classified || shouldFallbackError(operation, error);
       retry = !deadline.aborted && index + 1 < attempts && canRetry;
       if (canRetry && !deadline.aborted) health.set(slot, Date.now() + 30_000);
       outcome = retry ? 'fallback' : classified ? 'failed' : 'transport_error';

@@ -29,18 +29,38 @@ function environment(responses: Array<Response | Error>): { env: Env; requested:
 }
 
 describe('YouTube processor client', () => {
-  test.each([false, true])('retries the transient slot after mixed transcript failures (missing first: %s)', async (missingFirst) => {
+  test.each([false, true])('revisits slots in order after mixed transcript failures (missing first: %s)', async (missingFirst) => {
     const transient = () => Response.json({ error: { code: 'INVALID_RESPONSE', retryable: true } }, { status: 502 });
     const missing = () => Response.json({ error: { code: 'NOT_FOUND', retryable: false } }, { status: 404 });
     const { env, requested } = environment([
       ...(missingFirst ? [missing(), transient()] : [transient(), missing()]),
       Response.json({ value: { text: 'Recovered transcript' } }),
     ]);
-    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
+    Object.assign(env, { YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '3' });
     await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
       .resolves.toMatchObject({ text: 'Recovered transcript' });
     expect(requested).toHaveLength(3);
-    expect(requested[2]).toBe(requested[missingFirst ? 1 : 0]);
+    expect(requested[2]).toBe(requested[0]);
+  });
+
+  test.each(['NOT_FOUND', 'UNAVAILABLE', 'AUTH_REQUIRED', 'UNKNOWN_UPSTREAM_ERROR', 'INVALID_PROCESSOR_RESPONSE'])('recovers on the fourth transcript call after %s errors', async (code) => {
+    const failure = () => Response.json({ error: { code, retryable: false } }, { status: 404 });
+    const { env, requested } = environment([failure(), failure(), failure(), Response.json({ value: { text: 'Recovered' } })]);
+    Reflect.deleteProperty(env, 'YOUTUBE_PROCESSOR_MAX_ATTEMPTS');
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
+      .resolves.toMatchObject({ text: 'Recovered' });
+    expect(requested).toHaveLength(4);
+    expect(requested[0]).not.toBe(requested[1]);
+    expect(requested[2]).toBe(requested[0]);
+    expect(requested[3]).toBe(requested[1]);
+  });
+
+  test('does not retry invalid transcript input even if marked retryable', async () => {
+    const { env, requested } = environment([Response.json({ error: { code: 'INVALID_INPUT', retryable: true } }, { status: 400 })]);
+    Object.assign(env, { YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '4' });
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'bad', granularity: 'word' }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    expect(requested).toHaveLength(1);
   });
 
   test('returns unchanged results and captures diagnostics on both fallback and successful attempts', async () => {
@@ -138,7 +158,7 @@ describe('YouTube processor client', () => {
       Response.json({ value: blockedVideo }), Response.json({ value: blockedVideo }),
       Response.json({ value: { id: 'abcdefghijk', title: 'Recovered' } }),
     ]);
-    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
+    Object.assign(env, { YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '3' });
     await expect(runYouTubeOperation(env, { kind: 'video', id: 'abcdefghijk' })).resolves.toMatchObject({ title: 'Recovered' });
     expect(requested).toHaveLength(3);
     expect(requested[0]).not.toBe(requested[1]);
@@ -315,20 +335,22 @@ describe('YouTube processor client', () => {
     expect(requested[0]).not.toBe(requested[1]);
   });
 
-  test('preserves missing captions after every transcript slot agrees', async () => {
+  test('preserves missing captions only after exhausting four calls', async () => {
     const operation = {
       kind: 'transcript', id: 'abcdefghijk', granularity: 'word',
     } satisfies YouTubeOperation;
     const missing = () => Response.json({ error: {
       code: 'NOT_FOUND', message: 'No caption track is available.', status: 404, retryable: false,
     } }, { status: 404 });
-    const { env, requested } = environment([missing(), missing()]);
-    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
+    const { env, requested } = environment([missing(), missing(), missing(), missing()]);
+    Object.assign(env, { YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '4' });
 
     await expect(runYouTubeOperation(env, operation)).rejects.toMatchObject({
       code: 'NOT_FOUND', status: 404, retryable: false,
     });
-    expect(requested).toHaveLength(2);
+    expect(requested).toHaveLength(4);
+    expect(requested[2]).toBe(requested[0]);
+    expect(requested[3]).toBe(requested[1]);
   });
 
   test('does not fail over unrelated not-found errors', async () => {
