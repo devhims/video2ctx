@@ -1,0 +1,51 @@
+name: Warm dashboard caches
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dashboard-cache-main
+  cancel-in-progress: true
+
+jobs:
+  warm-dashboard-cache:
+    name: Warm dashboard caches on main
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            web/package-lock.json
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web/.next/cache
+          key: next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-${{ hashFiles('web/**/*.[jt]s', 'web/**/*.[jt]sx', 'web/**/*.css', '!web/node_modules/**', '!web/.next/**') }}
+          restore-keys: |
+            next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-
+      - name: Restore installed dependencies
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            platform/node_modules
+            web/node_modules
+          key: dashboard-modules-${{ runner.os }}-node22-${{ hashFiles('platform/package-lock.json', 'web/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci && npm ci --prefix ../web
+      # Use the same webpack build as the dashboard tests. Cache actions save
+      # successful results under main, where subsequent PRs can restore them.
+      - name: Build dashboard
+        run: npm --prefix ../web run build -- --webpack
