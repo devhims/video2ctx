@@ -133,7 +133,7 @@ test('failed runs show the error, and running history can retrieve the completed
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
 });
 
-test('non-admin and signed-out accounts have no menu and cannot open a session directly', { tag: '@smoke' }, async ({ page, context }) => {
+test('non-admin and signed-out accounts have no menu and cannot open a session directly', async ({ page, context }) => {
   for (const role of ['denied', 'signed-out']) {
     await login(context, role);
     await page.goto('/dashboard/developer');
@@ -187,7 +187,7 @@ test('reveals streamed text immediately when reduced motion is enabled', async (
 });
 
 
-test('follow-up recovers a lost receipt from the session without resubmitting and restores its stream', { tag: '@smoke' }, async ({ page, context }, testInfo) => {
+test('follow-up recovers a lost receipt from the session without resubmitting and restores its stream', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.goto(`/dashboard/sessions/${sessionId}`);
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
@@ -223,7 +223,7 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await page.screenshot({ path: testInfo.outputPath('follow-up-mobile.png'), fullPage: true });
 });
 
-test('starts a session from the dashboard and opens the admitted run', { tag: '@smoke' }, async ({ page, context }) => {
+test('starts a session from the dashboard and opens the admitted run', async ({ page, context }) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sessions');
   await page.getByRole('textbox', { name: 'Start a new session' }).fill('Inspect this YouTube video and explain its main point.');

@@ -174,17 +174,21 @@ jobs:
   platform-gate:
     name: Platform + Auth E2E
     if: always()
-    needs: [platform-checks, platform-integration, auth-e2e, dashboard-changes, dashboard-smoke]
+    needs: [platform-checks, platform-integration, auth-e2e, dashboard-changes, dashboard-e2e]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
 
-  dashboard-smoke:
-    name: Dashboard smoke E2E
+  dashboard-e2e:
+    name: Dashboard E2E (${{ matrix.shard }}/3)
     needs: dashboard-changes
     if: needs.dashboard-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     defaults:
       run:
         working-directory: platform
@@ -200,11 +204,11 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix ../web
       - run: npx playwright install --with-deps --only-shell chromium
-      - run: npm run test:agent:dashboard:smoke
+      - run: npm run test:agent:dashboard -- --shard=${{ matrix.shard }}/3
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: dashboard-smoke-results
+          name: dashboard-e2e-results-${{ matrix.shard }}
           path: .scratch/agent-sessions-dashboard/playwright-results
           retention-days: 7
 
