@@ -40,8 +40,8 @@ jobs:
       - run: npm pack --dry-run
       - run: npm run test:packed
 
-  platform:
-    name: Platform + Auth E2E
+  platform-checks:
+    name: Platform checks
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -58,7 +58,6 @@ jobs:
             platform/youtube-processor/package-lock.json
             platform/youtube-frames/package-lock.json
             packages/video2ctx-cli/package-lock.json
-            web/package-lock.json
       - name: Install platform dependencies
         run: npm ci
       - name: Install hosted CLI dependencies
@@ -70,10 +69,14 @@ jobs:
       - name: Verify published CLI package contents
         run: npm pack --dry-run
         working-directory: packages/video2ctx-cli
+      - name: Install container dependencies
+        run: npm ci --prefix youtube-processor && npm ci --prefix youtube-frames
       - name: Verify storyboard bundle
-        run: npm ci --prefix youtube-processor && npm --prefix youtube-processor run bundle:check
-      - name: Verify platform
-        run: npm run verify
+        run: npm --prefix youtube-processor run bundle:check
+      - name: Type check platform
+        run: npm run build
+      - name: Run platform unit tests
+        run: npm test
       - name: Profile Worker startup (local CPU, no deployment)
         run: npm run check:startup
       - uses: actions/upload-artifact@v4
@@ -81,18 +84,110 @@ jobs:
           name: worker-startup-profile
           path: platform/.wrangler/startup.cpuprofile
           include-hidden-files: true
+
+  platform-integration:
+    name: Platform integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+      - name: Install platform dependencies
+        run: npm ci
+      - name: Run auth integration tests
+        run: npm run test:auth:integration
       - name: Verify processor Linux image
         run: |
           docker build --platform linux/amd64 -t youtube-processor:test -f youtube-processor/Dockerfile youtube-processor
           docker run --rm --platform linux/amd64 --network none --mount type=bind,src="$PWD/youtube-processor/test",dst=/app/test,readonly youtube-processor:test sh -c 'node --test test/*.test.mjs'
-      - name: Install web dependencies for auth E2E
+
+  auth-e2e:
+    name: Auth E2E
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            packages/video2ctx-cli/package-lock.json
+            web/package-lock.json
+      - name: Install platform dependencies
+        run: npm ci
+      - name: Install hosted CLI dependencies
+        run: npm ci
+        working-directory: packages/video2ctx-cli
+      - name: Install web dependencies
         run: npm ci --prefix ../web
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Run CLI and browser auth E2E
         run: npm --prefix .. run test:auth:e2e
-      - name: Run agent dashboard E2E
-        run: npm run test:agent:dashboard
+
+  dashboard-e2e:
+    name: Dashboard E2E (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: sessions
+            filter: --grep agent-sessions[.]spec[.]ts
+          - suite: other
+            filter: --grep-invert agent-sessions[.]spec[.]ts
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            web/package-lock.json
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: web/.next/cache
+          key: next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-${{ hashFiles('web/**/*.[jt]s', 'web/**/*.[jt]sx', 'web/**/*.css', '!web/node_modules/**', '!web/.next/**') }}
+          restore-keys: |
+            next-webpack-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-
+      - name: Restore installed dependencies
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            platform/node_modules
+            web/node_modules
+          key: dashboard-modules-${{ runner.os }}-node22-${{ hashFiles('platform/package-lock.json', 'web/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci && npm ci --prefix ../web
+      # The runner image already has Chromium's system libraries; --with-deps only adds extra fonts.
+      - run: npx playwright install --only-shell chromium
+      # Complementary filters cover every test selected by the dashboard config.
+      - run: npm run test:agent:dashboard -- $DASHBOARD_FILTER
+        env:
+          DASHBOARD_FILTER: ${{ matrix.filter }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dashboard-e2e-results-${{ matrix.suite }}
+          path: .scratch/agent-sessions-dashboard/playwright-results
+          retention-days: 7
 
   web:
     name: Web
