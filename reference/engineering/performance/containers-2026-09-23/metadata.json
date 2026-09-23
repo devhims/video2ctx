@@ -1,0 +1,26 @@
+{
+  "date": "2026-09-23",
+  "gitRevision": "f6e927ca9d9c6081cc066ce862e81bb1d19bc16a",
+  "imageDigest": "sha256:da965119acce9110f42c7b64fe6c3c4905bba2879e40027efa096d8d44502e05",
+  "instanceTypes": {
+    "lite": {
+      "vcpu": 0.0625,
+      "memoryMiB": 256,
+      "location": "iad16"
+    },
+    "basic": {
+      "vcpu": 0.25,
+      "memoryMiB": 1024,
+      "location": "cmh01"
+    }
+  },
+  "proxyConfigured": false,
+  "productionUnchanged": true,
+  "productionVersion": 82,
+  "productionImage": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:bbd51df9143f8bca64fea714883c554aee94474fd122b22055b7b83cc4682f51",
+  "cleanup": {
+    "instancesStopped": true,
+    "applicationsDeleted": true,
+    "workerDeleted": true
+  }
+}

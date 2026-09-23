@@ -1,0 +1,70 @@
+{
+  "total": 128,
+  "successes": 128,
+  "firstResponse": "2026-09-23T14:59:38.919Z",
+  "lastResponse": "2026-09-23T15:05:43.270Z",
+  "pairs": {
+    "1": {
+      "n": 30,
+      "basicFaster": 25,
+      "pairedClientSavingMs": {
+        "p50": 782.3773339999898,
+        "p95": 12133.618084000016,
+        "min": -8408.383416999975,
+        "max": 13109.37049999999
+      },
+      "pairedContainerSavingMs": {
+        "p50": 697.5070040000137,
+        "p95": 12146.23625799999,
+        "min": -8770.610054999997,
+        "max": 12414.473955000009
+      }
+    },
+    "3": {
+      "n": 30,
+      "basicFaster": 28,
+      "pairedClientSavingMs": {
+        "p50": 2468.6690000000526,
+        "p95": 5621.379125999985,
+        "min": -7748.78933400003,
+        "max": 12183.576041000022
+      },
+      "pairedContainerSavingMs": {
+        "p50": 2600.341040999978,
+        "p95": 5472.900289000012,
+        "min": -7704.218378999969,
+        "max": 12283.040615000034
+      }
+    }
+  },
+  "tiers": {
+    "lite": {
+      "maxRssMiB": 120.86328125,
+      "retryRequests": 4,
+      "recordedCpuThrottledUsec": 0,
+      "workerColos": [
+        "MRS",
+        "CDG"
+      ],
+      "restartUptimeSeconds": [
+        1.186872659,
+        1.221561347,
+        1.203002378
+      ]
+    },
+    "basic": {
+      "maxRssMiB": 136.09375,
+      "retryRequests": 2,
+      "recordedCpuThrottledUsec": 0,
+      "workerColos": [
+        "MRS",
+        "CDG"
+      ],
+      "restartUptimeSeconds": [
+        1.897749755,
+        1.735631892,
+        1.468741201
+      ]
+    }
+  }
+}

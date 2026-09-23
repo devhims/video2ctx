@@ -1,0 +1,593 @@
+[
+  {
+    "label": "opus-astra-refresh",
+    "baselineRunId": "b8066ff7-7e51-4737-b4cf-cf8f66556d58",
+    "runId": "70fad2b8-b296-47a5-b01e-a3b765ed5b0a",
+    "sessionId": "a733c315-845b-4b73-99d9-498db8694ed5",
+    "status": "completed",
+    "outcome": "answered",
+    "coverage": {
+      "targetVideos": 3,
+      "reviewedVideos": 3
+    },
+    "clientObservedTotalMs": 54908,
+    "route": {
+      "route": "topic_research",
+      "researchVideoCount": 3,
+      "researchBreadth": "comparative",
+      "searchQuery": "Claude Opus 5.5 vs GPT-6 Astra comparison",
+      "useStoryboard": false,
+      "refreshEvidence": true,
+      "answerDetail": "standard"
+    },
+    "extractions": [
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "a6e_lTGRnwo",
+        "extractionId": "1df93bc6-516d-46d0-b0d1-aeb5bee631c9",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177516802,
+        "elapsedMs": 1145,
+        "status": 404,
+        "outcome": "fallback",
+        "failureKind": "upstream",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "request",
+            "outcome": "error",
+            "code": "NOT_FOUND",
+            "elapsedMs": 775
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-8111d905b4e07ea1:2:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "vUjAgGa8tAU",
+        "extractionId": "3c98be9f-2a3b-4970-b2cf-9b91aa3532f8",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177516835,
+        "elapsedMs": 1178,
+        "status": 404,
+        "outcome": "fallback",
+        "failureKind": "upstream",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "request",
+            "outcome": "error",
+            "code": "NOT_FOUND",
+            "elapsedMs": 907
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-8111d905b4e07ea1:0:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "0qDlok29Wa0",
+        "extractionId": "a9600049-d6b3-447f-96de-e6367de1c66d",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177517089,
+        "elapsedMs": 1432,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 1180
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-8111d905b4e07ea1:1:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "a6e_lTGRnwo",
+        "extractionId": "1df93bc6-516d-46d0-b0d1-aeb5bee631c9",
+        "attempt": 2,
+        "slot": 1,
+        "recordedAt": 1790177520624,
+        "elapsedMs": 3652,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 3492
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-8111d905b4e07ea1:2:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "vUjAgGa8tAU",
+        "extractionId": "3c98be9f-2a3b-4970-b2cf-9b91aa3532f8",
+        "attempt": 2,
+        "slot": 1,
+        "recordedAt": 1790177522698,
+        "elapsedMs": 5715,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 5504
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-8111d905b4e07ea1:0:retrieve"
+      }
+    ],
+    "transcriptTools": [
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "vUjAgGa8tAU"
+        },
+        "status": "completed",
+        "startedAt": 1790177515657,
+        "finishedAt": 1790177524531,
+        "durationMs": 8874,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 536,
+          "sources": [
+            {
+              "videoId": "vUjAgGa8tAU"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "0qDlok29Wa0"
+        },
+        "status": "completed",
+        "startedAt": 1790177515657,
+        "finishedAt": 1790177518705,
+        "durationMs": 3048,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 193,
+          "sources": [
+            {
+              "videoId": "0qDlok29Wa0"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "a6e_lTGRnwo"
+        },
+        "status": "completed",
+        "startedAt": 1790177515657,
+        "finishedAt": 1790177521746,
+        "durationMs": 6089,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 18,
+          "sources": [
+            {
+              "videoId": "a6e_lTGRnwo"
+            }
+          ],
+          "warningCodes": []
+        }
+      }
+    ]
+  },
+  {
+    "label": "sol-astra-refresh",
+    "baselineRunId": "b91eead1-9deb-4515-8753-927d383a297e",
+    "runId": "e6ab31a1-11c5-4f0c-904a-470ad654287d",
+    "sessionId": "10134cb9-e2f4-44ce-a922-254e32e6751c",
+    "status": "completed",
+    "outcome": "partial",
+    "coverage": {
+      "targetVideos": 3,
+      "reviewedVideos": 3
+    },
+    "clientObservedTotalMs": 42491,
+    "route": {
+      "route": "topic_research",
+      "researchVideoCount": 3,
+      "researchBreadth": "comparative",
+      "searchQuery": "GPT-6 Sol vs GPT-6 Astra comparison",
+      "useStoryboard": false,
+      "refreshEvidence": true,
+      "answerDetail": "standard"
+    },
+    "extractions": [
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "rZ2myXdJYdI",
+        "extractionId": "c9197b9a-5c24-4576-a17b-0d45d2ce6ce9",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177570483,
+        "elapsedMs": 940,
+        "status": 404,
+        "outcome": "fallback",
+        "failureKind": "upstream",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "request",
+            "outcome": "error",
+            "code": "NOT_FOUND",
+            "elapsedMs": 645
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-9da8d067ee1cf3c9:0:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "vUjAgGa8tAU",
+        "extractionId": "c5d5d0f4-dea0-4cce-8921-a50228ddf4a4",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177570574,
+        "elapsedMs": 1031,
+        "status": 404,
+        "outcome": "fallback",
+        "failureKind": "upstream",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "request",
+            "outcome": "error",
+            "code": "NOT_FOUND",
+            "elapsedMs": 662
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-9da8d067ee1cf3c9:2:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "LMT-bknLmNo",
+        "extractionId": "6f658ed6-5ad4-4b95-9c14-ff5ac402d151",
+        "attempt": 1,
+        "slot": 1,
+        "recordedAt": 1790177570729,
+        "elapsedMs": 1186,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 1023
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-9da8d067ee1cf3c9:1:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "vUjAgGa8tAU",
+        "extractionId": "c5d5d0f4-dea0-4cce-8921-a50228ddf4a4",
+        "attempt": 2,
+        "slot": 1,
+        "recordedAt": 1790177571654,
+        "elapsedMs": 867,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 786
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-9da8d067ee1cf3c9:2:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "rZ2myXdJYdI",
+        "extractionId": "c9197b9a-5c24-4576-a17b-0d45d2ce6ce9",
+        "attempt": 2,
+        "slot": 1,
+        "recordedAt": 1790177571843,
+        "elapsedMs": 1118,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 1114
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-9da8d067ee1cf3c9:0:retrieve"
+      }
+    ],
+    "transcriptTools": [
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "rZ2myXdJYdI"
+        },
+        "status": "completed",
+        "startedAt": 1790177569543,
+        "finishedAt": 1790177572805,
+        "durationMs": 3262,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 30,
+          "sources": [
+            {
+              "videoId": "rZ2myXdJYdI"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "LMT-bknLmNo"
+        },
+        "status": "completed",
+        "startedAt": 1790177569543,
+        "finishedAt": 1790177571621,
+        "durationMs": 2078,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 887,
+          "sources": [
+            {
+              "videoId": "LMT-bknLmNo"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "vUjAgGa8tAU"
+        },
+        "status": "completed",
+        "startedAt": 1790177569543,
+        "finishedAt": 1790177573667,
+        "durationMs": 4124,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 536,
+          "sources": [
+            {
+              "videoId": "vUjAgGa8tAU"
+            }
+          ],
+          "warningCodes": []
+        }
+      }
+    ]
+  },
+  {
+    "label": "same-three-videos-refresh",
+    "baselineRunId": "b8066ff7-7e51-4737-b4cf-cf8f66556d58",
+    "runId": "44c4d91d-d58e-46be-9d8e-05981dd43050",
+    "sessionId": "c618c745-8893-4859-aa3c-d6dd9a1db04d",
+    "status": "completed",
+    "outcome": "answered",
+    "coverage": {
+      "targetVideos": 3,
+      "reviewedVideos": 3,
+      "requiredVideos": 3
+    },
+    "clientObservedTotalMs": 64010,
+    "route": {
+      "route": "topic_research",
+      "researchVideoCount": 3,
+      "researchBreadth": "comparative",
+      "searchQuery": "Opus 5.5 vs GPT models comparison",
+      "useStoryboard": false,
+      "refreshEvidence": true,
+      "answerDetail": "standard",
+      "comparisonVideoIds": [
+        "LMT-bknLmNo",
+        "m8cOfSuBVkE",
+        "0qDlok29Wa0"
+      ]
+    },
+    "extractions": [
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "0qDlok29Wa0",
+        "extractionId": "9f585142-33f4-4c36-94d9-fbba814f1eb0",
+        "attempt": 1,
+        "slot": 1,
+        "recordedAt": 1790177614879,
+        "elapsedMs": 984,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 912
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-a3e715b4217af08d:2:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "m8cOfSuBVkE",
+        "extractionId": "8c76843b-9fab-4224-b2bd-ebd2c5dbcfaa",
+        "attempt": 1,
+        "slot": 0,
+        "recordedAt": 1790177615267,
+        "elapsedMs": 1372,
+        "status": 404,
+        "outcome": "fallback",
+        "failureKind": "upstream",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "request",
+            "outcome": "error",
+            "code": "NOT_FOUND",
+            "elapsedMs": 1005
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-a3e715b4217af08d:1:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "LMT-bknLmNo",
+        "extractionId": "2117773b-fc55-44b5-acea-38feb38ad99a",
+        "attempt": 1,
+        "slot": 1,
+        "recordedAt": 1790177616182,
+        "elapsedMs": 2287,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 2172
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-a3e715b4217af08d:0:retrieve"
+      },
+      {
+        "version": 1,
+        "kind": "transcript",
+        "videoId": "m8cOfSuBVkE",
+        "extractionId": "8c76843b-9fab-4224-b2bd-ebd2c5dbcfaa",
+        "attempt": 2,
+        "slot": 1,
+        "recordedAt": 1790177616320,
+        "elapsedMs": 855,
+        "status": 200,
+        "outcome": "success",
+        "capture": "available",
+        "events": [
+          {
+            "stage": "complete",
+            "outcome": "success",
+            "elapsedMs": 795
+          }
+        ],
+        "droppedEvents": 0,
+        "toolCallId": "chatcmpl-tool-a3e715b4217af08d:1:retrieve"
+      }
+    ],
+    "transcriptTools": [
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "LMT-bknLmNo"
+        },
+        "status": "completed",
+        "startedAt": 1790177613895,
+        "finishedAt": 1790177617207,
+        "durationMs": 3312,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 887,
+          "sources": [
+            {
+              "videoId": "LMT-bknLmNo"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "m8cOfSuBVkE"
+        },
+        "status": "completed",
+        "startedAt": 1790177613895,
+        "finishedAt": 1790177617241,
+        "durationMs": 3346,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 259,
+          "sources": [
+            {
+              "videoId": "m8cOfSuBVkE"
+            }
+          ],
+          "warningCodes": []
+        }
+      },
+      {
+        "name": "get_video_transcript",
+        "operation": "transcript",
+        "input": {
+          "videoId": "0qDlok29Wa0"
+        },
+        "status": "completed",
+        "startedAt": 1790177613895,
+        "finishedAt": 1790177615977,
+        "durationMs": 2082,
+        "output": {
+          "sourceCount": 1,
+          "excerptCount": 193,
+          "sources": [
+            {
+              "videoId": "0qDlok29Wa0"
+            }
+          ],
+          "warningCodes": []
+        }
+      }
+    ]
+  }
+]

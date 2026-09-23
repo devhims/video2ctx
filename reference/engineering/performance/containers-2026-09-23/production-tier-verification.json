@@ -1,0 +1,50 @@
+[
+  {
+    "label": "opus-astra-refresh-before",
+    "checkedAt": "2026-09-23T15:31:44.906Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  },
+  {
+    "label": "opus-astra-refresh-after",
+    "checkedAt": "2026-09-23T15:32:40.492Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  },
+  {
+    "label": "sol-astra-refresh-before",
+    "checkedAt": "2026-09-23T15:32:41.248Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  },
+  {
+    "label": "sol-astra-refresh-after",
+    "checkedAt": "2026-09-23T15:33:25.135Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  },
+  {
+    "label": "same-three-videos-refresh-before",
+    "checkedAt": "2026-09-23T15:33:25.722Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  },
+  {
+    "label": "same-three-videos-refresh-after",
+    "checkedAt": "2026-09-23T15:34:31.026Z",
+    "version": 85,
+    "vcpu": 0.25,
+    "image": "registry.cloudflare.com/9079b7cc8d9e8cf76bcca7559b82b5c5/all-things-youtube-platform-youtubeprocessorcontainer@sha256:ef11def600bc34c4c5f08151d510d54cc1863b29b29b5ae3fb7afd64eb07b5b6",
+    "valid": true
+  }
+]
