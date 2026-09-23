@@ -242,9 +242,13 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   order.sort((a, b) => Number((health.get(a) ?? 0) > operationStartedAt) - Number((health.get(b) ?? 0) > operationStartedAt));
   const attempts = maxAttempts(env);
   const deadline = AbortSignal.timeout(processorTimeoutMs(env));
+  const missingTranscriptSlots = new Set<number>();
   let lastFailure: unknown;
   for (let index = 0; index < attempts; index += 1) {
-    const slot = order[index % order.length]!;
+    // Probe every slot before repeating, then revisit only inconclusive slots.
+    const repeatSlots = order.filter(slot => !missingTranscriptSlots.has(slot));
+    const slot = index < order.length ? order[index]!
+      : repeatSlots[(index - order.length) % repeatSlots.length]!;
     const startedAt = Date.now();
     let outcome: ExtractionAttempt['outcome'] = 'transport_error';
     let capture: Pick<ExtractionAttempt, 'capture' | 'events' | 'droppedEvents'> = { capture: 'unavailable', events: [], droppedEvents: 0 };
@@ -279,9 +283,12 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       failureKind = extractionFailureKind(error, deadline);
       const classified = error instanceof YouTubeProcessorError;
       if (classified) status = error.status;
-      // A terminal NOT_FOUND transcript only probes each distinct slot once.
+      if (classified && operation.kind === 'transcript' && error.code === 'NOT_FOUND' && !error.retryable)
+        missingTranscriptSlots.add(slot);
+      // Missing captions are conclusive only after every slot agrees. A prior
+      // transient failure must retain its opportunity to recover on a repeat.
       const canRetry = !classified || (shouldFallbackError(operation, error)
-        && (error.retryable || index + 1 < count));
+        && (error.retryable || missingTranscriptSlots.size < count));
       retry = !deadline.aborted && index + 1 < attempts && canRetry;
       if (canRetry && !deadline.aborted) health.set(slot, Date.now() + 30_000);
       outcome = retry ? 'fallback' : classified ? 'failed' : 'transport_error';

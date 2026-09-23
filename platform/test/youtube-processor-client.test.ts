@@ -29,6 +29,20 @@ function environment(responses: Array<Response | Error>): { env: Env; requested:
 }
 
 describe('YouTube processor client', () => {
+  test.each([false, true])('retries the transient slot after mixed transcript failures (missing first: %s)', async (missingFirst) => {
+    const transient = () => Response.json({ error: { code: 'INVALID_RESPONSE', retryable: true } }, { status: 502 });
+    const missing = () => Response.json({ error: { code: 'NOT_FOUND', retryable: false } }, { status: 404 });
+    const { env, requested } = environment([
+      ...(missingFirst ? [missing(), transient()] : [transient(), missing()]),
+      Response.json({ value: { text: 'Recovered transcript' } }),
+    ]);
+    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
+      .resolves.toMatchObject({ text: 'Recovered transcript' });
+    expect(requested).toHaveLength(3);
+    expect(requested[2]).toBe(requested[missingFirst ? 1 : 0]);
+  });
+
   test('returns unchanged results and captures diagnostics on both fallback and successful attempts', async () => {
     const onDiagnostic = vi.fn();
     const { env } = environment([
@@ -309,6 +323,7 @@ describe('YouTube processor client', () => {
       code: 'NOT_FOUND', message: 'No caption track is available.', status: 404, retryable: false,
     } }, { status: 404 });
     const { env, requested } = environment([missing(), missing()]);
+    env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS = '3';
 
     await expect(runYouTubeOperation(env, operation)).rejects.toMatchObject({
       code: 'NOT_FOUND', status: 404, retryable: false,

@@ -2,6 +2,7 @@ import { createAnalyzeVideoFramesTool } from './tools/analyze-video-frames';
 import { createAnalyzeVideoStoryboardTool } from './tools/analyze-video-storyboard';
 import { createGetVideoFramesTool } from './tools/get-video-frames';
 import { createAnalyzeVideoTranscriptsTool } from './tools/analyze-video-transcripts';
+import { createResearchVideoTranscriptsTool } from './tools/research-video-transcripts';
 import { createGetVideoStoryboardTool } from './tools/get-video-storyboard';
 import type { ToolSet } from 'ai';
 import type { AgentToolContext } from './tool-context';
@@ -44,6 +45,7 @@ export function createCapabilityToolSet(
     selected[name] = name === 'finalize_answer'
       ? createFinalizeAnswerTool(context)
       : name === 'analyze_video_transcripts' ? createAnalyzeVideoTranscriptsTool(context)
+      : name === 'research_video_transcripts' ? createResearchVideoTranscriptsTool(context)
       : name === 'analyze_video_frames' ? createAnalyzeVideoFramesTool(context)
       : name === 'analyze_video_storyboard' ? createAnalyzeVideoStoryboardTool(context)
       : providerToolFactories[name](context);

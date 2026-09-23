@@ -169,3 +169,32 @@ it('resumes finalization without rerunning research or resetting its deadline', 
   await vi.advanceTimersByTimeAsync(1);
   expect(await run).toMatch(/Finalization timed out/i);
 });
+
+it('admits a ready analysis while all provider request slots are occupied', async () => {
+  const { options, controller } = setup(0);
+  const research = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [
+      ...[1, 2, 3, 4].map(n => ({ type: 'tool-call' as const, toolCallId: `metadata-${n}`, toolName: 'get_video', input: JSON.stringify({ videoId: `video00000${n}` }) })),
+      { type: 'tool-call' as const, toolCallId: 'analysis', toolName: 'analyze_video_transcripts', input: JSON.stringify({ assetVersions: ['1'.padStart(64, '0')], focus: 'Findings' }) },
+    ],
+    finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' },
+    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+  }) });
+  models.select.mockReturnValue(research);
+  const admitted: string[] = [];
+  const run = executeResearchRun({ ...options,
+    persistedRoute: { route: 'topic_research', researchVideoCount: 4, answerDetail: 'standard', useStoryboard: false },
+    executeEvidenceTool: async execution => {
+      admitted.push(execution.toolName);
+      return new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }));
+    },
+  }).catch(() => undefined);
+  await vi.advanceTimersByTimeAsync(1);
+  const beforeCancel = [...admitted];
+  controller.abort(new Error('Test completed'));
+  await vi.advanceTimersByTimeAsync(1);
+  await run;
+  expect(beforeCancel.filter(name => name === 'get_video')).toHaveLength(4);
+  expect(beforeCancel).toContain('analyze_video_transcript');
+});
