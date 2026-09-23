@@ -172,6 +172,9 @@ export async function executeResearchRun(options: {
   const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(decision.useStoryboard);
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
   const limiter = new ConcurrencyLimiter(MAX_CONCURRENT_EVIDENCE_REQUESTS);
+  // Slow provider requests must not occupy the slots needed to analyze assets
+  // that have already arrived. The research context also limits active models.
+  const analysisLimiter = new ConcurrencyLimiter(4);
   const upstream = createYouTubeAgentProvider(options.env);
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
@@ -206,7 +209,7 @@ export async function executeResearchRun(options: {
       analyze: transcriptAnalyst,
     },
     signal: options.signal,
-    executeEvidenceTool: (execution) => limiter.run(() => {
+    executeEvidenceTool: (execution) => (execution.toolName.startsWith('analyze_') ? analysisLimiter : limiter).run(() => {
       options.signal.throwIfAborted();
       return options.executeEvidenceTool({ ...execution, execute: async () => {
         options.signal.throwIfAborted();

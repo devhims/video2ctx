@@ -1,3 +1,4 @@
+import { researchVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/research-video-transcripts';
 import { attachTestAssetStore } from './fixtures/analysis-session';
 import { analyzeVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -19,6 +20,97 @@ import type { EvidencePacket } from '../src/agents/contracts';
 import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
 
 describe('YouTube AgentCore loop control', () => {
+  it.each(['error', 'partial', 'empty'] as const)('pipelines ready transcripts without waiting for slow or unusable retrievals (%s)', async failure => {
+    const context = await transcriptResearchContext();
+    if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+    const fetch = context.provider.transcript;
+    const analyze = context.transcriptPolicy.analyze;
+    let release!: () => void;
+    const slow = new Promise<void>(resolve => { release = resolve; });
+    const saved: EvidencePacket[] = [];
+    const execute = context.executeEvidenceTool;
+    context.executeEvidenceTool = async execution => {
+      const packet = await execute(execution);
+      saved.push(packet);
+      if (execution.toolName === 'analyze_video_transcript' && packet.sources[0]?.videoId === 'video000001') release();
+      return packet;
+    };
+    context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (args[0] === 'video000002') {
+        await slow;
+        expect(saved.some(packet => packet.artifacts.some(a => a.type === 'youtube_transcript_analysis'))).toBe(true);
+      }
+      if (args[0] === 'video000003') {
+        if (failure === 'error') throw new Error('No captions');
+        const result = await fetch(...args);
+        return { ...result, assetVersions: [], value: { ...result.value,
+          segments: failure === 'empty' ? [] : result.value.segments,
+          meta: { ...result.value.meta, partial: failure === 'partial' } } };
+      }
+      return fetch(...args);
+    });
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
+        input: JSON.stringify({ sources: [1, 2, 3].map(n => ({ videoId: `video00000${n}` })), focus: 'Practical tasks' }) });
+      expect(JSON.stringify(call.prompt)).toContain(failure === 'error' ? 'No captions' : 'complete nonempty saved transcript');
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) });
+    } });
+    await runResearchAgentWithModel({ model, message: 'Research tasks', context,
+      decision: { route: 'topic_research', researchVideoCount: 3 } });
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(analyze).mock.calls.map(([input]) => input.videoId)).toEqual(['video000001', 'video000002']);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 3, reviewedVideos: 2 } })]),
+    }));
+  });
+
+  it('retains completed pipeline evidence when another retrieval outlives the research deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = await transcriptResearchContext();
+      const fetch = context.provider.transcript;
+      let release!: () => void;
+      const slow = new Promise<void>(resolve => { release = resolve; });
+      context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
+        if (args[0] === 'video000002') await slow;
+        return fetch(...args);
+      });
+      const saved: EvidencePacket[] = [];
+      const execute = context.executeEvidenceTool;
+      context.executeEvidenceTool = async execution => {
+        const packet = await execute(execution);
+        saved.push(packet);
+        return packet;
+      };
+      const model = new MockLanguageModelV4({ doGenerate: async () => modelResult({
+        toolCallId: 'pipeline', toolName: 'research_video_transcripts', input: JSON.stringify({
+          sources: [{ videoId: 'video000001' }, { videoId: 'video000002' }], focus: 'Practical tasks',
+        }),
+      }) });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+        if (call.responseFormat?.type !== 'json') return { content: [{type:'text' as const,text:'Context is sufficient.'}],finishReason:{unified:'stop' as const,raw:'stop'},usage:modelResult({toolCallId:'unused',toolName:'unused',input:'{}'}).usage,warnings:[] };
+        return finalizerModelResult({ blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
+          intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
+      } });
+      const run = runResearchAgentWithModel({ model, finalizationModel: finalizer, message: 'Research tasks', context,
+        decision: { route: 'topic_research', researchVideoCount: 2 } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(saved.some(packet => packet.artifacts.some(a => a.type === 'youtube_transcript_analysis'))).toBe(true);
+      await vi.advanceTimersByTimeAsync(40_000);
+      await expect(run).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+      expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(1);
+      expect(context.finalize).toHaveBeenCalledOnce();
+      expect(JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt)).toContain('video000001');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('reads one complete transcript directly in inspection and reuses it across rephrased calls', async () => {
     const context = await transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst spy');
@@ -870,12 +962,19 @@ describe('YouTube AgentCore loop control', () => {
     }));
   });
 
+  it('validates pipeline selections before scheduling retrieval', () => {
+    const source = { videoId: 'video000001' };
+    expect(researchVideoTranscriptsInputSchema.safeParse({ sources: [source, source], focus: 'Tasks' }).success).toBe(false);
+    expect(researchVideoTranscriptsInputSchema.safeParse({ sources: Array.from({ length: 9 }, (_, i) => ({ assetVersion: assetVersion(i) })), focus: 'Tasks' }).success).toBe(false);
+    expect(researchVideoTranscriptsInputSchema.safeParse({ sources: [{ ...source, assetVersion: assetVersion(1) }], focus: 'Tasks' }).success).toBe(false);
+  });
+
   it('rejects duplicate or oversized transcript batches before provider calls', () => {
     expect(analyzeVideoTranscriptsInputSchema.safeParse({ assetVersions: [1, 1].map(assetVersion), focus: 'Tasks' }).success).toBe(false);
     expect(analyzeVideoTranscriptsInputSchema.safeParse({ assetVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(assetVersion), focus: 'Tasks' }).success).toBe(false);
   });
 
-  it.each([['focused', 2], ['comparative', 4]] as const)('bounds %s analysts to %i concurrent calls', async (researchBreadth, limit) => {
+  it.each([['focused', 2, false], ['comparative', 4, false], ['focused', 2, true], ['comparative', 4, true]] as const)('bounds %s analysts to %i concurrent calls (pipeline=%s)', async (researchBreadth, limit, pipeline) => {
     const context = await transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
     const original = context.transcriptPolicy.analyze;
@@ -892,22 +991,27 @@ describe('YouTube AgentCore loop control', () => {
     };
     let step = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => {
-      if (step++ === 0) return multiToolModelResult([1, 2, 3, 4].map(n => ({
-        toolCallId: `analysis-${n}`, toolName: 'analyze_video_transcripts',
-        input: JSON.stringify({ assetVersions: [assetVersion(n)], focus: 'Design skills' }),
-      })));
+      if (step++ === 0) return pipeline
+        ? modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts', input: JSON.stringify({
+          sources: [1, 2, 3, 4].map(n => ({ assetVersion: assetVersion(n) })), focus: 'Design skills',
+        }) })
+        : multiToolModelResult([1, 2, 3, 4].map(n => ({
+          toolCallId: `analysis-${n}`, toolName: 'analyze_video_transcripts',
+          input: JSON.stringify({ assetVersions: [assetVersion(n)], focus: 'Design skills' }),
+        })));
       return finalizerModelResult({
         blocks: [{ text: 'Compared the sources.', evidenceIds: ['transcript:video000001:window:0:0'] }],
         intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
       });
     } });
     const run = runResearchAgentWithModel({ model, message: 'Compare design skills',
-      decision: { route: 'topic_research', researchBreadth }, toolNames: ['analyze_video_transcripts', 'finalize_answer'], context });
+      decision: { route: 'topic_research', researchBreadth }, toolNames: ['research_video_transcripts', 'analyze_video_transcripts', 'finalize_answer'], context });
     await vi.waitFor(() => expect(started).toBe(limit));
     expect(active).toBe(limit);
     releases.splice(0).forEach(release => release());
     await run;
     expect(maximum).toBe(limit);
+    expect(context.provider.transcript).not.toHaveBeenCalled();
     expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
   });
 

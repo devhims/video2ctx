@@ -13,6 +13,7 @@ export const RESEARCH_TOPIC_TOOL_NAMES = [
   'get_video',
   'get_video_transcript',
   'analyze_video_transcripts',
+  'research_video_transcripts',
   'get_video_storyboard',
   'get_video_frames',
   'analyze_video_frames',
@@ -34,7 +35,7 @@ Work in a dynamic evidence loop:
 1. Use the supplied initial search evidence to select videos immediately. If no initial search was supplied, use one focused YouTube search, then select evidence. Only one search_youtube call is allowed per run, even if it fails; the tool is removed after use. Avoid repeated planning and discovery when useful candidates are available.
 2. Use search_youtube for topic discovery. Use browse_youtube only for category feeds.
 3. Inspect candidate metadata, channels, channel catalogs, and playlists only when they materially narrow the evidence.
-4. Select the target number of distinct videos likely to contain material evidence, preferring different creators and substantive relevance over search rank. Use transcript versions from session inventory when suitable. Call get_video_transcript for missing or explicitly refreshed videos, with independent retrievals in parallel. Then call analyze_video_transcripts ONCE with all selected saved assetVersions and a focused evidence question. Retrieval never invokes an analyst; analysis never fetches a transcript. Do not split the selection into separate batches; the application schedules the independent analyses together. The application limits active analysts to the research target, at most four. Each tool analyzes the complete transcript in one isolated model call and returns bounded, exact transcript evidence.
+4. Select the target number of distinct videos likely to contain material evidence, preferring different creators and substantive relevance over search rank. Call research_video_transcripts ONCE with the selected sources and a focused evidence question. Supply videoId for missing or explicitly refreshed transcripts, or assetVersion for suitable saved transcripts. Do not retrieve all transcripts first: the application saves each transcript and starts its analysis as soon as it is ready while other retrievals continue. Completed analyses are saved immediately and survive other failures or the research deadline. A failed retrieval skips only that video's analysis. For analysis of saved transcripts alone, analyze_video_transcripts remains available. The application limits active analysts to the research target, at most four. Each analysis reads the complete saved transcript in one isolated model call and returns bounded, exact transcript evidence.
 5. Use get_video_comments only when audience response is relevant to the question.
 6. Compare evidence, identify gaps or conflicts, and finalize from available evidence. Do not keep searching after repeated provider network failures.
 7. After the target number of unique transcript-analysis requests, or earlier when candidates are unsuitable or the time budget requires it, call finalize_answer. Repeating an identical request reuses its durable result and does not consume another analysis slot.

@@ -16,4 +16,4 @@ export const YOUTUBE_PROVIDER_TOOL_NAMES = [
 export type YouTubeProviderToolName = typeof YOUTUBE_PROVIDER_TOOL_NAMES[number];
 export type YouTubeAnalysisToolName = 'analyze_video_transcript' | 'analyze_video_frames' | 'analyze_video_storyboard';
 export type YouTubeEvidenceToolName = YouTubeProviderToolName | YouTubeAnalysisToolName;
-export type YouTubeAgentToolName = YouTubeProviderToolName | Exclude<YouTubeAnalysisToolName, 'analyze_video_transcript'> | 'analyze_video_transcripts' | 'finalize_answer';
+export type YouTubeAgentToolName = YouTubeProviderToolName | Exclude<YouTubeAnalysisToolName, 'analyze_video_transcript'> | 'analyze_video_transcripts' | 'research_video_transcripts' | 'finalize_answer';
