@@ -70,8 +70,8 @@ jobs:
       - run: npm pack --dry-run
       - run: npm run test:packed
 
-  platform:
-    name: Platform + Auth E2E
+  platform-checks:
+    name: Platform checks
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -88,7 +88,6 @@ jobs:
             platform/youtube-processor/package-lock.json
             platform/youtube-frames/package-lock.json
             packages/video2ctx-cli/package-lock.json
-            web/package-lock.json
       - name: Install platform dependencies
         run: npm ci
       - name: Install hosted CLI dependencies
@@ -100,10 +99,14 @@ jobs:
       - name: Verify published CLI package contents
         run: npm pack --dry-run
         working-directory: packages/video2ctx-cli
+      - name: Install container dependencies
+        run: npm ci --prefix youtube-processor && npm ci --prefix youtube-frames
       - name: Verify storyboard bundle
-        run: npm ci --prefix youtube-processor && npm --prefix youtube-processor run bundle:check
-      - name: Verify platform
-        run: npm run verify
+        run: npm --prefix youtube-processor run bundle:check
+      - name: Type check platform
+        run: npm run build
+      - name: Run platform unit tests
+        run: npm test
       - name: Profile Worker startup (local CPU, no deployment)
         run: npm run check:startup
       - uses: actions/upload-artifact@v4
@@ -111,16 +114,71 @@ jobs:
           name: worker-startup-profile
           path: platform/.wrangler/startup.cpuprofile
           include-hidden-files: true
+
+  platform-integration:
+    name: Platform integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            platform/youtube-processor/package-lock.json
+            platform/youtube-frames/package-lock.json
+      - name: Install platform dependencies
+        run: npm ci
+      - name: Install container dependencies
+        run: npm ci --prefix youtube-processor && npm ci --prefix youtube-frames
+      - name: Run auth integration tests
+        run: npm run test:auth:integration
       - name: Verify processor Linux image
         run: |
           docker build --platform linux/amd64 -t youtube-processor:test -f youtube-processor/Dockerfile youtube-processor
           docker run --rm --platform linux/amd64 --network none --mount type=bind,src="$PWD/youtube-processor/test",dst=/app/test,readonly youtube-processor:test sh -c 'node --test test/*.test.mjs'
-      - name: Install web dependencies for auth E2E
+
+  auth-e2e:
+    name: Auth E2E
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            platform/package-lock.json
+            packages/video2ctx-cli/package-lock.json
+            web/package-lock.json
+      - name: Install platform dependencies
+        run: npm ci
+      - name: Install hosted CLI dependencies
+        run: npm ci
+        working-directory: packages/video2ctx-cli
+      - name: Install web dependencies
         run: npm ci --prefix ../web
       - name: Install Chromium
         run: npx playwright install --with-deps --only-shell chromium
       - name: Run CLI and browser auth E2E
         run: npm --prefix .. run test:auth:e2e
+
+  # Keeps the required "Platform + Auth E2E" check while the work runs in parallel jobs.
+  platform-gate:
+    name: Platform + Auth E2E
+    if: always()
+    needs: [platform-checks, platform-integration, auth-e2e, dashboard-changes, dashboard-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
 
   dashboard-smoke:
     name: Dashboard smoke E2E
