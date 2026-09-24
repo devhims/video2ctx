@@ -106,10 +106,9 @@
     {
       "binding": "VIDEO_CATALOG",
       "database_name": "video2ctx-video-catalog",
-      // Local placeholder. Provision dedicated production/preview databases and
-      // replace these IDs before a remote migration or deployment.
-      "database_id": "00000000-0000-0000-0000-000000000002",
-      "preview_database_id": "00000000-0000-0000-0000-000000000003",
+      // Provisioned catalog databases. Local development still uses local storage.
+      "database_id": "90fdc3eb-c76f-4dfe-a0cd-503f7606b4c3",
+      "preview_database_id": "1439902b-2ee3-4cb3-9719-d18b409cb62e",
       "migrations_dir": "video-catalog-migrations",
       "remote": false
     },

@@ -146,4 +146,4 @@ These limits bound resource usage rather than guarantee any requested count. If 
 
 ### Shared video catalog
 
-The platform also uses local `VIDEO_CATALOG` D1 and `VIDEO_ASSETS` R2 bindings. `npm --prefix platform run db:migrate:local` applies both the account and video catalog migrations. The catalog stores requested public video assets incrementally; see `reference/engineering/VIDEO_CATALOG.md` for the storage layout and deployment requirements. The checked-in catalog database IDs are local placeholders and must be replaced before deployment.
+The platform also uses local `VIDEO_CATALOG` D1 and `VIDEO_ASSETS` R2 bindings. `npm --prefix platform run db:migrate:local` applies both the account and video catalog migrations. The catalog stores requested public video assets incrementally; see `reference/engineering/VIDEO_CATALOG.md` for the storage layout and deployment requirements. The checked-in catalog IDs refer to provisioned hosted databases; `--local` and the catalog binding's `remote: false` keep local development on local storage. Self-hosted deployments must configure their own databases and buckets.
