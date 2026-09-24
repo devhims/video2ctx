@@ -192,6 +192,19 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!this.hasSessionOwner(conversationId,userId)) return null;
     return this.sessionStore.read(z.string().regex(/^[a-f0-9]{64}$/).parse(version));
   }
+  async migrateSessionAssets(conversationId: string, userId: string, input: unknown) {
+    if (!this.hasSessionOwner(conversationId, userId)) return null;
+    const { mode, cursor } = z.object({
+      mode: z.enum(['migrate', 'verify']),
+      cursor: z.object({
+        afterVersion: z.string().regex(/^[a-f0-9]{64}$/),
+        generation: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      }).optional(),
+    }).parse(input);
+    const result = await this.sessionStore.migrateAssetBatch(mode, cursor);
+    return this.hasSessionOwner(conversationId, userId) ? result : null;
+  }
   async deleteSessionMemory(conversationId:string,userId:string,id:string) {
     if (!this.hasSessionOwner(conversationId,userId)) return null;
     this.sessionStore.deleteMemory(z.string().max(200).parse(id));

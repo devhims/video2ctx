@@ -115,3 +115,18 @@ describe('UserAccountDO', () => {
     await expect(second.getSession(CONVERSATION_A)).resolves.toBeNull();
   });
 });
+
+test('operator session inventory uses stable IDs across pages while session activity changes', async () => {
+  const account = env.USER_ACCOUNT.getByName('operator-stable-inventory');
+  const ids = Array.from({ length: 102 }, () => crypto.randomUUID()).sort();
+  for (const conversationId of ids) await account.recordSession({
+    conversationId, runId: crypto.randomUUID(), message: 'Private prompt', updatedAt: 100,
+  });
+  const first = await account.listSessionAssetMigrationTargets();
+  expect(first.conversationIds).toEqual(ids.slice(0, 100));
+  // A recency-based cursor would miss this now-active session on the next page.
+  await account.recordSession({ conversationId: ids[101]!, runId: crypto.randomUUID(), message: 'Updated prompt', updatedAt: 1000 });
+  const last = await account.listSessionAssetMigrationTargets(first.nextCursor!);
+  expect(last).toEqual({ conversationIds: ids.slice(100), nextCursor: null });
+  expect(JSON.stringify(first)).not.toContain('Private prompt');
+});

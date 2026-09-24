@@ -768,3 +768,24 @@ test('persists retrieval and analysis with separate bounded quotas and settles o
     expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='analyze_video_transcript' AND credits=0`).toHaveLength(11);
   });
 });
+
+test('operator asset migration RPC enforces session ownership and verifies dormant legacy assets', async () => {
+  const { runtime, userId, conversationId } = await seed('operator-session-owner');
+  let version = '';
+  await runInDurableObject(runtime, async (_instance, state) => {
+    const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
+    const legacy = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'operator-rpc/');
+    const saved = await legacy.retrieve('transcript:abcdefghijk:default', 'transcript', 'abcdefghijk', false,
+      async () => ({ value: { videoId: 'abcdefghijk', text: 'Saved captions', segments: [] }, cacheStatus: 'miss' }), () => ({}));
+    version = saved.assetVersions![0]!;
+  });
+  expect(await runtime.migrateSessionAssets(conversationId, 'different-user', { mode: 'migrate' })).toBeNull();
+  expect(await runtime.migrateSessionAssets(crypto.randomUUID(), userId, { mode: 'migrate' })).toBeNull();
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'verify' }))?.results)
+    .toEqual([{ version, status: 'unlinked', migrated: false }]);
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'migrate' }))?.results)
+    .toEqual([{ version, status: 'shared_verified', migrated: true }]);
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'verify' }))?.results)
+    .toEqual([{ version, status: 'shared_verified', migrated: false }]);
+  expect(await runtime.getSessionAsset(conversationId, userId, version)).toMatchObject({ text: 'Saved captions' });
+});

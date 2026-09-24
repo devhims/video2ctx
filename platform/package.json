@@ -34,7 +34,8 @@
     "db:catalog:local": "wrangler d1 migrations apply VIDEO_CATALOG --local",
     "db:catalog:preview": "wrangler d1 migrations apply VIDEO_CATALOG --remote --preview",
     "db:catalog:production": "wrangler d1 migrations apply VIDEO_CATALOG --remote",
-    "test:video-catalog": "vitest run --config vitest.video-catalog.config.ts"
+    "test:video-catalog": "vitest run --config vitest.video-catalog.config.ts",
+    "assets:sweep": "tsx scripts/session-assets/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.41",

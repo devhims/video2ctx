@@ -206,6 +206,19 @@ export class UserAccountDO extends DurableObject<Env> {
     };
   }
 
+  /** Stable pagination for operator migrations, unaffected by session activity. */
+  listSessionAssetMigrationTargets(after?: string) {
+    if (after !== undefined) z.string().uuid().parse(after);
+    const rows = this.ctx.storage.sql.exec<{ conversation_id: string }>(
+      'SELECT conversation_id FROM user_sessions WHERE conversation_id>? ORDER BY conversation_id LIMIT 101',
+      after ?? '',
+    ).toArray();
+    return {
+      conversationIds: rows.slice(0, 100).map(row => row.conversation_id),
+      nextCursor: rows.length > 100 ? rows[99]!.conversation_id : null,
+    };
+  }
+
   getSession(conversationId: string): UserSessionSummary | null {
     const parsedConversationId = z.string().uuid().parse(conversationId);
     const row = this.readSession(parsedConversationId);

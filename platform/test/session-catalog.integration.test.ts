@@ -486,3 +486,101 @@ test('preview capabilities store only references and revocation leaves shared im
   expect((await read(second)).status).toBe(200);
   expect(await env.VIDEO_ASSETS.get(ref.sharedImageKey)).not.toBeNull();
 });
+
+test('operator sweep covers every page, preserves originals, and retries failed assets without starving later pages', async () => {
+  await within('operator-pagination', async ({ legacy, store, backend, sql, reopen, prefix }) => {
+    for (let i = 0; i < 12; i++) {
+      const id = videoId();
+      await legacy.retrieve(`transcript:${id}:default`, 'transcript', id, false,
+        async () => ({ value: transcript(id), cacheStatus: 'miss' }), () => ({}));
+    }
+    const before = legacy.brief();
+    const originals = (await env.RESEARCH.list({ prefix })).objects.map(row => [row.key, row.etag]);
+    const audit = await store.migrateAssetBatch('verify');
+    expect(audit.results).toHaveLength(10);
+    expect(audit.results.every(row => row.status === 'unlinked')).toBe(true);
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    const pin = vi.spyOn(backend, 'pin').mockRejectedValueOnce(new Error('temporary failure'));
+    const first = await store.migrateAssetBatch('migrate');
+    expect(first.results.filter(row => row.status === 'unreadable')).toHaveLength(1);
+    expect(first.results.filter(row => row.status === 'shared_verified' && row.migrated)).toHaveLength(9);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await store.migrateAssetBatch('migrate', first.nextCursor!);
+    expect(second.results.every(row => row.status === 'shared_verified')).toBe(true);
+    expect(second.nextCursor).toBeNull();
+    pin.mockRestore();
+    const retry = await reopen().migrateAssetBatch('migrate');
+    expect(retry.results.every(row => row.status === 'shared_verified')).toBe(true);
+    expect(retry.results.filter(row => row.migrated)).toHaveLength(1);
+    const verified = await reopen().migrateAssetBatch('verify');
+    expect(verified.results.every(row => row.status === 'shared_verified' && !row.migrated)).toBe(true);
+    expect(reopen().brief()).toEqual(before);
+    expect((await env.RESEARCH.list({ prefix })).objects.map(row => [row.key, row.etag])).toEqual(originals);
+  });
+});
+
+test('operator verification fails on a missing shared source even while the retained private source is readable', async () => {
+  const id = videoId();
+  await within('operator-missing-shared', async ({ legacy, store, sql }) => {
+    const saved = await legacy.retrieve(`transcript:${id}:default`, 'transcript', id, false,
+      async () => ({ value: transcript(id), cacheStatus: 'miss' }), () => ({}));
+    const version = saved.assetVersions![0]!;
+    expect((await store.migrateAssetBatch('migrate')).results[0]?.status).toBe('shared_verified');
+    const ref = reference(sql, version);
+    const shared = await env.VIDEO_CATALOG.prepare('SELECT object_key FROM video_asset_versions WHERE content_hash=?')
+      .bind(ref.asset.contentHash).first<{ object_key: string }>();
+    await env.VIDEO_ASSETS.delete(shared!.object_key);
+    const blobKey = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', version).one().blob_key;
+    expect(await env.RESEARCH.get(blobKey)).not.toBeNull();
+    expect((await store.migrateAssetBatch('verify')).results[0]?.status).toBe('unreadable');
+    expect(await store.read(version)).toBeNull();
+  });
+});
+
+test('operator sweep rejects a changed inventory and cannot restore access after concurrent deletion', async () => {
+  const id = videoId();
+  await within('operator-delete-race', async ({ legacy, store, backend, sql }) => {
+    const saved = await legacy.retrieve(`transcript:${id}:default`, 'transcript', id, false,
+      async () => ({ value: transcript(id), cacheStatus: 'miss' }), () => ({}));
+    const version = saved.assetVersions![0]!;
+    const original = backend.pin.bind(backend);
+    vi.spyOn(backend, 'pin').mockImplementation(async (...args) => {
+      const ref = await original(...args);
+      await store.delete(version);
+      return ref;
+    });
+    const batch = await store.migrateAssetBatch('migrate');
+    expect(batch.stable).toBe(false);
+    expect(batch.results[0]?.status).toBe('changed');
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    await expect(store.migrateAssetBatch('migrate', { afterVersion: version, generation: batch.generation, total: 1 }))
+      .rejects.toThrow('Session assets changed');
+  });
+});
+
+test('operator verification reports a changed retained payload without replacing the shared citation version', async () => {
+  const id = videoId();
+  await within('operator-mismatch', async ({ legacy, store, sql }) => {
+    const saved = await legacy.retrieve(`transcript:${id}:default`, 'transcript', id, false,
+      async () => ({ value: transcript(id), cacheStatus: 'miss' }), () => ({}));
+    const version = saved.assetVersions![0]!;
+    await store.migrateAssetBatch('migrate');
+    const before = reference(sql, version);
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', version).one().blob_key;
+    await env.RESEARCH.put(key, JSON.stringify(transcript(id, 'Changed private bytes')));
+    expect((await store.migrateAssetBatch('verify')).results[0]?.status).toBe('mismatch');
+    expect(reference(sql, version)).toEqual(before);
+    expect(await store.read(version)).toEqual(transcript(id));
+  });
+});
+
+test('temporary operator helper authenticates requests before enumerating private sessions', async () => {
+  const { default: helper } = await import('../scripts/session-assets/worker');
+  const bindings = { ...env, MIGRATION_TOKEN: 'test-operator-token' };
+  const denied = await helper.fetch(new Request('https://operator/users', { method: 'POST', body: '{}' }), bindings);
+  expect(denied.status).toBe(401);
+  const allowed = await helper.fetch(new Request('https://operator/health', {
+    method: 'POST', headers: { authorization: 'Bearer test-operator-token' }, body: '{}',
+  }), bindings);
+  expect(await allowed.json()).toEqual({ ready: true });
+});

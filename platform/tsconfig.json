@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["vitest/globals", "node", "./worker-configuration.d.ts"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx", "worker-configuration.d.ts", "scripts/session-assets/**/*.ts"]
 }

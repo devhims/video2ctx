@@ -6,6 +6,18 @@ import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
 import type { SessionCatalog, SessionCatalogReference } from './session-catalog';
+import { canonicalSessionPayload } from './session-catalog';
+
+export interface SessionAssetMigrationCursor {
+  afterVersion: string;
+  generation: number;
+  total: number;
+}
+export interface SessionAssetMigrationResult {
+  version: string;
+  status: 'shared_verified' | 'unlinked' | 'unreadable' | 'mismatch' | 'changed';
+  migrated: boolean;
+}
 
 export { memoryUpdateSchema } from '../contracts';
 export type MemoryUpdate = import('../contracts').MemoryUpdate;
@@ -336,6 +348,62 @@ export class SessionEvidenceStore implements SessionAccess {
       )
       .toArray();
     for (const { version } of rows) await this.read(version);
+  }
+  /** Operator sweep, including dormant sessions. Never deletes private objects. */
+  async migrateAssetBatch(mode: 'migrate' | 'verify', cursor?: SessionAssetMigrationCursor) {
+    if (!this.catalog) throw new Error('Shared video catalog bindings are required.');
+    const generation = this.generation();
+    const total = this.sql.exec<{ total: number }>('SELECT COUNT(*) AS total FROM session_assets').one().total;
+    if (cursor && (cursor.generation !== generation || cursor.total !== total))
+      throw new Error('Session assets changed. Restart this session sweep.');
+    const rows = this.sql.exec<AssetRow>(
+      'SELECT * FROM session_assets WHERE version>? ORDER BY version LIMIT 11',
+      cursor?.afterVersion ?? '',
+    ).toArray();
+    const results: SessionAssetMigrationResult[] = [];
+    for (const row of rows.slice(0, 10)) {
+      let migrated = false;
+      let status: SessionAssetMigrationResult['status'] = 'unreadable';
+      try {
+        const saved = this.sql.exec<{ reference_json: string }>(
+          'SELECT reference_json FROM session_asset_catalog_refs WHERE version=?', row.version,
+        ).toArray()[0];
+        let reference: SessionCatalogReference | undefined = saved && JSON.parse(saved.reference_json);
+        // Use the retained original for equivalence checks, never as a fallback
+        // for a missing shared version. Verification cannot trigger lazy writes.
+        const original = row.blob_key ? await this.bucket.get(row.blob_key) : null;
+        const value = original ? await original.json() : null;
+        if (!reference && mode === 'migrate' && value !== null) {
+          reference = await this.catalog.pin(row.kind, row.video_id, row.resource_key, value, row.created_at);
+          if (generation === this.generation() && this.has(row.version)) {
+            this.atomic!(() => this.linkCatalog(row.version, reference!));
+            migrated = true;
+            // Verify the committed reference, including a concurrent lazy link.
+            reference = JSON.parse(this.sql.exec<{ reference_json: string }>(
+              'SELECT reference_json FROM session_asset_catalog_refs WHERE version=?', row.version,
+            ).one().reference_json);
+          }
+        }
+        if (!reference) status = 'unlinked';
+        else {
+          const shared = await this.catalog.read(reference);
+          status = shared === null ? 'unreadable'
+            : value !== null && canonicalSessionPayload(shared) !== canonicalSessionPayload(value) ? 'mismatch'
+            : 'shared_verified';
+        }
+      } catch {
+        // Continue past failures so one bad asset cannot starve later pages.
+        status = 'unreadable';
+      }
+      if (generation !== this.generation() || !this.has(row.version)) status = 'changed';
+      results.push({ version: row.version, status, migrated });
+    }
+    const currentTotal = this.sql.exec<{ total: number }>('SELECT COUNT(*) AS total FROM session_assets').one().total;
+    const stable = generation === this.generation() && total === currentTotal;
+    return {
+      results, total, generation, stable,
+      nextCursor: rows.length > 10 ? { afterVersion: rows[9]!.version, generation, total } : null,
+    };
   }
   async readTranscriptEvidence(version: string) {
     const asset = this.brief().assets.find(asset => asset.version === version);

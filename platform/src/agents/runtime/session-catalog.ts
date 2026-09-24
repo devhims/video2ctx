@@ -12,7 +12,7 @@ export interface SessionCatalogReference {
 // Only response-envelope fields may differ from the immutable source payload.
 // Transcript text, comments and image bytes must match the referenced version.
 const envelopeFields = new Set(['meta', 'freshness', 'selection', 'failures']);
-function canonical(value: unknown): string {
+export function canonicalSessionPayload(value: unknown): string {
   return JSON.stringify(value, (_key, item) =>
     item && typeof item === 'object' && !Array.isArray(item)
       ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
@@ -34,7 +34,7 @@ function projection(source: unknown, value: unknown): Omit<SessionCatalogReferen
   const overrides: Record<string, unknown> = {},
     omitted: string[] = [];
   for (const field of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    if (canonical(a[field]) === canonical(b[field])) continue;
+    if (canonicalSessionPayload(a[field]) === canonicalSessionPayload(b[field])) continue;
     if (!envelopeFields.has(field)) return;
     if (b[field] === undefined) omitted.push(field);
     else overrides[field] = b[field];
