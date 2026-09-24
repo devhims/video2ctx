@@ -353,7 +353,7 @@ export async function getVideoResource<T extends VideoResourceOperation>(env: En
   const key = videoResourceKey(operation);
   if (!key) throw new Error('Expected a video-specific resource.');
   return cached(env,`video-resource-v1:${key.kind}`,`${key.videoId}:${key.variant}`,
-    VIDEO_MAX_AGE[key.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh);
+    VIDEO_MAX_AGE[operation.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh);
 }
 
 async function hash(value: string): Promise<string> {
