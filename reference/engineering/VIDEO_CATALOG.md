@@ -102,7 +102,15 @@ npm run build
 
 The local migration script applies account migrations and catalog migrations. For only the catalog, use `npm run db:catalog:local`. The agent Postman configuration uses the same catalog migration directory and local database ID.
 
-The checked-in catalog database IDs are local placeholders. Before deployment, provision dedicated production and preview D1 databases and private R2 buckets, replace the IDs and verify names in `wrangler.jsonc`. Then apply catalog migrations in the selected environment. `deploy:production` applies both migration sets; direct `deploy` does not apply migrations. No shared resources are provisioned by this change.
+The hosted production and preview databases and private R2 buckets are provisioned. `wrangler.jsonc` contains their real IDs and names; the catalog retains `remote: false` for local development. That flag does not change remote migration or deployment targets.
+
+| Resource | Production | Preview |
+| --- | --- | --- |
+| D1 database | `video2ctx-video-catalog` | `video2ctx-video-catalog-preview` |
+| D1 ID | `90fdc3eb-c76f-4dfe-a0cd-503f7606b4c3` | `1439902b-2ee3-4cb3-9719-d18b409cb62e` |
+| Private R2 bucket | `video2ctx-video-assets` | `video2ctx-video-assets-preview` |
+
+The initial catalog migration has been applied to both hosted databases. `deploy:production` applies both account and catalog migration sets; direct `deploy` does not apply migrations. Subsequent migration runs skip applied files. Self-hosted deployments must create their own resources, update the bindings, and apply the catalog migrations before deployment.
 
 D1 is suitable for this initial exact-key catalog, but its [per-database size limit](https://developers.cloudflare.com/d1/platform/limits/) is 10 GB on Workers Paid. Millions of video roots do not imply millions of total rows. Measure database bytes, read latency, write queueing and asset/version counts during rollout. Plan sharding or PostgreSQL before the catalog approaches that limit. This implementation does not claim a measured production throughput or latency target.
 
