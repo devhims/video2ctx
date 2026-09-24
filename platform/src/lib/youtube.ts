@@ -8,7 +8,7 @@ import type {
   Video,
 } from 'all-things-youtube';
 import { browseDestination } from './youtube-client';
-import { videoCatalog } from './video-catalog';
+import { videoCatalog, type VideoAssetReference } from './video-catalog';
 import { readVideoResource, videoResourceKey, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
 import type { VideoFrames } from './youtube-frames-contract';
 import {
@@ -38,6 +38,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  catalogVersions?: VideoAssetReference[];
   sessionReused?: boolean;
   assetVersions?: string[];
   value: T;
@@ -156,6 +157,7 @@ async function cached<T extends VideoResourceOperation>(
   const entry: YouTubeCacheEntry<ResourceResult<T>> = {
     version: 1,
     value: response.value as ResourceResult<T>,
+    catalogVersions: response.catalogVersions,
     fetchedAt: response.fetchedAt,
     freshUntil: response.fetchedAt + maxAgeMs,
   };
@@ -180,7 +182,7 @@ function cachedValue<T>(
   cacheStatus: CacheStatus,
 ): CachedResult<T & { freshness?: Record<string, unknown> }> {
   const stale = cacheStatus === 'stale';
-  if (Array.isArray(entry.value)) return {value:entry.value,cacheStatus};
+  if (Array.isArray(entry.value)) return {value:entry.value,cacheStatus,...(entry.catalogVersions ? {catalogVersions:entry.catalogVersions} : {})};
   return {
     value: {
       ...withYouTubeMetadata(entry.value),
@@ -191,6 +193,7 @@ function cachedValue<T>(
       },
     },
     cacheStatus,
+    ...(entry.catalogVersions ? {catalogVersions:entry.catalogVersions} : {}),
   };
 }
 

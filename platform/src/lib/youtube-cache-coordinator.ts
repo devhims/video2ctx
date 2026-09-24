@@ -2,12 +2,13 @@ import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagno
 import { YouTubeProcessorError } from './youtube-processor-client';
 import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
-import { videoCatalog, VideoCatalogWriteError } from './video-catalog';
+import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
 import { loadVideoResource, readVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
 export interface YouTubeCacheEntry<T = unknown> {
+  catalogVersions?: VideoAssetReference[];
   version: 1;
   value: T;
   fetchedAt: number;
@@ -24,6 +25,7 @@ export interface YouTubeCacheRequest {
 }
 
 export interface YouTubeCacheResponse {
+  catalogVersions?: VideoAssetReference[];
   diagnostics?: ExtractionAttempt[];
   ok: boolean;
   value?: unknown;
@@ -38,7 +40,7 @@ export interface YouTubeCacheResponse {
   };
 }
 
-type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean) => Promise<unknown>;
+type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean, onVersions?: (references: VideoAssetReference[]) => void) => Promise<unknown>;
 
 const CACHE_READ_TTL_SECONDS = 60;
 const MINIMUM_CACHE_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -108,7 +110,7 @@ export class YouTubeCacheCoordinatorCore {
     const timestamp = Date.now();
     if (!request.refresh && existing && existing.freshUntil > timestamp && (!resource || resourceComplete(request.operation,existing.value))) {
       // Promote pre-catalog KV hits without pretending they were freshly fetched.
-      if (catalog && resource && !stored) await saveVideoResource(this.env,request.operation,existing.value,existing.fetchedAt,request.maxAgeMs);
+      if (catalog && resource && !stored) existing.catalogVersions = await saveVideoResource(this.env,request.operation,existing.value,existing.fetchedAt,request.maxAgeMs);
       return successFromEntry(existing, 'hit');
     }
 
@@ -121,7 +123,8 @@ export class YouTubeCacheCoordinatorCore {
     const withDiagnostics = (response: YouTubeCacheResponse): YouTubeCacheResponse =>
       diagnostics.length ? { ...response, diagnostics } : response;
     try {
-      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh);
+      let catalogVersions: VideoAssetReference[] | undefined;
+      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh, versions=>{catalogVersions=versions;});
       // Defense in depth: a resolved provider response can still be a failed
       // lookup. Preserve the last good value instead of overwriting it.
       if (request.operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {
@@ -131,6 +134,7 @@ export class YouTubeCacheCoordinatorCore {
       const complete = !resource || resourceComplete(request.operation,value);
       const entry: YouTubeCacheEntry = {
         version: 1,
+        catalogVersions,
         value,
         fetchedAt: timestamp,
         freshUntil: complete ? timestamp + request.maxAgeMs : timestamp,
@@ -138,7 +142,7 @@ export class YouTubeCacheCoordinatorCore {
       if (catalog && resource) {
         // The visual loader saves just the fresh misses, preserving hit timestamps.
         if (request.operation.kind !== 'frames' && (request.operation.kind !== 'storyboard' || request.operation.metadataOnly))
-          await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
+          entry.catalogVersions = await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
       try {
@@ -188,6 +192,7 @@ export function cacheRetentionSeconds(maxAgeMs: number): number {
 function successFromEntry(entry: YouTubeCacheEntry, cacheStatus: CacheStatus): YouTubeCacheResponse {
   return {
     ok: true,
+    catalogVersions: entry.catalogVersions,
     value: entry.value,
     fetchedAt: entry.fetchedAt,
     cacheStatus,

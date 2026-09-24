@@ -5,6 +5,7 @@ import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
+import type { SessionCatalog, SessionCatalogReference } from './session-catalog';
 
 export { memoryUpdateSchema } from '../contracts';
 export type MemoryUpdate = import('../contracts').MemoryUpdate;
@@ -80,23 +81,37 @@ export function sessionBriefForModel(brief: SessionBrief) {
 export class SessionEvidenceStore implements SessionAccess {
   readonly search: SessionSearch;
   private readonly pending = new Map<string, Promise<CachedResult<unknown>>>();
+  private readonly reads = new Map<string, Promise<unknown | null>>();
   constructor(
     private readonly sql: SqlStorage,
     private readonly bucket: R2Bucket,
     private readonly prefix: string,
     private readonly onVideoRead?: (videoId: string) => Promise<void>,
+    private readonly catalog?: SessionCatalog,
+    private readonly atomic?: <T>(work: () => T) => T,
   ) {
+    if (catalog && !atomic) throw new Error('Shared session storage requires a SQLite transaction boundary.');
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_assets (version TEXT PRIMARY KEY, resource_key TEXT NOT NULL, kind TEXT NOT NULL, video_id TEXT NOT NULL, blob_key TEXT NOT NULL, details_json TEXT NOT NULL, created_at INTEGER NOT NULL)`,
     );
-    sql.exec(`CREATE TABLE IF NOT EXISTS session_asset_keys (resource_key TEXT PRIMARY KEY, version TEXT NOT NULL)`);
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS session_asset_keys (resource_key TEXT PRIMARY KEY, version TEXT NOT NULL)`,
+    );
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS session_asset_catalog_refs (version TEXT PRIMARY KEY, reference_json TEXT NOT NULL)`,
+    );
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS session_catalog_ref_delete AFTER DELETE ON session_assets BEGIN
+      DELETE FROM session_asset_catalog_refs WHERE version=OLD.version;
+    END`);
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_packets (packet_id TEXT PRIMARY KEY, packet_json TEXT NOT NULL, versions_json TEXT NOT NULL)`,
     );
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_memories (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, memory_json TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
     );
-    sql.exec(`CREATE TABLE IF NOT EXISTS session_evidence_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)`);
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS session_evidence_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)`,
+    );
     sql.exec(`INSERT OR IGNORE INTO session_evidence_state VALUES (1, 0)`);
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_run_generations (run_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)`,
@@ -130,13 +145,17 @@ export class SessionEvidenceStore implements SessionAccess {
   private indexTranscript(version: string, transcript: Transcript) {
     this.search.indexTranscript(
       version,
-      completeTranscriptEvidence(transcript.videoId, transcript.segments, `youtube:transcript:${transcript.videoId}`)
-        .excerpts,
+      completeTranscriptEvidence(
+        transcript.videoId,
+        transcript.segments,
+        `youtube:transcript:${transcript.videoId}`,
+      ).excerpts,
     );
   }
   generation() {
-    return this.sql.exec<{ generation: number }>('SELECT generation FROM session_evidence_state WHERE id=1').one()
-      .generation;
+    return this.sql
+      .exec<{ generation: number }>('SELECT generation FROM session_evidence_state WHERE id=1')
+      .one().generation;
   }
   brief(): SessionBrief {
     const current = this.currentVersions();
@@ -176,7 +195,9 @@ export class SessionEvidenceStore implements SessionAccess {
             version,
           )
           .toArray()
-      : this.sql.exec<{ packet_json: string }>('SELECT packet_json FROM session_packets ORDER BY rowid DESC').toArray();
+      : this.sql
+          .exec<{ packet_json: string }>('SELECT packet_json FROM session_packets ORDER BY rowid DESC')
+          .toArray();
     const packets = rows.map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
     return packets.map((packet) =>
       packet.assetVersions?.some((version) => !current.has(version))
@@ -214,7 +235,8 @@ export class SessionEvidenceStore implements SessionAccess {
                 ...packet.warnings,
                 {
                   code: 'SUPERSEDED_SESSION_EVIDENCE',
-                  message: 'This evidence refers to an older stored version. Use current assets for current facts.',
+                  message:
+                    'This evidence refers to an older stored version. Use current assets for current facts.',
                 },
               ],
             }
@@ -239,19 +261,82 @@ export class SessionEvidenceStore implements SessionAccess {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
   }
   async readAsset(version: string) {
-    const asset = this.brief().assets.find(asset => asset.version === version);
+    const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) return null;
     const value = await this.read(version);
     return value === null ? null : { asset, value };
   }
   async read(version: string): Promise<unknown | null> {
+    const key = `${this.generation()}:${version}`;
+    const pending = this.reads.get(key);
+    if (pending) return pending;
+    const work = this.readStored(version);
+    this.reads.set(key, work);
+    try {
+      return await work;
+    } finally {
+      this.reads.delete(key);
+    }
+  }
+  private async readStored(version: string): Promise<unknown | null> {
+    const generation = this.generation();
     const row = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).toArray()[0];
     if (!row) return null;
-    const blob = await this.bucket.get(row.blob_key);
-    if (!this.has(version)) return null;
-    const value = blob ? await blob.json() : null;
+    const reference = this.sql
+      .exec<{ reference_json: string }>(
+        'SELECT reference_json FROM session_asset_catalog_refs WHERE version=?',
+        version,
+      )
+      .toArray()[0];
+    let value: unknown | null;
+    if (reference)
+      value = this.catalog ? await this.catalog.read(JSON.parse(reference.reference_json)) : null;
+    else {
+      const blob = row.blob_key ? await this.bucket.get(row.blob_key) : null;
+      value = blob ? await blob.json() : null;
+      if (value !== null && this.catalog && this.has(version) && generation === this.generation()) {
+        try {
+          const pinned = await this.catalog.pin(
+            row.kind,
+            row.video_id,
+            row.resource_key,
+            value,
+            row.created_at,
+          );
+          if (!this.has(version) || generation !== this.generation()) return null;
+          this.atomic!(() => this.linkCatalog(version, pinned, row.blob_key));
+          await this.cleanup();
+        } catch {
+          // Preserve the readable legacy copy and retry migration on a later read.
+          console.warn({ event: 'session_asset_backfill_failed' });
+        }
+      }
+    }
+    if (generation !== this.generation()) return null;
     if (value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
-    return this.has(version) ? value : null;
+    return this.has(version) && generation === this.generation() ? value : null;
+  }
+  private linkCatalog(version: string, reference: SessionCatalogReference, legacyBlob = '') {
+    const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
+    this.sql.exec(
+      'INSERT OR IGNORE INTO session_asset_catalog_refs VALUES (?,?)',
+      version,
+      JSON.stringify(reference),
+    );
+    this.sql.exec("UPDATE session_assets SET blob_key='' WHERE version=?", version);
+    this.queueCleanup([legacyBlob, retained.blob_key]);
+  }
+  /** Bounded lazy backfill for an active session; existing citation IDs stay fixed. */
+  async backfill(limit = 10): Promise<void> {
+    if (!this.catalog) return;
+    const rows = this.sql
+      .exec<{ version: string }>(
+        `SELECT version FROM session_assets WHERE blob_key<>''
+      AND version NOT IN (SELECT version FROM session_asset_catalog_refs) ORDER BY created_at LIMIT ?`,
+        Math.max(1, Math.min(20, limit)),
+      )
+      .toArray();
+    for (const { version } of rows) await this.read(version);
   }
   async readTranscriptEvidence(version: string) {
     const asset = this.brief().assets.find(asset => asset.version === version);
@@ -384,6 +469,34 @@ export class SessionEvidenceStore implements SessionAccess {
       this.alias(key, version);
       return { ...result, assetVersions: [version] };
     }
+    if (this.catalog) {
+      const reference = await this.catalog.pin(
+        kind,
+        videoId,
+        key,
+        result.value,
+        Date.now(),
+        result.catalogVersions,
+      );
+      if (generation !== this.generation())
+        throw new Error('Session assets changed during retrieval. Retry the request.');
+      this.atomic!(() => {
+        this.sql.exec(
+          'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
+          version,
+          key,
+          kind,
+          videoId,
+          '',
+          JSON.stringify(describe(result.value)),
+          Date.now(),
+        );
+        this.linkCatalog(version, reference);
+        if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
+        this.alias(key, version);
+      });
+      return { ...result, assetVersions: [version] };
+    }
     const blobKey = `${this.prefix}${generation}/${version}-${crypto.randomUUID()}.json`;
     // A crash between the R2 write and SQLite commit must not leave an orphan.
     this.queueCleanup([blobKey]);
@@ -467,17 +580,27 @@ export class SessionEvidenceStore implements SessionAccess {
     }
     // Keep pending deletions durable so interrupted cleanup can be retried.
     this.sql.exec('CREATE TABLE IF NOT EXISTS session_blob_deletions (blob_key TEXT PRIMARY KEY)');
-    for (const row of rows) this.sql.exec('INSERT OR IGNORE INTO session_blob_deletions VALUES (?)', row.blob_key);
+    for (const row of rows)
+      if (row.blob_key)
+        this.sql.exec('INSERT OR IGNORE INTO session_blob_deletions VALUES (?)', row.blob_key);
     await this.cleanup();
     return [...deletedIds];
   }
   queueCleanup(keys: string[]) {
     this.sql.exec('CREATE TABLE IF NOT EXISTS session_blob_deletions (blob_key TEXT PRIMARY KEY)');
-    for (const key of keys) this.sql.exec('INSERT OR IGNORE INTO session_blob_deletions VALUES (?)', key);
+    for (const key of keys)
+      if (key) this.sql.exec('INSERT OR IGNORE INTO session_blob_deletions VALUES (?)', key);
   }
   async cleanup() {
     this.sql.exec('CREATE TABLE IF NOT EXISTS session_blob_deletions (blob_key TEXT PRIMARY KEY)');
-    for (const row of this.sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_blob_deletions').toArray()) {
+    for (const row of this.sql
+      .exec<{ blob_key: string }>('SELECT blob_key FROM session_blob_deletions')
+      .toArray()) {
+      // Never remove an active private snapshot after a partially completed write.
+      if (
+        this.sql.exec('SELECT 1 FROM session_assets WHERE blob_key=? LIMIT 1', row.blob_key).toArray().length
+      )
+        continue;
       await this.bucket.delete(row.blob_key);
       this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', row.blob_key);
     }

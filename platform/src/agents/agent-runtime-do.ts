@@ -1,5 +1,6 @@
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { videoCatalog } from '../lib/video-catalog';
+import { sessionCatalog } from './runtime/session-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
@@ -139,8 +140,16 @@ export interface AgentRunRejection {
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   #sessionStore?: SessionEvidenceStore;
   private get sessionStore() {
-    return this.#sessionStore ??= new SessionEvidenceStore(this.ctx.storage.sql, this.env.RESEARCH, `agent-session/${this.ctx.id.toString()}/`,
-      async videoId => { await videoCatalog(this.env)?.requested(videoId); });
+    return (this.#sessionStore ??= new SessionEvidenceStore(
+      this.ctx.storage.sql,
+      this.env.RESEARCH,
+      `agent-session/${this.ctx.id.toString()}/`,
+      async (videoId) => {
+        await videoCatalog(this.env)?.requested(videoId);
+      },
+      sessionCatalog(this.env),
+      (work) => this.ctx.storage.transactionSync(work),
+    ));
   }
   private syncSessionHistory() {
     const search = this.sessionStore.search;
@@ -176,6 +185,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
   async getSessionAssets(conversationId:string,userId:string) {
     if (!this.hasSessionOwner(conversationId,userId)) return null;
+    await this.sessionStore.backfill();
     return this.sessionStore.brief();
   }
   async getSessionAsset(conversationId:string,userId:string,version:string) {
@@ -530,11 +540,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
         saveFramePreviews: (frames, signal) => {
           this.assertRunActive(runId);
-          return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal);
+          return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal, this.env.VIDEO_ASSETS);
         },
         saveStoryboardPreviews: (storyboard, signal) => {
           this.assertRunActive(runId);
-          return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal);
+          return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal, this.env.VIDEO_ASSETS);
         },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });

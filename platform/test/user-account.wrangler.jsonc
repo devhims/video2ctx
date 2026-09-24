@@ -28,13 +28,14 @@
     }
   ],
   "d1_databases": [
+    {"binding":"VIDEO_CATALOG","database_name":"session-catalog-test","database_id":"00000000-0000-0000-0000-000000000002"},
     {
       "binding": "DB",
       "database_name": "agent-test",
       "database_id": "00000000-0000-0000-0000-000000000001"
     }
   ],
-  "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-test-evidence"}],
+  "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-test-evidence"},{"binding":"VIDEO_ASSETS","bucket_name":"session-catalog-assets-test"}],
   "vars": {
     "STARTER_ONBOARDING_CREDITS": "1000",
     "BUILDER_MONTHLY_CREDITS": "20000"

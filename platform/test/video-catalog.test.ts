@@ -30,6 +30,7 @@ function fixture() {
   sql.exec(
     readFileSync(new URL('../video-catalog-migrations/0001_video_catalog.sql', import.meta.url), 'utf8'),
   );
+  sql.exec(readFileSync(new URL('../video-catalog-migrations/0003_historical_asset_versions.sql', import.meta.url), 'utf8'));
   let failCommit = false;
   function prepare(query: string, params: (string | number | null)[] = []): D1PreparedStatement {
     return {
@@ -266,10 +267,11 @@ test('coalesces misses, saves once, and a new coordinator reuses persisted evide
   await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
   const second = coordinator.getOrLoad(request);
   finish(transcript());
-  expect(await first).toMatchObject({ cacheStatus: 'miss' });
-  expect(await second).toMatchObject({ cacheStatus: 'coalesced' });
+  const loaded = await first;
+  expect(loaded).toMatchObject({ cacheStatus: 'miss', catalogVersions: [{...videoResourceKey(transcriptOp),contentHash:expect.any(String)}] });
+  expect(await second).toMatchObject({ cacheStatus: 'coalesced',catalogVersions:loaded.catalogVersions });
   expect(await new YouTubeCacheCoordinatorCore(f.env, loader).getOrLoad(request)).toMatchObject({
-    cacheStatus: 'hit',
+    cacheStatus: 'hit', catalogVersions:loaded.catalogVersions,
   });
   expect(loader).toHaveBeenCalledOnce();
 });
@@ -458,7 +460,12 @@ test('successful frames from a partial extraction can be reused in another batch
     failures: [],
     meta: { partial: false, warnings: [] },
   });
-  expect(await loadVideoResource(f.env, mutable)).toMatchObject({ frames: [frame(1000), frame(2000)] });
+  const onVersions=vi.fn();
+  expect(await loadVideoResource(f.env, mutable,undefined,false,onVersions)).toMatchObject({ frames: [frame(1000), frame(2000)] });
+  expect(onVersions).toHaveBeenCalledWith([
+    expect.objectContaining({kind:'frame',variant:'v1:640:1000',contentHash:expect.any(String)}),
+    expect.objectContaining({kind:'frame',variant:'v1:640:2000',contentHash:expect.any(String)}),
+  ]);
   expect(getVideoFrames).toHaveBeenCalledWith(
     f.env,
     { videoId: id, timestampsMs: [2000], maxWidth: 640 },
@@ -473,7 +480,7 @@ test('empty endscreen arrays retain their public array shape on shared hits', as
   const f = fixture();
   const op = { kind: 'endscreen', id } as const;
   await saveVideoResource(f.env, op, [], Date.now(), 60_000);
-  expect(await getVideoResource(f.env, op)).toEqual({ value: [], cacheStatus: 'hit' });
+  expect(await getVideoResource(f.env, op)).toMatchObject({ value: [], cacheStatus: 'hit' });
 });
 
 test('the hot lookup uses an index and warm reads do not update activity each time', async () => {
@@ -488,4 +495,70 @@ test('the hot lookup uses an index and warm reads do not update activity each ti
     .prepare('EXPLAIN QUERY PLAN SELECT * FROM video_assets WHERE video_id=? AND kind=? AND variant=?')
     .all(id, key.kind, key.variant);
   expect(plan.some((row) => String(row.detail).includes('SEARCH video_assets USING INDEX'))).toBe(true);
+});
+
+test('exact version reads retain old content while historical backfill never advances current freshness', async () => {
+  const f = fixture(),
+    key = videoResourceKey(transcriptOp)!;
+  const at = Date.now();
+  const original = await f.store.save(key, transcript('Original'), at - 1000, 60_000, true);
+  await f.store.save(key, transcript('Current'), at, 60_000, true);
+  const historical = await f.store.save(
+    key,
+    transcript('Uncatalogued legacy'),
+    at + 1000,
+    0,
+    true,
+    {},
+    false,
+  );
+  expect(await f.store.readVersion(original)).toMatchObject({ value: transcript('Original') });
+  expect(await f.store.readVersion(historical)).toMatchObject({ value: transcript('Uncatalogued legacy') });
+  expect(await f.store.read(key)).toMatchObject({
+    value: transcript('Current'),
+    fetchedAt: at,
+    freshUntil: at + 60_000,
+  });
+  await f.store.save(key, transcript('Original'), at + 2000, 0, true, {}, false);
+  expect(await f.store.readVersion(original)).toMatchObject({
+    fetchedAt: at - 1000,
+    freshUntil: at - 1000 + 60_000,
+  });
+});
+
+test('recovery commits a historical-only version without creating or replacing a current pointer', async () => {
+  const f = fixture(),
+    key = videoResourceKey(transcriptOp)!;
+  const at = Date.now() - 600_000;
+  f.failCommit(true);
+  await expect(f.store.save(key, transcript('Historical'), at, 0, true, {}, false)).rejects.toThrow();
+  f.failCommit(false);
+  expect(await f.store.reconcile()).toBe(1);
+  expect(await f.store.read(key)).toBeNull();
+  const row = f.sql.prepare('SELECT * FROM video_asset_versions').get()!;
+  expect(row).toMatchObject({ state: 'ready', publish_current: 0 });
+  expect(await f.store.readVersion({ ...key, contentHash: row.content_hash as string })).toMatchObject({
+    value: transcript('Historical'),
+  });
+});
+
+test('backfilling the payload of an interrupted live write preserves its recovery intent', async () => {
+  const f = fixture(),
+    key = videoResourceKey(transcriptOp)!;
+  const at = Date.now() - 600_000;
+  f.failPut(true);
+  await expect(f.store.save(key, transcript(), at, 60_000, true)).rejects.toThrow();
+  f.failPut(false);
+  await f.store.save(key, transcript(), at + 1000, 0, true, {}, false);
+  expect(f.sql.prepare('SELECT state,publish_current,fetched_at FROM video_asset_versions').get()).toEqual({
+    state: 'pending',
+    publish_current: 1,
+    fetched_at: at,
+  });
+  expect(await f.store.reconcile()).toBe(1);
+  expect(await f.store.read(key)).toMatchObject({
+    value: transcript(),
+    fetchedAt: at,
+    freshUntil: at + 60_000,
+  });
 });

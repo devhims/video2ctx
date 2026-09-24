@@ -1,6 +1,6 @@
 # Session evidence and memory
 
-The existing conversation-scoped AgentRuntimeDO owns source availability and derived memory. Cloudflare Agents Session provides searchable conversation history and the model-facing searchable-context tools. R2 holds raw payloads. Fireworks performs classification, analysis and finalization; it does not own persistence or retrieval policy.
+The existing conversation-scoped AgentRuntimeDO owns source availability and derived memory. Cloudflare Agents Session provides searchable conversation history and the model-facing searchable-context tools. The shared D1 catalog locates immutable public source versions in R2; the session keeps ownership, citations, search projections and private analysis. Fireworks performs classification, analysis and finalization; it does not own persistence or retrieval policy.
 
 ## Flow
 
@@ -43,7 +43,7 @@ sequenceDiagram
 
 An empty or partial transcript is available to the current run with warnings, but never enters reusable session storage. Failed refreshes leave the previous complete version intact. Fresh transcript and comment requests bypass the shared provider cache. A refresh retrieves each successful asset once during that run. Analysis rejects versions that have not been retrieved in the current refresh run. Missing, deleted, wrong-kind or out-of-scope assets fail before inference; analysis also checks availability after inference. A failed analysis leaves successful retrieval and its raw assets available for another analysis.
 
-Deleting an asset removes its aliases, derived packets, dependent findings, historical source excerpts and image previews. Historical messages remain; affected answers have unavailable source markers and are omitted from future assistant context. Deleting all assets also removes all memory. Deletion increments a generation before asynchronous cleanup. Older retrievals and memory snapshots cannot restore deleted state. R2 cleanup uses a durable queue and retries when the object starts again.
+Deleting an asset removes its aliases, derived packets, dependent findings, historical source excerpts and image previews. Historical messages remain; affected answers have unavailable source markers and are omitted from future assistant context. Deleting all assets also removes all memory. Deletion increments a generation before asynchronous cleanup. Older retrievals and memory snapshots cannot restore deleted state. Private R2 cleanup uses a durable queue and retries when the object starts again. Shared catalog references are removed locally, but session and account deletion never delete shared D1 versions or `VIDEO_ASSETS` objects. A missing shared version fails closed; a newer catalog version cannot replace cited historical evidence.
 
 History and context search use the same session Durable Object as evidence, with no cross-account search endpoint. Search indexes are derived data, never citation authority. Deleting a source removes raw transcript index entries, analyzed excerpt entries, dependent memory entries and affected answers from SDK history. Source-table SQLite triggers keep index deletion and memory replacement synchronous; generation checks protect lazy R2 index backfills. Account deletion clears SDK history and its index.
 
@@ -51,7 +51,19 @@ The dashboard exposes inventory, raw payload viewing, individual deletion, bulk 
 
 ## Scope and Cloudflare choices
 
-This change adds no new deployed binding: it uses existing Durable Object SQLite and RESEARCH R2. Existing historical run packets remain readable; old runs are not retroactively converted into raw asset storage. Newly retrieved complete assets become reusable automatically.
+The existing bindings have different responsibilities:
+
+| Store | Responsibility |
+| --- | --- |
+| `VIDEO_CATALOG` D1 and `VIDEO_ASSETS` R2 (`video2ctx-video-assets`) | Reusable public transcripts, comments, storyboard manifests/sheets and frames, with immutable versions |
+| Session Durable Object SQLite | Ownership, stable session asset IDs, exact catalog references, aliases, citations, search projections and memory |
+| `RESEARCH` R2 (`all-things-youtube-private`) | Private session/run snapshots, legacy source blobs and revocable image-preview references |
+
+`RESEARCH` is a binding name, not a bucket named "research". A session asset stores a catalog video ID, kind, variant and content hash, plus a small response-envelope overlay preserving the original metadata. New source payloads and JPEGs are not copied into the private bucket. Search projections and citation excerpts remain session-owned by design. New dashboard preview links keep a small private pointer to the shared JPEG. Revoking that pointer removes the link while retaining the shared image. Previously generated JPEG previews remain supported until their normal deletion.
+
+Legacy raw session blobs migrate on read, or in bounded batches of ten when their session inventory opens. The shared source is verified before a synchronous SQLite transaction attaches its immutable reference and queues the private blob for deletion. Failures retain the readable private copy and retry on a later read. Stable session IDs and citation IDs do not change. Historical imports do not advance the public current pointer or freshness. Unsupported payloads with private fields stay in private storage.
+
+This is a lazy migration of active sessions, not a bulk sweep of dormant sessions or historical run snapshots. Existing historical run packets remain readable; old runs are not retroactively converted into raw asset storage. Apply catalog migration `0003_historical_asset_versions.sql` before deploying this code. Session-local tables are created automatically.
 
 Cloudflare's [Session API](https://developers.cloudflare.com/agents/concepts/conversation-state-and-memory/) is used through `runtime/session-search.ts`, the only adapter importing `agents/experimental/memory/session`. The existing dependency is pinned to `agents@0.21.0`.
 
@@ -75,3 +87,8 @@ Frame tool results expose `sessionReused` in the activity trace when all request
 Session restoration projects assistant answers through the same numbered citation formatter as compact run responses. Canonical run results and model history retain immutable citation markers; user message text is never rewritten. Finalization logs distinguish missing evidence from conflicting evidence without logging the answer or citation identifier.
 
 If final synthesis fails, the deterministic fallback preserves only deduplicated analyzed findings or visual observations. Raw transcript segments and comments are never substituted for an answer. Without useful findings the run fails clearly, leaving saved assets reusable.
+
+
+### Shared-source validation
+
+Local Workers tests use actual D1 migrations, R2 and Durable Object SQLite. They cover two sessions sharing a version, deletion isolated to one session, exact historical reads after refresh, missing historical objects, stable legacy citation IDs, failed backfills, deletion during retrieval/backfill, transaction rollback, frame/sheet references, private-field rejection and preview revocation. Catalog tests also cover interrupted historical writes without changing current pointers or live-write recovery intent.

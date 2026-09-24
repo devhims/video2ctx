@@ -28,7 +28,7 @@ export function packetStoryboardPreviews(packet: EvidencePacket): z.infer<typeof
   return { mode, sheets: mode === 'inspection' && previews.success ? previews.data : [] };
 }
 
-export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, value: Storyboard, signal: AbortSignal): Promise<StoryboardPreview[]> {
+export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, value: Storyboard, signal: AbortSignal, sharedBucket?: R2Bucket): Promise<StoryboardPreview[]> {
   signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(value);
   const images = storyboard.sheets.map(sheet => ({ imageBase64: sheet.imageBase64, metadata: {
@@ -44,5 +44,5 @@ export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, v
   if (totalBytes > 8 * 1024 * 1024) {
     throw new Error('Storyboard previews exceed the 8 MiB image limit.');
   }
-  return saveImagePreviews(bucket, userId, images, signal);
+  return saveImagePreviews(bucket, userId, images, signal, sharedBucket ? {bucket:sharedBucket,videoId:value.videoId} : undefined);
 }

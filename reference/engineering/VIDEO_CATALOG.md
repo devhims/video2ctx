@@ -89,7 +89,38 @@ Recovery retains historical objects. Images written before a failed manifest wri
 
 Only reusable public provider evidence enters the shared catalog. Prompts, user IDs, private analysis, citations and conversation packets remain in the existing session store. Frame analysis still runs in the session against reusable source images. Deleting a session deletes its private evidence according to the existing lifecycle; it does not purge shared public video sources.
 
-This version does not add timeline summaries, embeddings, similarity search or a catalog management API. Those can build on these durable source references. Existing session assets are not bulk backfilled; new provider reads and legacy KV promotions populate the catalog.
+This version does not add timeline summaries, embeddings, similarity search or a catalog management API. Those can build on these durable source references. Existing session assets migrate lazily on read or when an active session inventory opens. Dormant sessions and historical run snapshots are not bulk backfilled.
+
+Session references identify an exact `(video_id, kind, variant, content_hash)` in `video_asset_versions`. Reads verify the stored manifest hash and hydrate that version's images. They never follow `video_assets` to a newer payload. A small session-local envelope preserves the metadata the session originally received. The session's existing asset hash remains the citation identity.
+
+Migration `0003_historical_asset_versions.sql` adds `publish_current` to the version journal. Legacy session imports write historical-only versions with `publish_current=0`; crash recovery can finish them without changing the public current pointer. A matching existing version is reused without renewing its timestamps. Live provider writes retain current-pointer publication.
+
+For example, sessions A and B can both reference English transcript version H1. A refresh adds H2 to the catalog. Their existing citations still resolve H1. Deleting the asset in session A removes A's ownership, citations and dependent memory; session B and both shared versions remain intact.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'actorBkg':'#e2e8f0','actorTextColor':'#0f172a','actorBorder':'#64748b','signalColor':'#334155','signalTextColor':'#334155','sequenceNumberColor':'#ffffff','noteBkgColor':'#f1f5f9','noteTextColor':'#0f172a'}}}%%
+sequenceDiagram
+    autonumber
+    participant User
+    participant Session as Session Durable Object
+    participant Catalog as Shared D1 catalog
+    participant Assets as video2ctx-video-assets R2
+    User->>Session: Retrieve transcript
+    Session->>Catalog: Resolve or save public version H1
+    Catalog->>Assets: Read or write immutable payload
+    Catalog-->>Session: Exact version reference H1
+    Session->>Session: Atomically save ownership and reference
+    User->>Session: Read cited evidence
+    Session->>Session: Verify session owns H1
+    Session->>Catalog: Resolve H1, independent of current version
+    Catalog->>Assets: Read H1
+    Session-->>User: Evidence with stable citation IDs
+    User->>Session: Delete this session asset
+    Session->>Session: Remove ownership, citations and dependent memory
+    Note over Catalog,Assets: Shared records and payloads remain available
+```
+
+The private `RESEARCH` binding points to `all-things-youtube-private`. New visual previews store revocable pointers there instead of copying shared JPEGs. Session deletion removes those pointers. Existing private previews and run snapshots keep their current lifecycle; only reusable raw session assets are migrated.
 
 ## Local setup and deployment
 
