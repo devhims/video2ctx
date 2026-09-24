@@ -5,7 +5,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['test/**/*.test.ts'],
-    exclude: ['test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts',
+    exclude: ['test/video-catalog.integration.test.ts', 'test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts',
       'test/auth-worker.integration.test.ts',
       'test/admin-access.integration.test.ts',
       'test/billing.integration.test.ts',

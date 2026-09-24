@@ -8,6 +8,9 @@ import type {
   Video,
 } from 'all-things-youtube';
 import { browseDestination } from './youtube-client';
+import { videoCatalog } from './video-catalog';
+import { readVideoResource, videoResourceKey, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
+import type { VideoFrames } from './youtube-frames-contract';
 import {
   normalizeBrowseLanguage,
   normalizeBrowseRegion,
@@ -86,7 +89,7 @@ export function withYouTubeMetadata<T>(value: T): T {
   } as T;
 }
 
-function processorError(error: YouTubeProcessorError): ApiError {
+function processorError(error: {code: string; message: string}): ApiError {
   const status = error.code === 'INVALID_INPUT' ? 422
     : error.code === 'NOT_FOUND' ? 404
     : error.code === 'AUTH_REQUIRED' ? 401
@@ -96,19 +99,27 @@ function processorError(error: YouTubeProcessorError): ApiError {
   return new ApiError(status, error.code, error.message);
 }
 
-async function cached<T extends YouTubeOperation>(
+type ResourceResult<T extends VideoResourceOperation> = T extends FrameOperation ? VideoFrames : T extends YouTubeOperation ? YouTubeOperationResult<T> : never;
+
+async function cached<T extends VideoResourceOperation>(
   env: Env,
   type: string,
   id: string,
   maxAgeMs: number,
   operation: T,
   onDiagnostic?: ExtractionDiagnosticSink,
-): Promise<CachedResult<YouTubeOperationResult<T> & { freshness?: Record<string, unknown> }>> {
-  const cacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
-  const existing = await readYouTubeCacheEntry<YouTubeOperationResult<T>>(env, cacheKey, type);
+  refresh = false,
+): Promise<CachedResult<ResourceResult<T> & { freshness?: Record<string, unknown> }>> {
+  const legacyCacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
+  const catalog = videoCatalog(env);
+  const resource = videoResourceKey(operation);
+  const cacheKey = catalog && resource ? `video-resource:v1:${await hash(JSON.stringify(resource))}` : legacyCacheKey;
+  const stored = catalog && resource && !refresh ? await readVideoResource(env,operation) : null;
+  const existing = stored ? {version:1 as const,...stored,value:stored.value as ResourceResult<T>}
+    : catalog && resource ? null : await readYouTubeCacheEntry<ResourceResult<T>>(env, cacheKey, type);
 
   const timestamp = now();
-  if (existing && existing.freshUntil > timestamp) {
+  if (!refresh && existing && existing.freshUntil > timestamp) {
     return cachedValue(existing, 'hit');
   }
 
@@ -116,13 +127,15 @@ async function cached<T extends YouTubeOperation>(
   try {
     const wireResponse = await env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey).getOrLoad(JSON.stringify({
       cacheKey,
+      legacyCacheKey,
       resourceType: type,
       maxAgeMs,
       operation,
+      refresh,
     }));
     response = parseCoordinatorResponse(wireResponse);
   } catch (error) {
-    if (existing) return cachedValue(existing, 'stale');
+    if (existing && !refresh) return cachedValue(existing, 'stale');
     throw new ApiError(
       503,
       'CACHE_COORDINATOR_UNAVAILABLE',
@@ -133,20 +146,16 @@ async function cached<T extends YouTubeOperation>(
     for (const event of response.diagnostics.slice(0, 4)) emitExtractionDiagnostic(onDiagnostic, event);
   }
   if (!response.ok && response.error) {
-    throw processorError(new YouTubeProcessorError(
-      response.error.code,
-      response.error.message,
-      response.error.status,
-      response.error.retryable,
-    ));
+    if (response.error.apiStatus) throw new ApiError(response.error.apiStatus,response.error.code,response.error.message);
+    throw processorError(response.error);
   }
   if (!response.ok || response.value === undefined || response.fetchedAt === undefined || !response.cacheStatus) {
     throw new ApiError(502, 'INVALID_CACHE_COORDINATOR_RESPONSE', 'The YouTube cache coordinator returned an invalid response.');
   }
 
-  const entry: YouTubeCacheEntry<YouTubeOperationResult<T>> = {
+  const entry: YouTubeCacheEntry<ResourceResult<T>> = {
     version: 1,
-    value: response.value as YouTubeOperationResult<T>,
+    value: response.value as ResourceResult<T>,
     fetchedAt: response.fetchedAt,
     freshUntil: response.fetchedAt + maxAgeMs,
   };
@@ -171,6 +180,7 @@ function cachedValue<T>(
   cacheStatus: CacheStatus,
 ): CachedResult<T & { freshness?: Record<string, unknown> }> {
   const stale = cacheStatus === 'stale';
+  if (Array.isArray(entry.value)) return {value:entry.value,cacheStatus};
   return {
     value: {
       ...withYouTubeMetadata(entry.value),
@@ -328,11 +338,22 @@ export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDi
 }
 
 export async function getCaptionTracks(env: Env, id: string) {
+  if (videoCatalog(env)) return (await getVideoResource(env,{kind:'caption-tracks',id})).value;
   return withYouTubeMetadata(await runYouTubeOperation(env, { kind: 'caption-tracks', id }));
 }
 
 export function getEndscreen(env: Env, id: string) {
+  if (videoCatalog(env)) return getVideoResource(env,{kind:'endscreen',id}).then(result=>result.value);
   return runYouTubeOperation(env, { kind: 'endscreen', id });
+}
+
+/** Shared DB-first retrieval for uncached visual resources and explicit refreshes. */
+export async function getVideoResource<T extends VideoResourceOperation>(env: Env, operation: T,
+  refresh = false, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<ResourceResult<T>>> {
+  const key = videoResourceKey(operation);
+  if (!key) throw new Error('Expected a video-specific resource.');
+  return cached(env,`video-resource-v1:${key.kind}`,`${key.videoId}:${key.variant}`,
+    VIDEO_MAX_AGE[key.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh);
 }
 
 async function hash(value: string): Promise<string> {

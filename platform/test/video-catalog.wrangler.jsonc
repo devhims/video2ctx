@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-video-catalog-test",
+  "main": "video-catalog-worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{
+    "binding": "VIDEO_CATALOG",
+    "database_name": "video-catalog-test",
+    "database_id": "00000000-0000-0000-0000-000000000002",
+    "migrations_dir": "../video-catalog-migrations"
+  }],
+  "r2_buckets": [{ "binding": "VIDEO_ASSETS", "bucket_name": "video-assets-test" }]
+}

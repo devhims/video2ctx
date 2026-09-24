@@ -31,8 +31,11 @@ function parseRequest(value: string): YouTubeCacheRequest {
   const request = parsed as Partial<YouTubeCacheRequest>;
   if (
     typeof request.cacheKey !== 'string'
+    || (request.legacyCacheKey !== undefined && typeof request.legacyCacheKey !== 'string')
     || typeof request.resourceType !== 'string'
     || typeof request.maxAgeMs !== 'number'
+    || !Number.isFinite(request.maxAgeMs) || request.maxAgeMs < 0
+    || (request.refresh !== undefined && typeof request.refresh !== 'boolean')
     || !request.operation
     || typeof request.operation !== 'object'
   ) {
