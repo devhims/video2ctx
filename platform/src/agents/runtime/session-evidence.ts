@@ -84,6 +84,7 @@ export class SessionEvidenceStore implements SessionAccess {
     private readonly sql: SqlStorage,
     private readonly bucket: R2Bucket,
     private readonly prefix: string,
+    private readonly onVideoRead?: (videoId: string) => Promise<void>,
   ) {
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_assets (version TEXT PRIMARY KEY, resource_key TEXT NOT NULL, kind TEXT NOT NULL, video_id TEXT NOT NULL, blob_key TEXT NOT NULL, details_json TEXT NOT NULL, created_at INTEGER NOT NULL)`,
@@ -249,6 +250,7 @@ export class SessionEvidenceStore implements SessionAccess {
     const blob = await this.bucket.get(row.blob_key);
     if (!this.has(version)) return null;
     const value = blob ? await blob.json() : null;
+    if (value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
     return this.has(version) ? value : null;
   }
   async readTranscriptEvidence(version: string) {

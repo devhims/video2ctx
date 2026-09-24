@@ -2,6 +2,8 @@ import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnosti
 import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
+import { getVideoResource } from '../../../lib/youtube';
+import { videoCatalog } from '../../../lib/video-catalog';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
   BrowseOptions,
@@ -27,7 +29,7 @@ import { getProvider, type ProviderAdapter } from '../../../providers';
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-    limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<VideoFrames>>;
+    limits?: { extractionTimeoutMs: number; refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<VideoFrames>>;
   storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<Storyboard>>;
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
@@ -59,8 +61,16 @@ export function createYouTubeAgentProvider(
   provider: ProviderAdapter = getProvider('youtube'),
 ): YouTubeAgentProvider {
   return {
-    frames: async (request, signal, limits, onDiagnostic) => ({ value: await getVideoFrames(env, request, signal, limits, onDiagnostic), cacheStatus: 'miss' }),
-    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options }, onDiagnostic)), cacheStatus: 'miss' }),
+    frames: async (request, signal, limits, onDiagnostic) => {
+      if (!videoCatalog(env)) return { value:await getVideoFrames(env,request,signal,limits,onDiagnostic),cacheStatus:'miss' };
+      signal?.throwIfAborted();
+      return abortable(getVideoResource(env,{kind:'frames',id:request.videoId,
+        timestampsMs:request.timestampsMs,maxWidth:request.maxWidth??1920,extractionTimeoutMs:limits?.extractionTimeoutMs??45_000},
+      limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}),signal);
+    },
+    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => videoCatalog(env)
+      ? getVideoResource(env,{kind:'storyboard',id:videoId,timestampsMs,...options},options.refresh,onDiagnostic)
+      : ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options }, onDiagnostic)), cacheStatus: 'miss' }),
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),
     trends: async (query, limit, includeAiInsights) => ({
@@ -72,10 +82,15 @@ export function createYouTubeAgentProvider(
       value: await provider.getTracks(env, videoId),
       cacheStatus: 'miss',
     }),
-    transcript: async (videoId, language, options, onDiagnostic) => options?.refresh
+    transcript: async (videoId, language, options, onDiagnostic) => options?.refresh && videoCatalog(env)
+      ? getVideoResource(env,{kind:'transcript',id:videoId,lang:language,granularity:'word'},true,onDiagnostic)
+      : options?.refresh
       ? {value: await runYouTubeOperation(env, {kind:'transcript',id:videoId,lang:language,granularity:'word'}, onDiagnostic),cacheStatus:'miss'}
       : provider.getTranscript(env, videoId, language, onDiagnostic),
-    comments: async (videoId, options = {}) => options.refresh
+    comments: async (videoId, options = {}) => options.refresh && videoCatalog(env)
+      ? getVideoResource(env,options.all ? {kind:'all-comments',id:videoId,maxPages:100}
+        : {kind:'comments',id:videoId,continuation:options.continuation},true)
+      : options.refresh
       ? {value: options.all ? await runYouTubeOperation(env, {kind:'all-comments',id:videoId,maxPages:100}) : await runYouTubeOperation(env, {kind:'comments',id:videoId,continuation:options.continuation}),cacheStatus:'miss'}
       : options.all
       ? provider.getAllComments(env, videoId)
@@ -91,4 +106,17 @@ export function createYouTubeAgentProvider(
       provider.getChannelPlaylists(env, channelId, continuation, sort),
     playlist: (playlistId) => provider.getPlaylist(env, playlistId),
   };
+}
+
+// Cancelling one waiter must not cancel extraction shared with another run.
+async function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  let cancel!: () => void;
+  const aborted = new Promise<never>((_,reject)=> {
+    cancel=()=>reject(signal.reason);
+    signal.addEventListener('abort',cancel,{once:true});
+    if (signal.aborted) cancel();
+  });
+  try { return await Promise.race([work,aborted]); }
+  finally { signal.removeEventListener('abort',cancel); }
 }

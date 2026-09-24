@@ -3,6 +3,7 @@ import app from './app';
 import { queueDigests } from './lib/digests';
 import { handleQueue } from './queues';
 import { reconcileMonitorSchedules } from './lib/monitor-scheduler';
+import { videoCatalog } from './lib/video-catalog';
 
 export { ImportWorkflow, MonitorWorkflow } from './workflows';
 export { app } from './app';
@@ -18,7 +19,10 @@ export default {
   queue: handleQueue,
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (controller.cron === '0 * * * *') {
-      await reconcileMonitorSchedules(env, controller.scheduledTime);
+      await Promise.all([
+        videoCatalog(env)?.reconcile(),
+        reconcileMonitorSchedules(env, controller.scheduledTime),
+      ]);
     } else if (controller.cron === '0 8 * * *') {
       await queueDigests(env, 'daily');
     } else if (controller.cron === '0 8 * * 1') {

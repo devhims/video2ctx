@@ -1,4 +1,5 @@
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
+import { videoCatalog } from '../lib/video-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
@@ -138,7 +139,8 @@ export interface AgentRunRejection {
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   #sessionStore?: SessionEvidenceStore;
   private get sessionStore() {
-    return this.#sessionStore ??= new SessionEvidenceStore(this.ctx.storage.sql, this.env.RESEARCH, `agent-session/${this.ctx.id.toString()}/`);
+    return this.#sessionStore ??= new SessionEvidenceStore(this.ctx.storage.sql, this.env.RESEARCH, `agent-session/${this.ctx.id.toString()}/`,
+      async videoId => { await videoCatalog(this.env)?.requested(videoId); });
   }
   private syncSessionHistory() {
     const search = this.sessionStore.search;

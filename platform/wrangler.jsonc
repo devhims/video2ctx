@@ -108,6 +108,16 @@
   ],
   "d1_databases": [
     {
+      "binding": "VIDEO_CATALOG",
+      "database_name": "video2ctx-video-catalog",
+      // Local placeholder. Provision dedicated production/preview databases and
+      // replace these IDs before a remote migration or deployment.
+      "database_id": "00000000-0000-0000-0000-000000000002",
+      "preview_database_id": "00000000-0000-0000-0000-000000000003",
+      "migrations_dir": "video-catalog-migrations",
+      "remote": false
+    },
+    {
       "binding": "DB",
       "database_name": "all-things-youtube-production",
       "database_id": "4f173c2a-8c42-49ef-b36d-07a91533f029",
@@ -125,6 +135,11 @@
     },
   ],
   "r2_buckets": [
+    {
+      "binding": "VIDEO_ASSETS",
+      "bucket_name": "video2ctx-video-assets",
+      "preview_bucket_name": "video2ctx-video-assets-preview"
+    },
     {
       "binding": "RESEARCH",
       "bucket_name": "all-things-youtube-private",

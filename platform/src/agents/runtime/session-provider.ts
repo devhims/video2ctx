@@ -90,7 +90,7 @@ export function sessionProvider(
               'storyboard_manifest',
               id,
               fresh,
-              () => provider.storyboard!(id, undefined, { metadataOnly: true }, diagnostic),
+              () => provider.storyboard!(id, undefined, { metadataOnly: true, ...(fresh ? {refresh:true} : {}) }, diagnostic),
               (value) => ({
                 totalSheets: value.manifest?.totalSheets,
                 totalFrames: value.frameCount,
@@ -139,7 +139,7 @@ export function sessionProvider(
               const fetched = await provider.storyboard!(
                 id,
                 undefined,
-                { sheetIndexes: missing, maxSheets: missing.length },
+                { sheetIndexes: missing, maxSheets: missing.length, ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
               );
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
@@ -183,7 +183,9 @@ export function sessionProvider(
                 },
                 meta: { partial, warnings: [...new Set(results.flatMap((r) => r.value.meta.warnings))] },
               }),
-              cacheStatus: 'miss',
+              cacheStatus: results.some(result=>result.cacheStatus==='stale') ? 'stale'
+                : results.some(result=>result.cacheStatus==='miss') ? 'miss'
+                : results.some(result=>result.cacheStatus==='coalesced') ? 'coalesced' : 'hit',
               sessionReused: missing.length === 0,
               assetVersions: [manifestVersion, ...results.flatMap((r) => r.assetVersions ?? [])],
             };
@@ -206,7 +208,8 @@ export function sessionProvider(
             let fetched: CachedResult<VideoFrames> | undefined;
             if (missing.length) {
               // Batch misses once; successful images survive even if other timestamps fail.
-              fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal, limits, diagnostic);
+              fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
+                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic);
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               for (const frame of fetched.value.frames) {
                 const value: VideoFrames = {
@@ -240,7 +243,7 @@ export function sessionProvider(
                   ],
                 },
               }),
-              cacheStatus: 'miss',
+              cacheStatus: fetched?.cacheStatus ?? 'hit',
               sessionReused: missing.length === 0,
               assetVersions: hits.flatMap((r) => r.assetVersions ?? []),
             };
