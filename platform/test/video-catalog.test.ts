@@ -144,6 +144,45 @@ const frame = (timestampMs: number) => ({
 });
 beforeEach(() => vi.clearAllMocks());
 
+test('metadata migration preserves R2 references and version history, with legacy read compatibility', async () => {
+  const f = fixture();
+  const key = { videoId: id, kind: 'video', variant: '{}' };
+  const value = { id, title: 'Video details' };
+  await f.store.save(key, value, Date.now(), 60_000, true);
+  const before = (await f.store.inventory(id)).results[0]!;
+  expect(await readVideoResource(f.env, { kind: 'video', id })).toMatchObject({ value });
+
+  f.sql.exec(readFileSync(new URL('../video-catalog-migrations/0002_video_metadata_kind.sql', import.meta.url), 'utf8'));
+  expect((await f.store.inventory(id)).results).toEqual([
+    { ...before, kind: 'video_metadata' },
+  ]);
+  expect(f.sql.prepare('SELECT kind, object_key FROM video_asset_versions').all()).toEqual([
+    { kind: 'video_metadata', object_key: before.object_key },
+  ]);
+  expect(await readVideoResource(f.env, { kind: 'video', id })).toMatchObject({ value });
+  expect([...f.objects.keys()]).toEqual([before.object_key]);
+});
+
+test('video details use the metadata kind and retain the operation freshness policy', async () => {
+  const f = fixture();
+  const value = { id, title: 'Video details' };
+  const coordinator = new YouTubeCacheCoordinatorCore(f.env, async () => value);
+  const requests: { maxAgeMs: number; operation: { kind: string } }[] = [];
+  Object.assign(f.env, { YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({
+    getOrLoad: async (wire: string) => {
+      const request = JSON.parse(wire);
+      requests.push(request);
+      return JSON.stringify(await coordinator.getOrLoad(request));
+    },
+  }) } });
+  await getVideoResource(f.env, { kind: 'video', id });
+  expect(requests).toMatchObject([{ maxAgeMs: 30 * 60_000, operation: { kind: 'video' } }]);
+  expect((await f.store.inventory(id)).results).toMatchObject([{ kind: 'video_metadata' }]);
+  expect([...f.objects.keys()][0]).toContain('/video_metadata/');
+  expect(await getVideoResource(f.env, { kind: 'video', id })).toMatchObject({ cacheStatus: 'hit' });
+  expect(requests).toHaveLength(1);
+});
+
 test('a later comment fetch adds to the same video without replacing its transcript', async () => {
   const f = fixture();
   const now = Date.now();

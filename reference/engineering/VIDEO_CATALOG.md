@@ -35,7 +35,7 @@ sequenceDiagram
 
 | Resource | Variant identity | Default freshness |
 | --- | --- | --- |
-| Video metadata | Video ID | 30 minutes |
+| Video metadata (`video_metadata`) | Video ID | 30 minutes |
 | Video signals | Video ID | 15 minutes |
 | Caption tracks | Video ID | 1 day |
 | Transcript | Language and granularity | 7 days |
@@ -62,6 +62,7 @@ R2 object keys use these prefixes:
 
 ```text
 youtube/videos/abcdefghijk/
+  video_metadata/<variant-hash>/<payload-hash>.json
   transcript/<variant-hash>/<payload-hash>.json
   comments/<variant-hash>/<payload-hash>.json
   storyboard_manifest/<variant-hash>/<payload-hash>.json
@@ -71,6 +72,8 @@ youtube/videos/abcdefghijk/
 ```
 
 A manifest references binary JPEG objects. Reads reconstruct the provider response expected by existing callers. Byte-identical payloads share a content hash. New snapshots remain available in the version inventory.
+
+`video_metadata` means the get-video-details response, not a video file. Migration `0002_video_metadata_kind.sql` renames existing D1 asset and version records. Their R2 object keys stay unchanged, so historical objects under `video/` remain readable; new writes use `video_metadata/`. Reads also accept the legacy kind during rollout. The processor operation remains `video` for compatibility with its existing contract.
 
 ## Consistency and recovery
 

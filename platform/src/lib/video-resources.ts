@@ -52,7 +52,7 @@ export function videoResourceKey(op: VideoResourceOperation): VideoAssetKey | un
       variant = { timestamps: [...new Set(op.timestampsMs)].sort((a, b) => a - b), maxWidth: op.maxWidth };
       break;
   }
-  return { videoId: op.id, kind: op.kind, variant: JSON.stringify(variant) };
+  return { videoId: op.id, kind: op.kind === 'video' ? 'video_metadata' : op.kind, variant: JSON.stringify(variant) };
 }
 
 export function resourceComplete(op: VideoResourceOperation, value: unknown): boolean {
@@ -179,7 +179,9 @@ export async function readVideoResource(
       present,
     );
   }
-  return store.read(key);
+  const stored = await store.read(key);
+  // Older Workers may still write the legacy kind during a rolling deployment.
+  return stored ?? (op.kind === 'video' ? store.read({ ...key, kind: 'video' }) : null);
 }
 
 export async function saveVideoResource(
