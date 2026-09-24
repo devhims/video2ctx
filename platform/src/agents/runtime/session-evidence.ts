@@ -304,8 +304,7 @@ export class SessionEvidenceStore implements SessionAccess {
             row.created_at,
           );
           if (!this.has(version) || generation !== this.generation()) return null;
-          this.atomic!(() => this.linkCatalog(version, pinned, row.blob_key));
-          await this.cleanup();
+          this.atomic!(() => this.linkCatalog(version, pinned));
         } catch {
           // Preserve the readable legacy copy and retry migration on a later read.
           console.warn({ event: 'session_asset_backfill_failed' });
@@ -316,15 +315,15 @@ export class SessionEvidenceStore implements SessionAccess {
     if (value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
     return this.has(version) && generation === this.generation() ? value : null;
   }
-  private linkCatalog(version: string, reference: SessionCatalogReference, legacyBlob = '') {
-    const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
+  private linkCatalog(version: string, reference: SessionCatalogReference) {
     this.sql.exec(
       'INSERT OR IGNORE INTO session_asset_catalog_refs VALUES (?,?)',
       version,
       JSON.stringify(reference),
     );
-    this.sql.exec("UPDATE session_assets SET blob_key='' WHERE version=?", version);
-    this.queueCleanup([legacyBlob, retained.blob_key]);
+    // Keep the original private blob and its key until migration is confirmed.
+    // Shared reads take precedence; ordinary explicit session deletion still
+    // removes session-owned copies without touching shared catalog objects.
   }
   /** Bounded lazy backfill for an active session; existing citation IDs stay fixed. */
   async backfill(limit = 10): Promise<void> {

@@ -158,7 +158,7 @@ test('sessions pin old content across refresh and never substitute current conte
   });
 });
 
-test('legacy backfill preserves citation identities, retires the private copy and keeps the newer public pointer', async () => {
+test('legacy backfill preserves citation identities, retains the private copy and keeps the newer public pointer', async () => {
   const id = videoId();
   await within('legacy-history', async ({ legacy, reopen, sql, prefix }) => {
     const value = transcript(id, 'Historical captions');
@@ -182,8 +182,12 @@ test('legacy backfill preserves citation identities, retires the private copy an
     expect(await restored.read(version)).toEqual(value);
     expect(restored.brief()).toEqual(before);
     expect((await restored.readEvidence(version)).packets[0]!.excerpts).toEqual(citations);
-    expect(await env.RESEARCH.get(blob)).toBeNull();
-    expect((await env.RESEARCH.list({ prefix })).objects).toEqual([]);
+    expect(await env.RESEARCH.get(blob)).not.toBeNull();
+    expect((await env.RESEARCH.list({ prefix })).objects).toHaveLength(1);
+    expect(
+      sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', version).one()
+        .blob_key,
+    ).toBe(blob);
     expect(reference(sql, version).asset.contentHash).toBeTruthy();
     expect(
       await catalog().read(videoResourceKey({ kind: 'transcript', id, granularity: 'word' })!),
@@ -213,7 +217,7 @@ test('a failed legacy backfill leaves the private asset readable and retries lat
     expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
     mock.mockRestore();
     expect(await store.read(version)).toEqual(value);
-    expect(await env.RESEARCH.get(blob)).toBeNull();
+    expect(await env.RESEARCH.get(blob)).not.toBeNull();
   });
 });
 
