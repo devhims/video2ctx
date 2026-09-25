@@ -3,7 +3,7 @@ import { YouTubeProcessorError } from './youtube-processor-client';
 import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
-import { loadVideoResource, readVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
+import { loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
@@ -108,7 +108,7 @@ export class YouTubeCacheCoordinatorCore {
     const stored = catalog && resource ? await readVideoResource(this.env,request.operation) : null;
     const existing = stored ? {version:1 as const,...stored} : await readYouTubeCacheEntry(this.env, request.legacyCacheKey ?? request.cacheKey, request.resourceType);
     const timestamp = Date.now();
-    if (!request.refresh && existing && existing.freshUntil > timestamp && (!resource || resourceComplete(request.operation,existing.value))) {
+    if (!request.refresh && existing && reusableVideoResource(request.operation, existing, timestamp)) {
       // Promote pre-catalog KV hits without pretending they were freshly fetched.
       if (catalog && resource && !stored) existing.catalogVersions = await saveVideoResource(this.env,request.operation,existing.value,existing.fetchedAt,request.maxAgeMs);
       return successFromEntry(existing, 'hit');

@@ -466,7 +466,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           return persist(() => trackedContext.finalize(id, input));
         },
       };
-      if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title) {
+      if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && (options.decision.refreshDynamicData || options.decision.refreshEvidence || !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title)) {
         try {
           await executeGetVideo({ videoId: options.decision.videoId }, phaseContext, `initial-video:${options.decision.videoId}`);
         } catch { signal.throwIfAborted(); }

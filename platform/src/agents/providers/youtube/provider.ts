@@ -2,7 +2,7 @@ import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnosti
 import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
-import { getVideoResource } from '../../../lib/youtube';
+import { getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
 import { videoCatalog } from '../../../lib/video-catalog';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
@@ -22,10 +22,13 @@ import type {
   SearchResponse,
   Transcript,
   Video,
+  VideoSignals,
 } from 'all-things-youtube';
 import type { CachedResult } from '../../../lib/youtube';
 import type { TrendReport } from '../../../lib/trends';
 import { getProvider, type ProviderAdapter } from '../../../providers';
+
+export type AgentVideo = Video & { signals?: VideoSignals & { freshness?: Record<string, unknown> } };
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
@@ -34,7 +37,7 @@ export interface YouTubeAgentProvider {
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
-  video(videoId: string): Promise<CachedResult<Video>>;
+  video(videoId: string, options?: { refresh?: boolean; includeSignals?: boolean }): Promise<CachedResult<AgentVideo>>;
   tracks(videoId: string): Promise<CachedResult<CaptionTrackList>>;
   transcript(videoId: string, language?: string, options?: { refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<Transcript>>;
   comments(
@@ -77,7 +80,14 @@ export function createYouTubeAgentProvider(
       value: await provider.trends(env, query, limit, includeAiInsights),
       cacheStatus: 'miss',
     }),
-    video: (videoId) => provider.getVideo(env, videoId),
+    video: async (videoId, options) => {
+      if (!options?.includeSignals) return provider.getVideo(env, videoId, options?.refresh);
+      const [metadata, signals] = await Promise.all([
+        provider.getVideo(env, videoId, options.refresh),
+        getVideoSignalsWithCache(env, videoId, options.refresh),
+      ]);
+      return { ...metadata, value: { ...metadata.value, signals: signals.value } };
+    },
     tracks: async (videoId) => ({
       value: await provider.getTracks(env, videoId),
       cacheStatus: 'miss',

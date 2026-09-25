@@ -22,11 +22,11 @@ const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; descri
   comments: { shortLabel: 'Comments', description: 'Paginated public comments and replies' },
   channel: { shortLabel: 'Channel info', description: 'Full creator profile, links, and totals' },
 };
-async function fetchSourceData(inspector: Inspector, option: SourceDataOption, signal: AbortSignal) {
+async function fetchSourceData(inspector: Inspector, option: SourceDataOption, signal: AbortSignal, refresh = false) {
   const providerApi = `/v1/providers/${inspector.provider}`;
   const result = await loadSourceData(async () => {
-    if (option === 'transcript') inspector.transcript = await api<Transcript>(`${providerApi}/videos/${inspector.id}/transcript`, { signal });
-    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments`, { signal });
+    if (option === 'transcript') inspector.transcript = await api<Transcript>(`${providerApi}/videos/${inspector.id}/transcript${refresh ? '?refresh=true' : ''}`, { signal });
+    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments?refresh=true`, { signal });
     if (option === 'channel') {
       const channelId = String((inspector.data.channel as { id?: string } | undefined)?.id ?? '');
       if (!channelId) throw new Error('The video response did not include a channel ID.');
@@ -124,7 +124,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   // Publish each independent result immediately. Only channel info needs metadata.
-  const loadVideoData = async (next: Inspector, datasets: Array<SourceDataOption | 'metadata'>, controller: AbortController) => {
+  const loadVideoData = async (next: Inspector, datasets: Array<SourceDataOption | 'metadata'>, controller: AbortController, refresh = false) => {
+    if (refresh) next.refreshData = [...new Set([...(next.refreshData ?? []), ...datasets])];
     next.loadingData = [...datasets];
     const publish = () => {
       if (operationController.current === controller && !controller.signal.aborted) {
@@ -135,12 +136,13 @@ export default function SourcesClient({ active }: {active:boolean}) {
     const load = async (dataset: SourceDataOption | 'metadata', work: () => Promise<void>) => {
       try { await work(); }
       finally {
+        if (!next.dataErrors[dataset]) next.refreshData = next.refreshData?.filter(item => item !== dataset);
         next.loadingData = next.loadingData?.filter(item => item !== dataset);
         publish();
       }
     };
     const metadata = datasets.includes('metadata') ? load('metadata', async () => {
-      const result = await loadSourceData(() => api<Record<string, unknown>>(`/v1/providers/${next.provider}/videos/${encodeURIComponent(next.id)}`, { signal: controller.signal }));
+      const result = await loadSourceData(() => api<Record<string, unknown>>(`/v1/providers/${next.provider}/videos/${encodeURIComponent(next.id)}${next.refreshData?.includes('metadata') ? '?refresh=true' : ''}`, { signal: controller.signal }));
       if (result.error !== undefined) next.dataErrors.metadata = result.error;
       else { next.data = result.value; delete next.dataErrors.metadata; }
     }) : Promise.resolve();
@@ -152,7 +154,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
           return;
         }
       }
-      await fetchSourceData(next, option, controller.signal);
+      await fetchSourceData(next, option, controller.signal, next.refreshData?.includes(option));
     }))]);
   };
 
@@ -173,6 +175,31 @@ export default function SourcesClient({ active }: {active:boolean}) {
       }
     } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
     finally { finishOperation(controller); }
+  };
+
+  const refreshVideoData = async () => {
+    if (!inspector || loading) return;
+    setNotice('');
+    const controller = beginOperation('Refreshing video data…');
+    const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
+    try {
+      await loadVideoData(next, ['metadata', ...next.requestedData.filter(option => option !== 'channel')], controller, true);
+      if (operationController.current === controller && !controller.signal.aborted && !Object.keys(next.dataErrors).length) {
+        setNotice('Video data refreshed.');
+      }
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not refresh video data.');
+    } finally { finishOperation(controller); }
+  };
+
+  const refreshComments = async () => {
+    if (!inspector || loading) return;
+    const controller = beginOperation('Fetching current comments…');
+    try {
+      await loadVideoData({ ...inspector, dataErrors: { ...inspector.dataErrors } }, ['comments'], controller);
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not refresh comments.');
+    } finally { finishOperation(controller); }
   };
 
   const retrySourceData = async () => {
@@ -292,7 +319,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
             {inspector ? (
-              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
               <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
             )}
@@ -347,11 +374,16 @@ function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, f
   </section>;
 }
 
-function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
+function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; onRefresh: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
-  const metadataLoading = Boolean(inspector.loadingData?.includes('metadata'));
+  const metadataLoading = Boolean(inspector.loadingData?.includes('metadata')) && !inspector.data.title;
+  const refreshing = inspector.loadingData?.some(dataset => inspector.refreshData?.includes(dataset));
+  const savedData = [inspector.data, inspector.transcript, inspector.comments].some(value => {
+    const state = (value as { freshness?: { state?: string } } | undefined)?.freshness?.state;
+    return state === 'stored' || state === 'stale';
+  });
   const [activePanel, setActivePanel] = useState<SourceDataOption>(panelOptions[0] ?? 'channel');
   const [commentPage, setCommentPage] = useState(inspector.comments);
   const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
@@ -365,7 +397,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
     setCommentsLoading(true);
     setCommentsError('');
     try {
-      const params = new URLSearchParams({ continuation });
+      const params = new URLSearchParams({ continuation, refresh: 'true' });
       const page = await api<CommentPage>(`/v1/providers/${inspector.provider}/videos/${encodeURIComponent(inspector.id)}/comments?${params}`);
       setCommentPage((current) => {
         if (!current) return page;
@@ -408,6 +440,14 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
+    {savedData || refreshing ? <div className='source-refresh-row'>
+      <span role='status'>{refreshing ? 'Refreshing data from YouTube…' : 'Showing saved data'}</span>
+      <button type='button' onClick={onRefresh} disabled={retrying || commentsLoading}
+        title='Fetch video details and the selected transcript and comments again from YouTube'>
+        {refreshing ? 'Refreshing…' : 'Refresh data'}
+      </button>
+    </div> : null}
+
     {inspector.dataErrors.metadata ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.metadata}</p> : null}
     <div className='source-overview-grid' data-channel={inspector.requestedData.includes('channel')}>
       <SourceVideoPreview inspector={inspector} title={title} />
@@ -416,11 +456,11 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
 
     {panelOptions.length ? <>
       <div className='source-data-tabs' role='tablist' aria-label='Fetched video data'>
-        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => setActivePanel(option)}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
+        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => { setActivePanel(option); if (option === 'comments' && !retrying && !commentsLoading) onOpenComments(); }}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
       </section>
     </> : null}
 
@@ -507,9 +547,10 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
   if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
-  if (inspector.dataErrors.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
+  if (inspector.dataErrors.transcript && !inspector.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>
+    {inspector.dataErrors.transcript ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript} Showing the previously loaded transcript.</p> : null}
     <header className='source-panel-head'><div><h3>{inspector.transcript.track.name}</h3><p>{inspector.transcript.meta.partial ? 'Partial transcript' : 'Complete transcript'} · {inspector.transcript.track.languageCode.toUpperCase()} · {inspector.transcript.track.kind} · {inspector.transcript.segments.length.toLocaleString()} moments</p></div><label><span className='sr-only'>Search transcript</span><input aria-label='Search transcript' value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.target.value)} placeholder='Filter transcript…' /></label></header>
     {inspector.transcript.meta.warnings.length ? <p className='source-data-warning'>{inspector.transcript.meta.warnings.join(' ')}</p> : null}
     <ol className='source-transcript'>{segments.map((segment) => <li key={`${segment.startMs}-${segment.text}`}><a href={`https://youtube.com/watch?v=${inspector.id}&t=${Math.floor(segment.startMs / 1000)}s`} target='_blank' rel='noreferrer'>{formatTime(segment.startMs)}</a><p>{highlight(segment.text, transcriptQuery)}</p></li>)}</ol>
@@ -518,10 +559,11 @@ function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscri
 }
 
 function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, onLoadMore }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void }) {
-  if (initialError) return <p role='alert' className='source-data-unavailable'>{initialError}</p>;
+  if (initialError && !page) return <p role='alert' className='source-data-unavailable'>{initialError}</p>;
   const comments = page?.comments ?? [];
-  if (!comments.length) return <p className='source-data-unavailable'>No public comments were returned.</p>;
+  if (!comments.length) return <>{initialError ? <p role='alert' className='source-data-unavailable'>{initialError}</p> : null}<p className='source-data-unavailable'>No public comments were returned.</p></>;
   return <>
+    {initialError ? <p role='alert' className='source-data-unavailable'>{initialError} Showing the previously loaded comments.</p> : null}
     <header className='source-panel-head'><div><h3>Audience response</h3><p>{comments.length.toLocaleString()} loaded across {pagesLoaded.toLocaleString()} {pagesLoaded === 1 ? 'page' : 'pages'}{page?.totalCount != null ? ` · ${page.totalCount.toLocaleString()} reported by YouTube` : ''}</p></div></header>
     {page?.meta.warnings.length ? <p className='source-data-warning'>{page.meta.warnings.join(' ')}</p> : null}
     <ol className='source-comments'>{comments.map((comment, index) => {

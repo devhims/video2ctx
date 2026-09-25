@@ -123,14 +123,14 @@ describe('platform YouTube container adapter', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  test('returns the previous timestamped count when both processors are blocked', async () => {
+  test('reuses the previous timestamped count without contacting blocked processors', async () => {
     const fetchedAt = Date.now() - 5_400_000;
     const cache = { get: vi.fn(async () => ({ version: 1, value: { id: 'abcdefghijk', viewCount: 404433, meta }, fetchedAt, freshUntil: Date.now() - 60_000 })), put: vi.fn() };
     const run = vi.fn(async (_operation: YouTubeOperation) => blockedMetadata);
     expect(await getVideoWithCache(environment(run, cache), 'abcdefghijk')).toMatchObject({
-      cacheStatus: 'stale', value: { viewCount: 404433, freshness: { state: 'stale', fetchedAt, reason: 'UPSTREAM_UNAVAILABLE' } },
+      cacheStatus: 'hit', value: { viewCount: 404433, freshness: { state: 'stored', fetchedAt } },
     });
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).not.toHaveBeenCalled();
     expect(cache.put).not.toHaveBeenCalled();
   });
 
@@ -191,7 +191,7 @@ describe('platform YouTube container adapter', () => {
     });
   });
 
-  test('stores misses in KV and serves expired entries when the processor is unavailable', async () => {
+  test('stores misses in KV and reuses saved entries regardless of age', async () => {
     const cache = {
       get: vi.fn(async () => null as unknown),
       put: vi.fn(async (_key: string, _value: string, _options?: KVNamespacePutOptions) => undefined),
@@ -222,11 +222,11 @@ describe('platform YouTube container adapter', () => {
     });
 
     const stale = await getVideoWithCache(environment(run, cache), 'abcdefghijk');
-    expect(stale.cacheStatus).toBe('stale');
+    expect(stale.cacheStatus).toBe('hit');
     expect(stale.value).toMatchObject({
       id: 'abcdefghijk',
       meta: { source: 'video2ctx' },
-      freshness: { state: 'stale', reason: 'UPSTREAM_UNAVAILABLE' },
+      freshness: { state: 'stored' },
     });
   });
 

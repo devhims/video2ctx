@@ -45,7 +45,7 @@ describe('transcript route', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(getTranscriptWithCache).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', 'hi');
+    expect(getTranscriptWithCache).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', 'hi', undefined, false);
     warning.mockRestore();
   });
 
@@ -66,7 +66,7 @@ describe('transcript route', () => {
     });
     expect(payload).not.toHaveProperty('segments');
     expect(payload).not.toHaveProperty('granularity');
-    expect(getTranscriptWithCache).toHaveBeenLastCalledWith(expect.anything(), 'abcdefghijk', undefined);
+    expect(getTranscriptWithCache).toHaveBeenLastCalledWith(expect.anything(), 'abcdefghijk', undefined, undefined, false);
   });
 
   test('rejects an unsupported transcript format before loading data', async () => {

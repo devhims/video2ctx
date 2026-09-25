@@ -908,9 +908,9 @@ export const openApiDocument = {
         tags: ['Videos'],
         operationId: 'getVideo',
         summary: 'Inspect a video',
-        description: 'Bot challenges use up to three processor attempts within one 120-second extraction budget, with jittered backoff and upstream Retry-After support. They are not cached as successful metadata. If refresh fails, previously successful metadata can be returned with freshness.state=stale and its original freshness.fetchedAt timestamp. Without usable cached metadata, upstream bot challenges return 503 UNAVAILABLE. Private and age-restricted video responses retain their availability metadata.',
+        description: 'Reuses complete saved metadata regardless of age. Saved responses carry freshness.state=stored and their original freshness.fetchedAt timestamp. Use refresh=true to request current values. A failed explicit refresh returns an error and retains the previous saved version. Bot challenges are never cached as successful metadata.',
         security: dataSecurity,
-        parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ')],
+        parameters: [providerParameter, pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'), queryParameter('refresh', 'Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.', { type: 'boolean', default: false })],
         responses: {
           '200': meteredJsonResponse('Normalized video metadata.', schemaRef('Video')),
           '503': jsonResponse('YouTube metadata is temporarily unavailable and no usable cached metadata exists.', schemaRef('Error')),
@@ -948,6 +948,7 @@ export const openApiDocument = {
         security: dataSecurity,
         parameters: [
           providerParameter,
+          queryParameter('refresh', 'Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.', { type: 'boolean', default: false }),
           pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('lang', 'Desired transcript language. The backend selects the default source track and translates only when necessary.', { type: 'string', example: 'hi' }),
           queryParameter('format', 'Response detail. text omits timing arrays, segments keeps segment timing, and words keeps word timing. Omitted preserves the rich words response.', { type: 'string', enum: ['text', 'segments', 'words'], default: 'words' }),
@@ -972,6 +973,7 @@ export const openApiDocument = {
         security: dataSecurity,
         parameters: [
           providerParameter,
+          queryParameter('refresh', 'Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.', { type: 'boolean', default: false }),
           pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
           queryParameter(

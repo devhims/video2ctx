@@ -69,6 +69,7 @@ export type Inspector = {
   requestedData: SourceDataOption[];
   dataErrors: Partial<Record<SourceDataOption | 'metadata', string>>;
   loadingData?: Array<SourceDataOption | 'metadata'>;
+  refreshData?: Array<SourceDataOption | 'metadata'>;
   transcript?: Transcript;
   comments?: CommentPage;
   channel?: ChannelInfo;

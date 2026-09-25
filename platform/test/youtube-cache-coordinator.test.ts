@@ -23,7 +23,7 @@ describe('YouTube cache coordinator', () => {
     const value = { id: 'abcdefghijk', viewCount: 404433 };
     const cache = { get: vi.fn(async () => ({ version: 1, value, fetchedAt, freshUntil: Date.now() - 60_000 })), put: vi.fn() };
     const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), async () => blocked);
-    await expect(coordinator.getOrLoad(request)).resolves.toMatchObject({ ok: true, cacheStatus: 'stale', value, fetchedAt });
+    await expect(coordinator.getOrLoad({ ...request, refresh: true })).resolves.toMatchObject({ ok: false, error: { code: 'UNAVAILABLE' } });
     expect(cache.put).not.toHaveBeenCalled();
   });
 
@@ -68,7 +68,7 @@ describe('YouTube cache coordinator', () => {
     expect(cache.put).toHaveBeenCalledTimes(1);
   });
 
-  test('serves an expired value when the shared upstream operation fails', async () => {
+  test('serves an expired search response when the shared upstream operation fails', async () => {
     const cachedValue = { id: 'abcdefghijk' };
     const cache = {
       get: vi.fn(async () => ({
@@ -82,7 +82,7 @@ describe('YouTube cache coordinator', () => {
     const loader = vi.fn(async () => { throw new Error('upstream unavailable'); });
     const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), loader);
 
-    await expect(coordinator.getOrLoad(request)).resolves.toMatchObject({
+    await expect(coordinator.getOrLoad({ ...request, resourceType: 'search', operation: { kind: 'search', query: 'video' } })).resolves.toMatchObject({
       ok: true,
       value: cachedValue,
       cacheStatus: 'stale',

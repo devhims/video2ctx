@@ -19,6 +19,7 @@ export interface FrameOperation {
   extractionTimeoutMs: number;
 }
 export type VideoResourceOperation = YouTubeOperation | FrameOperation;
+// Legacy freshness metadata and KV retention windows, not video refetch deadlines.
 export const VIDEO_MAX_AGE = {
   video: 30 * 60_000,
   'video-signals': 15 * 60_000,
@@ -71,6 +72,14 @@ export function resourceComplete(op: VideoResourceOperation, value: unknown): bo
   if (op.kind === 'transcript') return !!data.segments?.some((segment) => segment.text.trim());
   if (op.kind === 'all-comments') return data.complete === true;
   return true;
+}
+
+/** Age alone never triggers another fetch of a saved, complete video resource. */
+export function reusableVideoResource(op: VideoResourceOperation,
+  saved: { value: unknown; freshUntil: number; complete?: boolean }, now = Date.now()): boolean {
+  return videoResourceKey(op)
+    ? saved.complete !== false && resourceComplete(op, saved.value)
+    : saved.freshUntil > now;
 }
 
 export function metadataKey(id: string): VideoAssetKey {
@@ -155,12 +164,12 @@ export async function readVideoResource(
   const key = videoResourceKey(op);
   if (!store || !key) return null;
   if (op.kind === 'storyboard') {
-    const metadata = await store.read<Storyboard>(metadataKey(op.id));
+    const metadata = await store.readSaved<Storyboard>(metadataKey(op.id));
     if (!metadata) return null;
     if (op.metadataOnly) return metadata;
     const indexes = sheetIndexes(metadata.value, op);
     const sheets = await Promise.all(
-      indexes.map(async (index) => store.read<Storyboard>(await sheetKey(metadata.value, index))),
+      indexes.map(async (index) => store.readSaved<Storyboard>(await sheetKey(metadata.value, index))),
     );
     if (sheets.some((sheet) => !sheet)) return null;
     const present = sheets.filter((sheet): sheet is StoredVideoAsset<Storyboard> => !!sheet);
@@ -175,7 +184,7 @@ export async function readVideoResource(
   }
   if (op.kind === 'frames') {
     const assets = await Promise.all(
-      op.timestampsMs.map((time) => store.read<VideoFrames>(frameKey(op, time))),
+      op.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))),
     );
     if (assets.some((asset) => !asset)) return null;
     const present = assets.filter((asset): asset is StoredVideoAsset<VideoFrames> => !!asset);
@@ -189,7 +198,7 @@ export async function readVideoResource(
       present,
     );
   }
-  const stored = await store.read(key);
+  const stored = await store.readSaved(key);
   // Older Workers may still write the legacy kind during a rolling deployment.
   return stored ?? (op.kind === 'video' ? store.read({ ...key, kind: 'video' }) : null);
 }
@@ -297,10 +306,10 @@ export async function loadVideoResource(
     });
     const saved =
       store && !refresh
-        ? await Promise.all(request.timestampsMs.map((time) => store.read<VideoFrames>(frameKey(op, time))))
+        ? await Promise.all(request.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))))
         : [];
     const hits = saved.filter(
-      (asset): asset is StoredVideoAsset<VideoFrames> => !!asset && asset.freshUntil > Date.now(),
+      (asset): asset is StoredVideoAsset<VideoFrames> => !!asset && asset.complete,
     );
     const times = new Set(hits.flatMap((asset) => asset.value.frames.map((frame) => frame.timestampMs)));
     const missing = request.timestampsMs.filter((time) => !times.has(time));
@@ -328,8 +337,8 @@ export async function loadVideoResource(
     });
   }
   if (op.kind !== 'storyboard' || !store || op.metadataOnly) return runYouTubeOperation(env, op, diagnostic);
-  let metadata = !refresh ? await store.read<Storyboard>(metadataKey(op.id)) : null;
-  if (!metadata || metadata.freshUntil <= Date.now()) {
+  let metadata = !refresh ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
+  if (!metadata || !metadata.complete) {
     const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
     const fetchedAt = Date.now();
     const value = await runYouTubeOperation(env, metadataOp, diagnostic);
@@ -351,13 +360,13 @@ export async function loadVideoResource(
   const indexes = sheetIndexes(metadata.value, op);
   const saved = await Promise.all(
     indexes.map(async (index) =>
-      refresh ? null : store.read<Storyboard>(await sheetKey(metadata.value, index)),
+      refresh ? null : store.readSaved<Storyboard>(await sheetKey(metadata.value, index)),
     ),
   );
   const hits = saved.filter(
-    (asset): asset is StoredVideoAsset<Storyboard> => !!asset && asset.freshUntil > Date.now(),
+    (asset): asset is StoredVideoAsset<Storyboard> => !!asset && asset.complete,
   );
-  const missing = indexes.filter((_, index) => !saved[index] || saved[index]!.freshUntil <= Date.now());
+  const missing = indexes.filter((_, index) => !saved[index]?.complete);
   const versions = [...(metadata.catalogVersions ?? []), ...hits.flatMap((hit) => hit.catalogVersions ?? [])];
   if (!missing.length) {
     onVersions?.(versions);

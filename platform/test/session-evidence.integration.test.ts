@@ -7,6 +7,7 @@ import { expect, test, vi } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
 import type { Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
+import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
@@ -715,4 +716,30 @@ test('forwards transcript diagnostics through session retrieval even when fetchi
     await expect(executeGetVideoTranscript({ videoId: id }, ctx, 'failed-transcript')).rejects.toThrow('TRANSCRIPT_FETCH_FAILED');
     expect(ctx.onExtractionDiagnostic).toHaveBeenCalledWith({ ...diagnostic, toolCallId: 'failed-transcript' });
     expect(store.brief().assets).toHaveLength(0);
+  }));
+
+
+test('current comments bypass session reuse while saved transcripts and old comment versions remain readable', async () =>
+  within('dynamic-refresh', async (store, reopen) => {
+    const p: YouTubeAgentProvider = provider();
+    const comments = (text: string) => ({ videoId: id, replyContinuations: [],
+      comments: [{ id: text, text, author: { name: 'Viewer', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] }],
+      meta: transcript().meta });
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: comments('old') }));
+    const original = sessionProvider(p, store);
+    const savedTranscript = await original.transcript(id);
+    const savedComments = await original.comments(id);
+    vi.mocked(p.comments).mockResolvedValueOnce({ cacheStatus: 'miss', value: comments('new') });
+    const current = createCapabilityProvider(sessionProvider(p, reopen()), {
+      route: 'inspect_video', videoId: id, refreshDynamicData: true,
+    });
+    const updated = await current.comments(id);
+    expect(updated.value.comments[0]?.text).toBe('new');
+    expect(p.comments).toHaveBeenLastCalledWith(id, { refresh: true });
+    const reused = await current.transcript(id);
+    expect(reused.assetVersions).toEqual(savedTranscript.assetVersions);
+    expect(p.transcript).toHaveBeenCalledOnce();
+    expect(reopen().brief().assets.map(asset => asset.version)).toEqual(expect.arrayContaining([
+      ...savedComments.assetVersions!, ...updated.assetVersions!, ...savedTranscript.assetVersions!,
+    ]));
   }));

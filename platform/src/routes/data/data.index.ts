@@ -157,7 +157,8 @@ dataRoutes.post('/trends/plan', async (c) => {
 dataRoutes.get('/providers/:provider/videos/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video`, 'video', provider, () => provider.getVideo(c.env, id)));
+  const refresh = refreshRequested(c);
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-video`, 'video', provider, () => provider.getVideo(c.env, id, refresh)));
 });
 
 dataRoutes.get('/providers/:provider/videos/:id/tracks', async (c) => {
@@ -177,8 +178,9 @@ dataRoutes.get('/providers/:provider/videos/:id/transcript', async (c) => {
   const id = asId(c.req.param('id'));
   const desiredLanguage = text(c.req.query('lang'), 20) || undefined;
   const format = parseTranscriptFormat(c.req.query('format'));
+  const refresh = refreshRequested(c);
   const transcript = await cachedRead(c, `${provider.descriptor.id}-video-transcript`, 'transcript', provider, () =>
-    provider.getTranscript(c.env, id, desiredLanguage));
+    provider.getTranscript(c.env, id, desiredLanguage, undefined, refresh));
   return c.json(projectTranscript(transcript, format));
 });
 
@@ -186,13 +188,14 @@ dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const all = c.req.query('all') === 'true';
+  const refresh = refreshRequested(c);
   if (all) {
     return c.json(await meterOperation(c, {
       operation: `${provider.descriptor.id}-video-comments-all`,
       reservedCredits: dataOperationReserve('comments'),
       metadata: { provider: provider.descriptor.id },
     }, async () => {
-      const result = await provider.getAllComments(c.env, id);
+      const result = await provider.getAllComments(c.env, id, refresh);
       return {
         value: result.value,
         actualCredits: dataOperationCost('comments', result.cacheStatus),
@@ -201,7 +204,7 @@ dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {
     }));
   }
   return c.json(await cachedRead(c, `${provider.descriptor.id}-video-comments`, 'comments', provider, () =>
-    provider.getComments(c.env, id, c.req.query('continuation'))));
+    provider.getComments(c.env, id, c.req.query('continuation'), refresh)));
 });
 
 dataRoutes.get('/providers/:provider/videos/:id/endscreen', async (c) => {
@@ -368,4 +371,11 @@ function channelPlaylistSort(value?: string): ChannelPlaylistSort {
 
 function live(value?: string): SearchFilters['live'] {
   return ['live', 'upcoming', 'completed'].includes(value ?? '') ? value as SearchFilters['live'] : undefined;
+}
+
+function refreshRequested(c: Context<App>): boolean {
+  const value = c.req.query('refresh');
+  if (value !== undefined && value !== 'true' && value !== 'false')
+    throw new ApiError(422, 'INVALID_INPUT', 'refresh must be true or false.');
+  return value === 'true';
 }

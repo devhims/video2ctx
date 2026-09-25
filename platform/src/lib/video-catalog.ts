@@ -79,6 +79,17 @@ export class VideoCatalog {
     return row ? this.readRow<T>(row) : null;
   }
 
+  /** Reuse a historical import when no current public source is available. */
+  async readSaved<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
+    const current = await this.read<T>(key);
+    if (current) return current;
+    const row = await this.db.prepare(`SELECT * FROM video_asset_versions
+      WHERE video_id=? AND kind=? AND variant=? AND state='ready' AND complete=1
+      ORDER BY fetched_at DESC, content_hash LIMIT 1`)
+      .bind(key.videoId, key.kind, key.variant).first<AssetRow>();
+    return row ? this.readRow<T>(row) : null;
+  }
+
   private async readRow<T>(row: AssetRow): Promise<StoredVideoAsset<T> | null> {
     const object = await this.bucket.get(row.object_key);
     if (!object) return null;

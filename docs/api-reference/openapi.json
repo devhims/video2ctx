@@ -2048,7 +2048,7 @@
         ],
         "operationId": "getVideo",
         "summary": "Inspect a video",
-        "description": "Bot challenges use up to three processor attempts within one 120-second extraction budget, with jittered backoff and upstream Retry-After support. They are not cached as successful metadata. If refresh fails, previously successful metadata can be returned with freshness.state=stale and its original freshness.fetchedAt timestamp. Without usable cached metadata, upstream bot challenges return 503 UNAVAILABLE. Private and age-restricted video responses retain their availability metadata.",
+        "description": "Reuses complete saved metadata regardless of age. Saved responses carry freshness.state=stored and their original freshness.fetchedAt timestamp. Use refresh=true to request current values. A failed explicit refresh returns an error and retains the previous saved version. Bot challenges are never cached as successful metadata.",
         "security": [
           {
             "bearerApiKey": []
@@ -2089,6 +2089,16 @@
               "type": "string",
               "minLength": 1,
               "example": "dQw4w9WgXcQ"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "description": "Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.",
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           }
         ],
@@ -2268,6 +2278,16 @@
             }
           },
           {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "description": "Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
             "name": "id",
             "in": "path",
             "required": true,
@@ -2388,6 +2408,16 @@
                 "youtube"
               ],
               "example": "youtube"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "description": "Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.",
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           },
           {
@@ -7397,6 +7427,9 @@
                           "refreshEvidence": {
                             "type": "boolean"
                           },
+                          "refreshDynamicData": {
+                            "type": "boolean"
+                          },
                           "answerDetail": {
                             "type": "string",
                             "enum": [
@@ -7447,6 +7480,9 @@
                             "type": "boolean"
                           },
                           "refreshEvidence": {
+                            "type": "boolean"
+                          },
+                          "refreshDynamicData": {
                             "type": "boolean"
                           },
                           "answerDetail": {
@@ -8753,6 +8789,9 @@
                       "refreshEvidence": {
                         "type": "boolean"
                       },
+                      "refreshDynamicData": {
+                        "type": "boolean"
+                      },
                       "answerDetail": {
                         "type": "string",
                         "enum": [
@@ -8803,6 +8842,9 @@
                         "type": "boolean"
                       },
                       "refreshEvidence": {
+                        "type": "boolean"
+                      },
+                      "refreshDynamicData": {
                         "type": "boolean"
                       },
                       "answerDetail": {

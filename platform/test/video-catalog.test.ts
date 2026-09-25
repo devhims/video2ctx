@@ -292,15 +292,16 @@ test('explicit refresh bypasses persisted evidence and never disguises a failed 
   });
 });
 
-test('expired evidence remains available as marked stale fallback after upstream failure', async () => {
+test('reuses old complete evidence without an upstream attempt or a renewed timestamp', async () => {
   const f = fixture();
-  const old = Date.now() - 120_000;
+  const old = Date.now() - 30 * 86400_000;
   await saveVideoResource(f.env, transcriptOp, transcript(), old, 60_000);
-  expect(
-    await new YouTubeCacheCoordinatorCore(f.env, async () => {
-      throw new Error('offline');
-    }).getOrLoad(request),
-  ).toMatchObject({ ok: true, cacheStatus: 'stale', fetchedAt: old });
+  const loader = vi.fn(async () => { throw new Error('must not fetch'); });
+  expect(await new YouTubeCacheCoordinatorCore(f.env, loader).getOrLoad(request))
+    .toMatchObject({ ok: true, cacheStatus: 'hit', fetchedAt: old });
+  expect(loader).not.toHaveBeenCalled();
+  expect(await getTranscriptWithCache(f.env, transcriptOp.id, transcriptOp.lang))
+    .toMatchObject({ cacheStatus: 'hit', value: { freshness: { state: 'stored', fetchedAt: old } } });
 });
 
 test('promotes a legacy KV hit with its original fetch timestamp', async () => {
@@ -329,7 +330,7 @@ test('a persistence outage is reported even when stale evidence exists', async (
   await saveVideoResource(f.env, transcriptOp, transcript('old'), Date.now() - 120_000, 60_000);
   f.failPut(true);
   expect(
-    await new YouTubeCacheCoordinatorCore(f.env, async () => transcript('new')).getOrLoad(request),
+    await new YouTubeCacheCoordinatorCore(f.env, async () => transcript('new')).getOrLoad({ ...request, refresh: true }),
   ).toMatchObject({
     ok: false,
     error: { status: 503, message: 'Video evidence could not be saved. Please retry.' },
@@ -414,9 +415,9 @@ test('storyboard sheets are stored as JPEGs and assembled across different selec
   expect(await readVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [2] })).toBeNull();
 });
 
-test('storyboard loader fetches only missing sheets and does not renew existing sheets', async () => {
+test('storyboard loader reuses old sheets and only fetches missing sheets', async () => {
   const f = fixture();
-  const old = Date.now() - 500;
+  const old = Date.now() - 30 * 86400_000;
   await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, storyboard(), old, 60_000);
   await saveVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [0] }, storyboard([0]), old, 60_000);
   vi.mocked(runYouTubeOperation).mockResolvedValue(storyboard([1]));
@@ -561,4 +562,34 @@ test('backfilling the payload of an interrupted live write preserves its recover
     fetchedAt: at,
     freshUntil: at + 60_000,
   });
+});
+
+
+test('reuses a historical-only import without publishing it as current', async () => {
+  const f = fixture(), key = videoResourceKey(transcriptOp)!;
+  const fetchedAt = Date.now() - 90 * 86400_000;
+  const reference = await f.store.save(key, transcript('Imported'), fetchedAt, 0, true, {}, false);
+  expect(await f.store.read(key)).toBeNull();
+  expect(await getTranscriptWithCache(f.env, transcriptOp.id, transcriptOp.lang)).toMatchObject({
+    cacheStatus: 'hit', catalogVersions: [reference],
+    value: { segments: [{ text: 'Imported' }], freshness: { state: 'stored', fetchedAt } },
+  });
+  expect(await f.store.read(key)).toBeNull();
+});
+
+test.each([
+  [{ kind: 'video', id: 'abcdefghijk' }, { id: 'abcdefghijk', title: 'Saved title', viewCount: 100 }],
+  [{ kind: 'comments', id: 'abcdefghijk' }, { videoId: 'abcdefghijk', comments: [] }],
+] as const)('reuses old %j and replaces it only on explicit refresh', async (operation, value) => {
+  const f = fixture(), fetchedAt = Date.now() - 90 * 86400_000;
+  const [reference] = await saveVideoResource(f.env, operation, value, fetchedAt, 60_000);
+  const req = { ...request, operation, resourceType: operation.kind };
+  const updated = { ...value, updated: true };
+  const loader = vi.fn(async () => updated);
+  const core = new YouTubeCacheCoordinatorCore(f.env, loader);
+  expect(await core.getOrLoad(req)).toMatchObject({ cacheStatus: 'hit', fetchedAt, value });
+  expect(loader).not.toHaveBeenCalled();
+  expect(await core.getOrLoad({ ...req, refresh: true })).toMatchObject({ cacheStatus: 'miss', value: updated });
+  expect(loader).toHaveBeenCalledOnce();
+  expect(await f.store.readVersion(reference!)).toMatchObject({ fetchedAt, value });
 });

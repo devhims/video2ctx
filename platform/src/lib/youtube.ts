@@ -9,7 +9,7 @@ import type {
 } from 'all-things-youtube';
 import { browseDestination } from './youtube-client';
 import { videoCatalog, type VideoAssetReference } from './video-catalog';
-import { readVideoResource, videoResourceKey, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
+import { readVideoResource, videoResourceKey, reusableVideoResource, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
 import type { VideoFrames } from './youtube-frames-contract';
 import {
   normalizeBrowseLanguage,
@@ -120,8 +120,8 @@ async function cached<T extends VideoResourceOperation>(
     : catalog && resource ? null : await readYouTubeCacheEntry<ResourceResult<T>>(env, cacheKey, type);
 
   const timestamp = now();
-  if (!refresh && existing && existing.freshUntil > timestamp) {
-    return cachedValue(existing, 'hit');
+  if (!refresh && existing && reusableVideoResource(operation, existing, timestamp)) {
+    return cachedValue(existing, 'hit', !!resource);
   }
 
   let response;
@@ -136,7 +136,7 @@ async function cached<T extends VideoResourceOperation>(
     }));
     response = parseCoordinatorResponse(wireResponse);
   } catch (error) {
-    if (existing && !refresh) return cachedValue(existing, 'stale');
+    if (existing && !refresh) return cachedValue(existing, 'stale', !!resource);
     throw new ApiError(
       503,
       'CACHE_COORDINATOR_UNAVAILABLE',
@@ -161,7 +161,7 @@ async function cached<T extends VideoResourceOperation>(
     fetchedAt: response.fetchedAt,
     freshUntil: response.fetchedAt + maxAgeMs,
   };
-  return cachedValue(entry, response.cacheStatus);
+  return cachedValue(entry, response.cacheStatus, !!resource);
 }
 
 function parseCoordinatorResponse(value: string): YouTubeCacheResponse {
@@ -180,6 +180,7 @@ function parseCoordinatorResponse(value: string): YouTubeCacheResponse {
 function cachedValue<T>(
   entry: YouTubeCacheEntry<T>,
   cacheStatus: CacheStatus,
+  savedVideoResource = false,
 ): CachedResult<T & { freshness?: Record<string, unknown> }> {
   const stale = cacheStatus === 'stale';
   if (Array.isArray(entry.value)) return {value:entry.value,cacheStatus,...(entry.catalogVersions ? {catalogVersions:entry.catalogVersions} : {})};
@@ -187,7 +188,7 @@ function cachedValue<T>(
     value: {
       ...withYouTubeMetadata(entry.value),
       freshness: {
-        state: stale ? 'stale' : 'fresh',
+        state: stale ? 'stale' : savedVideoResource && cacheStatus === 'hit' ? 'stored' : 'fresh',
         fetchedAt: entry.fetchedAt,
         ...(stale ? { reason: 'UPSTREAM_UNAVAILABLE' } : {}),
       },
@@ -241,16 +242,16 @@ export async function getVideo(env: Env, id: string): Promise<Video> {
   return (await getVideoWithCache(env, id)).value;
 }
 
-export function getVideoWithCache(env: Env, id: string) {
-  return cached(env, 'video', `v2:${id}`, 30 * 60_000, { kind: 'video', id });
+export function getVideoWithCache(env: Env, id: string, refresh = false) {
+  return cached(env, 'video', `v2:${id}`, 30 * 60_000, { kind: 'video', id }, undefined, refresh);
 }
 
-export async function getVideoSignals(env: Env, id: string) {
-  return (await getVideoSignalsWithCache(env, id)).value;
+export async function getVideoSignals(env: Env, id: string, refresh = false) {
+  return (await getVideoSignalsWithCache(env, id, refresh)).value;
 }
 
-export function getVideoSignalsWithCache(env: Env, id: string) {
-  return cached(env, 'video-signals', id, 15 * 60_000, { kind: 'video-signals', id });
+export function getVideoSignalsWithCache(env: Env, id: string, refresh = false) {
+  return cached(env, 'video-signals', id, 15 * 60_000, { kind: 'video-signals', id }, undefined, refresh);
 }
 
 export async function getChannel(env: Env, id: string) {
@@ -315,29 +316,29 @@ export async function getComments(env: Env, id: string, continuation?: string) {
   return (await getCommentsWithCache(env, id, continuation)).value;
 }
 
-export function getCommentsWithCache(env: Env, id: string, continuation?: string) {
+export function getCommentsWithCache(env: Env, id: string, continuation?: string, refresh = false) {
   const key = `v6:${id}:${continuation ?? 'first'}`;
-  return cached(env, 'comments', key, 15 * 60_000, { kind: 'comments', id, continuation });
+  return cached(env, 'comments', key, 15 * 60_000, { kind: 'comments', id, continuation }, undefined, refresh);
 }
 
 export async function getAllComments(env: Env, id: string) {
   return (await getAllCommentsWithCache(env, id)).value;
 }
 
-export function getAllCommentsWithCache(env: Env, id: string) {
+export function getAllCommentsWithCache(env: Env, id: string, refresh = false) {
   return cached(env, 'all-comments', `v6:${id}`, 15 * 60_000, {
     kind: 'all-comments', id, maxPages: 100,
-  });
+  }, undefined, refresh);
 }
 
 export async function getTranscript(env: Env, id: string, lang?: string): Promise<Transcript> {
   return (await getTranscriptWithCache(env, id, lang)).value;
 }
 
-export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink) {
+export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false) {
   return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
     kind: 'transcript', id, lang, granularity: 'word',
-  }, onDiagnostic);
+  }, onDiagnostic, refresh);
 }
 
 export async function getCaptionTracks(env: Env, id: string) {

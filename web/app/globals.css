@@ -1832,6 +1832,32 @@ html:has(.developer-page) body {
   align-items: center;
 }
 
+.source-refresh-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding-block: var(--space-sm);
+  color: var(--color-dashboard-muted);
+  font-size: .75rem;
+}
+
+.source-refresh-row button {
+  min-height: 2.25rem;
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--color-dashboard-rule);
+  border-radius: var(--radius-dashboard-sm);
+  background: transparent;
+  color: var(--color-dashboard-ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.source-refresh-row button:disabled { opacity: .55; cursor: wait; }
+.source-refresh-row button:hover:not(:disabled) { border-color: var(--color-dashboard-ink-soft); }
+.source-refresh-row button:focus-visible { outline: 2px solid var(--color-dashboard-ink); outline-offset: 3px; }
+
 .source-overview-grid {
   border-bottom: 1px solid var(--color-dashboard-rule);
   display: grid;
