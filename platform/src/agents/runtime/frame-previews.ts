@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { videoImageKey } from '../../lib/video-catalog';
 import { sha256 } from '../../lib/http';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { EvidencePacket } from '../contracts';
@@ -32,16 +33,18 @@ export function packetFramePreviews(packet: EvidencePacket): FramePreview[] {
   return parsed.success ? parsed.data : [];
 }
 
-export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal): Promise<FramePreview[]> {
+export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal, sharedBucket?: R2Bucket): Promise<FramePreview[]> {
   signal.throwIfAborted();
   const frames = framesSchema.parse(value).frames;
   return saveImagePreviews(bucket, userId, frames.map(frame => ({ imageBase64: frame.imageBase64,
-    metadata: { timestampMs: frame.timestampMs, width: frame.width, height: frame.height } })), signal);
+    metadata: { timestampMs: frame.timestampMs, width: frame.width, height: frame.height } })), signal,
+    sharedBucket ? {bucket:sharedBucket,videoId:value.videoId} : undefined);
 }
 
 // Both visual tools share the existing collection, serving route and account cleanup.
 export async function saveImagePreviews<T extends { width: number; height: number }>(
   bucket: R2Bucket, userId: string, images: { imageBase64: string; metadata: T }[], signal: AbortSignal,
+  shared?: {bucket:R2Bucket;videoId:string},
 ): Promise<(T & { assetId: string; collectionId: string })[]> {
   signal.throwIfAborted();
   const collectionId = await frameCollectionId(userId);
@@ -55,9 +58,17 @@ export async function saveImagePreviews<T extends { width: number; height: numbe
       const key = framePreviewKey(collectionId, assetId);
       const preview = { ...image.metadata, assetId, collectionId };
       saved.push({ key, preview });
-      await bucket.put(key, Uint8Array.from(atob(image.imageBase64), value => value.charCodeAt(0)), {
-        httpMetadata: { contentType: 'image/jpeg', cacheControl: 'no-store' },
-      });
+      const bytes = Uint8Array.from(atob(image.imageBase64), value => value.charCodeAt(0));
+      if (shared) {
+        const sharedImageKey = await videoImageKey(shared.videoId,bytes);
+        if (!await shared.bucket.head(sharedImageKey)) throw new Error('Shared preview image is unavailable.');
+        // This private capability can be revoked without deleting the source JPEG.
+        await bucket.put(key,JSON.stringify({sharedImageKey}),{
+          httpMetadata:{contentType:'application/json',cacheControl:'no-store'},
+        });
+      } else {
+        await bucket.put(key,bytes,{httpMetadata:{contentType:'image/jpeg',cacheControl:'no-store'}});
+      }
       signal.throwIfAborted();
     }
     return saved.map(value => value.preview);

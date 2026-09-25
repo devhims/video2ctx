@@ -42,3 +42,27 @@ test('does not make session reads or frame extraction public', async () => {
   expect((await app.request('/v1/agent', { method: 'POST' }, env, executionContext)).status).toBe(401);
   expect(get).not.toHaveBeenCalled();
 });
+
+test('serves a shared image only through its live private preview reference', async () => {
+  const bytes=new Uint8Array([255,216,255,217]);
+  const sharedImageKey=`youtube/videos/abcdefghijk/images/${'c'.repeat(64)}.jpg`;
+  const sharedGet=vi.fn().mockImplementation(async()=>({body:new Response(bytes).body}));
+  const sharedEnv={...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env;
+  get.mockResolvedValue({httpMetadata:{contentType:'application/json'},json:async()=>({sharedImageKey})});
+  const response=await app.request(path,{},sharedEnv,executionContext);
+  expect(response.status).toBe(200);
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  expect(sharedGet).toHaveBeenCalledWith(sharedImageKey);
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  get.mockResolvedValue(null);
+  sharedGet.mockClear();
+  expect((await app.request(path,{},sharedEnv,executionContext)).status).toBe(404);
+  expect(sharedGet).not.toHaveBeenCalled();
+});
+
+test('rejects malformed shared preview references without reading arbitrary R2 keys',async()=>{
+  const sharedGet=vi.fn();
+  get.mockResolvedValue({httpMetadata:{contentType:'application/json'},json:async()=>({sharedImageKey:'private/analysis.json'})});
+  expect((await app.request(path,{}, {...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env,executionContext)).status).toBe(404);
+  expect(sharedGet).not.toHaveBeenCalled();
+});

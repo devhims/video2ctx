@@ -648,11 +648,13 @@ test('deduplicates complete transcript retrieval durably across focuses and keep
 test('session assets enforce ownership and deletion removes run copies, citations and memory', async()=> {
   const {runtime,runId,userId,conversationId}=await seed('session-asset-owner','running');
   let version='';
+  let sharedReference: import('../src/lib/video-catalog').VideoAssetReference;
   await runInDurableObject(runtime,async (instance,state)=>{
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
-    const store=new SessionEvidenceStore(state.storage.sql,env.RESEARCH,`agent-session/${state.id.toString()}/`);
-    const raw=await store.retrieve('transcript:abcdefghijk','transcript','abcdefghijk',false,async()=>({value:{videoId:'abcdefghijk',text:'Private captions',segments:[{text:'Private captions',startMs:0,endMs:1000,durationMs:1000}]},cacheStatus:'miss'}),()=>({complete:true}));
+    const store=(instance as unknown as {sessionStore:InstanceType<typeof SessionEvidenceStore>}).sessionStore;
+    const raw=await store.retrieve('transcript:abcdefghijk:default','transcript','abcdefghijk',false,async()=>({value:{videoId:'abcdefghijk',text:'Private captions',segments:[{text:'Private captions',startMs:0,endMs:1000,durationMs:1000}]},cacheStatus:'miss'}),()=>({complete:true}));
     version=raw.assetVersions![0]!;
+    sharedReference=JSON.parse(state.storage.sql.exec<{reference_json:string}>('SELECT reference_json FROM session_asset_catalog_refs WHERE version=?',version).one().reference_json).asset;
     const writer=instance as unknown as {performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>};
     const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
     instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'finalize',responseIntent:'context_answer',reason:'Stored evidence'})},0)`;
@@ -665,6 +667,8 @@ test('session assets enforce ownership and deletion removes run copies, citation
   expect(await runtime.getSessionAsset(conversationId,userId,version)).toMatchObject({text:'Private captions'});
   await runtime.deleteSessionAssets(conversationId,userId,version);
   expect(await runtime.getSessionAsset(conversationId,userId,version)).toBeNull();
+  const {VideoCatalog}=await import('../src/lib/video-catalog');
+  expect(await new VideoCatalog(env.VIDEO_CATALOG,env.VIDEO_ASSETS).readVersion(sharedReference!)).toMatchObject({value:{text:'Private captions'}});
   expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([]);
   await runInDurableObject(runtime,async instance=>{
     expect(instance.sql`SELECT * FROM agent_evidence_packets`).toEqual([]);
@@ -763,4 +767,25 @@ test('persists retrieval and analysis with separate bounded quotas and settles o
     expect(result.billing.creditsCharged).toBe(11);
     expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='analyze_video_transcript' AND credits=0`).toHaveLength(11);
   });
+});
+
+test('operator asset migration RPC enforces session ownership and verifies dormant legacy assets', async () => {
+  const { runtime, userId, conversationId } = await seed('operator-session-owner');
+  let version = '';
+  await runInDurableObject(runtime, async (_instance, state) => {
+    const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
+    const legacy = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'operator-rpc/');
+    const saved = await legacy.retrieve('transcript:abcdefghijk:default', 'transcript', 'abcdefghijk', false,
+      async () => ({ value: { videoId: 'abcdefghijk', text: 'Saved captions', segments: [] }, cacheStatus: 'miss' }), () => ({}));
+    version = saved.assetVersions![0]!;
+  });
+  expect(await runtime.migrateSessionAssets(conversationId, 'different-user', { mode: 'migrate' })).toBeNull();
+  expect(await runtime.migrateSessionAssets(crypto.randomUUID(), userId, { mode: 'migrate' })).toBeNull();
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'verify' }))?.results)
+    .toEqual([{ version, status: 'unlinked', migrated: false }]);
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'migrate' }))?.results)
+    .toEqual([{ version, status: 'shared_verified', migrated: true }]);
+  expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'verify' }))?.results)
+    .toEqual([{ version, status: 'shared_verified', migrated: false }]);
+  expect(await runtime.getSessionAsset(conversationId, userId, version)).toMatchObject({ text: 'Saved captions' });
 });

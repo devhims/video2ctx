@@ -3,7 +3,12 @@ import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-fr
 import { getVideoFrames } from './youtube-frames';
 import { runYouTubeOperation, type YouTubeOperation } from './youtube-processor-client';
 import type { ExtractionDiagnosticSink } from './extraction-diagnostics';
-import { videoCatalog, type VideoAssetKey, type StoredVideoAsset } from './video-catalog';
+import {
+  videoCatalog,
+  type VideoAssetKey,
+  type StoredVideoAsset,
+  type VideoAssetReference,
+} from './video-catalog';
 import { ApiError, sha256 } from './http';
 
 export interface FrameOperation {
@@ -52,7 +57,11 @@ export function videoResourceKey(op: VideoResourceOperation): VideoAssetKey | un
       variant = { timestamps: [...new Set(op.timestampsMs)].sort((a, b) => a - b), maxWidth: op.maxWidth };
       break;
   }
-  return { videoId: op.id, kind: op.kind === 'video' ? 'video_metadata' : op.kind, variant: JSON.stringify(variant) };
+  return {
+    videoId: op.id,
+    kind: op.kind === 'video' ? 'video_metadata' : op.kind,
+    variant: JSON.stringify(variant),
+  };
 }
 
 export function resourceComplete(op: VideoResourceOperation, value: unknown): boolean {
@@ -64,16 +73,16 @@ export function resourceComplete(op: VideoResourceOperation, value: unknown): bo
   return true;
 }
 
-function metadataKey(id: string): VideoAssetKey {
+export function metadataKey(id: string): VideoAssetKey {
   return { videoId: id, kind: 'storyboard_manifest', variant: 'v1' };
 }
-async function sheetKey(board: Storyboard, index: number): Promise<VideoAssetKey> {
+export async function sheetKey(board: Storyboard, index: number): Promise<VideoAssetKey> {
   const manifest = await sha256(
     JSON.stringify({ frameCount: board.frameCount, intervalMs: board.intervalMs, manifest: board.manifest }),
   );
   return { videoId: board.videoId, kind: 'storyboard_sheet', variant: `${manifest}:${index}` };
 }
-function frameKey(op: FrameOperation, time: number): VideoAssetKey {
+export function frameKey(op: FrameOperation, time: number): VideoAssetKey {
   return { videoId: op.id, kind: 'frame', variant: `v1:${op.maxWidth}:${time}` };
 }
 function sheetIndexes(board: Storyboard, op: Extract<YouTubeOperation, { kind: 'storyboard' }>): number[] {
@@ -115,6 +124,7 @@ function combined<T>(value: T, assets: StoredVideoAsset[]): StoredVideoAsset<T> 
     fetchedAt: Math.min(...assets.map((asset) => asset.fetchedAt)),
     freshUntil: Math.min(...assets.map((asset) => asset.freshUntil)),
     complete: assets.every((asset) => asset.complete),
+    catalogVersions: assets.flatMap((asset) => asset.catalogVersions ?? []),
   };
 }
 function boardWithSheets(
@@ -190,10 +200,16 @@ export async function saveVideoResource(
   value: unknown,
   fetchedAt: number,
   maxAgeMs: number,
-) {
+): Promise<VideoAssetReference[]> {
   const store = videoCatalog(env);
   const key = videoResourceKey(op);
-  if (!store || !key) return;
+  if (!store || !key) return [];
+  const references: VideoAssetReference[] = [];
+  const save: typeof store.save = async (...args) => {
+    const reference = await store.save(...args);
+    references.push(reference);
+    return reference;
+  };
   if (op.kind === 'storyboard') {
     const board = storyboardSchema.parse(value);
     if (board.videoId !== op.id) throw new Error('Storyboard video mismatch.');
@@ -205,7 +221,7 @@ export async function saveVideoResource(
           const index = sheet.firstFrameIndex / board.manifest.framesPerSheet;
           if (!Number.isInteger(index) || !expected.includes(index))
             throw new Error('Unexpected storyboard sheet.');
-          await store.save(
+          await save(
             await sheetKey(board, index),
             {
               ...board,
@@ -224,12 +240,12 @@ export async function saveVideoResource(
           );
         }
       } else
-        await store.save(metadataKey(op.id), board, fetchedAt, maxAgeMs, resourceComplete(op,board), {
+        await save(metadataKey(op.id), board, fetchedAt, maxAgeMs, resourceComplete(op, board), {
           ...board.manifest,
           intervalMs: board.intervalMs,
         });
     }
-    return;
+    return references;
   }
   if (op.kind === 'frames') {
     const frames = framesSchema.parse(value);
@@ -239,7 +255,7 @@ export async function saveVideoResource(
     )
       throw new Error('Unexpected video frame.');
     for (const frame of frames.frames)
-      await store.save(
+      await save(
         frameKey(op, frame.timestampMs),
         { ...frames, frames: [frame], failures: [], meta: { ...frames.meta, partial: false } },
         fetchedAt,
@@ -247,7 +263,7 @@ export async function saveVideoResource(
         true,
         { timestampMs: frame.timestampMs, width: frame.width, height: frame.height, maxWidth: op.maxWidth },
       );
-    return;
+    return references;
   }
   const data = value as {
     segments?: unknown[];
@@ -255,12 +271,13 @@ export async function saveVideoResource(
     continuation?: string;
     complete?: boolean;
   };
-  await store.save(key, value, fetchedAt, maxAgeMs, resourceComplete(op, value), {
+  await save(key, value, fetchedAt, maxAgeMs, resourceComplete(op, value), {
     segmentCount: data.segments?.length,
     commentCount: data.comments?.length,
     hasContinuation: !!data.continuation,
     collectionComplete: data.complete,
   });
+  return references;
 }
 
 /** Only missing visual assets go to a container; successful partial batches survive. */
@@ -269,6 +286,7 @@ export async function loadVideoResource(
   op: VideoResourceOperation,
   diagnostic?: ExtractionDiagnosticSink,
   refresh = false,
+  onVersions?: (references: VideoAssetReference[]) => void,
 ): Promise<unknown> {
   const store = videoCatalog(env);
   if (op.kind === 'frames') {
@@ -296,7 +314,10 @@ export async function loadVideoResource(
           diagnostic,
         )
       : undefined;
-    if (fetched) await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames);
+    const versions = fetched
+      ? await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames)
+      : [];
+    onVersions?.([...hits.flatMap((hit) => hit.catalogVersions ?? []), ...versions]);
     return framesSchema.parse({
       videoId: op.id,
       frames: [...hits.flatMap((asset) => asset.value.frames), ...(fetched?.frames ?? [])].sort(
@@ -312,8 +333,20 @@ export async function loadVideoResource(
     const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
     const fetchedAt = Date.now();
     const value = await runYouTubeOperation(env, metadataOp, diagnostic);
-    await saveVideoResource(env, metadataOp, value, fetchedAt, VIDEO_MAX_AGE.storyboard);
-    metadata = { value, fetchedAt, freshUntil: fetchedAt + VIDEO_MAX_AGE.storyboard, complete: true };
+    const catalogVersions = await saveVideoResource(
+      env,
+      metadataOp,
+      value,
+      fetchedAt,
+      VIDEO_MAX_AGE.storyboard,
+    );
+    metadata = {
+      value,
+      fetchedAt,
+      freshUntil: fetchedAt + VIDEO_MAX_AGE.storyboard,
+      complete: true,
+      catalogVersions,
+    };
   }
   const indexes = sheetIndexes(metadata.value, op);
   const saved = await Promise.all(
@@ -325,12 +358,15 @@ export async function loadVideoResource(
     (asset): asset is StoredVideoAsset<Storyboard> => !!asset && asset.freshUntil > Date.now(),
   );
   const missing = indexes.filter((_, index) => !saved[index] || saved[index]!.freshUntil <= Date.now());
-  if (!missing.length)
+  const versions = [...(metadata.catalogVersions ?? []), ...hits.flatMap((hit) => hit.catalogVersions ?? [])];
+  if (!missing.length) {
+    onVersions?.(versions);
     return boardWithSheets(
       metadata.value,
       op,
       hits.map((asset) => asset.value),
     );
+  }
   const fetchedAt = Date.now();
   const fetched = await runYouTubeOperation(
     env,
@@ -343,6 +379,9 @@ export async function loadVideoResource(
     fetched.frameCount !== metadata.value.frameCount
   )
     throw new Error('Storyboard changed during retrieval. Refresh its manifest.');
-  await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.storyboard);
+  onVersions?.([
+    ...versions,
+    ...(await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.storyboard)),
+  ]);
   return boardWithSheets(metadata.value, op, [...hits.map((asset) => asset.value), fetched]);
 }

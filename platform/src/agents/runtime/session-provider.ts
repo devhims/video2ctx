@@ -159,7 +159,13 @@ export function sessionProvider(
                     'storyboard_sheet',
                     id,
                     true,
-                    async () => ({ ...fetched, value }),
+                    async () => ({
+                      ...fetched,
+                      value,
+                      catalogVersions: fetched.catalogVersions?.filter(
+                        (asset) => asset.kind === 'storyboard_sheet' && asset.variant.endsWith(`:${index}`),
+                      ),
+                    }),
                     () => ({
                       sheetIndex: index,
                       manifestVersion,
@@ -225,8 +231,20 @@ export function sessionProvider(
                     'frame',
                     request.videoId,
                     refresh,
-                    async () => ({ value, cacheStatus: fetched!.cacheStatus }),
-                    () => ({ timestampMs: frame.timestampMs, width: frame.width, height: frame.height, maxWidth }),
+                    async () => ({
+                      value,
+                      cacheStatus: fetched!.cacheStatus,
+                      catalogVersions: fetched!.catalogVersions?.filter(
+                        (asset) =>
+                          asset.kind === 'frame' && asset.variant === `v1:${maxWidth}:${frame.timestampMs}`,
+                      ),
+                    }),
+                    () => ({
+                      timestampMs: frame.timestampMs,
+                      width: frame.width,
+                      height: frame.height,
+                      maxWidth,
+                    }),
                   ),
                 );
               }

@@ -5,10 +5,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [cloudflareTest(async () => ({
     wrangler: { configPath: './test/user-account.wrangler.jsonc' },
-    miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'migrations')) } },
+    miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'migrations')), TEST_VIDEO_MIGRATIONS: await readD1Migrations(resolve(import.meta.dirname, 'video-catalog-migrations')) } },
   }))],
   test: {
-    include: ['test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts', 'test/user-account-do.integration.test.ts', 'test/agent-runtime-do.integration.test.ts'],
-    setupFiles: ['./test/apply-auth-migrations.ts'],
+    include: ['test/session-catalog.integration.test.ts', 'test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts', 'test/user-account-do.integration.test.ts', 'test/agent-runtime-do.integration.test.ts'],
+    setupFiles: ['./test/apply-auth-migrations.ts','./test/apply-video-catalog-migrations.ts'],
   },
 });
