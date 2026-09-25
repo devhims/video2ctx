@@ -460,3 +460,22 @@ test('fresh video data does not offer a saved-data refresh button', async ({ pag
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh data', exact: true })).toHaveCount(0);
 });
+
+test('a known video opens without waiting for the remote URL resolver', async ({ page }) => {
+  let resolveReads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/resolve', async route => {
+    resolveReads++;
+    await gate;
+    await route.fulfill({ json: { kind: 'video', provider: 'youtube', id: videoId } });
+  });
+  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
+  try {
+    await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+    await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible({ timeout: 1500 });
+    expect(resolveReads).toBe(0);
+  } finally { release(); }
+});

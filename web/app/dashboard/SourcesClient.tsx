@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import Link from 'next/link';
 import { redirect, useRouter, useSearchParams } from 'next/navigation';
 import { platformRequest as api, isAbortError } from '../../lib/platform-request';
-import { loadSourceData } from '../../lib/source-data';
+import { loadSourceData, videoIdFromInput } from '../../lib/source-data';
 
 import { Checkbox } from './Checkbox';
 
@@ -98,7 +98,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
     setHasSearched(true);
     setInspector(null);
     try {
-      const resolved = await api<{ kind: EntityType | 'search'; provider?: ProviderId; id?: string; query?: string }>('/v1/resolve', {
+      const videoId = videoIdFromInput(query);
+      const resolved = videoId ? { kind: 'video' as const, provider: 'youtube' as const, id: videoId }
+        : await api<{ kind: EntityType | 'search'; provider?: ProviderId; id?: string; query?: string }>('/v1/resolve', {
         method: 'POST', body: JSON.stringify({ input: query }), signal: controller.signal,
       });
       if (resolved.kind === 'video' && resolved.id) {
