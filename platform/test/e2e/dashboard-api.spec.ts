@@ -404,3 +404,59 @@ test('a cold settings visit does not download source or trend tool code',async({
  expect(code).not.toContain('Resolving your query');
  expect(code).not.toContain('Recent vs established');
 });
+
+
+for (const mobile of [false, true]) {
+  test(`saved video refresh preserves data on failure and retries fresh (${mobile ? 'mobile' : 'desktop'})`, async ({ page }, testInfo) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+    let refreshAttempts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reads: string[] = [];
+    await page.route(new RegExp(`/videos/${videoId}(?:[/?].*)?$`), async route => {
+      const url = new URL(route.request().url());
+      reads.push(url.pathname + url.search);
+      const fresh = url.searchParams.get('refresh') === 'true';
+      if (url.pathname.endsWith('/transcript')) {
+        if (fresh && ++refreshAttempts === 1) {
+          await gate;
+          await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Transcript refresh failed.' } } });
+        } else await route.fulfill({ json: { ...transcript, freshness: { state: fresh ? 'fresh' : 'stored', fetchedAt: 1000 } } });
+      } else await route.fulfill({ json: {
+        id: videoId, title: 'Saved video example', channel: { id: 'channel', name: 'Creator' }, thumbnails: [],
+        viewCountText: fresh ? '200 views' : '100 views', freshness: { state: fresh ? 'fresh' : 'stored', fetchedAt: 1000 },
+      } });
+    });
+    await page.goto('/dashboard?section=discover');
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+    await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+    const refresh = page.getByRole('button', { name: 'Refresh data', exact: true });
+    await expect(refresh).toBeEnabled();
+    await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('saved-video.png'), fullPage: true });
+    await refresh.click();
+    await expect(page.getByRole('button', { name: 'Refreshing…', exact: true })).toBeDisabled();
+    await expect(page.getByRole('heading', { name: 'Saved video example' })).toBeVisible();
+    await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+    release();
+    await expect(page.getByRole('alert').filter({ hasText: 'Transcript refresh failed.' })).toBeVisible();
+    await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+    await expect(refresh).toBeEnabled();
+    await page.getByRole('button', { name: 'Retry failed requests' }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Transcript refresh failed.' })).toHaveCount(0);
+    await expect(refresh).toHaveCount(0);
+    expect(refreshAttempts).toBe(2);
+    expect(reads.filter(url => url.endsWith(`${videoId}?refresh=true`))).toHaveLength(1);
+    expect(reads.filter(url => url.endsWith('/transcript?refresh=true'))).toHaveLength(2);
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  });
+}
+
+test('fresh video data does not offer a saved-data refresh button', async ({ page }) => {
+  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: { ...transcript, freshness: { state: 'fresh', fetchedAt: Date.now() } } }));
+  await page.goto('/dashboard?section=discover');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh data', exact: true })).toHaveCount(0);
+});
