@@ -168,11 +168,12 @@ export async function researchTrendTopic(
   const settled = await settleInBatches(selected, 6, async (candidate): Promise<CollectedVideo> => {
     const [video, signals] = await Promise.all([
       getVideo(env, candidate.id),
-      getVideoSignals(env, candidate.id).catch(() => undefined),
+      getVideoSignals(env, candidate.id, true),
     ]);
     const publishedTimeText = candidate.publishedTimeText ?? signals?.publishedTimeText;
     const ageHours = parsePublishedAgeHours(publishedTimeText, signals?.publishDate);
-    const viewCount = video.viewCount ?? signals?.viewCount ?? candidate.viewCount ?? 0;
+    if (signals.viewCount === undefined) throw new Error(`Current view count unavailable for ${candidate.id}.`);
+    const viewCount = signals.viewCount;
     const viewsPerHour = ageHours && ageHours > 0 ? Math.round(viewCount / ageHours) : undefined;
     const description = video.description ?? candidate.description ?? '';
     const snapshot = deriveSnapshotSignals({

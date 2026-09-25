@@ -105,13 +105,13 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
     let continuation: string | undefined;
     let partial = false;
     if (input.kind === 'deep-comments') {
-      const comments = (await provider.getAllComments(this.env, input.entityId)).value;
+      const comments = (await provider.getAllComments(this.env, input.entityId, true)).value;
       pages.push(...comments.comments);
       partial = !comments.complete;
       continuation = comments.continuation;
     } else {
       for (let page = 0; page < 2; page += 1) {
-        const comments = (await provider.getComments(this.env, input.entityId, continuation)).value;
+        const comments = (await provider.getComments(this.env, input.entityId, continuation, true)).value;
         pages.push(...comments.comments);
         continuation = comments.continuation;
         if (!continuation) break;

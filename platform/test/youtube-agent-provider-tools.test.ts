@@ -14,6 +14,29 @@ import { discoverInitialEvidence } from '../src/agents/research/initial-discover
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
 
 describe('YouTube agent provider-operation tools', () => {
+  it('labels saved metadata and includes fresh counts with their own timestamp', async () => {
+    const provider: YouTubeAgentProvider = providerFixture();
+    const original = await provider.video('abcdefghijk');
+    const fetchedAt = Date.parse('2026-09-11T12:20:00.000Z');
+    provider.video = async () => ({ cacheStatus: 'hit', value: { ...original.value,
+      viewCount: 10, freshness: { state: 'stored', fetchedAt },
+    } });
+    const saved = await executeGetVideo({ videoId: 'abcdefghijk' }, toolContext(provider), 'saved');
+    expect(saved.warnings).toContainEqual(expect.objectContaining({ code: 'SAVED_VIDEO_METADATA' }));
+    expect(saved.excerpts[0]?.text).toContain('2026-09-11T12:20:00.000Z');
+    provider.video = async () => ({ cacheStatus: 'miss', value: { ...original.value,
+      viewCount: 100, freshness: { state: 'fresh', fetchedAt },
+      signals: { videoId: 'abcdefghijk', viewCount: 101, likeCount: 7, commentCount: 3,
+        freshness: { state: 'fresh', fetchedAt: fetchedAt + 1000 }, meta: meta() },
+    } });
+    const fresh = await executeGetVideo({ videoId: 'abcdefghijk' }, toolContext(provider), 'current');
+    expect(fresh.excerpts[0]?.text).toContain('Views: 101');
+    expect(fresh.excerpts[0]?.text).toContain('Likes: 7');
+    expect(fresh.excerpts[0]?.text).toContain('Comment count: 3');
+    expect(fresh.excerpts[0]?.text).toContain('Statistics fetched at: 2026-09-11T12:20:01.000Z');
+    expect(fresh.warnings).not.toContainEqual(expect.objectContaining({ code: 'SAVED_VIDEO_METADATA' }));
+  });
+
   it('keeps an exact stale view count and its observation time visible to the model', async () => {
     const provider: YouTubeAgentProvider = providerFixture();
     const original = await provider.video('abcdefghijk');

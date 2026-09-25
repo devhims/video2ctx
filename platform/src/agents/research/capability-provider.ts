@@ -7,6 +7,14 @@ export function createCapabilityProvider(
   provider: YouTubeAgentProvider,
   decision: ExecutableRoute,
 ): YouTubeAgentProvider {
+  const savedProvider = provider;
+  provider = {
+    ...provider,
+    video: (id, options) => decision.refreshDynamicData || decision.refreshEvidence
+      ? savedProvider.video(id, { ...options, refresh: true, ...(decision.refreshDynamicData ? { includeSignals: true } : {}) }) : savedProvider.video(id, options),
+    comments: (id, options) => decision.refreshDynamicData
+      ? savedProvider.comments(id, { ...options, refresh: true }) : savedProvider.comments(id, options),
+  };
   if (decision.useStoryboard === false) provider = { ...provider, storyboard: undefined, frames: undefined };
   if (decision.route === 'topic_research') return provider;
   const requirePinnedVideo = (videoId: string) => {
@@ -29,9 +37,9 @@ export function createCapabilityProvider(
     search: (query, filters) => provider.search(query, filters),
     browse: (options) => provider.browse(options),
     trends: (query, limit, includeAiInsights) => provider.trends(query, limit, includeAiInsights),
-    video: async (videoId) => {
+    video: async (videoId, options) => {
       requirePinnedVideo(videoId);
-      return await provider.video(videoId);
+      return await provider.video(videoId, options);
     },
     tracks: async (videoId) => {
       requirePinnedVideo(videoId);

@@ -1,4 +1,4 @@
-import type { Video } from 'all-things-youtube';
+import type { AgentVideo } from '../provider';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
@@ -17,7 +17,7 @@ export type GetVideoInput = z.infer<typeof getVideoInputSchema>;
 
 export function createGetVideoTool(context: AgentToolContext) {
   return tool({
-    description: 'Read core metadata for exactly one YouTube video. This does not fetch transcripts, comments, tracks, or endscreen elements.',
+    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. This does not fetch transcripts, comments, tracks, or endscreen elements.',
     inputSchema: getVideoInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideo(input, context, toolCallId),
@@ -38,14 +38,19 @@ export function executeGetVideo(input: GetVideoInput, context: AgentToolContext,
   });
 }
 
-function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
+function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
   const sourceId = `youtube:video:${safeIdPart(video.id)}`;
   const freshness = z.object({
-    state: z.enum(['fresh', 'stale']), fetchedAt: z.number().finite(), reason: z.string().optional(),
+    state: z.enum(['fresh', 'stored', 'stale']), fetchedAt: z.number().finite(), reason: z.string().optional(),
   }).optional().safeParse('freshness' in video ? video.freshness : undefined);
   const observation = freshness.success ? freshness.data : undefined;
-  const date = observation ? new Date(observation.fetchedAt) : undefined;
-  const fetchedAt = date && Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  const fetchedAt = observationTime(observation?.fetchedAt);
+  const statisticsAt = observationTime(video.signals?.freshness?.fetchedAt);
+  const viewCount = video.signals?.viewCount ?? video.viewCount;
+  const savedWarning = observation?.state === 'stored' ? [{
+    code: 'SAVED_VIDEO_METADATA',
+    message: `These values were saved${fetchedAt ? ` at ${fetchedAt}` : ''}. Do not describe changing counts as current without a fresh lookup.`,
+  }] : [];
   const staleWarning = observation?.state === 'stale' ? [{
     code: 'STALE_VIDEO_METADATA',
     message: `The metadata refresh failed. These are previously observed values${fetchedAt ? ` from ${fetchedAt}` : ''}; state their age and do not describe them as current.`,
@@ -67,7 +72,10 @@ function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacke
       text: bounded([
         video.title,
         `Channel: ${video.channel.name}`,
-        video.viewCount !== undefined ? `Views: ${video.viewCount}` : video.viewCountText ? `Views: ${video.viewCountText}` : undefined,
+        viewCount !== undefined ? `Views: ${viewCount}` : video.viewCountText ? `Views: ${video.viewCountText}` : undefined,
+        video.signals?.likeCount !== undefined ? `Likes: ${video.signals.likeCount}` : undefined,
+        video.signals?.commentCount !== undefined ? `Comment count: ${video.signals.commentCount}` : undefined,
+        statisticsAt ? `Statistics fetched at: ${statisticsAt}` : undefined,
         fetchedAt ? `Metadata fetched at: ${fetchedAt}${observation?.state === 'stale' ? ' (stale; refresh failed)' : ''}` : undefined,
         video.publishedTimeText ? `Published: ${video.publishedTimeText}` : undefined,
         video.durationText ? `Duration: ${video.durationText}` : undefined,
@@ -83,7 +91,8 @@ function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacke
         id: video.id,
         channel: video.channel,
         durationSeconds: video.durationSeconds,
-        viewCount: video.viewCount,
+        viewCount: video.signals?.viewCount ?? video.viewCount,
+        ...(video.signals ? { signals: video.signals } : {}),
         isLive: video.isLive,
         hasCaptions: video.hasCaptions,
         keywords: video.keywords.slice(0, 40),
@@ -91,10 +100,16 @@ function singleVideoPacket(video: Video, toolCallId: string): Omit<EvidencePacke
         ...(observation ? { freshness: observation } : {}),
       },
     }],
-    warnings: [...providerWarnings(
+    warnings: [...savedWarning, ...providerWarnings(
       video.meta,
       'PARTIAL_VIDEO_METADATA',
       'YouTube returned partial video metadata.',
-    ), ...staleWarning],
+    ), ...providerWarnings(video.signals?.meta, 'PARTIAL_VIDEO_SIGNALS', 'Some current statistics are unavailable.'), ...staleWarning],
   };
+}
+
+function observationTime(value: unknown): string | undefined {
+  if (typeof value !== 'number') return;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }

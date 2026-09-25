@@ -26,7 +26,7 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   const providerApi = `/v1/providers/${inspector.provider}`;
   const result = await loadSourceData(async () => {
     if (option === 'transcript') inspector.transcript = await api<Transcript>(`${providerApi}/videos/${inspector.id}/transcript`, { signal });
-    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments`, { signal });
+    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments?refresh=true`, { signal });
     if (option === 'channel') {
       const channelId = String((inspector.data.channel as { id?: string } | undefined)?.id ?? '');
       if (!channelId) throw new Error('The video response did not include a channel ID.');
@@ -175,6 +175,16 @@ export default function SourcesClient({ active }: {active:boolean}) {
     finally { finishOperation(controller); }
   };
 
+  const refreshComments = async () => {
+    if (!inspector || loading) return;
+    const controller = beginOperation('Fetching current comments…');
+    try {
+      await loadVideoData({ ...inspector, dataErrors: { ...inspector.dataErrors } }, ['comments'], controller);
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not refresh comments.');
+    } finally { finishOperation(controller); }
+  };
+
   const retrySourceData = async () => {
     if (!inspector || loading) return;
     const controller = beginOperation('Retrying failed source requests…');
@@ -292,7 +302,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
             {inspector ? (
-              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
               <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
             )}
@@ -347,7 +357,7 @@ function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, f
   </section>;
 }
 
-function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
+function InspectorPanel({ inspector, onRetry, onOpenComments, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
@@ -365,7 +375,7 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
     setCommentsLoading(true);
     setCommentsError('');
     try {
-      const params = new URLSearchParams({ continuation });
+      const params = new URLSearchParams({ continuation, refresh: 'true' });
       const page = await api<CommentPage>(`/v1/providers/${inspector.provider}/videos/${encodeURIComponent(inspector.id)}/comments?${params}`);
       setCommentPage((current) => {
         if (!current) return page;
@@ -416,11 +426,11 @@ function InspectorPanel({ inspector, onRetry, retrying, segments, transcriptQuer
 
     {panelOptions.length ? <>
       <div className='source-data-tabs' role='tablist' aria-label='Fetched video data'>
-        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => setActivePanel(option)}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
+        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => { setActivePanel(option); if (option === 'comments' && !retrying && !commentsLoading) onOpenComments(); }}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
       </section>
     </> : null}
 

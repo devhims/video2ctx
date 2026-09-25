@@ -18,6 +18,32 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
+  it('refreshes dynamic data without refreshing transcripts or visuals', async () => {
+    const base = providerWith({ video: vi.fn(), comments: vi.fn(), transcript: vi.fn(), storyboard: vi.fn() });
+    const provider = createCapabilityProvider(base, {
+      route: 'inspect_video', videoId: 'abcdefghijk', refreshDynamicData: true,
+    });
+    await provider.video('abcdefghijk');
+    await provider.comments('abcdefghijk', { all: true });
+    await provider.transcript('abcdefghijk', 'en');
+    await provider.storyboard!('abcdefghijk');
+    expect(base.video).toHaveBeenCalledWith('abcdefghijk', { refresh: true, includeSignals: true });
+    expect(base.comments).toHaveBeenCalledWith('abcdefghijk', { all: true, refresh: true });
+    expect(base.transcript).toHaveBeenCalledWith('abcdefghijk', 'en', undefined);
+    expect(base.storyboard).toHaveBeenCalledWith('abcdefghijk', undefined, undefined, undefined);
+  });
+
+  it('retains the dynamic refresh decision and rejects finalizing from old statistics', async () => {
+    const decision = { route: 'inspect_video', videoId: 'abcdefghijk', refreshDynamicData: true,
+      useStoryboard: false, researchVideoCount: 1, answerDetail: 'standard' };
+    expect(await classifyCapabilityWithModel({ message: 'How many likes does https://youtu.be/abcdefghijk have now?',
+      model: classifierModel(decision), signal: new AbortController().signal })).toMatchObject(decision);
+    await expect(classifyCapabilityWithModel({ message: 'How many likes now?',
+      model: classifierModel({ route: 'finalize', responseIntent: 'context_answer', contextScope: 'video',
+        reason: 'Saved counts', refreshDynamicData: true, researchVideoCount: 0 }),
+      signal: new AbortController().signal })).rejects.toThrow();
+  });
+
   it('repairs a follow-up comparison that drops the saved video from its scope', async () => {
     const previous = 'abcdefghijk', current = 'lmnopqrstuv';
     let calls = 0;

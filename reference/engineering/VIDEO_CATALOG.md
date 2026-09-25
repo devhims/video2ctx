@@ -4,7 +4,7 @@ A video accumulates source evidence as callers request it. D1 locates the exact 
 
 The application owns freshness, asset identity, coalescing, and persistence. The existing processor and frame containers own YouTube extraction. R2 and D1 do not perform extraction or analysis.
 
-For example, a transcript request creates a video record and an English transcript reference. A later comments request adds a comments reference to that video. Another agent asking for the English transcript reads the existing object if it is fresh.
+For example, a transcript request creates a video record and an English transcript reference. A later comments request adds a comments reference to that video. Another agent asking for the English transcript reads the existing complete object regardless of age.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'signalColor': '#334155', 'signalTextColor': '#334155', 'sequenceNumberColor': '#ffffff', 'actorBkg': '#e2e8f0', 'actorTextColor': '#0f172a', 'actorBorder': '#64748b'}}}%%
@@ -16,11 +16,11 @@ sequenceDiagram
     participant Store as R2 assets
     participant Source as YouTube containers
     Caller->>App: Request transcript for video ID and language
-    App->>DB: Find exact asset and freshness
-    alt Fresh asset exists
+    App->>DB: Find exact asset variant
+    alt Complete asset exists and no refresh requested
         App->>Store: Read referenced payload
         Store-->>App: Source evidence
-    else Missing or expired
+    else Missing, incomplete, or explicit refresh
         App->>App: Coalesce identical requests in coordinator
         App->>Source: Extract requested resource
         Source-->>App: Source evidence
@@ -33,20 +33,26 @@ sequenceDiagram
 
 ## Stored evidence
 
-| Resource | Variant identity | Default freshness |
-| --- | --- | --- |
-| Video metadata (`video_metadata`) | Video ID | 30 minutes |
-| Video signals | Video ID | 15 minutes |
-| Caption tracks | Video ID | 1 day |
-| Transcript | Language and granularity | 7 days |
-| Comment page | Continuation token | 15 minutes |
-| Collected comments | Page limit | 15 minutes |
-| Storyboard manifest | Video ID | 7 days |
-| Storyboard sheet | Manifest geometry hash and sheet index | 7 days |
-| Extracted frame | Requested timestamp and maximum width | 7 days |
-| Endscreen elements | Video ID | 1 day |
+| Resource | Variant identity |
+| --- | --- |
+| Video metadata (`video_metadata`) | Video ID |
+| Video signals | Video ID |
+| Caption tracks | Video ID |
+| Transcript | Language and granularity |
+| Comment page | Continuation token |
+| Collected comments | Page limit |
+| Storyboard manifest | Video ID |
+| Storyboard sheet | Manifest geometry hash and sheet index |
+| Extracted frame | Requested timestamp and maximum width |
+| Endscreen elements | Video ID |
 
-Existing adapter TTLs remain authoritative for their calls. Missing resources are fetched independently. For example, requesting frames at 10 and 20 seconds after 10 seconds was already extracted downloads only the missing 20-second frame. A partial extraction preserves successful frames for subsequent requests.
+Complete video resources are reused regardless of age. `fresh_until` and the legacy KV retention windows remain for compatibility, but do not trigger another video fetch. Missing resources are fetched independently. Requesting frames at 10 and 20 seconds after 10 seconds was already extracted downloads only the missing 20-second frame. Partial extraction preserves successful frames for subsequent requests.
+
+Metadata, transcript and comments API routes accept `refresh=true`. A normal request reuses saved data; an explicit refresh fetches again and saves the result. Responses mark reused video data with `freshness.state=stored` and its original `freshness.fetchedAt`. Existing immutable session references remain readable after refresh.
+
+Explicit comments import jobs fetch fresh comments. Sources requests fresh comments when the user opens a video with Comments selected, clicks the Comments tab, or loads another comment page. Restoring dashboard drafts and history uses the saved data. The agent classifier selects `refreshDynamicData` when the user asks for current views, likes or comments. That refreshes metadata, statistics and requested comments while continuing to reuse transcripts and images. Explicit requests to refresh all evidence retain the separate `refreshEvidence` behavior.
+
+Trend research explicitly fetches current statistics. Failed or missing view counts exclude that video from the new snapshot, rather than recording saved counts under a new timestamp. Search, channel and playlist caches still use their existing expiration policy.
 
 Metadata includes the fields returned by the provider, such as title, description, channel references and thumbnail URLs. Only returned image bytes are copied into R2. Referenced URLs are not automatically downloaded. Search, channel and playlist responses retain the existing KV path. Discovering a video in search does not proactively populate its catalog.
 
@@ -81,7 +87,7 @@ D1 and R2 have no cross-service transaction. The pending version is written firs
 
 Missing objects and manifests with mismatched hashes cause a cache miss. Failed persistence returns an error instead of pretending the new evidence was saved. A normal upstream failure may serve existing evidence with `cacheStatus: stale`; an explicit refresh reports upstream failure. Partial sources are saved but never treated as fresh complete hits.
 
-Legacy fresh KV entries are promoted on demand with their original fetch timestamp. API and agent helpers use the same canonical coordinator identity. Identical requests coalesce; overlapping but different frame or sheet batches may still perform duplicate extraction concurrently. Canceling a frame waiter does not cancel extraction shared with another caller; the container time budget still bounds it.
+Complete legacy video KV entries are promoted on demand with their original fetch timestamp. API and agent helpers use the same canonical coordinator identity. When only historical imports exist, new reads can reuse the latest complete saved version without publishing a current pointer. Identical requests coalesce; overlapping but different frame or sheet batches may still perform duplicate extraction concurrently. Canceling a frame waiter does not cancel extraction shared with another caller; the container time budget still bounds it.
 
 Recovery retains historical objects. Images written before a failed manifest write can remain unreferenced. There is no garbage collector or retention policy in this first version. Do not attach a blanket bucket expiration rule: it could delete current evidence. Add reference-aware cleanup and capacity monitoring before sustained large ingestion.
 
