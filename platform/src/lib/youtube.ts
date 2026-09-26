@@ -90,14 +90,14 @@ export function withYouTubeMetadata<T>(value: T): T {
   } as T;
 }
 
-function processorError(error: {code: string; message: string}): ApiError {
+function processorError(error: {code: string; message: string}, extractionId?: string): ApiError {
   const status = error.code === 'INVALID_INPUT' ? 422
     : error.code === 'NOT_FOUND' ? 404
     : error.code === 'AUTH_REQUIRED' ? 401
     : error.code === 'RATE_LIMITED' ? 429
     : error.code === 'UNAVAILABLE' || error.code === 'PROCESSOR_BUSY' || error.code === 'PROCESSOR_UNAVAILABLE' ? 503
     : 502;
-  return new ApiError(status, error.code, error.message);
+  return new ApiError(status, error.code, error.message, extractionId ? { extractionId } : undefined);
 }
 
 type ResourceResult<T extends VideoResourceOperation> = T extends FrameOperation ? VideoFrames : T extends YouTubeOperation ? YouTubeOperationResult<T> : never;
@@ -148,7 +148,7 @@ async function cached<T extends VideoResourceOperation>(
   }
   if (!response.ok && response.error) {
     if (response.error.apiStatus) throw new ApiError(response.error.apiStatus,response.error.code,response.error.message);
-    throw processorError(response.error);
+    throw processorError(response.error, response.diagnostics?.at(-1)?.extractionId);
   }
   if (!response.ok || response.value === undefined || response.fetchedAt === undefined || !response.cacheStatus) {
     throw new ApiError(502, 'INVALID_CACHE_COORDINATOR_RESPONSE', 'The YouTube cache coordinator returned an invalid response.');

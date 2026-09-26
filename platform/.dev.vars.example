@@ -22,6 +22,8 @@ UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 LANDING_RATE_LIMIT_SALT=replace-with-a-private-random-value
 # Optional. Use an HTTP(S) proxy when YouTube blocks shared datacenter egress.
+# Optional JSON array of distinct sticky proxy URLs; takes precedence for the processor.
+OUTBOUND_PROXY_URLS=
 OUTBOUND_PROXY_URL=
 
 # Operator access only, never Agent testing access. Private comma-separated admin allowlist. Production: wrangler secret put ADMIN_EMAILS_SECRET

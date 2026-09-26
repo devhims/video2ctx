@@ -1,6 +1,6 @@
 {
   "name": "all-things-youtube",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "TypeScript toolkit for YouTube transcripts, metadata, storyboards, comments, channels, and playlists.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

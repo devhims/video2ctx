@@ -278,6 +278,7 @@ Local secret placeholders are documented in [`platform/.dev.vars.example`](./pla
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID` | Platform  | Subscription checkout and webhook processing                                                         |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`                | Platform  | Stores the anonymous landing-page rolling quota                                                      |
 | `LANDING_RATE_LIMIT_SALT`                                           | Platform  | HMAC-hashes visitor IPs before they are used as Redis keys                                           |
+| `OUTBOUND_PROXY_URLS`                                              | Processor | Optional JSON array of sticky HTTP(S) proxy connections for processor slot fallback                 |
 | `OUTBOUND_PROXY_URL`                                                | Processor | Optional HTTP(S) proxy for outbound YouTube traffic                                                  |
 | `PLATFORM_API_BASE_URL`                                             | Web       | Overrides the platform origin; defaults to localhost in development and the public API in production |
 | `NEXT_PUBLIC_PLATFORM_API_BASE_URL`                                 | Web       | Browser-visible platform origin used by the anonymous landing-page inspection                        |

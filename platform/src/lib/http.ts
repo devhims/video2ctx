@@ -26,11 +26,26 @@ export function jsonError(c: Context, error: unknown): Response {
   );
 }
 
-export function safeErrorLog(error: unknown): { errorName: string; errorCode?: string } {
-  const errorName = error instanceof Error ? safeErrorName(error.name) : 'UnknownError';
-  if (!error || typeof error !== 'object' || !('code' in error)) return { errorName };
-  const errorCode = safeErrorCode(String(error.code));
-  return errorCode ? { errorName, errorCode } : { errorName };
+export function safeErrorLog(error: unknown): { errorName: string; errorCode?: string; upstreamErrorCode?: string; extractionId?: string } {
+  const result: { errorName: string; errorCode?: string; upstreamErrorCode?: string; extractionId?: string } = {
+    errorName: error instanceof Error ? safeErrorName(error.name) : 'UnknownError',
+  };
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object' && !seen.has(current); depth++) {
+    seen.add(current);
+    const code = 'code' in current && typeof current.code === 'string' ? safeErrorCode(current.code) : undefined;
+    if (code) {
+      if (depth === 0) result.errorCode = code;
+      else result.upstreamErrorCode = code;
+    }
+    if (current instanceof ApiError && current.details && typeof current.details === 'object' && 'extractionId' in current.details) {
+      const id = current.details.extractionId;
+      if (typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) result.extractionId = id;
+    }
+    current = 'cause' in current ? current.cause : undefined;
+  }
+  return result;
 }
 
 function safeErrorName(value: string): string {

@@ -186,8 +186,8 @@ function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boo
 
 function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
   // Upstream transcript error labels are not reliable proof of permanent failure.
-  // Retry across the pool within the call/time budgets, except invalid caller input.
-  if (operation.kind === 'transcript') return error.code !== 'INVALID_INPUT';
+  // Retry across the pool, except invalid input or a confirmed access restriction.
+  if (operation.kind === 'transcript') return error.code !== 'INVALID_INPUT' && error.code !== 'AUTH_REQUIRED';
   return error.retryable;
 }
 
@@ -243,6 +243,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   const attempts = maxAttempts(env);
   const deadline = AbortSignal.timeout(processorTimeoutMs(env));
   let lastFailure: unknown;
+  let upstreamFailure: YouTubeProcessorError | undefined;
   for (let index = 0; index < attempts; index += 1) {
     // Visit every configured slot before starting the next pass.
     const slot = order[index % order.length]!;
@@ -257,7 +258,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     try {
       deadline.throwIfAborted();
       const response = await abortableContainerFetch(deadline, () => processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId }, body, signal: deadline,
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId, 'x-processor-egress-slot': String(slot) }, body, signal: deadline,
       })));
       status = response.status;
       outcome = 'failed';
@@ -276,6 +277,9 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
         return result;
       }
     } catch (error) {
+      if (error instanceof YouTubeProcessorError && error.code !== 'NOT_FOUND' && error.code !== 'INVALID_INPUT') {
+        upstreamFailure = error;
+      }
       lastFailure = error;
       failureKind = extractionFailureKind(error, deadline);
       const classified = error instanceof YouTubeProcessorError;
@@ -285,7 +289,9 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       if (canRetry && !deadline.aborted) health.set(slot, Date.now() + 30_000);
       outcome = retry ? 'fallback' : classified ? 'failed' : 'transport_error';
       delay = Math.max(retryDelayMs(env, index), classified ? error.retryAfterMs : 0);
-      if (!retry && classified && !deadline.aborted) throw error;
+      if (!retry && classified && !deadline.aborted) {
+        throw operation.kind === 'transcript' && error.code === 'NOT_FOUND' && upstreamFailure ? upstreamFailure : error;
+      }
     } finally {
       if (outcome !== 'success') logProcessorAttempt(operation.kind, slot, index, status,
         outcome === 'fallback' ? 'fallback' : outcome === 'transport_error' ? 'transport-error' : 'processor-error',
