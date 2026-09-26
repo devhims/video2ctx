@@ -5,12 +5,16 @@ import { env as workerEnv } from 'cloudflare:workers';
 import { applyD1Migrations } from 'cloudflare:test';
 import type { D1Migration } from '@cloudflare/vitest-pool-workers';
 import { afterEach, describe, expect, test } from 'vitest';
+import { Hono } from 'hono';
+import type { App } from '../src/types';
+import { meterOperation } from '../src/lib/metering';
 import {
   creditBalance,
   entitlements,
   releaseCredits,
   reserveCredits,
   settleCredits,
+  settleCreditsAndReadBalance,
   type CreditEnv,
 } from '../src/lib/entitlements';
 
@@ -27,6 +31,55 @@ const env = {
 } satisfies CreditEnv;
 
 describe('credit queries on D1', () => {
+  test('a stored API read uses two credit round trips and returns the settled balance', async () => {
+    const id = 'stored-read-round-trips';
+    await createUser(id);
+    const tracked = trackRoundTrips(env.DB);
+    const app = new Hono<App>();
+    app.get('/', async c => {
+      c.set('principal', { user: { id, name: 'Reader', email: `${id}@test.example` }, method: 'session', permissions: {} });
+      return c.json(await meterOperation(c, { operation: 'video', reservedCredits: 2 }, async () => ({
+        value: { saved: true }, actualCredits: 1, cacheStatus: 'hit',
+      })));
+    });
+    const response = await app.request('/', {}, { ...env, DB: tracked.db } as Env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ saved: true });
+    expect(response.headers.get('X-Credits-Charged')).toBe('1');
+    expect(response.headers.get('X-Credits-Remaining')).toBe('999');
+    expect(tracked.calls()).toBe(2);
+    expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
+  });
+
+  test('a failed first reservation rolls back its onboarding grant too', async () => {
+    const id = 'failed-first-reservation';
+    await createUser(id);
+    await env.DB.prepare(`CREATE TRIGGER test_fail_first_reservation
+      BEFORE INSERT ON credit_ledger WHEN NEW.user_id='failed-first-reservation' AND NEW.entry_type='reserve'
+      BEGIN SELECT RAISE(ABORT, 'test reservation failure'); END`).run();
+    try {
+      await expect(reserveCredits(env, id, 'failure', 1, {})).rejects.toThrow('test reservation failure');
+      expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(0);
+      expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(0);
+    } finally {
+      await env.DB.prepare('DROP TRIGGER test_fail_first_reservation').run();
+    }
+    await reserveCredits(env, id, 'retry', 1, {});
+    expect(await creditBalance(env, id)).toBe(999);
+  });
+
+  test('settlement retries return the balance without applying a second refund', async () => {
+    const id = 'settle-and-read-retry';
+    await createUser(id);
+    await reserveCredits(env, id, 'operation', 10, {});
+    const balances = await Promise.all([
+      settleCreditsAndReadBalance(env, id, 'operation', 10, 3, 0),
+      settleCreditsAndReadBalance(env, id, 'operation', 10, 3, 0),
+    ]);
+    expect(balances).toEqual([997, 997]);
+    expect(await operationCount(id, 'operation', 'settle')).toBe(1);
+  });
+
   afterEach(async () => {
     const discrepancies = await env.DB.prepare(`
       SELECT u.id, a.available_credits, COALESCE(SUM(l.credits), 0) AS ledger_balance
@@ -305,4 +358,36 @@ async function operationCount(userId: string, operationId: string, entryType: st
      WHERE user_id=? AND operation_id=? AND entry_type=?`
   ).bind(userId, operationId, entryType).first<{ count: number }>();
   return Number(row?.count ?? 0);
+}
+
+/** Count binding round trips while running real SQL and triggers in local D1. */
+function trackRoundTrips(database: D1Database) {
+  let calls = 0;
+  const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  function statement(target: D1PreparedStatement): D1PreparedStatement {
+    const wrapped = new Proxy(target, {
+      get(inner, key) {
+        if (key === 'bind') return (...values: unknown[]) => statement(inner.bind(...values));
+        const value = Reflect.get(inner, key);
+        if (['first', 'all', 'run', 'raw'].includes(String(key))) {
+          return (...args: unknown[]) => { calls++; return value.apply(inner, args); };
+        }
+        return typeof value === 'function' ? value.bind(inner) : value;
+      },
+    });
+    originals.set(wrapped, target);
+    return wrapped;
+  }
+  const db = new Proxy(database, {
+    get(target, key) {
+      if (key === 'prepare') return (sql: string) => statement(target.prepare(sql));
+      if (key === 'batch') return (statements: D1PreparedStatement[]) => {
+        calls++;
+        return target.batch(statements.map(item => originals.get(item) ?? item));
+      };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { db, calls: () => calls };
 }

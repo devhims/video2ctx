@@ -1,4 +1,5 @@
 import { timeAgentAdmission } from '../lib/agent-admission-timing';
+import { recordDataTiming } from '../lib/data-request-timing';
 import type { Context, MiddlewareHandler } from 'hono';
 import type { App, AppUser, AuthPrincipal } from '../types';
 import { createRequestAuth } from '../lib/request-auth';
@@ -23,6 +24,18 @@ export const restrictCliSessionAuthRoutes: MiddlewareHandler<App> = async (c, ne
 };
 
 export const establishPrincipal: MiddlewareHandler<App> = async (c, next) => {
+  const startedAt = Date.now();
+  let recorded = false;
+  const record = () => {
+    if (!recorded) recordDataTiming(c, 'authentication', startedAt);
+    recorded = true;
+  };
+  try {
+    await authenticate(c, async () => { record(); await next(); });
+  } finally { record(); }
+};
+
+const authenticate: MiddlewareHandler<App> = async (c, next) => {
   c.set('principal', null);
   c.set('user', null);
 

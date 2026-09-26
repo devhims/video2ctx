@@ -25,6 +25,7 @@ export interface AppVariables {
   requestId: string;
   requestStartedAt?: number;
   agentAdmissionTimings?: Array<{ stage: string; durationMs: number }>;
+  dataRequestTimings?: Array<{ stage: string; durationMs: number }>;
 }
 
 export type App = { Bindings: Env; Variables: AppVariables };

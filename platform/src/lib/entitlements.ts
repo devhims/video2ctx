@@ -63,34 +63,39 @@ export async function enforceCount(
 }
 
 export async function creditBalance(env: CreditEnv, userId: string): Promise<number> {
-  await ensureCreditGrant(env, userId);
-  const row = await env.DB.prepare('SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?')
-    .bind(userId)
-    .first<{ balance: number }>();
-  return Number(row?.balance ?? 0);
+  const results = await env.DB.batch<{ balance: number }>([
+    onboardingGrant(env, userId), balanceStatement(env, userId),
+  ]);
+  return Number(results[1]!.results[0]?.balance ?? 0);
 }
 
 export async function ensureCreditGrant(env: CreditEnv, userId: string): Promise<void> {
-  const limits = await entitlements(env, userId);
-  if (limits.creditGrant === 'onboarding') await ensureOnboardingGrant(env, userId, limits);
+  await onboardingGrant(env, userId).run();
 }
 
-async function ensureOnboardingGrant(env: CreditEnv, userId: string, limits: Entitlements): Promise<void> {
-  await env.DB.prepare(
+function balanceStatement(env: CreditEnv, userId: string): D1PreparedStatement {
+  return env.DB.prepare('SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?').bind(userId);
+}
+
+/** Check the plan inside the grant statement so batching preserves the same policy. */
+function onboardingGrant(env: CreditEnv, userId: string): D1PreparedStatement {
+  const allowance = Number(env.STARTER_ONBOARDING_CREDITS);
+  return env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
      SELECT ?, ?, ?, 'grant',
        CASE WHEN current_balance < ? THEN ? - current_balance ELSE 0 END,
        ?, ?
      FROM (
-       SELECT available_credits AS current_balance
-       FROM credit_accounts
-       WHERE user_id = ?
+       SELECT a.available_credits AS current_balance
+       FROM credit_accounts a
+       LEFT JOIN billing_accounts b ON b.user_id = a.user_id
+       WHERE a.user_id = ? AND COALESCE(b.plan, 'starter') != 'builder'
      )`
   ).bind(
-    crypto.randomUUID(), userId, 'onboarding:v1', limits.includedCredits, limits.includedCredits,
-    JSON.stringify({ plan: limits.plan, kind: 'onboarding', allowance: limits.includedCredits }), now(), userId,
-  ).run();
+    crypto.randomUUID(), userId, 'onboarding:v1', allowance, allowance,
+    JSON.stringify({ plan: 'starter', kind: 'onboarding', allowance }), now(), userId,
+  );
 }
 
 export async function reserveCredits(
@@ -100,18 +105,18 @@ export async function reserveCredits(
   amount: number,
   metadata: Record<string, unknown>
 ): Promise<void> {
-  await ensureCreditGrant(env, userId);
   // The conditional insert and balance trigger execute as one atomic statement.
   // Check duplicates after a no-op so simultaneous retries also succeed once.
-  const result = await env.DB.prepare(
+  const reservation = env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
      SELECT ?, ?, ?, 'reserve', ?, ?, ?
      WHERE (SELECT available_credits FROM credit_accounts WHERE user_id=?) >= ?`
   ).bind(
     crypto.randomUUID(), userId, operationId, -amount, JSON.stringify(metadata), now(), userId, amount
-  ).run();
-  if (!result.meta.changes) {
+  );
+  const [, result] = await env.DB.batch([onboardingGrant(env, userId), reservation]);
+  if (!result!.meta.changes) {
     const existing = await env.DB.prepare(
       `SELECT 1 FROM credit_ledger WHERE user_id=? AND operation_id=? AND entry_type='reserve'`
     ).bind(userId, operationId).first();
@@ -129,15 +134,44 @@ export async function settleCredits(
   providerCostMicros: number,
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
+  await settlementStatement(env, userId, operationId, reserved, actual, providerCostMicros, metadata).run();
+}
+
+/** The reservation already ensured the grant. Read the balance after settlement in the same batch. */
+export async function settleCreditsAndReadBalance(
+  env: CreditEnv,
+  userId: string,
+  operationId: string,
+  reserved: number,
+  actual: number,
+  providerCostMicros: number,
+  metadata: Record<string, unknown> = {},
+): Promise<number> {
+  const results = await env.DB.batch<{ balance: number }>([
+    settlementStatement(env, userId, operationId, reserved, actual, providerCostMicros, metadata),
+    balanceStatement(env, userId),
+  ]);
+  return Number(results[1]!.results[0]?.balance ?? 0);
+}
+
+function settlementStatement(
+  env: CreditEnv,
+  userId: string,
+  operationId: string,
+  reserved: number,
+  actual: number,
+  providerCostMicros: number,
+  metadata: Record<string, unknown>,
+): D1PreparedStatement {
   const refund = Math.max(0, reserved - actual);
-  await env.DB.prepare(
+  return env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, provider_cost_micros, metadata_json, created_at)
      VALUES (?, ?, ?, 'settle', ?, ?, ?, ?)`
   ).bind(
     crypto.randomUUID(), userId, operationId, refund, providerCostMicros,
     JSON.stringify({ ...metadata, reserved, actual }), now()
-  ).run();
+  );
 }
 
 export async function releaseCredits(

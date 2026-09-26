@@ -30,6 +30,14 @@ Concurrent reservations check the balance inside their conditional insert. A
 successful reservation updates that balance before another write can spend it.
 Do not move the sufficient-funds check into a separate application read.
 
+Metered API requests send the onboarding grant check and reservation in one D1
+batch. They send settlement and the resulting balance read in a second batch.
+The grant statement checks the billing plan in SQL, so Builder accounts receive
+no Starter grant. Each batch is a transaction; a failure rolls back that batch.
+Standalone balance reads batch the grant check with their read. See
+[stored video API latency](./API_LATENCY.md) for measurements and response timing
+headers.
+
 ## Migration and rollout
 
 Apply `platform/migrations/0017_credit_accounts.sql` before deploying the updated

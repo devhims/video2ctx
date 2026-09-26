@@ -8,27 +8,39 @@ class CreditDatabase {
     this.balance = balance;
   }
 
+  async batch(statements: Array<{ all(): Promise<unknown> }>) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.all());
+    return results;
+  }
+
   prepare(sql: string) {
     return {
-      bind: (...values: unknown[]) => ({
-        first: async () => {
-          if (sql.includes('SELECT plan FROM billing_accounts')) return this.plan === 'builder' ? { plan: 'builder' } : null;
-          if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
-          return null;
-        },
-        run: async () => {
-          if (!sql.includes('INSERT OR IGNORE INTO credit_ledger')) return { meta: { changes: 0 } };
-          const operationId = String(values[2]);
-          if (this.operations.has(operationId)) return { meta: { changes: 0 } };
-          this.operations.add(operationId);
-
-          if (operationId === 'onboarding:v1') {
-            const allowance = Number(values[3]);
-            this.balance += Math.max(0, allowance - this.balance);
-          }
-          return { meta: { changes: 1 } };
-        },
-      }),
+      bind: (...values: unknown[]) => {
+        const statement = {
+          first: async () => {
+            if (sql.includes('SELECT plan FROM billing_accounts')) return this.plan === 'builder' ? { plan: 'builder' } : null;
+            if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
+            return null;
+          },
+          run: async () => {
+            if (!sql.includes('INSERT OR IGNORE INTO credit_ledger')) return { meta: { changes: 0 } };
+            const operationId = String(values[2]);
+            if (this.operations.has(operationId) || operationId === 'onboarding:v1' && this.plan === 'builder') {
+              return { meta: { changes: 0 } };
+            }
+            this.operations.add(operationId);
+            if (operationId === 'onboarding:v1') {
+              const allowance = Number(values[3]);
+              this.balance += Math.max(0, allowance - this.balance);
+            }
+            return { meta: { changes: 1 } };
+          },
+        };
+        return { ...statement, all: async () => sql.startsWith('SELECT')
+          ? { results: [await statement.first()] }
+          : { ...await statement.run(), results: [] } };
+      },
     };
   }
 }
