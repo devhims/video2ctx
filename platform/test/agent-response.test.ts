@@ -17,6 +17,14 @@ function completedRun(): AgentRunView {
 }
 
 describe('compact agent response', () => {
+  it('repairs escaped table source markers in existing answers using only validated citations', () => {
+    const run=completedRun();
+    run.result!.answer='| Test | Source |\n| --- | --- |\n| Coding | (source marker:a](source marker:b] |\n| Unknown | (source marker:evidence:unknown:ref_9] |';
+    const before=structuredClone(run);
+    expect(compactAgentRun(run).result?.answer).toBe('| Test | Source |\n| --- | --- |\n| Coding | [1] |\n| Unknown | [source unavailable] |');
+    expect(compactAgentRun(run).result?.sources).toHaveLength(1);
+    expect(run).toEqual(before);
+  });
   it('exposes stored extractions only on explicit diagnostics reads, including failed runs', () => {
     const run = completedRun();
     run.status = 'failed';

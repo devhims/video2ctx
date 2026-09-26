@@ -228,7 +228,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
         <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
         {result.warnings.filter(warning => warning.code === 'FINAL_SYNTHESIS_UNAVAILABLE').map(warning =>
           <div key={warning.code} role='alert' className='alert error'><strong>Answer incomplete</strong><p>{warning.message}</p></div>)}
-        <AgentMarkdown>{result.answer}</AgentMarkdown>
+        <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {
           const href = safeSourceUrl(source.url);
           return <li key={source.id}>{href ? <a href={href} target='_blank' rel='noreferrer'><span className='agent-source-number'>[{source.id}]</span><span>{source.title}</span><ArrowUpRightIcon size={13} aria-hidden='true' /></a> : <span>[{source.id}] {source.title}</span>}</li>;
