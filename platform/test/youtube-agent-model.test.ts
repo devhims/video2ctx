@@ -181,6 +181,37 @@ describe('YouTube agent model', () => {
     } finally { fetchMock.mockRestore(); }
   });
 
+  test.each(['low', 'medium'])('sets GLM finalizer effort to %s without changing research', async effort => {
+    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: 'test-key',
+      AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'glm-5p3-flash',
+      AGENT_FINALIZER_REASONING_EFFORT: effort } as unknown as Env;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe(FIREWORKS_GLM_MODEL_ID);
+      expect(body.reasoning_effort).toBe(effort === 'medium' ? 'high' : 'low');
+      expect(body.max_tokens).toBe(3524);
+      expect(body).not.toHaveProperty('thinking');
+      return Response.json({ id: 'test', created: 1, model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 } });
+    });
+    try {
+      await generateText({ model: createAgentModel(env, 'session', 'low', { model_role: 'finalizer' }),
+        prompt: 'Public evidence', maxOutputTokens: 2500 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(createAgentModel(env, 'session', 'low', { model_role: 'transcript_analyst' }).modelId)
+        .toBe(FIREWORKS_GLM_MODEL_ID);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test('rejects unsupported finalizer effort and applying GLM effort to DeepSeek', () => {
+    const env = { AI_GATEWAY_ID: '', FIREWORKS_API_KEY: 'test-key', AGENT_FINALIZER_PROVIDER: 'fireworks',
+      AGENT_FINALIZER_MODEL: 'glm-5p3-flash', AGENT_FINALIZER_REASONING_EFFORT: 'max' } as unknown as Env;
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'finalizer' })).toThrow(/Unsupported finalizer reasoning/);
+    Object.assign(env, { AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash', AGENT_FINALIZER_REASONING_EFFORT: 'medium' });
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'finalizer' })).toThrow(/requires GLM/);
+  });
+
   test('accounts for Priority input, cache, and output prices for both production models', () => {
     expect(fireworksModelPricing(FIREWORKS_GLM_MODEL_ID)).toEqual({
       uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625,

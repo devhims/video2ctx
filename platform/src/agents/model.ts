@@ -38,6 +38,15 @@ export function createAgentModel(
   if (useFireworks && !env.FIREWORKS_API_KEY?.trim()) throw new Error('Fireworks secret is not configured.');
   const profile = useFireworks && (isFinalizer || useTextProfile)
     ? fireworksFinalizerProfile(isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
+  const finalizerEffort = isFinalizer ? env.AGENT_FINALIZER_REASONING_EFFORT?.trim() : undefined;
+  if (finalizerEffort && !['low', 'medium'].includes(finalizerEffort)) {
+    throw new Error('Unsupported finalizer reasoning effort.');
+  }
+  if (finalizerEffort && profile?.modelId !== FIREWORKS_GLM_MODEL_ID) {
+    throw new Error('Finalizer reasoning effort requires GLM Flash.');
+  }
+  const glmFinalizerOptions = finalizerEffort
+    ? { reasoningEffort: finalizerEffort === 'medium' ? 'high' : 'low' } : undefined;
   const disableTextReasoning = !isFinalizer && profile?.modelId.startsWith('accounts/fireworks/models/deepseek-');
   const gatewayId = env.AI_GATEWAY_ID.trim();
   const model = useFireworks
@@ -63,7 +72,7 @@ export function createAgentModel(
       // reasoning to preserve the research deadline and output allowance.
       maxOutputTokens: (params.maxOutputTokens ?? 1_500) + (disableTextReasoning ? 0 : FINALIZER_THINKING_TOKENS),
       providerOptions: { ...params.providerOptions, ...profile.providerOptions,
-        fireworks: { ...(disableTextReasoning ? { reasoningEffort: 'none' } : profile.providerOptions.fireworks),
+        fireworks: { ...(glmFinalizerOptions ?? (disableTextReasoning ? { reasoningEffort: 'none' } : profile.providerOptions.fireworks)),
           ...(!isFinalizer ? { reasoningHistory: 'interleaved' } : {}),
           serviceTier: 'priority', promptCacheKey: sessionAffinity } },
     } : useFireworks ? {
