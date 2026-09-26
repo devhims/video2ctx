@@ -28,7 +28,7 @@ describe('YouTube agent model', () => {
 
   test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes %s to Fireworks GLM with native low reasoning and the unchanged research ceiling', async role => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_FINALIZER_PROVIDER: 'fireworks',
-      AGENT_FINALIZER_MODEL: 'deepseek-v4-flash-0731', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+      AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe(FIREWORKS_GLM_MODEL_ID);
@@ -51,7 +51,7 @@ describe('YouTube agent model', () => {
         output: Output.object({ schema: z.object({ visible: z.boolean() }) }), maxOutputTokens: 1600 });
       expect(workersAI.create).not.toHaveBeenCalled();
       expect(createAgentModel(env, 'test-session', 'low', { model_role: 'finalizer' }).modelId)
-        .toBe('accounts/fireworks/models/deepseek-v4-flash-0731');
+        .toBe('accounts/fireworks/models/deepseek-v4p1-flash');
     } finally { fetchMock.mockRestore(); }
   });
 
@@ -84,7 +84,7 @@ describe('YouTube agent model', () => {
     Object.assign(env, { AGENT_GLM_PROVIDER: 'unknown' });
     expect(() => createAgentModel(env, 'test')).toThrow(/Unsupported agent GLM provider/);
   });
-  test.each(['gpt-oss-120b', 'deepseek-v4-flash-0731'])('uses native settings and prices for %s', async name => {
+  test.each(['gpt-oss-120b', 'deepseek-v4p1-flash', 'deepseek-v4-flash-0731'])('uses native settings and prices for %s', async name => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'workers-ai', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     Object.assign(env, { AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: name });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
@@ -109,7 +109,7 @@ describe('YouTube agent model', () => {
         prompt: 'Public evidence', maxOutputTokens: 2500 });
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(fireworksModelPricing(`accounts/fireworks/models/${name}`)?.outputUsdPerMillionTokens)
-        .toBe(name === 'gpt-oss-120b' ? 0.72 : 0.825);
+        .toBe(name === 'gpt-oss-120b' ? 0.72 : name === 'deepseek-v4p1-flash' ? 1.5 : 0.825);
       expect(createAgentModel(env, 'session', 'low', { model_role: 'classifier' }).modelId).toBe('glm');
     } finally { fetchMock.mockRestore(); }
   });
@@ -118,8 +118,8 @@ describe('YouTube agent model', () => {
     expect(fireworksModelPricing(FIREWORKS_GLM_MODEL_ID)).toEqual({
       uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625,
     });
-    expect(fireworksModelPricing('accounts/fireworks/models/deepseek-v4-flash-0731')).toEqual({
-      uncachedInputUsdPerMillionTokens: .275, cachedInputUsdPerMillionTokens: .00875, outputUsdPerMillionTokens: .825,
+    expect(fireworksModelPricing('accounts/fireworks/models/deepseek-v4p1-flash')).toEqual({
+      uncachedInputUsdPerMillionTokens: .375, cachedInputUsdPerMillionTokens: .0075, outputUsdPerMillionTokens: 1.5,
     });
   });
 
@@ -131,7 +131,7 @@ describe('YouTube agent model', () => {
 
   test('sends native bounded thinking and a combined budget only for the Fireworks finalizer', async () => {
     const env = { AI_GATEWAY_ID: 'all-things-youtube', AGENT_GLM_PROVIDER: 'workers-ai', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
-    Object.assign(env, { AGENT_FINALIZER_PROVIDER: 'fireworks' });
+    Object.assign(env, { AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash' });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       expect(body.max_tokens).toBe(3524);
@@ -139,6 +139,7 @@ describe('YouTube agent model', () => {
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
       expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body.model).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
       expect(body.response_format.type).toBe('json_schema');
       return Response.json({ id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({

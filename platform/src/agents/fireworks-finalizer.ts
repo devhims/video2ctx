@@ -12,6 +12,11 @@ const profiles: Record<string, { modelId: string; providerOptions: ProviderOptio
     providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
     pricing: { uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625 },
   },
+  'deepseek-v4p1-flash': {
+    modelId: 'accounts/fireworks/models/deepseek-v4p1-flash',
+    providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
+    pricing: { uncachedInputUsdPerMillionTokens: .375, cachedInputUsdPerMillionTokens: .0075, outputUsdPerMillionTokens: 1.5 },
+  },
   'deepseek-v4-flash-0731': {
     modelId: 'accounts/fireworks/models/deepseek-v4-flash-0731',
     providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
