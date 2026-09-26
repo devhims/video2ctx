@@ -42,7 +42,7 @@ describe('Polar payment queries on D1', () => {
   test('preserves balances already above the Builder allowance', async () => {
     const userId = 'payment-carry-user';
     await createUser(userId);
-    await addCredits(userId, 25_000, 'test:opening-balance');
+    await addCredits(userId, 24_000, 'test:opening-balance');
 
     await applyPaidOrder(env, paidOrder(userId, 'carry-order'));
 

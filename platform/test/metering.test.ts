@@ -4,7 +4,7 @@ import { ApiError, jsonError } from '../src/lib/http';
 
 const ledger = vi.hoisted(() => ({
   reserveCredits: vi.fn(),
-  settleCredits: vi.fn(),
+  settleCreditsAndReadBalance: vi.fn(),
   releaseCredits: vi.fn(),
   creditBalance: vi.fn(),
 }));
@@ -40,7 +40,7 @@ describe('credit metering', () => {
   beforeEach(() => {
     for (const mock of Object.values(ledger)) mock.mockReset();
     ledger.reserveCredits.mockResolvedValue(undefined);
-    ledger.settleCredits.mockResolvedValue(undefined);
+    ledger.settleCreditsAndReadBalance.mockResolvedValue(99);
     ledger.releaseCredits.mockResolvedValue(undefined);
     ledger.creditBalance.mockResolvedValue(99);
   });
@@ -51,11 +51,12 @@ describe('credit metering', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('X-Credits-Charged')).toBe('1');
     expect(response.headers.get('X-Credits-Remaining')).toBe('99');
+    expect(ledger.creditBalance).not.toHaveBeenCalled();
     expect(ledger.reserveCredits).toHaveBeenCalledWith(
       expect.anything(), 'user-1', expect.any(String), 3,
       expect.objectContaining({ operation: 'video', authMethod: 'api-key', apiKeyId: 'key-1', requestId: 'request-1' }),
     );
-    expect(ledger.settleCredits).toHaveBeenCalledWith(
+    expect(ledger.settleCreditsAndReadBalance).toHaveBeenCalledWith(
       expect.anything(), 'user-1', expect.any(String), 3, 1, 0,
       expect.objectContaining({ cacheStatus: 'hit', operation: 'video' }),
     );
@@ -64,7 +65,7 @@ describe('credit metering', () => {
   test('releases a reservation when the operation fails', async () => {
     const response = await testApp.request('/failure', {}, {} as Env);
     expect(response.status).toBe(502);
-    expect(ledger.settleCredits).not.toHaveBeenCalled();
+    expect(ledger.settleCreditsAndReadBalance).not.toHaveBeenCalled();
     expect(ledger.releaseCredits).toHaveBeenCalledWith(
       expect.anything(), 'user-1', expect.any(String), 3,
       expect.objectContaining({ outcome: 'failed', operation: 'video' }),

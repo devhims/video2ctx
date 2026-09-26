@@ -4,8 +4,35 @@ import { Hono } from 'hono';
 import type { App } from '../src/types';
 import { app } from '../src/index';
 import { requestContext } from '../src/middlewares/request-context';
+import { timeDataRequest } from '../src/lib/data-request-timing';
 
 describe('request middleware', () => {
+  test('video reads expose stage durations without query strings or payloads', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const middlewareApp = new Hono<App>();
+      middlewareApp.use('*', requestContext);
+      middlewareApp.get('/v1/providers/youtube/videos/:id', async c => c.json(
+        await timeDataRequest(c, 'data_read', async () => ({ title: 'private-test-payload' })),
+      ));
+      const response = await middlewareApp.request('/v1/providers/youtube/videos/abcdefghijk?secret=query-secret', {
+        headers: { authorization: 'Bearer credential-secret' },
+      }, {} as Env);
+      expect(response.headers.get('Server-Timing')).toMatch(/^data_read;dur=\d+, total;dur=\d+$/);
+      const output = JSON.stringify(log.mock.calls);
+      expect(output).toContain('dataTimings');
+      for (const secret of ['private-test-payload', 'query-secret', 'credential-secret']) expect(output).not.toContain(secret);
+    } finally { log.mockRestore(); }
+  });
+
+  test('failed video authentication still reports its duration', async () => {
+    const response = await app.request('/v1/providers/youtube/videos/abcdefghijk', {}, {
+      APP_ORIGIN: 'https://app.example.com',
+    } as unknown as Env);
+    expect(response.status).toBe(401);
+    expect(response.headers.get('Server-Timing')).toMatch(/^authentication;dur=\d+, total;dur=\d+$/);
+  });
+
   test('allows app-origin API-key preflights and exposes credit headers', async () => {
     const response = await app.request('/v1/search', {
       method: 'OPTIONS',

@@ -1,8 +1,9 @@
 import type { Context } from 'hono';
 import type { App } from '../types';
 import { ApiError } from './http';
-import { creditBalance, releaseCredits, reserveCredits, settleCredits } from './entitlements';
+import { creditBalance, releaseCredits, reserveCredits, settleCreditsAndReadBalance } from './entitlements';
 import { requirePrincipal } from '../middlewares/authentication';
+import { timeDataRequest } from './data-request-timing';
 
 export const CREDIT_COSTS = {
   free: 0,
@@ -82,7 +83,7 @@ export async function meterOperation<T>(
 
   if (options.reservedCredits > 0) {
     try {
-      await reserveCredits(c.env, principal.user.id, operationId, options.reservedCredits, commonMetadata);
+      await timeDataRequest(c, 'credit_reserve', () => reserveCredits(c.env, principal.user.id, operationId, options.reservedCredits, commonMetadata));
     } catch (error) {
       if (error instanceof ApiError && error.status === 402) {
         c.header('X-Credits-Charged', '0');
@@ -94,7 +95,7 @@ export async function meterOperation<T>(
 
   let result: CreditWork<T>;
   try {
-    result = await work();
+    result = await timeDataRequest(c, 'data_read', work);
   } catch (error) {
     if (options.reservedCredits > 0) {
       await releaseCredits(c.env, principal.user.id, operationId, options.reservedCredits, {
@@ -115,8 +116,8 @@ export async function meterOperation<T>(
     throw new ApiError(500, 'METERING_CONFIGURATION_ERROR', 'This operation could not be metered.');
   }
 
-  if (options.reservedCredits > 0) {
-    await settleCredits(
+  const remaining = options.reservedCredits > 0
+    ? await timeDataRequest(c, 'credit_settle', () => settleCreditsAndReadBalance(
       c.env,
       principal.user.id,
       operationId,
@@ -124,10 +125,8 @@ export async function meterOperation<T>(
       result.actualCredits,
       options.providerCostMicros ?? 0,
       { ...commonMetadata, cacheStatus: result.cacheStatus },
-    );
-  }
-
-  const remaining = await creditBalance(c.env, principal.user.id);
+    ))
+    : await timeDataRequest(c, 'credit_balance', () => creditBalance(c.env, principal.user.id));
   c.header('X-Credits-Charged', String(result.actualCredits));
   c.header('X-Credits-Remaining', String(remaining));
   return result.value;

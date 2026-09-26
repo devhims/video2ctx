@@ -18,17 +18,27 @@ sequenceDiagram
     autonumber
     participant App as Platform Worker
     participant DB as D1
+    App->>DB: Create user at signup
+    Note over DB: Create balance row and grant 1,000 credits atomically
+    DB-->>App: Account ready
     App->>DB: Insert reservation if stored balance covers cost
     Note over DB: Insert ledger entry and trigger balance deduction<br/>Commit both or roll back both
     DB-->>App: Inserted, duplicate, or insufficient credits
-    App->>DB: Insert settlement or release
+    App->>DB: Batch settlement and balance read
     Note over DB: Refund unused credits through the same trigger
-    DB-->>App: Return stored balance on subsequent read
+    DB-->>App: Return settled balance
 ```
 
 Concurrent reservations check the balance inside their conditional insert. A
 successful reservation updates that balance before another write can spend it.
 Do not move the sufficient-funds check into a separate application read.
+
+Metered API requests reserve credits in one D1 call. Settlement and the resulting
+balance read share a second D1 batch, so the remaining-balance header adds no
+network round trip. Normal API and agent credit operations do not read the
+billing plan or attempt onboarding grants. A standalone balance read is one
+SELECT with no writes. See [stored video API latency](./API_LATENCY.md) for
+measurements and response timing headers.
 
 ## Migration and rollout
 
@@ -44,9 +54,24 @@ ledger writes also fire the triggers. A Worker rollback should retain the new
 table and triggers. Preview and production migration/deployment scope must be
 confirmed before changing shared state.
 
-Onboarding, Builder top-ups, refund resets, and credit prices retain their
-existing behavior. New users start with a zero balance row; the existing lazy
-onboarding grant still supplies Starter credits on the first credit check.
+Apply `platform/migrations/0018_signup_credit_grant.sql` before deploying the
+Worker that removes lazy grants. The standard `deploy:production` command runs
+account migrations first. New user creation, the balance row, and the 1,000-credit
+signup grant commit together. A grant failure rolls back signup so it can retry;
+an account cannot be created successfully without its grant.
+
+Migration 0018 also grants credits once to older Starter accounts that have no
+`onboarding:v1` grant. It fills their balance to 1,000, preserves higher balances,
+and skips Builder accounts. Already granted accounts are not refilled, even if
+they have spent their allowance. Existing adjustments count toward this one-time
+catch-up. The unique ledger operation prevents an old Worker from granting twice
+during rollout. Retain the trigger on Worker rollback.
+
+The SQL trigger uses the current 1,000-credit signup policy. Future allowance
+changes must update the trigger in a new migration and update
+`STARTER_ONBOARDING_CREDITS` together; changing the environment variable alone
+only affects entitlement display and refund policy. Builder top-ups, refund
+resets, and per-operation credit prices are unchanged.
 
 ## Manual credits
 
@@ -68,8 +93,7 @@ ON CONFLICT(user_id, operation_id, entry_type) DO NOTHING;
 ```
 
 Only insert this row. The trigger adds 10,000 to the account balance atomically.
-An adjustment before a Starter user's first onboarding grant counts toward
-their onboarding allowance, as it did before this migration.
+New users already have their signup grant before any manual adjustment.
 
 ## Reconciliation
 
