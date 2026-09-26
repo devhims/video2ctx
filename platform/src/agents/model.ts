@@ -38,6 +38,7 @@ export function createAgentModel(
   if (useFireworks && !env.FIREWORKS_API_KEY?.trim()) throw new Error('Fireworks secret is not configured.');
   const profile = useFireworks && (isFinalizer || useTextProfile)
     ? fireworksFinalizerProfile(isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
+  const disableTextReasoning = !isFinalizer && profile?.modelId.startsWith('accounts/fireworks/models/deepseek-');
   const gatewayId = env.AI_GATEWAY_ID.trim();
   const model = useFireworks
     ? createFireworks({ apiKey: env.FIREWORKS_API_KEY })(profile?.modelId ?? FIREWORKS_GLM_MODEL_ID)
@@ -57,13 +58,12 @@ export function createAgentModel(
     specificationVersion: 'v4',
     transformParams: async ({ params }) => profile ? {
       ...params,
-      // Fireworks counts reasoning inside max_tokens. Callers select the answer
-      // allowance; the provider adds reasoning headroom. GLM/DeepSeek have an
-      // explicit thinking budget; GPT-OSS uses its native low reasoning effort.
-      // Text roles share these settings without changing vision requests.
-      maxOutputTokens: (params.maxOutputTokens ?? 1_500) + FINALIZER_THINKING_TOKENS,
+      // Fireworks counts reasoning inside max_tokens. Reserve headroom only
+      // for profiles that reason. DeepSeek extraction and planning disable
+      // reasoning to preserve the research deadline and output allowance.
+      maxOutputTokens: (params.maxOutputTokens ?? 1_500) + (disableTextReasoning ? 0 : FINALIZER_THINKING_TOKENS),
       providerOptions: { ...params.providerOptions, ...profile.providerOptions,
-        fireworks: { ...profile.providerOptions.fireworks,
+        fireworks: { ...(disableTextReasoning ? { reasoningEffort: 'none' } : profile.providerOptions.fireworks),
           ...(!isFinalizer ? { reasoningHistory: 'interleaved' } : {}),
           serviceTier: 'priority', promptCacheKey: sessionAffinity } },
     } : useFireworks ? {

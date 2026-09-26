@@ -62,7 +62,7 @@ describe('YouTube agent model', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe(visual ? FIREWORKS_GLM_MODEL_ID : 'accounts/fireworks/models/deepseek-v4p1-flash');
-      expect(body.max_tokens).toBe(visual ? 1600 : 2624);
+      expect(body.max_tokens).toBe(1600);
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
       expect(body.reasoning_history).toBe('interleaved');
@@ -72,8 +72,8 @@ describe('YouTube agent model', () => {
         expect(body).not.toHaveProperty('thinking');
         expect(body.messages.some((m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))).toBe(true);
       } else {
-        expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
-        expect(body).not.toHaveProperty('reasoning_effort');
+        expect(body.reasoning_effort).toBe('none');
+        expect(body).not.toHaveProperty('thinking');
         expect(JSON.stringify(body.messages)).not.toContain('image_url');
       }
       return Response.json({ id: 'test', created: 1, model: body.model,
@@ -86,6 +86,25 @@ describe('YouTube agent model', () => {
           ? [{ type: 'text', text: 'Inspect this frame.' }, { type: 'file', data: '/9j/2Q==', mediaType: 'image/jpeg' }]
           : [{ type: 'text', text: 'Analyze the supplied text.' }] }],
         output: Output.object({ schema: z.object({ supported: z.boolean() }) }), maxOutputTokens: 1600 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test('retains the native low reasoning profile for GPT-OSS text roles', async () => {
+    const env = { AI_GATEWAY_ID: '', AGENT_TEXT_MODEL: 'gpt-oss-120b', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe('accounts/fireworks/models/gpt-oss-120b');
+      expect(body.reasoning_effort).toBe('low');
+      expect(body.max_tokens).toBe(2624);
+      expect(body).not.toHaveProperty('thinking');
+      return Response.json({ id: 'test', created: 1, model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
+    });
+    try {
+      await generateText({ model: createAgentModel(env, 'session', 'low', { model_role: 'transcript_analyst' }),
+        prompt: 'Public evidence', maxOutputTokens: 1600 });
       expect(fetchMock).toHaveBeenCalledOnce();
     } finally { fetchMock.mockRestore(); }
   });
