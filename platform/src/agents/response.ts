@@ -76,7 +76,11 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   const sourceIds = new Map<string, string>();
   const evidenceIds = new Map<string, string>();
   // Replace a contiguous group together so several excerpts from one video become one reference.
-  const answer = result.answer.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
+  // Earlier formatters escaped model-written table citations into visible IDs.
+  // Restore only citations already validated for this stored answer.
+  const displayAnswer = result.answer.replace(/\(source marker:([^\]]+)\]/g,
+    (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]');
+  const answer = displayAnswer.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
     const refs = new Set<string>();
     for (const match of group.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)) {
       const citation = citations.get(match[1]!);

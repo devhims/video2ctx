@@ -11,7 +11,7 @@ const fields = finalizeAnswerInputSchema.omit({ answer: true, citations: true, i
 const block = z.object({
   // The SDK bounds generation tokens and the rendered contract bounds total
   // characters. A decoding limit on each paragraph can split words at its edge.
-  text: z.string().trim().min(1).describe('One complete paragraph or list item. End at a natural sentence boundary; never continue a sentence in the next block.'),
+  text: z.string().trim().min(1).describe('One complete paragraph, list item, or Markdown table. Finish the table within this block. End prose at a natural sentence boundary; never continue a sentence in the next block.'),
   evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(12),
 });
 // Executable routes require references in the transmitted JSON schema itself.
@@ -57,11 +57,12 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
     return [block.text
       .replace(/【ref_\d*】?|\[ref_\d*\]?/g, '')
       .replace(/\[cite:[^\]]*\]?/g, '')
+      .replace(/\(source marker:[^\]]*\]?/g, '')
       .trim()];
   }).filter(Boolean).join('\n\n').slice(0, 20_000);
 }
 
-export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>): FinalizeAnswerInput {
+export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
   assertCoherentAnswerBlocks(input);
@@ -72,11 +73,23 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     warnings: input.warnings.map(warning => ({ ...warning, code: warning.code === 'ANSWER_SCOPE_SHORTFALL' ? 'PARTIAL_EVIDENCE' : warning.code })),
     citations: [],
     answer: input.blocks.map(block => {
-      // Only application-owned references may create citation markers.
+      const declared = new Set(block.evidenceIds);
+      const placed = new Set<string>();
+      // Inline placement can position only references declared for this block.
+      // Persisted evidence validation still owns whether those IDs are valid.
       const text = block.text
         .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
-        .replace(/\[cite:/g, '(source marker:');
-      return `${text} ${[...new Set(block.evidenceIds)].map(id => `[cite:${id}]`).join(' ')}`.trim();
+        .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
+          const rawId = inlineId ?? escapedId!;
+          const id = aliases.get(rawId) ?? rawId;
+          if (!declared.has(id)) return '[source unavailable]';
+          placed.add(id);
+          return `[cite:${id}]`;
+        });
+      const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
+      // Appending text to the final table row would create an extra cell.
+      const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
+      return remaining ? `${text}${separator}${remaining}`.trim() : text.trim();
     }).join('\n\n'),
   });
 }

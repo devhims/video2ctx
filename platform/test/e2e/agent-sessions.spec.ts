@@ -260,7 +260,7 @@ test('single composer grows with text, preserves newlines and composition, and s
 test('answers render readable Markdown, block unsafe content, and fit the mobile composer', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  const answer = '## What the video shows\n\nThe speaker prefers **Fable for coding**, with a few caveats. [1]\n\n- Fable is useful for refining interactions.\n- Astra helps with initial prototypes.\n\n| Task | Suggested approach |\n| --- | --- |\n| Prototyping | Start with Astra |\n| Refinement | Use Fable |\n\n[Watch the video](https://www.youtube.com/watch?v=P7bxbDSnZRM)\n\n[Unsafe link](javascript:alert(1))\n\n![Remote image](https://example.test/tracking.png)\n\n<script>alert(1)</script>';
+  const answer = '## What the video shows\n\nThe speaker prefers **Fable for coding**, with a few caveats. [1]\n\n- Fable is useful for refining interactions.\n- Astra helps with initial prototypes.\n\n| Task | Suggested approach | Source |\n| --- | --- | --- |\n| Prototyping | Start with Astra | [1] |\n| Refinement | Use Fable | [1] |\n\n[Watch the video](https://www.youtube.com/watch?v=P7bxbDSnZRM)\n\n[Unsafe link](javascript:alert(1))\n\n![Remote image](https://example.test/tracking.png)\n\n<script>alert(1)</script>';
   const imageRequests: string[] = [];
   page.on('request', request => { if (request.url().includes('example.test/tracking.png')) imageRequests.push(request.url()); });
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
@@ -272,6 +272,10 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown strong')).toHaveText('Fable for coding');
   await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown > ul')).toHaveCSS('list-style-type', 'disc');
   await expect(page.getByRole('table')).toContainText('Refinement');
+  await expect(page.getByRole('table').getByRole('link', {name:'[1]'})).toHaveCount(2);
+  await expect(page.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('href','https://www.youtube.com/watch?v=P7bxbDSnZRM');
+  await expect(page.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('title','Source 1: Fable Vs Astra Debate Is Over');
+  await page.getByRole('table').screenshot({path:testInfo.outputPath('source-table.png')});
   await expect(page.getByRole('link', { name: 'Watch the video' })).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('link', { name: 'Unsafe link' })).toHaveCount(0);
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);

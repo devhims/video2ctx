@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { renderPartialAnswer, renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, assertRequestedNumberedItems } from '../src/agents/structured-answer';
+import { compactAgentResult } from '../src/agents/response';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -19,10 +20,33 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('keeps validated row citations inside a comparison table without leaking evidence IDs', () => {
+    const table='| Test | Result | Source |\n| --- | --- | --- |\n| Coding | Supported result | [cite:ref_1] |';
+    const input=renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_1','e1']]));
+    const result=buildAgentTurnResult({runId:crypto.randomUUID(),conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
+      {userId:'test',creditsRemaining:10},input,[packet],1);
+    const compact=compactAgentResult(result);
+    expect(compact.answer).toBe(table.replace('[cite:ref_1]','[1]'));
+    expect(compact.sources).toHaveLength(1);
+    expect(compact.answer).not.toContain('source marker:');
+  });
+  it('places remaining table references below the table instead of adding a trailing cell', () => {
+    const table='| Test | Result |\n| --- | --- |\n| Coding | Supported result |';
+    expect(renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]}).answer)
+      .toBe(`${table}\n\nSources: [cite:e1]`);
+  });
+  it('does not allow inline aliases to cite evidence undeclared for the block', () => {
+    const table='| Test | Source |\n| --- | --- |\n| Coding | [cite:ref_2] |';
+    const input=renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','invented']]));
+    expect(input.answer).toContain('| Coding | [source unavailable] |');
+    expect(input.answer).not.toContain('invented');
+    expect(input.answer).not.toContain('ref_2');
+    expect(input.answer).toContain('[cite:e1]');
+  });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
       { text: 'First draft [cite:ref_1]' },
-      { text: 'Second draft 【ref_2】' },
+      { text: 'Second draft 【ref_2】(source marker:evidence:private:ref_3]' },
     ] })).toBe('First draft\n\nSecond draft');
     expect(renderPartialAnswer({ blocks: [{ text: 'x'.repeat(25_000) }] })).toHaveLength(20_000);
   });
