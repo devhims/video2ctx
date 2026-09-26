@@ -48,24 +48,41 @@ describe('credit queries on D1', () => {
     expect(response.headers.get('X-Credits-Charged')).toBe('1');
     expect(response.headers.get('X-Credits-Remaining')).toBe('999');
     expect(tracked.calls()).toBe(2);
+    expect(tracked.queries.join(' ')).not.toContain('billing_accounts');
+    expect(tracked.queries.join(' ')).not.toContain("'grant'");
     expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
   });
 
-  test('a failed first reservation rolls back its onboarding grant too', async () => {
-    const id = 'failed-first-reservation';
+  test('signup grants credits before any API operation and repeated reads never regrant them', async () => {
+    const id = 'signup-grant';
     await createUser(id);
-    await env.DB.prepare(`CREATE TRIGGER test_fail_first_reservation
-      BEFORE INSERT ON credit_ledger WHEN NEW.user_id='failed-first-reservation' AND NEW.entry_type='reserve'
-      BEGIN SELECT RAISE(ABORT, 'test reservation failure'); END`).run();
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(1000);
+    expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
+    await addCredits(id, -1000, 'spend-signup-credits');
+    const tracked = trackRoundTrips(env.DB);
+    expect(await creditBalance({ ...env, DB: tracked.db }, id)).toBe(0);
+    expect(tracked.calls()).toBe(1);
+    await expect(reserveCredits(env, id, 'empty-account', 1, {})).rejects.toMatchObject({ status: 402 });
+    await expect(reserveAgentCredits(env, id, 'empty-agent')).rejects.toMatchObject({ status: 402 });
+    expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
+    expect(await creditBalance(env, id)).toBe(0);
+  });
+
+  test('a failed signup grant rolls back the user and can be retried', async () => {
+    const id = 'failed-signup-grant';
+    await env.DB.prepare(`CREATE TRIGGER test_fail_signup_grant
+      BEFORE INSERT ON credit_ledger WHEN NEW.user_id='failed-signup-grant' AND NEW.entry_type='grant'
+      BEGIN SELECT RAISE(ABORT, 'test signup grant failure'); END`).run();
     try {
-      await expect(reserveCredits(env, id, 'failure', 1, {})).rejects.toThrow('test reservation failure');
-      expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(0);
-      expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(0);
+      await expect(createUser(id)).rejects.toThrow('test signup grant failure');
+      expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(id).first()).toBeNull();
+      expect(await env.DB.prepare('SELECT user_id FROM credit_accounts WHERE user_id=?').bind(id).first()).toBeNull();
     } finally {
-      await env.DB.prepare('DROP TRIGGER test_fail_first_reservation').run();
+      await env.DB.prepare('DROP TRIGGER test_fail_signup_grant').run();
     }
-    await reserveCredits(env, id, 'retry', 1, {});
-    expect(await creditBalance(env, id)).toBe(999);
+    await createUser(id);
+    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
   });
 
   test('settlement retries return the balance without applying a second refund', async () => {
@@ -112,7 +129,7 @@ describe('credit queries on D1', () => {
       ('adjustment','negative','legacy','adjustment',-5,0)`
     ).run();
     const before = await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all();
-    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS.slice(0, migrationIndex + 1));
     expect((await db.prepare('SELECT * FROM credit_accounts ORDER BY user_id').all()).results).toEqual([
       { user_id: 'empty', available_credits: 0 },
       { user_id: 'historical', available_credits: 978 },
@@ -122,6 +139,50 @@ describe('credit queries on D1', () => {
     await settleAgentCredits({ ...env, DB: db }, 'historical', 'unreserved-cancel', 0, 0);
     await settleCredits({ ...env, DB: db }, 'historical', 'in-progress', 22, 3, 0);
     expect(await creditBalance({ ...env, DB: db }, 'historical')).toBe(997);
+  });
+
+  test('signup migration grants only eligible historical accounts and never refills spent grants', async () => {
+    const migrationEnv = workerEnv as typeof workerEnv & {
+      CREDIT_MIGRATION_DB: D1Database;
+      TEST_MIGRATIONS: D1Migration[];
+    };
+    const db = migrationEnv.CREDIT_MIGRATION_DB;
+    const index = migrationEnv.TEST_MIGRATIONS.findIndex(m => m.name === '0018_signup_credit_grant.sql');
+    expect(index).toBeGreaterThan(0);
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS.slice(0, index));
+    // The migration database is shared with the preceding historical-balance test.
+    await db.prepare('DELETE FROM user').run();
+    for (const id of ['empty', 'partial', 'higher', 'spent', 'builder']) {
+      await db.prepare('INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?,?,?,0,0)')
+        .bind(id, id, `${id}@signup-migration.test`).run();
+    }
+    await db.prepare(`INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at) VALUES
+      ('partial','partial','adjustment','adjustment',96,0),
+      ('higher','higher','adjustment','adjustment',1500,0),
+      ('spent-grant','spent','onboarding:v1','grant',1000,0),
+      ('spent-use','spent','use','adjustment',-1000,0),
+      ('builder','builder','adjustment','adjustment',400,0)`).run();
+    await db.prepare(`INSERT INTO billing_accounts (user_id,plan,provider_updated_at,updated_at)
+      VALUES ('builder','builder',0,0)`).run();
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
+    expect((await db.prepare('SELECT * FROM credit_accounts ORDER BY user_id').all()).results).toEqual([
+      { user_id: 'builder', available_credits: 400 },
+      { user_id: 'empty', available_credits: 1000 },
+      { user_id: 'higher', available_credits: 1500 },
+      { user_id: 'partial', available_credits: 1000 },
+      { user_id: 'spent', available_credits: 0 },
+    ]);
+    expect((await db.prepare("SELECT user_id,credits FROM credit_ledger WHERE operation_id='onboarding:v1' ORDER BY user_id").all()).results).toEqual([
+      { user_id: 'empty', credits: 1000 },
+      { user_id: 'higher', credits: 0 },
+      { user_id: 'partial', credits: 904 },
+      { user_id: 'spent', credits: 1000 },
+    ]);
+    await reserveCredits({ ...env, DB: db }, 'empty', 'spend', 1000, {});
+    const before = await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all();
+    await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
+    expect((await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all()).results).toEqual(before.results);
+    expect(await creditBalance({ ...env, DB: db }, 'empty')).toBe(0);
   });
 
   test('manual grants update the stored balance once even when retried concurrently', async () => {
@@ -142,7 +203,7 @@ describe('credit queries on D1', () => {
     const id = 'data-parallel-balance';
     await createUser(id);
     await setBuilderPlan(id);
-    await addCredits(id, 10, 'opening');
+    await addCredits(id, -990, 'opening');
     const attempts = await Promise.allSettled([
       reserveCredits(env, id, 'request-a', 7, {}),
       reserveCredits(env, id, 'request-b', 7, {}),
@@ -207,6 +268,8 @@ describe('credit queries on D1', () => {
     await createUser(other);
     await setBuilderPlan(id);
     await setBuilderPlan(other);
+    // Isolate maintenance behavior from signup grants in these two fixtures.
+    await env.DB.prepare('DELETE FROM credit_ledger WHERE user_id IN (?,?)').bind(id, other).run();
     await addCredits(id, 100, 'maintenance');
     await env.DB.prepare('UPDATE credit_ledger SET credits=250 WHERE user_id=?').bind(id).run();
     expect(await creditBalance(env, id)).toBe(250);
@@ -229,7 +292,7 @@ describe('credit queries on D1', () => {
     ) INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at)
       SELECT 'history-' || n, ?, 'history-' || n, 'adjustment', 1, 0 FROM entries`).bind(id).run();
     const result = await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).all();
-    expect(result.results).toEqual([{ available_credits: 1000 }]);
+    expect(result.results).toEqual([{ available_credits: 2000 }]);
     expect(result.meta.rows_read).toBeLessThanOrEqual(3);
   });
 
@@ -258,7 +321,7 @@ describe('credit queries on D1', () => {
     const id = 'agent-parallel-balance';
     await createUser(id);
     await setBuilderPlan(id);
-    await addCredits(id, AGENT_CREDIT_RESERVE, 'test:agent-funds');
+    await addCredits(id, AGENT_CREDIT_RESERVE - 1000, 'test:agent-funds');
     const attempts = await Promise.allSettled([
       reserveAgentCredits(env, id, 'run-a'), reserveAgentCredits(env, id, 'run-b'),
     ]);
@@ -278,18 +341,18 @@ describe('credit queries on D1', () => {
     await expect(operationCount(userId, 'onboarding:v1', 'grant')).resolves.toBe(1);
   });
 
-  test('tops a pre-existing Starter balance up to the onboarding allowance', async () => {
+  test('reads preserve adjustments instead of topping the account back up', async () => {
     const userId = 'payment-legacy-credit-user';
     await createUser(userId);
-    await addCredits(userId, 96, 'test:legacy-balance');
+    await addCredits(userId, -904, 'test:remaining-balance');
 
-    await expect(creditBalance(env, userId)).resolves.toBe(1_000);
+    await expect(creditBalance(env, userId)).resolves.toBe(96);
   });
 
   test('does not grant Builder credits outside a paid-order webhook', async () => {
     const userId = 'payment-builder-credit-user';
     await createUser(userId);
-    await addCredits(userId, 400, 'test:builder-balance');
+    await addCredits(userId, -600, 'test:builder-balance');
     await setBuilderPlan(userId);
 
     await expect(entitlements(env, userId)).resolves.toMatchObject({
@@ -363,6 +426,7 @@ async function operationCount(userId: string, operationId: string, entryType: st
 /** Count binding round trips while running real SQL and triggers in local D1. */
 function trackRoundTrips(database: D1Database) {
   let calls = 0;
+  const queries: string[] = [];
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
   function statement(target: D1PreparedStatement): D1PreparedStatement {
     const wrapped = new Proxy(target, {
@@ -380,7 +444,7 @@ function trackRoundTrips(database: D1Database) {
   }
   const db = new Proxy(database, {
     get(target, key) {
-      if (key === 'prepare') return (sql: string) => statement(target.prepare(sql));
+      if (key === 'prepare') return (sql: string) => { queries.push(sql); return statement(target.prepare(sql)); };
       if (key === 'batch') return (statements: D1PreparedStatement[]) => {
         calls++;
         return target.batch(statements.map(item => originals.get(item) ?? item));
@@ -389,5 +453,5 @@ function trackRoundTrips(database: D1Database) {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  return { db, calls: () => calls };
+  return { db, queries, calls: () => calls };
 }

@@ -62,40 +62,14 @@ export async function enforceCount(
   }
 }
 
+/** Reading a balance never grants credits. Signup and payment events own grants. */
 export async function creditBalance(env: CreditEnv, userId: string): Promise<number> {
-  const results = await env.DB.batch<{ balance: number }>([
-    onboardingGrant(env, userId), balanceStatement(env, userId),
-  ]);
-  return Number(results[1]!.results[0]?.balance ?? 0);
-}
-
-export async function ensureCreditGrant(env: CreditEnv, userId: string): Promise<void> {
-  await onboardingGrant(env, userId).run();
+  const row = await balanceStatement(env, userId).first<{ balance: number }>();
+  return Number(row?.balance ?? 0);
 }
 
 function balanceStatement(env: CreditEnv, userId: string): D1PreparedStatement {
   return env.DB.prepare('SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?').bind(userId);
-}
-
-/** Check the plan inside the grant statement so batching preserves the same policy. */
-function onboardingGrant(env: CreditEnv, userId: string): D1PreparedStatement {
-  const allowance = Number(env.STARTER_ONBOARDING_CREDITS);
-  return env.DB.prepare(
-    `INSERT OR IGNORE INTO credit_ledger
-     (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
-     SELECT ?, ?, ?, 'grant',
-       CASE WHEN current_balance < ? THEN ? - current_balance ELSE 0 END,
-       ?, ?
-     FROM (
-       SELECT a.available_credits AS current_balance
-       FROM credit_accounts a
-       LEFT JOIN billing_accounts b ON b.user_id = a.user_id
-       WHERE a.user_id = ? AND COALESCE(b.plan, 'starter') != 'builder'
-     )`
-  ).bind(
-    crypto.randomUUID(), userId, 'onboarding:v1', allowance, allowance,
-    JSON.stringify({ plan: 'starter', kind: 'onboarding', allowance }), now(), userId,
-  );
 }
 
 export async function reserveCredits(
@@ -107,16 +81,15 @@ export async function reserveCredits(
 ): Promise<void> {
   // The conditional insert and balance trigger execute as one atomic statement.
   // Check duplicates after a no-op so simultaneous retries also succeed once.
-  const reservation = env.DB.prepare(
+  const result = await env.DB.prepare(
     `INSERT OR IGNORE INTO credit_ledger
      (id, user_id, operation_id, entry_type, credits, metadata_json, created_at)
      SELECT ?, ?, ?, 'reserve', ?, ?, ?
      WHERE (SELECT available_credits FROM credit_accounts WHERE user_id=?) >= ?`
   ).bind(
     crypto.randomUUID(), userId, operationId, -amount, JSON.stringify(metadata), now(), userId, amount
-  );
-  const [, result] = await env.DB.batch([onboardingGrant(env, userId), reservation]);
-  if (!result!.meta.changes) {
+  ).run();
+  if (!result.meta.changes) {
     const existing = await env.DB.prepare(
       `SELECT 1 FROM credit_ledger WHERE user_id=? AND operation_id=? AND entry_type='reserve'`
     ).bind(userId, operationId).first();
@@ -137,7 +110,7 @@ export async function settleCredits(
   await settlementStatement(env, userId, operationId, reserved, actual, providerCostMicros, metadata).run();
 }
 
-/** The reservation already ensured the grant. Read the balance after settlement in the same batch. */
+/** Read the balance after settlement in the same database round trip. */
 export async function settleCreditsAndReadBalance(
   env: CreditEnv,
   userId: string,

@@ -1,47 +1,15 @@
 import { creditBalance, entitlements } from '../src/lib/entitlements';
 
 class CreditDatabase {
-  balance: number;
-  readonly operations = new Set<string>();
-
-  constructor(balance = 0, readonly plan: 'starter' | 'builder' = 'starter') {
-    this.balance = balance;
-  }
-
-  async batch(statements: Array<{ all(): Promise<unknown> }>) {
-    const results = [];
-    for (const statement of statements) results.push(await statement.all());
-    return results;
-  }
-
+  readonly queries: string[] = [];
+  constructor(readonly balance = 0, readonly plan: 'starter' | 'builder' = 'starter') {}
   prepare(sql: string) {
-    return {
-      bind: (...values: unknown[]) => {
-        const statement = {
-          first: async () => {
-            if (sql.includes('SELECT plan FROM billing_accounts')) return this.plan === 'builder' ? { plan: 'builder' } : null;
-            if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
-            return null;
-          },
-          run: async () => {
-            if (!sql.includes('INSERT OR IGNORE INTO credit_ledger')) return { meta: { changes: 0 } };
-            const operationId = String(values[2]);
-            if (this.operations.has(operationId) || operationId === 'onboarding:v1' && this.plan === 'builder') {
-              return { meta: { changes: 0 } };
-            }
-            this.operations.add(operationId);
-            if (operationId === 'onboarding:v1') {
-              const allowance = Number(values[3]);
-              this.balance += Math.max(0, allowance - this.balance);
-            }
-            return { meta: { changes: 1 } };
-          },
-        };
-        return { ...statement, all: async () => sql.startsWith('SELECT')
-          ? { results: [await statement.first()] }
-          : { ...await statement.run(), results: [] } };
-      },
-    };
+    this.queries.push(sql);
+    return { bind: () => ({ first: async () => {
+      if (sql.includes('SELECT plan FROM billing_accounts')) return { plan: this.plan };
+      if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
+      throw new Error('Unexpected credit query');
+    } }) };
   }
 }
 
@@ -76,26 +44,16 @@ describe('credit entitlements', () => {
     });
   });
 
-  test('grants a new Starter account exactly 1,000 credits once', async () => {
-    const database = new CreditDatabase();
-    const env = environment(database);
-
-    await expect(creditBalance(env, 'user-1')).resolves.toBe(1000);
-    await expect(creditBalance(env, 'user-1')).resolves.toBe(1000);
-    expect([...database.operations]).toEqual(['onboarding:v1']);
+  for (const balance of [0, 96, 1000]) test(`reads a Starter balance of ${balance} without changing it`, async () => {
+    const database = new CreditDatabase(balance);
+    await expect(creditBalance(environment(database), 'user-1')).resolves.toBe(balance);
+    expect(database.queries).toEqual(['SELECT available_credits AS balance FROM credit_accounts WHERE user_id = ?']);
   });
 
-  test('tops a legacy test account up to the onboarding allowance', async () => {
-    const database = new CreditDatabase(96);
-
-    await expect(creditBalance(environment(database), 'user-1')).resolves.toBe(1000);
-    expect([...database.operations]).toEqual(['onboarding:v1']);
-  });
-
-  test('does not grant Builder credits on a calendar timer', async () => {
+  test('reads a Builder balance without checking its plan or granting credits', async () => {
     const database = new CreditDatabase(400, 'builder');
-
     await expect(creditBalance(environment(database), 'user-1')).resolves.toBe(400);
-    expect([...database.operations]).toEqual([]);
+    expect(database.queries).toHaveLength(1);
+    expect(database.queries[0]).not.toContain('billing_accounts');
   });
 });

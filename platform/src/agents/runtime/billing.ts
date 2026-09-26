@@ -1,4 +1,4 @@
-import { ensureCreditGrant, type CreditEnv } from '../../lib/entitlements';
+import type { CreditEnv } from '../../lib/entitlements';
 import { ApiError } from '../../lib/http';
 import { DATA_OPERATION_PRICING } from '../../lib/metering';
 
@@ -7,7 +7,6 @@ export const AGENT_CREDIT_RESERVE = (AGENT_MAX_TOOL_CALLS - 1)
   * Math.max(...Object.values(DATA_OPERATION_PRICING).flatMap(price => [price.cached, price.fresh]));
 
 export async function reserveAgentCredits(env: CreditEnv, userId: string, runId: string): Promise<boolean> {
-  await ensureCreditGrant(env, userId);
   const operationId = `agent:${runId}`;
   await env.DB.prepare(`
     INSERT OR IGNORE INTO credit_ledger

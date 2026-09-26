@@ -45,17 +45,20 @@ in one batch.
 
 Successful metered reads now use two credit round trips:
 
-1. Check Starter onboarding eligibility and reserve credits in one D1 batch.
+1. Reserve credits with one conditional insert.
 2. Settle the charge and read the resulting balance in another batch.
 
-The grant statement checks the current billing plan inside SQL. The existing
-conditional reservation, ledger uniqueness constraints, and balance triggers
-still prevent overspending and duplicate grants or refunds. A standalone
-balance request batches its grant check with the balance read.
+Signup grants Starter credits when the user row is created. Normal API and
+agent credit operations neither read the billing plan nor attempt a grant.
+The conditional reservation, ledger uniqueness constraints, and balance triggers
+prevent overspending and duplicate refunds. A standalone balance request is one
+read with no writes.
 
 [D1 batches execute in order as a transaction](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch).
-If a statement fails, its batch rolls back. No database migration or pricing
-change is required.
+If a statement fails, its batch rolls back. Apply account migration
+`0018_signup_credit_grant.sql` before deploying. It catches up eligible older
+Starter accounts once and installs the signup grant trigger. Credit prices are
+unchanged. See [credit accounting](./CREDIT_ACCOUNTING.md) for rollout details.
 
 The real local D1 regression test failed with seven round trips before the
 change and passes with two afterward, while verifying the settled balance.
