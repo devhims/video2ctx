@@ -137,13 +137,41 @@ it('resumes direct finalization without reclassification or a new deadline', asy
   expect(options.onFinalizing).toHaveBeenCalledWith(deadlineAt);
 });
 
-it('omits the inspection request from the transmitted schema when escalation is unavailable', async () => {
+it.each(['video', 'history', 'mixed'] as const)('omits inspection requests from the transmitted schema for %s context', async contextScope => {
   const { options, finalizer, decision } = setup('context_answer', true);
-  await executeResearchRun({ ...options, persistedRoute: { ...decision, contextScope: 'history' } });
+  await executeResearchRun({ ...options, persistedRoute: { ...decision, contextScope } });
   const format = finalizer.doGenerateCalls[0]!.responseFormat;
   if (format?.type !== 'json') throw new Error('Expected structured output.');
   expect(format.schema).not.toHaveProperty('properties.needsEvidence');
   expect(format.schema).toHaveProperty('properties.blocks');
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('allows stored-context search during gathering and exposes no retrieval or inspection tools', async () => {
+  const {options,classifier,output}=setup('context_answer',true);
+  const search=vi.fn(async()=>({matches:[{text:'The woman holds the microphone.'}]}));
+  const inspect=vi.fn();
+  options.session={brief:()=>({assets:[],memories:[]}),searchTools:async()=>({
+    search_context:tool({inputSchema:z.object({query:z.string()}),execute:search}),
+    get_video_frames:tool({inputSchema:z.object({}),execute:inspect}),
+  })} as unknown as NonNullable<typeof options.session>;
+  let steps=0;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
+    if (call.responseFormat?.type==='json') {
+      expect(call.tools).toBeUndefined();
+      expect(call.toolChoice).toEqual({type:'none'});
+      return {content:[{type:'text',text:JSON.stringify(output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
+    }
+    expect(call.tools?.map(value=>value.name).sort()).toEqual(['list_session_assets','read_session_evidence','search_context']);
+    return steps++===0
+      ? {content:[{type:'tool-call',toolCallId:'saved-search',toolName:'search_context',input:JSON.stringify({query:'interviewer'})}],finishReason:{unified:'tool-calls',raw:'tool_calls'},usage,warnings:[]}
+      : {content:[{type:'text',text:'Stored context is sufficient.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
+  }});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  expect(search).toHaveBeenCalledOnce();
+  expect(inspect).not.toHaveBeenCalled();
+  expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
   expect(options.finalize).toHaveBeenCalledOnce();
 });
 
@@ -206,32 +234,36 @@ it('reads stored evidence on demand before finalizing and commits memory after v
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
-it.each([false,true])('escalates insufficient context once and returns to the same finalizer (older reference=%s)',async(olderReference)=>{
+it.each(['abcdefghijk', 'zzzzzzzzzzz'])('repairs an unexpected inspection request without rerouting or retrieval: %s', async videoId => {
   const {options,classifier,output}=setup('context_answer',true);
-  if (olderReference) {
-    options.conversationHistory=[];
-    options.session={brief:()=>({assets:[],memories:[]}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),
-      searchHistory:vi.fn(async()=>[{content:'Inspect https://youtu.be/abcdefghijk'}])} as unknown as NonNullable<typeof options.session>;
-  }
-  let finalizedCalls=0;
-  const finalizer=new MockLanguageModelV4({doGenerate:async call=>({
-    content:[{type:'text',text:JSON.stringify(call.responseFormat?.type!=='json' ? {ready:true} : finalizedCalls++===0
-      ? {...output,blocks:[{text:'The requested visual evidence is unavailable.',evidenceIds:[]}],needsEvidence:{videoId:'abcdefghijk',visual:true,reason:'The stored observations do not identify both participants.'}}
-      : output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
+  let attempts=0;
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
+    content:[{type:'text',text:JSON.stringify(attempts++===0
+      ? {...output,needsEvidence:{videoId,visual:true,reason:'Need another inspection.'}} : output)}],
+    finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   })});
-  let coreCalls=0;
-  const core=new MockLanguageModelV4({doGenerate:async()=>({
-    content:olderReference && coreCalls++===0 ? [{type:'tool-call',toolCallId:'frames',toolName:'get_video_frames',input:JSON.stringify({videoId:'abcdefghijk',timestampsMs:[30000],focus:'Identify the participants.'})}]
-      : [{type:'tool-call',toolCallId:'finish',toolName:'finalize_answer',input:JSON.stringify({...output,intent:'inspect_video',artifacts:[]})}],
-    finishReason:{unified:'tool-calls',raw:'tool_calls'},usage,warnings:[],
-  })});
-  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : metadata.model_role==='finalizer' ? finalizer : core);
-  options.executeEvidenceTool=vi.fn(async()=>evidence);
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : finalizer);
   await executeResearchRun(options);
-  expect(options.persistRoute).toHaveBeenLastCalledWith(expect.objectContaining({route:'inspect_video',videoId:'abcdefghijk',useStoryboard:true}));
-  expect(options.onCapabilityLoaded).toHaveBeenCalledTimes(1);
-  expect(finalizer.doGenerateCalls).toHaveLength(olderReference ? 4 : 2);
-  expect(options.finalize).toHaveBeenCalledTimes(1);
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.persistRoute).toHaveBeenCalledTimes(1);
+  expect(options.persistRoute).toHaveBeenCalledWith(expect.objectContaining({route:'finalize'}));
+  expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('answers with an explicit evidence gap instead of requesting another inspection', async () => {
+  const {options,classifier}=setup('context_answer');
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
+    content:[{type:'text',text:JSON.stringify({confidence:'low',warnings:[{code:'ANSWER_SCOPE_SHORTFALL',message:'The stored evidence does not identify the participants.'}],
+      blocks:[{text:'The collected evidence does not establish who the participants are.',evidenceIds:[]}]})}],
+    finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
+  })});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('does not establish')}));
 });
 
 
