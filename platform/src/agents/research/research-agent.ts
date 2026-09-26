@@ -668,9 +668,9 @@ async function runUnifiedFinalizer(options: {
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const gatheredEvidenceIds = new Set<string>();
+  const inspectionRequestSchema = z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),visual:z.boolean(),reason:z.string().max(500)});
   const baseSchema = baseOutputSchema.extend({
     memoryUpdates: z.array(memoryUpdateSchema).max(12).optional(),
-    needsEvidence: z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),visual:z.boolean(),reason:z.string().max(500)}).optional(),
   });
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
   const historyRequired = options.decision.route === 'finalize'
@@ -782,7 +782,7 @@ async function runUnifiedFinalizer(options: {
     // packet IDs and citations copied from unrelated history are not excerpt IDs.
     const allowedIds = [...new Set([...prepared.fullIds.keys(), ...prepared.fullIds.values(), ...gatheredEvidenceIds])];
     const reference = allowedIds.length ? z.enum(allowedIds) : z.string();
-    const outputSchema = baseSchema.extend({
+    const answerSchema = baseSchema.extend({
       blocks: z.array(baseOutputSchema.shape.blocks.element.extend({
         evidenceIds: z.array(reference).min(conversational || intent === 'context_answer' || !allowedIds.length ? 0 : 1)
           .max(conversational || !allowedIds.length ? 0 : 12),
@@ -791,6 +791,10 @@ async function runUnifiedFinalizer(options: {
         evidenceIds: z.array(reference).max(allowedIds.length ? 20 : 0).default([]),
       })).max(12).optional(),
     });
+    // Do not offer a decoding choice that this route cannot execute.
+    const outputSchema = options.allowEscalation ? answerSchema.extend({
+      needsEvidence: inspectionRequestSchema.optional(),
+    }) : answerSchema;
     const attemptStartedAt = Date.now();
     let candidate: string | undefined;
     let finishReason: string | undefined;
@@ -888,16 +892,17 @@ async function runUnifiedFinalizer(options: {
       usageRecorded = true;
       validationStage = 'output_schema';
       const output = result.output;
-      if (output.needsEvidence && !options.allowEscalation) throw new ZodError([{code:'custom',path:['needsEvidence'],message:'Video inspection is unavailable for this request. Answer from retrieved context or state the exact history/evidence gap.'}]);
-      if (output.needsEvidence && options.allowEscalation) {
+      const needsEvidence = 'needsEvidence' in output ? inspectionRequestSchema.optional().parse(output.needsEvidence) : undefined;
+      if (needsEvidence && !options.allowEscalation) throw new ZodError([{code:'custom',path:['needsEvidence'],message:'Video inspection is unavailable for this request. Answer from retrieved context or state the exact history/evidence gap.'}]);
+      if (needsEvidence && options.allowEscalation) {
         const known = new Set([...(options.context.session?.brief().assets.map(asset=>asset.videoId) ?? []), ...options.evidence.flatMap(packet=>packet.sources.flatMap(source=>source.videoId ? [source.videoId] : [])), ...(options.conversationHistory ?? []).flatMap(turn=>turn.resourceIds)]);
-        if (!known.has(output.needsEvidence.videoId)) {
-          const olderMessages = await options.context.session?.searchHistory?.(output.needsEvidence.videoId) ?? [];
-          if (olderMessages.some(message => extractYouTubeVideoIds(message.content).includes(output.needsEvidence!.videoId)))
-            known.add(output.needsEvidence.videoId);
+        if (!known.has(needsEvidence.videoId)) {
+          const olderMessages = await options.context.session?.searchHistory?.(needsEvidence.videoId) ?? [];
+          if (olderMessages.some(message => extractYouTubeVideoIds(message.content).includes(needsEvidence.videoId)))
+            known.add(needsEvidence.videoId);
         }
-        if (!known.has(output.needsEvidence.videoId)) throw new Error('Finalizer selected an unavailable video.');
-        throw new MoreEvidenceRequired({comparisonVideoIds:comparisonVideoIds.length ? comparisonVideoIds : undefined,route:'inspect_video',videoId:output.needsEvidence.videoId,useStoryboard:output.needsEvidence.visual,researchVideoCount:1,answerDetail:'answerDetail' in options.decision ? options.decision.answerDetail : undefined,numberedItemCount});
+        if (!known.has(needsEvidence.videoId)) throw new Error('Finalizer selected an unavailable video.');
+        throw new MoreEvidenceRequired({comparisonVideoIds:comparisonVideoIds.length ? comparisonVideoIds : undefined,route:'inspect_video',videoId:needsEvidence.videoId,useStoryboard:needsEvidence.visual,researchVideoCount:1,answerDetail:'answerDetail' in options.decision ? options.decision.answerDetail : undefined,numberedItemCount});
       }
       if (finishReason === 'length') throw new Error('Final answer was truncated by the output token limit.');
       if (historySelection === 'first_user_message') {

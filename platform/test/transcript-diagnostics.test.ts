@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import type { TranscriptDiagnostic } from '../src/agents/runtime/transcript-diagnostics';
 import { analyzeTranscriptWithModel } from '../src/agents/providers/youtube/transcript-analyst';
@@ -78,6 +78,37 @@ it('records output-limit repair separately from grounding errors', async () => {
   await analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) });
   expect(events[1]).toMatchObject({ outcome: 'rejected', code: 'OUTPUT_LIMIT', finishReason: 'length' });
   expect(events[3]?.outcome).toBe('accepted');
+});
+
+it('repairs truncated JSON once with a smaller schema, unchanged token limit and recorded usage', async () => {
+  const events: TranscriptDiagnostic[] = [];
+  const recordUsage = vi.fn();
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    if (!model.doGenerateCalls.length || model.doGenerateCalls.length === 1) return {
+      ...response(null), content: [{ type: 'text', text: '{"findings":[' }],
+      finishReason: { unified: 'length', raw: 'length' },
+    };
+    expect(call.responseFormat).toMatchObject({ schema: { properties: { findings: {
+      maxItems: 3, items: { properties: { quantities: { maxItems: 3 }, entities: { maxItems: 1 } } },
+    } } } });
+    return response(output('OpenAI'));
+  } });
+  const result = await analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e),
+    modelBudget: { limitMicros: 1000000, currentCostMicros: () => 0, recordUsage } });
+  expect(result.findings).toHaveLength(1);
+  expect(model.doGenerateCalls).toHaveLength(2);
+  expect(model.doGenerateCalls.map(call => call.maxOutputTokens)).toEqual([2400, 2400]);
+  expect(events.map(e => e.outcome)).toEqual(['started', 'rejected', 'started', 'accepted']);
+  expect(recordUsage).toHaveBeenCalledTimes(2);
+});
+
+it('does not start a third analysis when the compact repair also hits its output limit', async () => {
+  const events: TranscriptDiagnostic[] = [];
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({ ...response(null),
+    content: [{ type: 'text', text: '{"findings":[' }], finishReason: { unified: 'length', raw: 'length' } }) });
+  await expect(analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) })).rejects.toThrow();
+  expect(model.doGenerateCalls).toHaveLength(2);
+  expect(events.filter(e => e.code === 'OUTPUT_LIMIT')).toHaveLength(2);
 });
 
 it('bounds malformed response captures and marks truncation', async () => {

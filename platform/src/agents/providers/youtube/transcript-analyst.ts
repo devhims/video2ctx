@@ -16,8 +16,10 @@ const ANALYSIS_WINDOW_DURATION_MS = 60_000;
 const ANALYSIS_WINDOW_TEXT_LIMIT = 2_000;
 const ANALYST_WAIT_MS = 90_000;
 
-const transcriptAnalystOutputSchema = (maximum: number) => z.object({
+const transcriptAnalystOutputSchema = (maximum: number, repair = false) => z.object({
   findings: z.array(transcriptFactsSchema.extend({
+    entities: transcriptFactsSchema.shape.entities.unwrap().max(repair ? 1 : 3).default([]),
+    quantities: transcriptFactsSchema.shape.quantities.unwrap().max(repair ? 3 : 10).default([]),
     claim: z.string().trim().min(1).max(280),
     windowIndexes: z.array(z.number().int().nonnegative()).min(1).max(MAX_WINDOWS_PER_FINDING),
   })).max(maximum),
@@ -113,6 +115,7 @@ export async function analyzeTranscriptWithModel(
   const modelCallId = input.modelCallId ?? `transcript-analyst:${crypto.randomUUID()}`;
   let repairFeedback: string | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const attemptMaximum = attempt === 0 ? maximum : Math.min(maximum, 3);
     assertModelCostAvailable(input.modelBudget);
     const startedAt = Date.now();
     const attemptId = crypto.randomUUID();
@@ -148,10 +151,10 @@ export async function analyzeTranscriptWithModel(
           'Return at most three concise warnings describing material source limitations only. Put claim-specific caveats in the claim. Do not warn about how many findings you extracted, instructions you followed, omitted benchmarks, or other search results not reviewed. Do not repeat findings in warnings.',
           'Reference only numeric window indexes that appear in the transcript catalog.',
           'Do not invent identifiers, timestamps, or quotations. The application resolves window indexes back to the original text.',
-          `Return at most ${maximum} distinct findings and at most ${MAX_WINDOWS_PER_FINDING} supporting window indexes per finding.`,
+          `Return at most ${attemptMaximum} distinct findings and at most ${MAX_WINDOWS_PER_FINDING} supporting window indexes per finding.`,
           'Return an empty findings array when the transcript does not contain relevant evidence.',
           ...(repairFeedback
-            ? [`Your previous response was invalid: ${repairFeedback}`, 'Return a corrected analysis using available windows and quoted facts. Omit unsupported details; preserve explicit uncertainty.']
+            ? [`Your previous response was invalid: ${repairFeedback.slice(0, 4000)}`, 'Return a shorter corrected analysis using available windows and quoted facts. Use at most one identity and three quantities per finding, with the shortest exact quotes that preserve support. Prioritize distinct requested topics. Omit unsupported details; preserve explicit uncertainty.']
             : []),
         ].join('\n'),
         prompt: JSON.stringify({
@@ -165,7 +168,7 @@ export async function analyzeTranscriptWithModel(
         output: Output.object({
           name: 'TranscriptAnalysis',
           description: 'A complete-video analysis that references application-owned transcript window indexes.',
-          schema: transcriptAnalystOutputSchema(maximum),
+          schema: transcriptAnalystOutputSchema(attemptMaximum, attempt > 0),
         }),
         temperature: 0.1,
         maxOutputTokens: MAX_ANALYST_OUTPUT_TOKENS,
@@ -219,10 +222,19 @@ export async function analyzeTranscriptWithModel(
     } catch (error) {
       if (input.signal.aborted) canceled();
       else if (NoObjectGeneratedError.isInstance(error)) {
-        emit('failed', { code: error.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'SCHEMA_INVALID', finishReason: error.finishReason,
+        if (error.usage) {
+          const modelId = typeof input.model === 'string' ? input.model : input.model.modelId;
+          input.modelBudget?.recordUsage({ callId: attempt === 0 ? modelCallId : `${modelCallId}:repair`,
+            category: 'transcript_analyst', modelId, pricing: fireworksModelPricing(modelId), usage: error.usage });
+        }
+        emit(error.finishReason === 'length' ? 'rejected' : 'failed', { code: error.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'SCHEMA_INVALID', finishReason: error.finishReason,
           rejectedOutput: error.text?.slice(0, 24000), captureTruncated: (error.text?.length ?? 0) > 24000,
           inputTokens: error.usage?.inputTokens, outputTokens: error.usage?.outputTokens,
-          issues: schemaFailureIssues(error.text, maximum) });
+          issues: schemaFailureIssues(error.text, attemptMaximum) });
+        if (error.finishReason === 'length' && attempt === 0) {
+          repairFeedback = 'The previous analysis exhausted its output-token limit. Return fewer findings with complete short source quotes.';
+          continue;
+        }
       } else {
         const details = failureDetails(error, input.signal);
         emit('failed', { code: error instanceof Error && error.name === 'TimeoutError' ? 'ANALYSIS_TIMEOUT' : details.statusCode ? 'PROVIDER_ERROR' : 'ANALYSIS_ERROR', statusCode: details.statusCode,

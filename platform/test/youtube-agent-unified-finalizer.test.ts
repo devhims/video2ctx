@@ -137,6 +137,16 @@ it('resumes direct finalization without reclassification or a new deadline', asy
   expect(options.onFinalizing).toHaveBeenCalledWith(deadlineAt);
 });
 
+it('omits the inspection request from the transmitted schema when escalation is unavailable', async () => {
+  const { options, finalizer, decision } = setup('context_answer', true);
+  await executeResearchRun({ ...options, persistedRoute: { ...decision, contextScope: 'history' } });
+  const format = finalizer.doGenerateCalls[0]!.responseFormat;
+  if (format?.type !== 'json') throw new Error('Expected structured output.');
+  expect(format.schema).not.toHaveProperty('properties.needsEvidence');
+  expect(format.schema).toHaveProperty('properties.blocks');
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
 it('rejects invented citations, repairs once, and keeps the system prompt stable', async () => {
   const { options, finalizer, output } = setup('context_answer', true);
   let attempt = 0;

@@ -22,6 +22,41 @@ const packet = (finding = facts): EvidencePacket => ({
 });
 
 describe('transcript grounding', () => {
+  it.each([
+    ['two more microphones', 2, 'microphones'],
+    ['eight microphones', 8, 'microphones'],
+    ['twenty-four microphones', 24, 'microphones'],
+    ['eight hundred microphones', 800, 'microphones'],
+    ['one hundred and twenty-four microphones', 124, 'microphones'],
+    ['one thousand two hundred microphones', 1200, 'microphones'],
+    ['minus five percent', -5, '%'],
+    ['-5 percent', -5, '%'],
+    ['500 million voice samples', 500000000, 'voice samples'],
+    ['1,000 voice samples', 1000, 'voice samples'],
+    ['Rest for 8 hours.', 8, 'h'],
+    ['Rest for 30 minutes.', 30, 'min'],
+    ['Temperature is 70 degrees Fahrenheit.', 70, '°F'],
+    ['Contains 24g protein.', 24, 'grams'],
+  ])('accepts equivalent notation with an exact quote: %s', (quote, value, unit) => {
+    expect(() => assertTranscriptFacts({ claim: '', entities: [], uncertainty: null,
+      quantities: [{ metric: 'source value', value, unit, basis: null, kind: 'reported', quote }] }, [quote])).not.toThrow();
+  });
+
+  it.each([
+    ['Rest for 8 hours.', 480, 'min'],
+    ['500 million voice samples', 500, 'voice samples'],
+    ['1,000 voice samples', 1, 'voice samples'],
+    ['eight hundred microphones', 8, 'microphones'],
+    ['one thousand two hundred microphones', 1000, 'microphones'],
+    ['twenty eight five microphones', 28, 'microphones'],
+    ['-5 percent', 5, '%'],
+    ['Temperature is 70 degrees.', 70, '°F'],
+    ['62.3 5 percent', 62.35, '%'],
+  ])('still rejects conversion, scale loss, or inferred units: %s', (quote, value, unit) => {
+    expect(() => assertTranscriptFacts({ claim: '', entities: [], uncertainty: null,
+      quantities: [{ metric: 'source value', value, unit, basis: null, kind: 'reported', quote }] }, [quote])).toThrow();
+  });
+
   it('preserves all ten requested findings in finalization evidence', () => {
     const evidence = packet();
     const data = evidence.artifacts[0]!.data as any;
