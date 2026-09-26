@@ -1146,6 +1146,23 @@ export interface YouTubeClient {
   getEndscreen(videoId: string): Promise<EndscreenElement[]>;
 }
 
+function captionAvailabilityError(raw: JsonObject): YouTubeClientError | undefined {
+  const playability = object(raw.playabilityStatus);
+  const status = string(playability.status);
+  if (status === 'OK') return undefined;
+  const reason = string(playability.reason) ?? '';
+  if (/confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason)) {
+    return new YouTubeClientError('UNAVAILABLE', 'YouTube blocked caption metadata with a bot challenge.', { retryable: true });
+  }
+  if (status === 'LOGIN_REQUIRED' || status === 'AGE_CHECK_REQUIRED' || status === 'CONTENT_CHECK_REQUIRED') {
+    return new YouTubeClientError('AUTH_REQUIRED', 'YouTube requires authorization to read this video’s captions.');
+  }
+  if (status === 'UNPLAYABLE' || status === 'ERROR' || status === 'LIVE_STREAM_OFFLINE') {
+    return new YouTubeClientError('UNAVAILABLE', 'YouTube reports that this video is unavailable.');
+  }
+  return new YouTubeClientError('INVALID_RESPONSE', 'YouTube caption metadata did not include a valid playability status.', { retryable: true });
+}
+
 export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTubeClient {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const language = options.language ?? 'en';
@@ -1211,7 +1228,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     }
   };
 
-  const player = async (videoId: string, requireCaptionTrack = true): Promise<JsonObject> => {
+  const player = async (videoId: string, requireCaptionTrack = true, onFailure?: (error: YouTubeClientError) => void): Promise<JsonObject> => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
@@ -1229,7 +1246,10 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         const tracks = parseCaptionTracks(response).internal;
         if (status === 'OK' && (!requireCaptionTrack || tracks.some(track => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? 'UNKNOWN'}`);
+        const failure = captionAvailabilityError(response);
+        if (failure) onFailure?.(failure);
       } catch (error) {
+        if (error instanceof YouTubeClientError) onFailure?.(error);
         attempts.push(
           `${profile.name}: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -1243,7 +1263,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     );
   };
 
-  const desktopPlayer = async (videoId: string): Promise<DesktopPlayerResult | undefined> => {
+  const desktopPlayer = async (videoId: string): Promise<{ value?: DesktopPlayerResult; error?: YouTubeClientError }> => {
     try {
       const response = await transport.fetch('watch-page', () => ({
         input: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
@@ -1255,12 +1275,14 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
           },
         },
       }));
-      if (!response.ok) return undefined;
+      if (!response.ok) return { error: classifyHttpError(response.status, `YouTube watch metadata request failed: ${response.status}`) };
       const raw = extractInitialPlayerResponse(await response.text());
       const cookies = responseCookies(response.headers);
-      return raw ? { raw, cookies } : undefined;
-    } catch {
-      return undefined;
+      return raw ? { value: { raw, cookies } } : { error: new YouTubeClientError(
+        'INVALID_RESPONSE', 'YouTube watch metadata did not include a player response.', { retryable: true }) };
+    } catch (error) {
+      return { error: error instanceof YouTubeClientError ? error : new YouTubeClientError(
+        'UPSTREAM_ERROR', 'YouTube watch metadata request failed.', { retryable: true }) };
     }
   };
 
@@ -1290,15 +1312,21 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
-    const [raw, desktop] = await Promise.all([player(videoId, true), desktopPlayer(videoId)]);
-    return {
-      raw,
-      captions: mergeCaptionCatalog(
-        parseCaptionTracks(raw),
-        desktop ? parseCaptionTracks(desktop.raw) : undefined,
-      ),
-      captionCookies: desktop?.cookies,
-    };
+    const failures: YouTubeClientError[] = [];
+    const [raw, desktop] = await Promise.all([
+      player(videoId, true, error => { failures.push(error); }), desktopPlayer(videoId),
+    ]);
+    const captions = mergeCaptionCatalog(parseCaptionTracks(raw),
+      desktop.value ? parseCaptionTracks(desktop.value.raw) : undefined);
+    // Missing tracks prove caption absence only after usable, playable metadata.
+    // A successful catalog from either source still wins over a failed source.
+    if (captions.internal.length === 0) {
+      const primaryError = captionAvailabilityError(raw);
+      const desktopError = desktop.value ? captionAvailabilityError(desktop.value.raw) : desktop.error;
+      const failure = primaryError ?? desktopError ?? failures.find(error => error.retryable);
+      if (failure) throw failure;
+    }
+    return { raw, captions, captionCookies: desktop.value?.cookies };
   };
 
   const rawBrowse = async (browseOptions: BrowseOptions = {}): Promise<JsonObject> => {

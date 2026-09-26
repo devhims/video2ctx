@@ -75,6 +75,18 @@ try {
   }
   console.log(JSON.stringify({ test: 'packed-caption-recovery', commonjs: true, esm: true, passed: true }));
 
+  for (const api of [commonjs, esm]) {
+    await assert.rejects(api.getTranscript({ videoId: 'AR1Gi3RHanE',
+      retry: { policy: { maxAttempts: 1 } },
+      fetch: async input => {
+        const player = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" } };
+        return String(input).includes('/watch?')
+          ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(player)};`) : Response.json(player);
+      },
+    }), { code: 'UNAVAILABLE', retryable: true });
+  }
+  console.log(JSON.stringify({ test: 'packed-caption-availability', commonjs: true, esm: true, passed: true }));
+
   if (process.argv.includes('--live')) {
     const requests = [];
     const result = await esm.getStoryboard({

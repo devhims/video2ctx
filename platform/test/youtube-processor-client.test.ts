@@ -16,7 +16,8 @@ function environment(responses: Array<Response | Error>): { env: Env; requested:
     YOUTUBE_PROCESSOR: {
       idFromName: (name: string) => name,
       get: (id: string) => ({
-        fetch: async () => {
+        fetch: async (request: Request) => {
+          expect(request.headers.get('x-processor-egress-slot')).toBe(id.split('-').at(-1));
           requested.push(id);
           const response = responses.shift();
           if (response instanceof Error) throw response;
@@ -43,7 +44,7 @@ describe('YouTube processor client', () => {
     expect(requested[2]).toBe(requested[0]);
   });
 
-  test.each(['NOT_FOUND', 'UNAVAILABLE', 'AUTH_REQUIRED', 'UNKNOWN_UPSTREAM_ERROR', 'INVALID_PROCESSOR_RESPONSE'])('recovers on the fourth transcript call after %s errors', async (code) => {
+  test.each(['NOT_FOUND', 'UNAVAILABLE', 'UNKNOWN_UPSTREAM_ERROR', 'INVALID_PROCESSOR_RESPONSE'])('recovers on the fourth transcript call after %s errors', async (code) => {
     const failure = () => Response.json({ error: { code, retryable: false } }, { status: 404 });
     const { env, requested } = environment([failure(), failure(), failure(), Response.json({ value: { text: 'Recovered' } })]);
     Reflect.deleteProperty(env, 'YOUTUBE_PROCESSOR_MAX_ATTEMPTS');
@@ -53,6 +54,23 @@ describe('YouTube processor client', () => {
     expect(requested[0]).not.toBe(requested[1]);
     expect(requested[2]).toBe(requested[0]);
     expect(requested[3]).toBe(requested[1]);
+  });
+
+  test('a later missing-caption response does not erase earlier upstream throttling', async () => {
+    const { env, requested } = environment([
+      Response.json({ error: { code: 'RATE_LIMITED', message: 'Caption request throttled', retryable: true } }, { status: 429 }),
+      Response.json({ error: { code: 'NOT_FOUND', retryable: false } }, { status: 404 }),
+    ]);
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
+      .rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429, retryable: true });
+    expect(requested).toHaveLength(2);
+  });
+
+  test('does not retry a confirmed transcript access restriction', async () => {
+    const { env, requested } = environment([Response.json({ error: { code: 'AUTH_REQUIRED', retryable: false } }, { status: 401 })]);
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
+      .rejects.toMatchObject({ code: 'AUTH_REQUIRED', status: 401 });
+    expect(requested).toHaveLength(1);
   });
 
   test('does not retry invalid transcript input even if marked retryable', async () => {

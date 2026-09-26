@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- Distinguish bot challenges, login restrictions, failed watch metadata, and malformed playability responses from missing captions. Empty catalogs only imply missing captions when metadata retrieval succeeded and the video is playable.
+- Preserve a usable caption catalog from either source even when another metadata source failed.
+
 ## 0.6.1
 
 - Validate upstream caption URLs and refresh malformed or missing URLs within the existing retry limit. Try usable alternate player metadata and desktop tracks instead of treating URL parsing failures as invalid caller input.

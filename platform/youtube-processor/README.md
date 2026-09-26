@@ -6,20 +6,42 @@ The Worker retains authentication, authorization, credit metering, error contrac
 
 ## Proxy configuration
 
-For local development, add this to the ignored `platform/.dev.vars` file:
+Use the Worker secret `OUTBOUND_PROXY_URLS` for a small pool of independent HTTP(S) proxy connections. Its value is a JSON array of one to four distinct proxy URLs. For example, two sticky residential endpoints can use different ports:
 
-```ini
-OUTBOUND_PROXY_URL=http://user:password@proxy.example.com:8080
+```json
+["http://user:password@proxy.example.com:10001","http://user:password@proxy.example.com:10002"]
 ```
 
-For a deployed Worker, set it interactively without placing the value in source control:
+Set the secret interactively, never in source control or build variables:
 
 ```sh
 cd platform
-npx wrangler secret put OUTBOUND_PROXY_URL
+npx wrangler secret put OUTBOUND_PROXY_URLS
 ```
 
-If the secret is absent, the container connects to YouTube directly. Health output exposes only `proxyConfigured: true|false`, never the proxy URL.
+For local development, store the JSON value in the ignored `platform/.dev.vars` file. The pool takes precedence over the legacy `OUTBOUND_PROXY_URL` secret. If neither is set, the processor connects directly. Invalid pool configuration fails closed instead of silently reverting to direct egress. A different URL does not itself prove a different exit IP; verify exit independence with the provider.
+
+The Worker passes a private logical slot header to the processor. Slot 0 selects the first connection, slot 1 selects the second, and larger slots wrap around the pool. Configure at least as many connections as `YOUTUBE_PROCESSOR_INSTANCE_COUNT` to give each container slot independent egress. One connection is used for the entire extraction, including player metadata, the watch page, captions, and retries. Connections and their dispatchers are never changed globally during an operation, so concurrent extractions cannot switch each other's proxy.
+
+Each transcript attempt has a 25-second connection budget covering network requests, body reads, and retry waits. Proxied provider requests have at most two transport attempts per request, rather than spending all five default attempts on one failing connection. The Worker retains its four-attempt, 120-second total budget and its 30-second best-effort slot cooldown. Cooldowns are runtime-isolate hints, not durable guarantees. A fallback moves to another configured connection before revisiting a slot.
+
+Health output includes only `proxyConfigured` and the configured connection count. Operation logs include logical slots and extraction IDs. Proxy URLs, credentials, cookies, and signed caption URLs are not logged. Frame extraction uses its separate container and legacy proxy setting; this pool does not route video or audio downloads through residential bandwidth.
+
+### Transcript errors
+
+`all-things-youtube@0.6.2` distinguishes upstream access failures from missing captions. A bot challenge produces retryable `UNAVAILABLE`; upstream throttling remains `RATE_LIMITED`; failed or malformed metadata produces an upstream or invalid-response error. A real login or age restriction produces `AUTH_REQUIRED`. A confirmed playable video without a matching caption track retains `NOT_FOUND`. A usable catalog from either metadata source can recover the extraction even if another source failed.
+
+The Worker preserves an earlier upstream failure if a later slot reports missing captions. Wrapped agent tool failures retain safe upstream error codes and the extraction ID for correlation with processor attempts.
+
+### Rollout and rollback
+
+Publish the extraction-library release first, then install its exact version and regenerate the processor lockfile. Build and test the production Docker context. Set the proxy pool secret only on the intended Worker. Change `YOUTUBE_PROCESSOR_VERSION` when activating the pool so requests use fresh container identities and receive the new environment. This change requires no storage migrations.
+
+Start with two independently verified sticky connections and the existing two processor slots. Verify a fresh transcript for GmLcJVzkxPA and the four videos from the failed headphones and sourdough sessions. Then rerun those queries as new dashboard sessions and check reviewed-video counts, complete transcript coverage, upstream errors, latency, and provider bandwidth. Do not mark historical failed runs successful or overwrite their evidence.
+
+Cache hits do not consume proxy bandwidth. Compare Decodo's billed traffic before and after a known batch of fresh extractions; decoded response bytes are not the billed metric. Verify the provider's remaining allowance and trial conversion terms before widening traffic.
+
+To return to direct egress, remove the pool secret and any legacy proxy secret, change the processor version again, and deploy. Merely deleting a secret does not guarantee an already-running container restarts with different environment variables. Roll back both routing and the image if the release fails its production checks.
 
 ## Capacity
 

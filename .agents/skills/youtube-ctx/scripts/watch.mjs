@@ -20583,6 +20583,22 @@ function parseVideoSignals(videoId, raw) {
     meta: meta([], false)
   };
 }
+function captionAvailabilityError(raw) {
+  const playability = object4(raw.playabilityStatus);
+  const status = string(playability.status);
+  if (status === "OK") return void 0;
+  const reason = string(playability.reason) ?? "";
+  if (/confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason)) {
+    return new YouTubeClientError("UNAVAILABLE", "YouTube blocked caption metadata with a bot challenge.", { retryable: true });
+  }
+  if (status === "LOGIN_REQUIRED" || status === "AGE_CHECK_REQUIRED" || status === "CONTENT_CHECK_REQUIRED") {
+    return new YouTubeClientError("AUTH_REQUIRED", "YouTube requires authorization to read this video’s captions.");
+  }
+  if (status === "UNPLAYABLE" || status === "ERROR" || status === "LIVE_STREAM_OFFLINE") {
+    return new YouTubeClientError("UNAVAILABLE", "YouTube reports that this video is unavailable.");
+  }
+  return new YouTubeClientError("INVALID_RESPONSE", "YouTube caption metadata did not include a valid playability status.", { retryable: true });
+}
 function createYouTubeClient(options = {}) {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const language = options.language ?? "en";
@@ -20636,7 +20652,7 @@ function createYouTubeClient(options = {}) {
       });
     }
   };
-  const player = async (videoId, requireCaptionTrack = true) => {
+  const player = async (videoId, requireCaptionTrack = true, onFailure) => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
     }
@@ -20654,7 +20670,10 @@ function createYouTubeClient(options = {}) {
         const tracks = parseCaptionTracks(response).internal;
         if (status === "OK" && (!requireCaptionTrack || tracks.some((track) => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? "UNKNOWN"}`);
+        const failure2 = captionAvailabilityError(response);
+        if (failure2) onFailure?.(failure2);
       } catch (error) {
+        if (error instanceof YouTubeClientError) onFailure?.(error);
         attempts.push(
           `${profile.name}: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -20679,12 +20698,20 @@ function createYouTubeClient(options = {}) {
           }
         }
       }));
-      if (!response.ok) return void 0;
+      if (!response.ok) return { error: classifyHttpError(response.status, `YouTube watch metadata request failed: ${response.status}`) };
       const raw = extractInitialPlayerResponse(await response.text());
       const cookies = responseCookies(response.headers);
-      return raw ? { raw, cookies } : void 0;
-    } catch {
-      return void 0;
+      return raw ? { value: { raw, cookies } } : { error: new YouTubeClientError(
+        "INVALID_RESPONSE",
+        "YouTube watch metadata did not include a player response.",
+        { retryable: true }
+      ) };
+    } catch (error) {
+      return { error: error instanceof YouTubeClientError ? error : new YouTubeClientError(
+        "UPSTREAM_ERROR",
+        "YouTube watch metadata request failed.",
+        { retryable: true }
+      ) };
     }
   };
   const desktopChannelAbout = async (channelId) => {
@@ -20708,15 +20735,24 @@ function createYouTubeClient(options = {}) {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
     }
-    const [raw, desktop] = await Promise.all([player(videoId, true), desktopPlayer(videoId)]);
-    return {
-      raw,
-      captions: mergeCaptionCatalog(
-        parseCaptionTracks(raw),
-        desktop ? parseCaptionTracks(desktop.raw) : void 0
-      ),
-      captionCookies: desktop?.cookies
-    };
+    const failures = [];
+    const [raw, desktop] = await Promise.all([
+      player(videoId, true, (error) => {
+        failures.push(error);
+      }),
+      desktopPlayer(videoId)
+    ]);
+    const captions = mergeCaptionCatalog(
+      parseCaptionTracks(raw),
+      desktop.value ? parseCaptionTracks(desktop.value.raw) : void 0
+    );
+    if (captions.internal.length === 0) {
+      const primaryError = captionAvailabilityError(raw);
+      const desktopError = desktop.value ? captionAvailabilityError(desktop.value.raw) : desktop.error;
+      const failure2 = primaryError ?? desktopError ?? failures.find((error) => error.retryable);
+      if (failure2) throw failure2;
+    }
+    return { raw, captions, captionCookies: desktop.value?.cookies };
   };
   const rawBrowse = async (browseOptions = {}) => {
     const destination = browseDestination(browseOptions.categoryId);

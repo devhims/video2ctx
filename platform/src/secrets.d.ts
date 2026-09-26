@@ -12,6 +12,7 @@ interface Env {
   UPSTASH_REDIS_REST_TOKEN: string;
   LANDING_RATE_LIMIT_SALT: string;
   OUTBOUND_PROXY_URL?: string;
+  OUTBOUND_PROXY_URLS?: string;
   FIREWORKS_API_KEY?: string;
   OAUTH_PROXY_SECRET: string;
 }

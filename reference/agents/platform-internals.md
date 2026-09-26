@@ -24,7 +24,7 @@ For session evidence reuse, memory, citation versions and deletion invariants, r
 
 ## Configuration
 
-Non-secret bindings live in `platform/wrangler.jsonc`; runtime secrets stay outside source control. Local development needs Docker for processor cache misses. Proxy credentials belong in `OUTBOUND_PROXY_URL` and never in logs.
+Non-secret bindings live in `platform/wrangler.jsonc`; runtime secrets stay outside source control. Local development needs Docker for processor cache misses. Proxy credentials belong in the processor pool secret `OUTBOUND_PROXY_URLS` or the legacy `OUTBOUND_PROXY_URL`, never in logs. See `platform/youtube-processor/README.md` for connection selection and rollout.
 
 Use the fully local path by default. Preview and production migrations and Cloudflare deployments change shared state — confirm scope with the user first.
 
@@ -41,7 +41,7 @@ Run the relevant package, platform, and container tests. Regenerate and verify d
 
 ## Provider retries and latency
 
-The processor timeout setting bounds the entire extraction operation, including response-body reads and retry delays. Production allows four attempts, visiting both configured slots before repeating in the same order. Transcript failures retry regardless of upstream code or retryable flag, except INVALID_INPUT. Even NOT_FOUND from both slots receives a second pass within the existing time limit. Other operations retain their explicit retryable-error policy. Partial empty track catalogs only probe each distinct slot once. Retry-After is honored within the total budget. Thirty-second health hints are local to a runtime isolate and may disappear on eviction; both processor slots share the configured outbound proxy, so fallback does not promise independent egress.
+The processor timeout setting bounds the entire extraction operation, including response-body reads and retry delays. Production allows four attempts, visiting both configured slots before repeating in the same order. Transcript failures retry regardless of upstream code or retryable flag, except INVALID_INPUT and confirmed AUTH_REQUIRED restrictions. Even NOT_FOUND from both slots receives a second pass within the existing time limit. Other operations retain their explicit retryable-error policy. Partial empty track catalogs only probe each distinct slot once. Retry-After is honored within the total budget. Thirty-second health hints are local to a runtime isolate and may disappear on eviction; processor slots select distinct entries from `OUTBOUND_PROXY_URLS` when a pool is configured. With a single legacy proxy, fallback still shares egress. Verify public exit independence with the provider.
 
 `youtube_processor_attempt` logs include an extraction ID, attempt duration, and total elapsed time. The container's `youtube_processor_timing` event uses the same ID and records operation duration, process CPU time, RSS, heap use, uptime, and concurrency at entry. CPU and memory are process-wide, so concurrent operations can contribute. Compare processor duration against container duration to locate binding/startup overhead, and inspect CPU and memory measurements before attributing latency to container size. These measurements do not identify the outbound IP or YouTube's challenge criteria.
 

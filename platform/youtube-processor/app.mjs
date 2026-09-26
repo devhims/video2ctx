@@ -60,6 +60,7 @@ export function createProcessorApp(runtime, options = {}) {
     status: 'ok',
     runtime: 'hono-node-container',
     proxyConfigured: runtime.proxyConfigured === true,
+    proxyConnections: runtime.proxyConnections ?? 0,
     capacity: { active: activeOperations, maximum: maxConcurrentOperations },
   }));
 
@@ -101,6 +102,11 @@ export function createProcessorApp(runtime, options = {}) {
       } }, 400);
     }
 
+    const suppliedSlot = c.req.header('x-processor-egress-slot');
+    if (suppliedSlot !== undefined && !/^[0-3]$/.test(suppliedSlot)) {
+      return c.json({ error: { code: 'INVALID_INPUT', message: 'The processor egress slot is invalid.', retryable: false } }, 422);
+    }
+    const egressSlot = Number(suppliedSlot ?? '0');
     const diagnostics = { version: 1, events: [], droppedEvents: 0 };
     const suppliedId = c.req.header('x-extraction-id');
     const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
@@ -116,13 +122,14 @@ export function createProcessorApp(runtime, options = {}) {
     const activeAtStart = activeOperations;
 
     try {
-      return c.json({ value: await runtime.run(operation, { extractionId, onDiagnostic }), ...envelope() });
+      return c.json({ value: await runtime.run(operation, { extractionId, egressSlot, onDiagnostic }), ...envelope() });
     } catch (error) {
       const normalized = normalizeProcessorError(error);
       console.error(JSON.stringify({
         event: 'youtube_processor_failure',
         extractionId,
         operation: operation.kind,
+        egressSlot,
         code: normalized.error.code,
         retryable: normalized.error.retryable,
       }));
@@ -138,7 +145,7 @@ export function createProcessorApp(runtime, options = {}) {
         processCpuMs: (cpu.user + cpu.system) / 1000,
         rssBytes: memory.rss, heapUsedBytes: memory.heapUsed,
         processUptimeSeconds: Math.round(process.uptime()), activeAtStart,
-        proxyConfigured: runtime.proxyConfigured === true,
+        proxyConfigured: runtime.proxyConfigured === true, egressSlot,
       }));
     }
   });
