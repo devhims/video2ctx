@@ -14,6 +14,6 @@ Manual review: DeepSeek consistently labeled unmet comparison scope. GLM compari
 
 Estimated uncached cost for these three answers: GLM $0.003289, DeepSeek $0.011299. Includes reported reasoning tokens, excludes earlier exploratory calls and any unreported usage. Rates: https://docs.fireworks.ai/serverless/pricing.
 
-Recommendation: GLM research and visuals, updated DeepSeek finalizer, retaining the independent partial-answer fixes. This preserves the earlier role split and favors the more cautious answers in these samples. DeepSeek is slower and more expensive for this uncached finalization workload. Production completion times must be checked after rollout.
+Recommendation: GLM Flash for research, visuals, and final answers, retaining the independent partial-answer fixes. Final answers use application medium effort, which maps to Fireworks high. The measured speed and cost advantages matter more for this product than DeepSeek's more cautious wording in three samples. That small sample does not establish a general quality advantage for DeepSeek. Evidence-gap handling and complete production session times must be checked after rollout.
 
 A preliminary harness with shorter instructions had one GLM timeout at 60 seconds. That differs from the production prompt and is not pooled with the matched table; it reinforces that this is not a reliability estimate.

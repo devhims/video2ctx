@@ -29,13 +29,13 @@ OUTBOUND_PROXY_URL=
 # Operator access only, never Agent testing access. Private comma-separated admin allowlist. Production: wrangler secret put ADMIN_EMAILS_SECRET
 ADMIN_EMAILS_SECRET=
 
-# GLM handles research and visuals; updated DeepSeek handles final answers.
+# GLM handles research, visuals, and final answers.
 AGENT_TEXT_PROVIDER=
 AGENT_TEXT_MODEL=
 AGENT_FINALIZER_PROVIDER=fireworks
-AGENT_FINALIZER_MODEL=deepseek-v4p1-flash
-# Leave blank for DeepSeek. GLM supports low or medium (mapped to high).
-AGENT_FINALIZER_REASONING_EFFORT=
+AGENT_FINALIZER_MODEL=glm-5p3-flash
+# Medium maps to Fireworks high. Research keeps its existing reasoning settings.
+AGENT_FINALIZER_REASONING_EFFORT=medium
 # Set the GLM provider used for research and visual analysis.
 AGENT_GLM_PROVIDER=fireworks
 FIREWORKS_API_KEY=
