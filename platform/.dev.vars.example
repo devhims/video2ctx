@@ -29,9 +29,11 @@ OUTBOUND_PROXY_URL=
 # Operator access only, never Agent testing access. Private comma-separated admin allowlist. Production: wrangler secret put ADMIN_EMAILS_SECRET
 ADMIN_EMAILS_SECRET=
 
-# DeepSeek finalizer candidate. GLM research/classification continue on Workers AI.
+# DeepSeek handles text roles and final answers. GLM handles storyboard/frame analysis.
+AGENT_TEXT_PROVIDER=fireworks
+AGENT_TEXT_MODEL=deepseek-v4p1-flash
 AGENT_FINALIZER_PROVIDER=fireworks
 AGENT_FINALIZER_MODEL=deepseek-v4p1-flash
-# Set to fireworks to test GLM classification/research/vision on Fireworks too.
+# Set the GLM provider used for visual analysis.
 AGENT_GLM_PROVIDER=fireworks
 FIREWORKS_API_KEY=

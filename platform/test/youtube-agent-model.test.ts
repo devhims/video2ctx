@@ -55,8 +55,56 @@ describe('YouTube agent model', () => {
     } finally { fetchMock.mockRestore(); }
   });
 
-  test('preserves reasoning and native tool results across Fireworks research steps', async () => {
-    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes production %s to its text or visual model', async role => {
+    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
+      AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    const visual = role === 'visual_analyst';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe(visual ? FIREWORKS_GLM_MODEL_ID : 'accounts/fireworks/models/deepseek-v4p1-flash');
+      expect(body.max_tokens).toBe(visual ? 1600 : 2624);
+      expect(body.service_tier).toBe('priority');
+      expect(body.prompt_cache_key).toBe('session');
+      expect(body.reasoning_history).toBe('interleaved');
+      expect(body.response_format.type).toBe('json_schema');
+      if (visual) {
+        expect(body.reasoning_effort).toBe('low');
+        expect(body).not.toHaveProperty('thinking');
+        expect(body.messages.some((m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))).toBe(true);
+      } else {
+        expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+        expect(body).not.toHaveProperty('reasoning_effort');
+        expect(JSON.stringify(body.messages)).not.toContain('image_url');
+      }
+      return Response.json({ id: 'test', created: 1, model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"supported":true}' } }],
+        usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
+    });
+    try {
+      await generateText({ model: createAgentModel(env, 'session', 'low', { model_role: role }),
+        messages: [{ role: 'user', content: visual
+          ? [{ type: 'text', text: 'Inspect this frame.' }, { type: 'file', data: '/9j/2Q==', mediaType: 'image/jpeg' }]
+          : [{ type: 'text', text: 'Analyze the supplied text.' }] }],
+        output: Output.object({ schema: z.object({ supported: z.boolean() }) }), maxOutputTokens: 1600 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test('rejects invalid text model configuration without silently switching models', () => {
+    const env = { AI_GATEWAY_ID: '', AGENT_TEXT_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: 'unknown',
+      FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'transcript_analyst' })).toThrow(/Unsupported/);
+    Object.assign(env, { AGENT_TEXT_MODEL: undefined });
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'classifier' })).toThrow(/not configured/);
+    Object.assign(env, { AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', AGENT_TEXT_PROVIDER: 'unknown' });
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'agent_core' })).toThrow(/Unsupported agent text provider/);
+    Object.assign(env, { AGENT_TEXT_PROVIDER: 'fireworks', FIREWORKS_API_KEY: undefined });
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'transcript_analyst' })).toThrow(/secret/);
+  });
+
+  test.each([undefined, 'deepseek-v4p1-flash'])('preserves reasoning and native tool results across Fireworks research steps for %s', async textModel => {
+    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: textModel,
+      FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     let calls = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)); calls++;

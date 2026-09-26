@@ -35,6 +35,8 @@
     "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
     "AGENT_RUNTIME_ENABLED": "true",
     "AGENT_GLM_PROVIDER": "fireworks",
+    "AGENT_TEXT_PROVIDER": "fireworks",
+    "AGENT_TEXT_MODEL": "deepseek-v4p1-flash",
     "AGENT_FINALIZER_PROVIDER": "fireworks",
     "AGENT_FINALIZER_MODEL": "deepseek-v4p1-flash",
     // Rollout: Agent-only allowlist by default; all permits every authenticated user with data access.
