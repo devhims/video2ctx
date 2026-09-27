@@ -12,3 +12,5 @@ vi.mock('cloudflare:workers', () => ({
 // Worker entrypoint tests only verify the Hono application. Avoid loading the
 // Cloudflare-only Agents runtime in Vitest's Node environment.
 vi.mock('agents', () => ({ Agent: class {} }));
+
+vi.mock('cloudflare:sockets', () => ({ connect: vi.fn() }));

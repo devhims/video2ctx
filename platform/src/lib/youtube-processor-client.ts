@@ -175,7 +175,7 @@ function failureFrom(payload: unknown): ProcessorFailure['error'] | undefined {
   return payload.error;
 }
 
-function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boolean {
+export function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boolean {
   if (operation.kind !== 'caption-tracks' || !isRecord(result)) return false;
   const metadata = result.meta;
   return Array.isArray(result.tracks)
@@ -184,7 +184,7 @@ function shouldFallbackResult(operation: YouTubeOperation, result: unknown): boo
     && metadata.partial === true;
 }
 
-function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
+export function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
   // Upstream transcript error labels are not reliable proof of permanent failure.
   // Retry across the pool, except invalid input or a confirmed access restriction.
   if (operation.kind === 'transcript') return error.code !== 'INVALID_INPUT' && error.code !== 'AUTH_REQUIRED';
@@ -232,6 +232,10 @@ async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload
 export async function runYouTubeOperation<T extends YouTubeOperation>(
   env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
+  if (String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard') {
+    const { runWorkerYouTubeOperation } = await import('./youtube-worker-extraction');
+    return runWorkerYouTubeOperation(env, operation, onDiagnostic) as Promise<YouTubeOperationResult<T>>;
+  }
   const body = JSON.stringify(operation);
   const extractionId = crypto.randomUUID();
   const operationStartedAt = Date.now();

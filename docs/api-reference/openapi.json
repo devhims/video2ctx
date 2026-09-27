@@ -7869,12 +7869,26 @@
                         "attempt": {
                           "type": "integer",
                           "minimum": 1,
-                          "maximum": 4
+                          "maximum": 5
                         },
                         "slot": {
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 3
+                        },
+                        "backend": {
+                          "type": "string",
+                          "enum": [
+                            "worker",
+                            "container"
+                          ]
+                        },
+                        "egress": {
+                          "type": "string",
+                          "enum": [
+                            "direct",
+                            "proxy"
+                          ]
                         },
                         "recordedAt": {
                           "type": "integer",
@@ -9231,12 +9245,26 @@
                     "attempt": {
                       "type": "integer",
                       "minimum": 1,
-                      "maximum": 4
+                      "maximum": 5
                     },
                     "slot": {
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 3
+                    },
+                    "backend": {
+                      "type": "string",
+                      "enum": [
+                        "worker",
+                        "container"
+                      ]
+                    },
+                    "egress": {
+                      "type": "string",
+                      "enum": [
+                        "direct",
+                        "proxy"
+                      ]
                     },
                     "recordedAt": {
                       "type": "integer",
@@ -10046,12 +10074,26 @@
                     "attempt": {
                       "type": "integer",
                       "minimum": 1,
-                      "maximum": 4
+                      "maximum": 5
                     },
                     "slot": {
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 3
+                    },
+                    "backend": {
+                      "type": "string",
+                      "enum": [
+                        "worker",
+                        "container"
+                      ]
+                    },
+                    "egress": {
+                      "type": "string",
+                      "enum": [
+                        "direct",
+                        "proxy"
+                      ]
                     },
                     "recordedAt": {
                       "type": "integer",

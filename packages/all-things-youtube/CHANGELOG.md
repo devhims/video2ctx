@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `all-things-youtube/client` as a supported export for `createYouTubeClient`, including browse, video signals, custom fetch transport and shared types.
+
 ## 0.6.2
 
 - Distinguish bot challenges, login restrictions, failed watch metadata, and malformed playability responses from missing captions. Empty catalogs only imply missing captions when metadata retrieval succeeded and the video is playable.

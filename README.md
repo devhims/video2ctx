@@ -243,7 +243,7 @@ flowchart LR
   api --> coordinator --> processor --> library --> youtube
 ```
 
-The Worker owns authentication, authorization, rate limits, credit metering, caching, private research, and the public HTTP contract. Outbound YouTube work is isolated in a private Cloudflare Container. Identical cache misses are coalesced by a Durable Object before the request reaches a processor instance; cache hits never wake a container.
+The Worker owns authentication, authorization, rate limits, credit metering, caching, private research, and the public HTTP contract. Outbound YouTube work uses a private Cloudflare Container by default. The opt-in Worker extraction backend runs core data operations directly, with proxy fallback, while retaining containers for storyboards and FFmpeg frames. See [Worker extraction](./reference/engineering/WORKER_EXTRACTION.md) for configuration and rollout. Identical cache misses are coalesced by a Durable Object before the request reaches a processor instance; cache hits never wake a container. With Worker extraction enabled, core cache misses execute in the Worker.
 
 The processor installs the published `all-things-youtube` npm package at an exact version recorded in its lockfile for general provider calls. Publish library changes before updating that dependency. Storyboards use a committed, CI-checked bundle of the shared storyboard implementation so a hosted storyboard fix can deploy with the processor. The processor image consumes that bundle and does not compile library source.
 

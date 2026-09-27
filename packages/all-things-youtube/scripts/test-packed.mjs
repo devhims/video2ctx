@@ -21,6 +21,11 @@ try {
   assert(entry.startsWith(temporary));
   const commonjs = require('all-things-youtube');
   const esm = await import(pathToFileURL(entry).href);
+  const clientEntry = require.resolve('all-things-youtube/client');
+  for (const api of [require('all-things-youtube/client'), await import(pathToFileURL(clientEntry).href)]) {
+    assert.equal(typeof api.createYouTubeClient, 'function');
+    assert.equal(typeof api.createYouTubeClient({ fetch: async () => Response.json({}) }).browse, 'function');
+  }
   assert.equal(typeof commonjs.getStoryboard, 'function');
   assert.equal(typeof esm.getStoryboard, 'function');
   const version = JSON.parse(await readFile(join(dirname(entry), '..', 'package.json'), 'utf8')).version;
