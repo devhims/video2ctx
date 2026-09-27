@@ -53,3 +53,26 @@ test('published extraction library reports bot-blocked metadata as upstream unav
   assert.ok(body.diagnostics.events.some(event => event.stage === 'caption_metadata' && event.status === 200));
   assert.ok(requests.every(url => url.includes('/player') || url.includes('/watch?')));
 });
+
+test('published extraction library reports confirmed missing captions as a terminal processor result', async t => {
+  const requests = [];
+  const player = { playabilityStatus: { status: 'OK' }, videoDetails: { videoId: 'AR1Gi3RHanE' } };
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = String(input);
+    requests.push(url);
+    return url.includes('/watch?')
+      ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(player)};`)
+      : Response.json(player);
+  });
+  const app = createProcessorApp(createYouTubeRuntime({}));
+  const response = await app.request('/operations', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'transcript', id: 'AR1Gi3RHanE', granularity: 'segment' }) });
+  const body = await response.json();
+  assert.equal(response.status, 404);
+  assert.equal(body.error.code, 'CAPTIONS_UNAVAILABLE');
+  assert.equal(body.error.retryable, false);
+  assert.equal(body.diagnostics.events.at(-1).code, 'CAPTIONS_UNAVAILABLE');
+  assert.ok(requests.some(url => url.includes('/watch?')));
+  assert.ok(requests.some(url => url.includes('/player')));
+  assert.equal(body.diagnostics.events.some(event => event.attempt !== undefined), false);
+});

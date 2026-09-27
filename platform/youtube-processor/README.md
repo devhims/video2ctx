@@ -29,9 +29,9 @@ Health output includes only `proxyConfigured` and the configured connection coun
 
 ### Transcript errors
 
-`all-things-youtube@0.6.2` distinguishes upstream access failures from missing captions. A bot challenge produces retryable `UNAVAILABLE`; upstream throttling remains `RATE_LIMITED`; failed or malformed metadata produces an upstream or invalid-response error. A real login or age restriction produces `AUTH_REQUIRED`. A confirmed playable video without a matching caption track retains `NOT_FOUND`. A usable catalog from either metadata source can recover the extraction even if another source failed.
+`all-things-youtube@0.6.3` distinguishes upstream access failures from missing captions. A bot challenge produces retryable `UNAVAILABLE`; upstream throttling remains `RATE_LIMITED`; failed or malformed metadata produces an upstream or invalid-response error. A real login or age restriction produces `AUTH_REQUIRED`. Confirmed playable metadata without any caption tracks produces non-retryable `CAPTIONS_UNAVAILABLE`. A missing requested language or track within an existing caption catalog retains `NOT_FOUND`. A usable catalog from either metadata source can recover the extraction even if another source failed.
 
-The Worker preserves an earlier upstream failure if a later slot reports missing captions. Wrapped agent tool failures retain safe upstream error codes and the extraction ID for correlation with processor attempts.
+The Worker preserves an earlier upstream failure if a later slot reports `NOT_FOUND`. Confirmed `CAPTIONS_UNAVAILABLE` is terminal and replaces earlier transient failures. Wrapped agent tool failures retain safe upstream error codes and the extraction ID for correlation with processor attempts.
 
 ### Rollout and rollback
 
