@@ -29,6 +29,9 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   listApiKeys: 'first-party',
   deleteApiKey: 'first-party',
   resolveInput: 'first-party',
+  listRecentSources: 'first-party',
+  saveRecentSource: 'first-party',
+  getRecentSource: 'first-party',
   startAgentRun: 'consumer',
   getAgentAccess: 'consumer',
   listAgentSessions: 'consumer',
@@ -98,6 +101,9 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
  * Tests keep this inventory aligned with the non-consumer audience map.
  */
 export const OPENAPI_INTERNAL_SAFETY: Readonly<Record<string, string>> = {
+  listRecentSources: 'Browser-session only. Lists inputs belonging to the authenticated user without exposing shared asset references.',
+  saveRecentSource: 'Browser-session only. Resolves existing provider assets server-side; never accepts client-supplied R2 keys or video payloads.',
+  getRecentSource: 'Browser-session only. Verifies user ownership before reading the saved shared references.',
   inspectLandingYouTubeVideo: 'Public, rate-limited demo route; do not use it as a credentialed bulk-data API.',
   submitScaleInquiry: 'Public lead form; validate Turnstile and rate limits, and never let the caller choose the notification recipient.',
   signInWithMagicLink: 'Sends account email; rate-limit callers and never disclose whether an address is registered.',

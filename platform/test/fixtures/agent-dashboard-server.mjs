@@ -135,6 +135,14 @@ createServer(async (req, res) => {
     if (runId) return reply(200, success(runId));
   }
   if (url.pathname === '/v1/projects') return reply(200, { projects: [] });
+  if (url.pathname === '/v1/sources/recent') {
+    if (req.method === 'POST') {
+      let raw = ''; for await (const chunk of req) raw += chunk;
+      const payload = JSON.parse(raw);
+      return reply(201, { source: { id: crypto.randomUUID(), input: payload.input, title: payload.input, kind: payload.snapshot.kind, updatedAt: Date.now() } });
+    }
+    return reply(200, { sources: [] });
+  }
   if (url.pathname === '/v1/monitors') return reply(200, { monitors: [] });
   if (url.pathname === '/v1/notifications') return reply(200, { notifications: [] });
   if (url.pathname === '/v1/billing') return reply(200, { plan: 'starter', status: 'active', creditBalance: 679, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false });

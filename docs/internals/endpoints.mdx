@@ -33,6 +33,9 @@ Called by the video2ctx web application or an explicit signed-in account action.
 | `GET` | `/v1/oauth/youtube/connect` | `createYouTubeConnectUrl` | Create a YouTube OAuth URL | `sessionCookie` or `demoUser` | Returns a state-bound OAuth URL; start it only from a user-initiated connection flow. |
 | `POST` | `/v1/resolve` | `resolveInput` | Route universal UI input | `sessionCookie` or `cliSession` or `bearerApiKey` or `apiKey` or `demoUser` | First-party input router; its dispatch behavior is not a stable public API contract. |
 | `POST` | `/v1/scale-inquiries` | `submitScaleInquiry` | Submit a Scale plan inquiry | Public or protocol-signed | Public lead form; validate Turnstile and rate limits, and never let the caller choose the notification recipient. |
+| `GET` | `/v1/sources/recent` | `listRecentSources` | List recent Sources inputs | `sessionCookie` or `demoUser` | Browser-session only. Lists inputs belonging to the authenticated user without exposing shared asset references. |
+| `POST` | `/v1/sources/recent` | `saveRecentSource` | Remember a Sources search or inspection | `sessionCookie` or `demoUser` | Browser-session only. Resolves existing provider assets server-side; never accepts client-supplied R2 keys or video payloads. |
+| `GET` | `/v1/sources/recent/{id}` | `getRecentSource` | Restore saved Sources data | `sessionCookie` or `demoUser` | Browser-session only. Verifies user ownership before reading the saved shared references. |
 
 ## Callbacks and signed links
 

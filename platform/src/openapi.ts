@@ -1,6 +1,7 @@
 import { storedExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
+import { saveSourceSchema, sourceSnapshotSchema } from './lib/source-history';
 import { compactAgentRunSchema } from './agents/response';
 import { agentRunProgressSchema } from './agents/runtime/run-progress';
 import {
@@ -1086,6 +1087,30 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/sources/recent': {
+      get: {
+        tags: ['Projects'], operationId: 'listRecentSources', summary: 'List recent Sources inputs', security: privateSecurity,
+        description: 'First-party dashboard history. Returns the thirty most recent successful searches and inspections for the signed-in user.',
+        responses: { '200': jsonResponse('Recent source summaries.', { type: 'object', properties: { sources: { type: 'array', items: schemaRef('RecentSource') } } }), ...standardErrors },
+      },
+      post: {
+        tags: ['Projects'], operationId: 'saveRecentSource', summary: 'Remember a Sources search or inspection', security: privateSecurity,
+        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data.',
+        requestBody: jsonBody(z.toJSONSchema(saveSourceSchema, { target: 'openapi-3.0' })),
+        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource') } }),
+          '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), ...standardErrors },
+      },
+    },
+    '/v1/sources/recent/{id}': {
+      get: {
+        tags: ['Projects'], operationId: 'getRecentSource', summary: 'Restore saved Sources data', security: privateSecurity,
+        description: 'Loads the user-owned references, hydrates shared immutable assets, and moves the entry to the top of history. No provider request or credit charge is made.',
+        parameters: [pathParameter('id', 'Recent source UUID.')],
+        responses: { '200': jsonResponse('Saved source and displayed data.', { type: 'object', properties: {
+          source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }),
+        } }), '404': responseRef('NotFound'), ...standardErrors },
+      },
+    },
     '/v1/projects': {
       get: {
         tags: ['Projects'],
@@ -2152,6 +2177,10 @@ export const openApiDocument = {
         },
       },
       AgentRunProgress: z.toJSONSchema(agentRunProgressSchema, { target: 'openapi-3.0' }),
+      RecentSource: { type: 'object', required: ['id', 'input', 'title', 'kind', 'updatedAt'], properties: {
+        id: { type: 'string', format: 'uuid' }, input: { type: 'string' }, title: { type: 'string' },
+        kind: { type: 'string', enum: ['search', 'inspection'] }, updatedAt: { type: 'integer' },
+      } },
       CompactAgentRun: z.toJSONSchema(compactAgentRunSchema, { target: 'openapi-3.0' }),
       AgentRunReceipt: {
         type: 'object',

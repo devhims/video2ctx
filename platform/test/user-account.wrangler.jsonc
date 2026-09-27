@@ -36,6 +36,7 @@
     }
   ],
   "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-test-evidence"},{"binding":"VIDEO_ASSETS","bucket_name":"session-catalog-assets-test"}],
+  "kv_namespaces": [{ "binding": "YOUTUBE_CACHE", "id": "00000000000000000000000000000001" }],
   "vars": {
     "STARTER_ONBOARDING_CREDITS": "1000",
     "BUILDER_MONTHLY_CREDITS": "20000"
