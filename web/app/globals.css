@@ -1613,13 +1613,14 @@ html:has(.developer-page) body {
   width: 4rem;
   aspect-ratio: 16 / 9;
   display: grid;
+  position: relative;
   place-items: center;
   overflow: hidden;
   border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-surface-muted);
   color: var(--color-dashboard-muted);
 }
-.recent-source-visual img { width: 100%; height: 100%; object-fit: cover; }
+.recent-source-visual img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .recent-source-visual > * { grid-area: 1 / 1; }
 .recent-source-visual > span { font-size: .7rem; font-weight: 600; }
 .recent-source-skeleton {

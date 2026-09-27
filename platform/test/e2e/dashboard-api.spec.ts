@@ -146,15 +146,16 @@ test('recent sources use matching skeleton rows while history is loading', async
   } finally { await scenario.release(); await scenario.clear(); }
 });
 
-for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and search icons share dimensions on mobile (${theme})`, async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+for (const mobile of [false, true]) for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and search icons share dimensions on ${mobile ? 'mobile' : 'desktop'} (${theme})`, async ({ page }, testInfo) => {
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: theme });
   const sources = [
     { id: '25c715cb-30f4-4d24-a66f-1cab99d4b4c6', input: `https://youtube.com/watch?v=${videoId}`, title: 'Saved video thumbnail', kind: 'inspection', updatedAt: Date.now(), thumbnailUrl: 'https://thumb.example.test/video.svg' },
     { id: '90abdb7b-af0c-429c-9c9d-02949a76d1c6', input: 'Opus vs Astra', title: 'Saved search query', kind: 'search', updatedAt: Date.now() },
   ];
   await page.route('**/api/platform/v1/sources/recent', route => route.fulfill({ json: { sources } }));
-  await page.route('https://thumb.example.test/video.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#334155"/></svg>' }));
+  // YouTube's sddefault images are 4:3 with black bars around a 16:9 picture.
+  await page.route('https://thumb.example.test/video.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="black"/><rect y="30" width="320" height="180" fill="#334155"/></svg>' }));
   await page.goto('/dashboard/sources');
   const video = page.getByRole('button', { name: /Saved video thumbnail/ });
   const search = page.getByRole('button', { name: /Saved search query/ });
@@ -165,6 +166,11 @@ for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and 
   expect(videoBounds?.width).toBe(searchBounds?.width);
   expect(videoBounds?.height).toBe(searchBounds?.height);
   expect(videoBounds?.width).toBe(64);
+  expect(videoBounds?.height).toBe(36);
+  const imageBounds = await video.locator('img').boundingBox();
+  expect(imageBounds?.width).toBe(videoBounds?.width);
+  expect(imageBounds?.height).toBe(videoBounds?.height);
+  expect(imageBounds?.y).toBe(videoBounds?.y);
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   await page.screenshot({ path: testInfo.outputPath(`recent-sources-${theme}.png`), fullPage: true });
 });
