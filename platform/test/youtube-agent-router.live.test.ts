@@ -12,6 +12,28 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     { message: 'Compare it with the other one', route: 'finalize', responseIntent: 'clarification', terms: [] },
     { message: 'Write a standalone Python function to sort integers', route: 'finalize', responseIntent: 'rejected', terms: [] },
   ];
+  it.each([
+    { message: 'how to get the most out of opus 5.5?', required: [/opus\s*5\.5/i], forbidden: [/4\.5/] },
+    { message: 'Explain running a 7B model locally with 8 GB RAM without a GPU', required: [/7\s*b/i, /8\s*gb/i, /cpu|without.*gpu|no.*gpu/i], forbidden: [] },
+    { message: 'Show 20-minute vegetarian meals under 500 calories', required: [/20[- ]?(?:min|minute)/i, /vegetarian/i, /(?:under|below|less than)\s*500|<\s*500/i], forbidden: [] },
+    { message: 'Find Nikon Z6 III low-light tutorials from 2025, not reviews', required: [/nikon/i, /z6\s*iii/i, /low[- ]?light/i, /2025/, /-reviews?|not.*review|no.*review|exclude.*review/i], forbidden: [] },
+  ])('preserves search facts on the first attempt: $message', async ({ message, required, forbidden }) => {
+    const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
+    if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
+    const attempts: { attempt: number; outcome: string }[] = [];
+    const decision = await classifyCapabilityWithModel({ message,
+      model: createAgentModel({ AGENT_TEXT_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: 'glm-5p3-flash',
+        FIREWORKS_API_KEY: apiKey, AI_GATEWAY_ID: '' } as unknown as Env,
+        `router-fidelity:${crypto.randomUUID()}`, 'low', { model_role: 'classifier' }),
+      signal: AbortSignal.timeout(25_000), onDiagnostic: event => attempts.push(event),
+    });
+    expect(decision.route).toBe('topic_research');
+    const query = decision.route === 'topic_research' ? decision.searchQuery ?? '' : '';
+    for (const pattern of required) expect(query).toMatch(pattern);
+    for (const pattern of forbidden) expect(query).not.toMatch(pattern);
+    expect(attempts).toMatchObject([{ attempt: 1, outcome: 'valid' }]);
+    console.info(JSON.stringify({ message, searchQuery: query, attempts: attempts.length }));
+  }, 30_000);
   it('routes a request to list user messages to the context finalizer', async () => {
     const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
     if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
