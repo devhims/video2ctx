@@ -105,11 +105,11 @@ for (const theme of ['light', 'dark'] as const) test(`Sources and Agent share th
     '/v1/sources/recent': { body: { sources: [] } },
     '/v1/agent/sessions': { body: { sessions: [], nextCursor: null } },
   } });
-  const presentation = async (title: string) => page.getByRole('heading', { name: title, exact: true }).evaluate(heading => {
+  const presentation = async (title: string) => page.getByRole('heading', { name: title, exact: true }).evaluate(`heading => {
     const style = getComputedStyle(heading);
-    const container = getComputedStyle(heading.parentElement!);
+    const container = getComputedStyle(heading.parentElement);
     return { fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight, padding: container.padding };
-  });
+  }`);
   try {
     await page.goto('/dashboard/sources');
     await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
@@ -126,7 +126,7 @@ for (const theme of ['light', 'dark'] as const) test(`Sources and Agent share th
     await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toHaveCount(0);
     await page.goto('/dashboard/sources');
     await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   } finally { await scenario.clear(); }
 });
 
