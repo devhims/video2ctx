@@ -13,6 +13,7 @@ import { useAccountResource, useDashboardDraft, useDashboardCache } from './Dash
 import pageStyles from './DashboardPages.module.css';
 import { Icon } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
+import { SOURCES_HOME_EVENT } from './dashboard-routes';
 
 import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, Inspector, RecentSource, SourceSnapshot } from './research-types';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
@@ -136,6 +137,16 @@ export default function SourcesClient({ active }: {active:boolean}) {
       setNotice('Cancelled. Completed results are still available.');
     }
   }, []);
+
+  const showRecentSources = useCallback(() => {
+    cancelOperation(); setInspector(null); setItems([]); setHasSearched(false);
+    setQuery(''); setTranscriptQuery(''); setError(''); setNotice('');
+  }, [cancelOperation, setInspector, setItems, setHasSearched, setQuery, setTranscriptQuery]);
+
+  useEffect(() => {
+    window.addEventListener(SOURCES_HOME_EVENT, showRecentSources);
+    return () => window.removeEventListener(SOURCES_HOME_EVENT, showRecentSources);
+  }, [showRecentSources]);
 
   useEffect(() => () => { operationController.current?.abort(); }, []);
   useEffect(() => {
@@ -355,7 +366,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         <div className='workspace-view'>
           <>
             <section className='source-studio' aria-labelledby='source-studio-title'>
-              <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={() => { cancelOperation(); setInspector(null); setItems([]); setHasSearched(false); setError(''); }}>Recent sources</button>}</header>
+              <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={showRecentSources}>Recent sources</button>}</header>
               <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
@@ -393,11 +404,11 @@ export default function SourcesClient({ active }: {active:boolean}) {
               hasSearched || loading || items.length ? <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
               : <section className='source-results' aria-labelledby='recent-sources-title'>
                 <header><h2 id='recent-sources-title'>Recent sources</h2></header>
-                {historyLoading ? <p role='status'>Loading recent sources…</p> : null}
+                {historyLoading && !recentSources.length ? <RecentSourcesSkeleton /> : null}
                 {historyError ? <div className='alert error' role='alert'>{historyError} <button onClick={() => void loadHistory()}>Retry recent sources</button></div> : null}
                 {!historyLoading && !historyError && !recentSources.length ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>No recent sources yet</h3><p>Search YouTube or inspect a link to start your history.</p></div></div> : null}
-                <div className='source-result-list recent-source-list'>{recentSources.map(source => <button key={source.id} onClick={() => void openRecentSource(source)}>
-                  <span className={pageStyles.rowIcon}><Icon name='search' size={20} /></span>
+                <div className='source-result-list recent-source-list' aria-busy={historyLoading}>{recentSources.map(source => <button key={source.id} onClick={() => void openRecentSource(source)}>
+                  <span className='recent-source-visual'>{source.kind === 'search' ? <Icon name='search' size={20} /> : <><span aria-hidden='true'>YT</span>{source.thumbnailUrl && <img src={source.thumbnailUrl} alt='' loading='lazy' onError={event => { event.currentTarget.hidden = true; }} />}</>}</span>
                   <span className='source-result-copy'><b>{source.title}</b><small>{source.kind === 'search' ? 'Search' : source.input}</small><em>{new Date(source.updatedAt).toLocaleString()}</em></span>
                   <span className='source-result-action'>Open <b aria-hidden='true'>→</b></span>
                 </button>)}</div>
@@ -408,6 +419,17 @@ export default function SourcesClient({ active }: {active:boolean}) {
         {historyError && (inspector || hasSearched || loading) ? <div className='alert error' role='alert'>{historyError}</div> : null}
     </>
   );
+}
+
+function RecentSourcesSkeleton() {
+  return <div className='source-result-list recent-source-list' role='status' aria-label='Loading recent sources' aria-busy='true'>
+    <span className='sr-only'>Loading recent sources</span>
+    {[0, 1, 2].map(index => <div className='recent-source-skeleton' key={index} aria-hidden='true'>
+      <span className='recent-source-visual' />
+      <span className='source-result-copy'><b><i className='ui-bar' data-width='long' /></b><small><i className='ui-bar' data-width='medium' /></small><em><i className='ui-bar' data-width='short' /></em></span>
+      <span className='source-result-action'><i className='ui-bar' /></span>
+    </div>)}
+  </div>;
 }
 
 function SourceChannelSkeleton() {

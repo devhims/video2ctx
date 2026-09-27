@@ -8490,6 +8490,11 @@
           },
           "updatedAt": {
             "type": "integer"
+          },
+          "thumbnailUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Saved thumbnail reference for an inspected URL, when available."
           }
         }
       },

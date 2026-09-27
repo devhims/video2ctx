@@ -2180,6 +2180,7 @@ export const openApiDocument = {
       RecentSource: { type: 'object', required: ['id', 'input', 'title', 'kind', 'updatedAt'], properties: {
         id: { type: 'string', format: 'uuid' }, input: { type: 'string' }, title: { type: 'string' },
         kind: { type: 'string', enum: ['search', 'inspection'] }, updatedAt: { type: 'integer' },
+        thumbnailUrl: { type: 'string', format: 'uri', description: 'Saved thumbnail reference for an inspected URL, when available.' },
       } },
       CompactAgentRun: z.toJSONSchema(compactAgentRunSchema, { target: 'openapi-3.0' }),
       AgentRunReceipt: {

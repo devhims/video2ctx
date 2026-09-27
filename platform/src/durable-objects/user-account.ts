@@ -119,7 +119,8 @@ export class UserAccountDO extends DurableObject<Env> {
     const existing = this.ctx.storage.sql.exec<{ id: string }>('SELECT id FROM recent_sources WHERE source_key = ?', key).toArray()[0];
     const entry: RecentSource = { id: existing?.id ?? crypto.randomUUID(), input: input.input,
       title: input.title,
-      kind: input.snapshot.kind, updatedAt: this.nextSourceUpdate() };
+      kind: input.snapshot.kind, updatedAt: this.nextSourceUpdate(),
+      ...(input.snapshot.kind === 'inspection' && input.snapshot.inspector.thumbnailUrl ? { thumbnailUrl: input.snapshot.inspector.thumbnailUrl } : {}) };
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`INSERT INTO recent_sources (id, source_key, input, title, kind, updated_at, snapshot)
         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_key) DO UPDATE SET
@@ -133,9 +134,21 @@ export class UserAccountDO extends DurableObject<Env> {
 
   listSources(): RecentSource[] {
     this.assertActive();
-    return this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number }>(
-      'SELECT id, input, title, kind, updated_at FROM recent_sources ORDER BY updated_at DESC, rowid DESC LIMIT ?', RECENT_SOURCE_LIMIT,
-    ).toArray().map(({ updated_at, ...row }) => ({ ...row, updatedAt: updated_at }));
+    return this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number; thumbnail_url: string | null }>(
+      `SELECT id, input, title, kind, updated_at, json_extract(snapshot, '$.inspector.thumbnailUrl') AS thumbnail_url
+       FROM recent_sources ORDER BY updated_at DESC, rowid DESC LIMIT ?`, RECENT_SOURCE_LIMIT,
+    ).toArray().map(({ updated_at, thumbnail_url, ...row }) => ({ ...row, updatedAt: updated_at, ...(thumbnail_url ? { thumbnailUrl: thumbnail_url } : {}) }));
+  }
+
+  listSourceReferences() {
+    return this.listSources().map(source => ({ source, snapshot: source.kind === 'inspection' && !source.thumbnailUrl
+      ? sourceReferenceSchema.parse(JSON.parse(this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?', source.id).one().snapshot)) : null }));
+  }
+
+  cacheSourceThumbnail(id: string, url: string): void {
+    this.assertActive();
+    this.ctx.storage.sql.exec(`UPDATE recent_sources SET snapshot = json_set(snapshot, '$.inspector.thumbnailUrl', ?)
+      WHERE id = ? AND kind = 'inspection' AND json_extract(snapshot, '$.inspector.thumbnailUrl') IS NULL`, z.string().url().parse(url), z.string().uuid().parse(id));
   }
 
   getSource(id: string): { source: RecentSource; snapshot: SourceReference } | null {

@@ -5,6 +5,26 @@ import { readYouTubeCacheEntry } from './youtube-cache-coordinator';
 import { routeInput, withYouTubeMetadata } from './youtube';
 import { sourceSnapshotSchema, type SaveSourceInput, type SaveReferencedSource, type SourceReference, type SourceSnapshot } from './source-history';
 
+function thumbnailUrl(data: Record<string, unknown>): string | undefined {
+  const images = data.thumbnails as Array<{ url?: string; width?: number }> | undefined;
+  return images?.filter(image => typeof image.url === 'string').sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.url;
+}
+
+/** Older entries resolve their thumbnail from their existing saved metadata version. */
+export async function sourceThumbnail(env: Env, reference: SourceReference): Promise<string | undefined> {
+  if (reference.kind !== 'inspection') return;
+  if (reference.inspector.thumbnailUrl) return reference.inspector.thumbnailUrl;
+  const metadata = reference.inspector.assets.metadata;
+  if (metadata) {
+    const stored = await videoCatalog(env)?.readVersion<Record<string, unknown>>(metadata);
+    return stored ? thumbnailUrl(stored.value) : undefined;
+  }
+  if (reference.inspector.entity) {
+    const object = await env.VIDEO_ASSETS.get(reference.inspector.entity);
+    if (object) return thumbnailUrl(await object.json<Record<string, unknown>>());
+  }
+}
+
 // Only public provider payloads enter this bucket. Inputs and user selections stay in the user DO.
 async function saveShared(env: Env, value: unknown): Promise<string> {
   const payload = JSON.stringify(value);
@@ -57,6 +77,7 @@ export async function referenceSource(env: Env, value: SaveSourceInput): Promise
       requestedData: source.requestedData, dataErrors: source.dataErrors, assets,
       entity: source.type !== 'video' ? await saveShared(env, data) : undefined,
       channel: channel ? await saveShared(env, channel) : undefined,
+      thumbnailUrl: thumbnailUrl(data),
     },
   } };
 }

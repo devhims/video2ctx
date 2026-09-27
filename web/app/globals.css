@@ -1606,8 +1606,32 @@ html:has(.developer-page) body {
 }
 
 .source-result-list.recent-source-list > button {
-  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
 }
+
+.recent-source-visual {
+  width: 4rem;
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius-dashboard-sm);
+  background: var(--color-dashboard-surface-muted);
+  color: var(--color-dashboard-muted);
+}
+.recent-source-visual img { width: 100%; height: 100%; object-fit: cover; }
+.recent-source-visual > * { grid-area: 1 / 1; }
+.recent-source-visual > span { font-size: .7rem; font-weight: 600; }
+.recent-source-skeleton {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: 18px 8px;
+  border-bottom: 1px solid var(--color-dashboard-rule);
+}
+.recent-source-skeleton .recent-source-visual { background: var(--color-dashboard-rule); animation: dashboardSkeletonPulse 1.8s ease-in-out infinite; }
+.recent-source-skeleton .source-result-action { width: 3rem; }
 
 .source-result-thumb img,
 .source-result-thumb > i {
@@ -1769,6 +1793,7 @@ html:has(.developer-page) body {
   .source-result-skeletons small,
   .source-skeleton-media,
   .source-skeleton-lines i,
+  .recent-source-skeleton .recent-source-visual,
   .ui-bar::before { animation: none; }
 }
 
@@ -2632,6 +2657,7 @@ html:has(.developer-page) body {
     grid-template-columns: 7.5rem minmax(0, 1fr);
     gap: var(--space-md);
   }
+  .recent-source-skeleton { gap: var(--space-md); }
 
   .source-result-action {
     display: none;
