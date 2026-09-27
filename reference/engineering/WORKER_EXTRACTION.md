@@ -2,7 +2,7 @@
 
 The Worker can execute core YouTube operations using the shared extraction library. It tries YouTube directly, then retries eligible failures through the configured Decodo gateways. Decodo selects the exit IP; the Worker still runs the YouTube client and verifies YouTube's TLS certificate.
 
-The rollout switch defaults to `container`. Setting `YOUTUBE_EXTRACTION_BACKEND=worker` moves search, browse, video metadata and signals, channels, playlists, comments, caption catalogs, transcripts and end screens into the Worker. Storyboards remain in the processor container, including its image conversion. Exact frames remain in the FFmpeg container. Caching, coalescing, authentication, billing and public result shapes stay at their existing boundaries.
+The rollout switch defaults to `worker`. `YOUTUBE_EXTRACTION_BACKEND=worker` moves search, browse, video metadata and signals, channels, playlists, comments, caption catalogs, transcripts and end screens into the Worker. Storyboards remain in the processor container, including its image conversion. Exact frames remain in the FFmpeg container. Caching, coalescing, authentication, billing and public result shapes stay at their existing boundaries.
 
 ```mermaid
 %%{init: {'themeVariables': {'sequenceNumberColor': '#ffffff', 'activationBkgColor': '#334155', 'activationBorderColor': '#334155'}}}%%
@@ -43,7 +43,7 @@ Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array o
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `YOUTUBE_EXTRACTION_BACKEND` | `container` | Set to `worker` for core extraction |
+| `YOUTUBE_EXTRACTION_BACKEND` | `worker` | Set to `container` to roll back core extraction |
 | `YOUTUBE_EXTRACTION_TIMEOUT_MS` | `120000` | Entire operation including retry waits |
 | `YOUTUBE_DIRECT_TIMEOUT_MS` | `8000` | Direct attempt budget |
 | `YOUTUBE_PROXY_TIMEOUT_MS` | `25000` | Budget for each proxy attempt |
@@ -62,4 +62,4 @@ Safe attempt logs contain route, slot, outcome, duration, byte count and status,
 
 Local checks include the full platform and container suites, library packed-package tests, auth integration, documentation generation and Worker startup profiling. See `WORKER_EXTRACTION_RESULTS.md` for the deployed checks.
 
-The production default remains `container`. Before enabling Worker extraction, review the new TLS dependency and deploy the switch to a controlled environment. Watch success rate, latency, proxy usage and CPU for uncached operations. Increase traffic only after those results are acceptable. Set the switch back to `container` and deploy to roll back core extraction; retain processor bindings and image configuration throughout this rollout. There is no automatic container fallback in Worker mode.
+Deploying the merged configuration enables Worker extraction by default. No additional toggle is required. Watch success rate, latency, proxy usage and CPU for uncached operations after deployment. Sustained load testing and independent review of the new TLS dependency remain follow-up work. Set the switch back to `container` and deploy to roll back core extraction; retain processor bindings and image configuration throughout this rollout. There is no automatic container fallback in Worker mode.

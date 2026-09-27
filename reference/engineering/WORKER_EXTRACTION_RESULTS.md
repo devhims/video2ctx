@@ -30,6 +30,6 @@ The temporary Worker had a 30,000 ms CPU limit. Deployment reported 32 ms startu
 - Final focused extraction/processor/diagnostics suite: 55 passed, including the added stalled-cleanup test.
 - Final platform type check, generated API documentation check and storyboard bundle check passed.
 
-Skipped tests were reported by the existing suites. Browser E2E, sustained load testing and an independent review of the new TLS dependency remain rollout checks. The production configuration stays on the container backend.
+Skipped tests were reported by the existing suites. PR CI also passed auth and dashboard browser E2E. Sustained load testing and an independent review of the new TLS dependency remain follow-up work. The PR now configures Worker extraction as the default for the next deployment; the deployed production Worker has not been changed by this test.
 
 The temporary Worker was deleted after verification, and the local copied deployment secrets were removed. The checked-in fixture contains fixed test cases and no credentials. Follow `WORKER_EXTRACTION.md` for configuration, source dependency setup and rollback.

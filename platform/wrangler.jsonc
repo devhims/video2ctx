@@ -27,8 +27,8 @@
     "POLAR_ENVIRONMENT": "production",
     "POLAR_BUILDER_PRODUCT_ID": "",
     "LANDING_DEMO_RATE_LIMIT_MODE": "enforced",
-    // Opt in after validating Worker extraction. Container is the rollback path.
-    "YOUTUBE_EXTRACTION_BACKEND": "container",
+    // Core extraction runs in Workers. Set to container to roll back.
+    "YOUTUBE_EXTRACTION_BACKEND": "worker",
     "YOUTUBE_EXTRACTION_TIMEOUT_MS": "120000",
     "YOUTUBE_DIRECT_TIMEOUT_MS": "8000",
     "YOUTUBE_PROXY_TIMEOUT_MS": "25000",
