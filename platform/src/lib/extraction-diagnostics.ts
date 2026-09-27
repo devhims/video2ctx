@@ -23,7 +23,8 @@ export const extractionEventSchema = z.object({
 
 export const extractionAttemptSchema = z.object({
   version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
-  extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(4), slot: z.number().int().min(0).max(3),
+  extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(5), slot: z.number().int().min(0).max(3),
+  backend: z.enum(['worker', 'container']).optional(), egress: z.enum(['direct', 'proxy']).optional(),
   recordedAt: count, elapsedMs: metric, status: z.number().int().min(100).max(599).optional(),
   outcome: z.enum(['success', 'failed', 'fallback', 'transport_error']),
   failureKind: z.enum(['timeout', 'canceled', 'transport', 'invalid_response', 'upstream']).optional(),
