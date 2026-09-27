@@ -67,15 +67,14 @@ function SessionList() {
     {!pendingMessage && <header className='agent-welcome'><h2>Ask about a video or topic</h2></header>}
     {pendingMessage && <div className='agent-messages'><PendingUserMessage message={pendingMessage} /></div>}
     <MessageComposer onSendAction={showPendingMessage} onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
-    <div hidden={!!pendingMessage}><form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
+    <div className='agent-history' hidden={!!pendingMessage}><SessionResults key={`${search}:${revision}`} search={search} searchForm={<form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
       <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
       <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
-    </form>
-    <SessionResults key={`${search}:${revision}`} search={search} /></div>
+    </form>} /></div>
   </>;
 }
 
-function SessionResults({ search }: { search: string }) {
+function SessionResults({ search, searchForm }: { search: string; searchForm: ReactNode }) {
   const cache = useAgentSessionCache();
   const [page, setPage] = useState<AgentSessionList>(() => cache.readList(search) ?? { sessions: [], nextCursor: null });
   const [loading, setLoading] = useState(true);
@@ -102,6 +101,7 @@ function SessionResults({ search }: { search: string }) {
     finally { setLoading(false); }
   };
   return <>
+    {(page.sessions.length > 0 || search) && searchForm}
     <div className='agent-list-heading'><h3>{search ? 'Search results' : 'Recent sessions'}</h3><button className='agent-icon-button' aria-label='Refresh sessions' title='Refresh sessions' disabled={loading} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {error && <p role='alert' className='alert error'>{error}</p>}
     <div className='agent-session-list' aria-busy={loading}>

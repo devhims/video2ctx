@@ -118,10 +118,12 @@ for (const theme of ['light', 'dark'] as const) test(`Sources and Agent share th
     await page.screenshot({ path: testInfo.outputPath(`sources-empty-${theme}.png`), fullPage: true });
     await page.getByRole('link', { name: 'Agent', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toHaveCount(0);
     expect(await presentation('No sessions yet')).toEqual(sourceStyle);
     await page.screenshot({ path: testInfo.outputPath(`sessions-empty-${theme}.png`), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toHaveCount(0);
     await page.goto('/dashboard/sources');
     await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
