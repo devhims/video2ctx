@@ -122,7 +122,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
         'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". Also set researchVideoCount explicitly. Usually choose 1-2 for a narrow question, 3 for an ordinary comparison, and 4-8 only when the requested breadth warrants it. Fewer focused sources leave more time for careful extraction. This is a research target, not proof that the answer is incomplete if fewer sufficient sources are found.',
         'For all finalize decisions set researchVideoCount to 0. For every executable route explicitly choose its researchVideoCount.',
         'Set requiredVideoCount only when the user explicitly requests that many source videos, not that many recommendations or answer items. Set researchVideoCount to that required count up to the capacity of 8; preserve the actual required count separately. For inspect_video set researchVideoCount to 1.',
-        'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name and requested task. The application executes this search immediately; no separate search-planning step is needed.',
+        'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name, exact model/version numbers, dates, identifiers, and requested task. Never correct or substitute a user-supplied version based on remembered releases, even if it seems unfamiliar or nonexistent. Search the supplied name and version first; discovery establishes available evidence. For example, Opus 5.5 must remain Opus 5.5, never Opus 4.5. The application executes this search immediately; no separate search-planning step is needed.',
         'When the request targets a supplied channel, set channelId from suppliedChannelIds. The application will inspect its identity and Videos tab and restrict search to that channel. Do not replace channel research with an unrestricted search.',
         'Resolve every subject of a specific-video comparison into comparisonVideoIds using suppliedVideoIds and history. Do not drop an earlier video when the current message introduces a new URL. If all subjects have saved transcripts, choose finalize. If just one needs retrieval, choose inspect_video for that video and retain all comparisonVideoIds. If several need retrieval, choose topic_research with comparisonVideoIds and researchVideoCount matching that set; discovery will be skipped. If the earlier reference is ambiguous, ask for clarification.',
         'Otherwise return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
@@ -179,6 +179,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
     if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
+    if (parsed.success && feedback.length === 0) feedback = searchQueryNumberIssues(parsed.data, input);
     input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
       elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });
@@ -195,6 +196,25 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   }
   throw new ApiError(502, 'AGENT_CLASSIFICATION_INVALID',
     `Classification could not produce a valid routing decision after one repair. Invalid fields: ${feedback.map(issue => issue.path || 'tool call').join(', ')}. Please retry the request.`);
+}
+
+/** Dotted numeric constraints include model versions and must survive query rewriting.
+ * Keep this independent of a release catalog, which would repeat the model's mistake.
+ * URLs are references, not search constraints. Follow-ups without explicit numbers
+ * can still resolve their subject from conversation history.
+ */
+function searchQueryNumberIssues(
+  decision: z.infer<typeof classifierDecisionSchema>, input: CapabilityClassifierInput,
+): { path: string; code: string; message: string }[] {
+  if (decision.route !== 'topic_research' || decision.comparisonVideoIds?.length) return [];
+  const numbers = (text: string) => new Set(text.replace(/https?:\/\/\S+/gi, '').match(/(?<![\d.])\d+(?:\.\d+)+(?!\d|\.\d)/g) ?? []);
+  const requested = numbers(input.message);
+  if (!requested.size) return [];
+  const proposed = numbers(decision.searchQuery ?? '');
+  const allowed = new Set([...requested, ...(input.conversationHistory ?? []).flatMap(turn => [...numbers(turn.user)])]);
+  if ([...requested].every(value => proposed.has(value)) && [...proposed].every(value => allowed.has(value))) return [];
+  return [{ path: 'searchQuery', code: 'changed_numeric_constraint',
+    message: `Preserve these exact dotted numbers from the current request: ${[...requested].join(', ')}. Do not replace or drop them. Additional versions must come from supplied user messages, not remembered product releases. Search the requested subject as written.` }];
 }
 
 function comparisonScopeIssues(
