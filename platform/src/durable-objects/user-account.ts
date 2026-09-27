@@ -2,6 +2,7 @@ import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
 import type { AgentRequest, AgentAdmission } from '../agents/contracts';
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
+import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
 
 const MAX_SEARCH_TEXT_LENGTH = 32_000;
 const MAX_TITLE_LENGTH = 80;
@@ -100,6 +101,7 @@ export class UserAccountDO extends DurableObject<Env> {
     this.ctx.storage.sql.exec('DELETE FROM user_session_runs');
     this.ctx.storage.sql.exec('DELETE FROM user_sessions');
     this.ctx.storage.sql.exec('DELETE FROM agent_conversations');
+    this.ctx.storage.sql.exec('DELETE FROM recent_sources');
     // Keep only a tombstone so already-authenticated requests cannot recreate data.
   }
 
@@ -107,6 +109,46 @@ export class UserAccountDO extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec('SELECT id FROM account_deletion LIMIT 1').toArray().length) {
       throw new Error('Account deletion is in progress.');
     }
+  }
+
+  saveSource(value: SaveReferencedSource): RecentSource {
+    this.assertActive();
+    const input = saveReferencedSourceSchema.parse(value);
+    const snapshot = JSON.stringify(input.snapshot);
+    const key = sourceIdentity(input);
+    const existing = this.ctx.storage.sql.exec<{ id: string }>('SELECT id FROM recent_sources WHERE source_key = ?', key).toArray()[0];
+    const entry: RecentSource = { id: existing?.id ?? crypto.randomUUID(), input: input.input,
+      title: input.title,
+      kind: input.snapshot.kind, updatedAt: this.nextSourceUpdate() };
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(`INSERT INTO recent_sources (id, source_key, input, title, kind, updated_at, snapshot)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_key) DO UPDATE SET
+        input=excluded.input, title=excluded.title, kind=excluded.kind, updated_at=excluded.updated_at, snapshot=excluded.snapshot`,
+        entry.id, key, entry.input, entry.title, entry.kind, entry.updatedAt, snapshot);
+      this.ctx.storage.sql.exec(`DELETE FROM recent_sources WHERE id NOT IN
+        (SELECT id FROM recent_sources ORDER BY updated_at DESC, rowid DESC LIMIT ?)`, RECENT_SOURCE_LIMIT);
+    });
+    return entry;
+  }
+
+  listSources(): RecentSource[] {
+    this.assertActive();
+    return this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number }>(
+      'SELECT id, input, title, kind, updated_at FROM recent_sources ORDER BY updated_at DESC, rowid DESC LIMIT ?', RECENT_SOURCE_LIMIT,
+    ).toArray().map(({ updated_at, ...row }) => ({ ...row, updatedAt: updated_at }));
+  }
+
+  getSource(id: string): { source: RecentSource; snapshot: SourceReference } | null {
+    this.assertActive();
+    const row = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?', z.string().uuid().parse(id)).toArray()[0];
+    if (!row) return null;
+    this.ctx.storage.sql.exec('UPDATE recent_sources SET updated_at = ? WHERE id = ?', this.nextSourceUpdate(), id);
+    return { source: this.listSources().find(source => source.id === id)!, snapshot: sourceReferenceSchema.parse(JSON.parse(row.snapshot)) };
+  }
+
+  private nextSourceUpdate(): number {
+    const latest = this.ctx.storage.sql.exec<{ latest: number | null }>('SELECT MAX(updated_at) AS latest FROM recent_sources').one().latest;
+    return Math.max(Date.now(), (latest ?? 0) + 1);
   }
 
   recordSession(value: RecordSessionInput): UserSessionSummary {
@@ -283,6 +325,10 @@ export class UserAccountDO extends DurableObject<Env> {
   }
 
   private ensureSchema(): void {
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS recent_sources (
+      id TEXT PRIMARY KEY, source_key TEXT NOT NULL UNIQUE, input TEXT NOT NULL, title TEXT NOT NULL,
+      kind TEXT NOT NULL, updated_at INTEGER NOT NULL, snapshot TEXT NOT NULL
+    )`);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS account_deletion (id INTEGER PRIMARY KEY)');
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_conversations (conversation_id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(`

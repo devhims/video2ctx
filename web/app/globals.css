@@ -1605,6 +1605,10 @@ html:has(.developer-page) body {
   position: relative;
 }
 
+.source-result-list.recent-source-list > button {
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+}
+
 .source-result-thumb img,
 .source-result-thumb > i {
   width: 100%;

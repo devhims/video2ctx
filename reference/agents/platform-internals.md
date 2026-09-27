@@ -18,6 +18,8 @@ Read the root `README.md`, `docs/open-source/local-development.mdx`, and `refere
 
 For the DB-first public video catalog, R2 object layout, progressive retrieval, recovery and provisioning, read `reference/engineering/VIDEO_CATALOG.md`.
 
+For Sources history, user DO reference ownership, and restoration from shared assets, read `reference/engineering/SOURCE_HISTORY.md`.
+
 ## Agent session evidence
 
 For session evidence reuse, memory, citation versions and deletion invariants, read `reference/engineering/SESSION_EVIDENCE.md`.

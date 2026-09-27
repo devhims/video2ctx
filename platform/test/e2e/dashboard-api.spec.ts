@@ -17,6 +17,83 @@ test.beforeEach(async ({ page, context }) => {
   await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: { id: videoId, title: 'Transcript deadline regression', thumbnails: [], channel: { id: 'channel', name: 'Creator' } } }));
 });
 
+test('recent video sources survive reload and restore datasets without provider requests', async ({ page }) => {
+  const source = { id: 'e98e29c2-2d42-4408-b055-5b63d5907084', input: `https://youtube.com/watch?v=${videoId}`, title: 'Saved video', kind: 'inspection', updatedAt: Date.now() };
+  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
+    data: { id: videoId, title: source.title, thumbnails: [] }, transcript, requestedData: ['transcript'], dataErrors: {} } };
+  let remembered = false, providerReads = 0;
+  page.on('request', request => { if (request.url().includes('/v1/providers/')) providerReads++; });
+  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  await page.route('**/api/platform/v1/sources/recent**', async route => {
+    if (route.request().method() === 'POST') {
+      const request = route.request().postDataJSON();
+      expect(request.input).toBe(source.input);
+      expect(request.snapshot.inspector.id).toBe(videoId);
+      expect(request.snapshot.inspector.loadedData).toContain('transcript');
+      expect(request.snapshot.inspector).not.toHaveProperty('transcript');
+      expect(request.snapshot.inspector).not.toHaveProperty('data');
+      remembered = true; return route.fulfill({ status: 201, json: { source } });
+    }
+    return route.fulfill({ json: route.request().url().endsWith(source.id) ? { source, snapshot } : { sources: remembered ? [source] : [] } });
+  });
+  await page.goto('/dashboard/sources');
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  await expect.poll(() => remembered).toBe(true);
+  const readsBeforeRestore = providerReads;
+  await page.reload();
+  await page.getByRole('button', { name: /Saved video/ }).click();
+  await expect(page.getByRole('heading', { name: 'Saved video' })).toBeVisible();
+  await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  expect(providerReads).toBe(readsBeforeRestore);
+  await page.getByRole('button', { name: 'Recent sources', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Saved video/ })).toBeVisible();
+});
+
+test('recent searches restore their saved result list and dataset choices', async ({ page }) => {
+  const source = { id: 'cd2b8fe1-c3e6-4b67-bd51-0ee1a10ccbbf', input: 'Opus vs Astra', title: 'Opus vs Astra', kind: 'search', updatedAt: Date.now() };
+  const items = [{ provider: 'youtube', type: 'video', id: videoId, title: 'Saved comparison result', thumbnails: [] }];
+  let remembered = false, providerReads = 0;
+  await page.unroute('**/api/platform/v1/resolve');
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query: source.input } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => { providerReads++; return route.fulfill({ json: { results: items } }); });
+  await page.route('**/api/platform/v1/sources/recent**', async route => {
+    if (route.request().method() === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({ input: source.input, snapshot: { kind: 'search', selectedData: ['transcript'] } });
+      remembered = true; return route.fulfill({ status: 201, json: { source } });
+    }
+    return route.fulfill({ json: route.request().url().endsWith(source.id)
+      ? { source, snapshot: { kind: 'search', items, selectedData: ['comments'] } } : { sources: remembered ? [source] : [] } });
+  });
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByText('Saved comparison result')).toBeVisible();
+  await expect.poll(() => remembered).toBe(true);
+  await page.reload();
+  await page.getByRole('button', { name: /Opus vs Astra/ }).click();
+  await expect(page.getByText('Saved comparison result')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue(source.input);
+  await expect(page.getByRole('checkbox', { name: 'Comments' })).toBeChecked();
+  expect(providerReads).toBe(1);
+});
+
+test('recent source load failures expose a retry and preserve the form', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/platform/v1/sources/recent', route => ++attempts === 1
+    ? route.fulfill({ status: 503, json: { error: { code: 'TEMPORARY', message: 'History is temporarily unavailable.' } } })
+    : route.fulfill({ json: { sources: [] } }));
+  await page.goto('/dashboard/sources');
+  await expect(page.getByRole('alert').filter({ hasText: 'History is temporarily unavailable.' })).toBeVisible();
+  await expect(page.getByText('No recent sources yet')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry recent sources' }).click();
+  await expect(page.getByText('No recent sources yet')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toBeVisible();
+});
+
 test('slow transcript finishes after the old browser deadline', async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -26,7 +103,7 @@ test('slow transcript finishes after the old browser deadline', async ({ page })
   await page.goto('/dashboard?section=discover');
   await page.clock.install();
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await page.getByRole('button', { name: /Inspect/ }).click();
   await requested;
   await page.clock.fastForward(180_000);
   await expect(page.getByText('A transcript is not available for this video.')).toHaveCount(0);
@@ -42,7 +119,7 @@ test('source errors mirror the API and retry only the failed dataset', async ({ 
     : route.fulfill({ json: transcript }));
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await page.getByRole('button', { name: /Inspect/ }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'The API transcript deadline expired.' })).toBeVisible();
   await page.getByRole('button', { name: 'Retry failed requests' }).click();
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
@@ -105,7 +182,7 @@ test('transcript renders while metadata is pending, then survives its failure', 
   await page.route(`**/videos/${videoId}/transcript`, route => { transcriptReads++; return route.fulfill({ json: transcript }); });
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await page.getByRole('button', { name: /Inspect/ }).click();
   try {
     await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
   } finally { release(); }
@@ -128,7 +205,7 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   });
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await page.getByRole('button', { name: /Inspect/ }).click();
   await expect(page.getByRole('heading', { name: 'Transcript deadline regression', exact: true })).toBeVisible();
   await expect(page.getByRole('status', { name: 'Loading transcript' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save to project' })).toBeDisabled();
@@ -350,7 +427,7 @@ test('an active transcript finishes while settings is open and is reused on retu
  await page.route(`**/videos/${videoId}/transcript`,async route=>{reads++;await gate;await route.fulfill({json:transcript});});
  await page.goto('/dashboard/sources');
  await page.getByRole('textbox',{name:'Video search or YouTube URL'}).fill(`https://youtube.com/watch?v=${videoId}`);
- await page.getByRole('button',{name:/Search videos/}).click();
+ await page.getByRole('button',{name:/Inspect/}).click();
  await expect.poll(()=>reads).toBe(1);
  await page.getByRole('link',{name:'Settings',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Workspace settings'})).toBeVisible();
@@ -429,7 +506,7 @@ for (const mobile of [false, true]) {
     });
     await page.goto('/dashboard?section=discover');
     await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-    await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+    await page.getByRole('button', { name: /Inspect/ }).click();
     const refresh = page.getByRole('button', { name: 'Refresh data', exact: true });
     await expect(refresh).toBeEnabled();
     await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
@@ -456,7 +533,7 @@ test('fresh video data does not offer a saved-data refresh button', async ({ pag
   await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: { ...transcript, freshness: { state: 'fresh', fetchedAt: Date.now() } } }));
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
-  await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+  await page.getByRole('button', { name: /Inspect/ }).click();
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh data', exact: true })).toHaveCount(0);
 });
@@ -474,7 +551,7 @@ test('a known video opens without waiting for the remote URL resolver', async ({
   await page.goto('/dashboard/sources');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
   try {
-    await page.getByRole('button', { name: /Open video|Search videos/ }).click();
+    await page.getByRole('button', { name: /Inspect/ }).click();
     await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible({ timeout: 1500 });
     expect(resolveReads).toBe(0);
   } finally { release(); }

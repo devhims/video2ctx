@@ -1,4 +1,7 @@
 import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
+import { userAccountInstanceName } from '../../agents/runtime/identity';
+import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdSchema } from '../../lib/source-history';
+import { referenceSource, restoreSource } from '../../lib/source-history-storage';
 import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
 import { Hono } from 'hono';
 import type { App, ImportPayload } from '../../types';
@@ -42,6 +45,8 @@ export const ACCOUNT_ROUTE_PATTERNS = [
 ] as const;
 
 export const SESSION_ONLY_ROUTE_PATTERNS = [
+  '/sources/recent',
+  '/sources/recent/*',
   '/oauth/youtube/connect',
   '/oauth/youtube',
   '/billing',
@@ -49,6 +54,33 @@ export const SESSION_ONLY_ROUTE_PATTERNS = [
 
 for (const path of ACCOUNT_ROUTE_PATTERNS) sessionRoutes.use(path, requireAccountPrincipal);
 for (const path of SESSION_ONLY_ROUTE_PATTERNS) sessionRoutes.use(path, requireSessionPrincipal);
+
+sessionRoutes.get('/sources/recent', async (c) => {
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
+  return c.json({ sources: await account.listSources() });
+});
+
+sessionRoutes.post('/sources/recent', async (c) => {
+  if (!c.req.header('content-type')?.includes('application/json')) throw new ApiError(422, 'INVALID_CONTENT_TYPE', 'Expected application/json.');
+  const payload = await c.req.text();
+  if (new TextEncoder().encode(payload).byteLength > MAX_SOURCE_SNAPSHOT_BYTES) throw new ApiError(422, 'SOURCE_TOO_LARGE', 'This source is too large to add to recent sources.');
+  let json: unknown;
+  try { json = JSON.parse(payload); } catch { throw new ApiError(422, 'INVALID_JSON', 'The request body is not valid JSON.'); }
+  const parsed = saveSourceSchema.safeParse(json);
+  if (!parsed.success) throw new ApiError(422, 'INVALID_SOURCE', 'The recent source data is invalid.');
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
+  const referenced = await referenceSource(c.env, parsed.data);
+  return c.json({ source: await account.saveSource(referenced) }, 201);
+});
+
+sessionRoutes.get('/sources/recent/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!sourceIdSchema.safeParse(id).success) throw new ApiError(422, 'INVALID_ID', 'Invalid recent source ID.');
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
+  const saved = await account.getSource(id);
+  if (!saved) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This recent source was not found.');
+  return c.json({ source: saved.source, snapshot: await restoreSource(c.env, saved.snapshot) });
+});
 
 sessionRoutes.get('/account', (c) => {
   const principal = requirePrincipal(c);

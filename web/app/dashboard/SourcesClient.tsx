@@ -14,7 +14,7 @@ import pageStyles from './DashboardPages.module.css';
 import { Icon } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 
-import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, Inspector } from './research-types';
+import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, Inspector, RecentSource, SourceSnapshot } from './research-types';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 const YOUTUBE_API = '/v1/providers/youtube';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
@@ -54,10 +54,63 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [operationLabel, setOperationLabel] = useState('');
+  const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const historyInput = useRef('');
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const authenticated = Boolean(user) || demoEnabled;
   const playlistInput = isPlaylistUrl(query);
+
+  const loadHistory = useCallback(async (signal?: AbortSignal) => {
+    setHistoryLoading(true); setHistoryError('');
+    try {
+      const result = await api<{ sources: RecentSource[] }>('/v1/sources/recent', { signal });
+      setRecentSources(result.sources);
+    } catch (cause) { if (!isAbortError(cause)) setHistoryError(cause instanceof Error ? cause.message : 'Could not load recent sources.'); }
+    finally { if (!signal?.aborted) setHistoryLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (!active || !authenticated) return;
+    const controller = new AbortController();
+    void loadHistory(controller.signal);
+    return () => controller.abort();
+  }, [active, authenticated, loadHistory]);
+
+  const rememberSource = async (input: string, snapshot: SourceSnapshot, signal: AbortSignal) => {
+    try {
+      const request = snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
+        : { kind: snapshot.kind, inspector: {
+          provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
+          requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
+          loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
+        } };
+      const { source } = await api<{ source: RecentSource }>('/v1/sources/recent', {
+        method: 'POST', body: JSON.stringify({ input, snapshot: request }), signal,
+      });
+      setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
+      setHistoryError('');
+    } catch (cause) { if (!isAbortError(cause)) setHistoryError(cause instanceof Error ? `Could not save recent source: ${cause.message}` : 'Could not save recent source.'); }
+  };
+
+  const openRecentSource = async (entry: RecentSource) => {
+    const controller = beginOperation('Loading saved source data…');
+    try {
+      const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(`/v1/sources/recent/${entry.id}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setQuery(source.input); historyInput.current = source.input; setTranscriptQuery('');
+      setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)]);
+      if (snapshot.kind === 'search') {
+        setSelectedData(snapshot.selectedData); setItems(snapshot.items); setInspector(null); setHasSearched(true);
+      } else {
+        setItems([]); setHasSearched(false); setSelectedData(snapshot.inspector.requestedData.length ? snapshot.inspector.requestedData : ['transcript']);
+        setInspector(snapshot.inspector);
+      }
+    } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open recent source.'); }
+    finally { finishOperation(controller); }
+  };
 
   const beginOperation = useCallback((label: string) => {
     operationController.current?.abort();
@@ -94,6 +147,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const runSearch = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!query.trim()) return;
+    const input = query.trim();
     const controller = beginOperation('Resolving your query…');
     setHasSearched(true);
     setInspector(null);
@@ -104,13 +158,15 @@ export default function SourcesClient({ active }: {active:boolean}) {
         method: 'POST', body: JSON.stringify({ input: query }), signal: controller.signal,
       });
       if (resolved.kind === 'video' && resolved.id) {
+        setHasSearched(false); setItems([]);
         setOperationLabel('Opening the video and fetching your selected data…');
-        await inspect('video', resolved.id, controller, resolved.provider ?? 'youtube', selectedData);
+        await inspect('video', resolved.id, controller, resolved.provider ?? 'youtube', selectedData, input);
         return;
       }
       if (resolved.kind === 'playlist' && resolved.id) {
+        setHasSearched(false); setItems([]);
         setOperationLabel('Opening the playlist and loading its videos…');
-        await inspect('playlist', resolved.id, controller, resolved.provider ?? 'youtube', selectedData);
+        await inspect('playlist', resolved.id, controller, resolved.provider ?? 'youtube', selectedData, input);
         return;
       }
       if (resolved.kind !== 'search') {
@@ -119,7 +175,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
       setOperationLabel('Searching YouTube videos…');
       const params = new URLSearchParams({ q: resolved.query ?? query, type: 'video' });
       const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
-      setItems(data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' })));
+      const results = data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' as const }));
+      setItems(results);
+      await rememberSource(input, { kind: 'search', selectedData: [...selectedData], items: results }, controller.signal);
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Search failed.');
     } finally { finishOperation(controller); }
@@ -127,6 +185,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   // Publish each independent result immediately. Only channel info needs metadata.
   const loadVideoData = async (next: Inspector, datasets: Array<SourceDataOption | 'metadata'>, controller: AbortController, refresh = false) => {
+    const input = historyInput.current;
     if (refresh) next.refreshData = [...new Set([...(next.refreshData ?? []), ...datasets])];
     next.loadingData = [...datasets];
     const publish = () => {
@@ -158,13 +217,17 @@ export default function SourcesClient({ active }: {active:boolean}) {
       }
       await fetchSourceData(next, option, controller.signal, next.refreshData?.includes(option));
     }))]);
+    if (!controller.signal.aborted && operationController.current === controller) {
+      await rememberSource(input, { kind: 'inspection', inspector: { ...next, loadingData: [] } }, controller.signal);
+    }
   };
 
   const inspect = async (
     type: EntityType, id: string, activeController?: AbortController,
-    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData,
+    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData, input?: string,
   ) => {
     const controller = activeController ?? beginOperation('Fetching your selected data…');
+    historyInput.current = input ?? `https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : type === 'playlist' ? `playlist?list=${id}` : `channel/${id}`}`;
     setError('');
     try {
       if (type === 'video') {
@@ -173,7 +236,11 @@ export default function SourcesClient({ active }: {active:boolean}) {
       } else {
         const plural = type === 'channel' ? 'channels' : 'playlists';
         const data = await api<Record<string, unknown>>(`/v1/providers/${provider}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
-        if (!controller.signal.aborted) setInspector({ provider, type, id, data, requestedData: [], dataErrors: {} });
+        if (!controller.signal.aborted) {
+          const next: Inspector = { provider, type, id, data, requestedData: [], dataErrors: {} };
+          setInspector(next);
+          await rememberSource(historyInput.current, { kind: 'inspection', inspector: next }, controller.signal);
+        }
       }
     } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
     finally { finishOperation(controller); }
@@ -288,12 +355,12 @@ export default function SourcesClient({ active }: {active:boolean}) {
         <div className='workspace-view'>
           <>
             <section className='source-studio' aria-labelledby='source-studio-title'>
-              <header className={pageStyles.intro}><h2 id='source-studio-title'>Find a video or playlist</h2><p>Search YouTube or paste a link to inspect its data.</p></header>
+              <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={() => { cancelOperation(); setInspector(null); setItems([]); setHasSearched(false); setError(''); }}>Recent sources</button>}</header>
               <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
-                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='Search videos, or paste a video or playlist URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
-                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : playlistInput ? 'Open playlist' : 'Search videos'} <span aria-hidden='true'>→</span></button>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : 'Inspect'} <span aria-hidden='true'>→</span></button>
                 </div>
                 <fieldset className='source-data-picker'>
                   <legend>Include with each video</legend>
@@ -323,10 +390,22 @@ export default function SourcesClient({ active }: {active:boolean}) {
             {inspector ? (
               <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
-              <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
+              hasSearched || loading || items.length ? <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
+              : <section className='source-results' aria-labelledby='recent-sources-title'>
+                <header><h2 id='recent-sources-title'>Recent sources</h2></header>
+                {historyLoading ? <p role='status'>Loading recent sources…</p> : null}
+                {historyError ? <div className='alert error' role='alert'>{historyError} <button onClick={() => void loadHistory()}>Retry recent sources</button></div> : null}
+                {!historyLoading && !historyError && !recentSources.length ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>No recent sources yet</h3><p>Search YouTube or inspect a link to start your history.</p></div></div> : null}
+                <div className='source-result-list recent-source-list'>{recentSources.map(source => <button key={source.id} onClick={() => void openRecentSource(source)}>
+                  <span className={pageStyles.rowIcon}><Icon name='search' size={20} /></span>
+                  <span className='source-result-copy'><b>{source.title}</b><small>{source.kind === 'search' ? 'Search' : source.input}</small><em>{new Date(source.updatedAt).toLocaleString()}</em></span>
+                  <span className='source-result-action'>Open <b aria-hidden='true'>→</b></span>
+                </button>)}</div>
+              </section>
             )}
           </>
         </div>
+        {historyError && (inspector || hasSearched || loading) ? <div className='alert error' role='alert'>{historyError}</div> : null}
     </>
   );
 }
