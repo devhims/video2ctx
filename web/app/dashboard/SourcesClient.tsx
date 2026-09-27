@@ -7,6 +7,7 @@ import { platformRequest as api, isAbortError } from '../../lib/platform-request
 import { loadSourceData, videoIdFromInput } from '../../lib/source-data';
 
 import { Checkbox } from './Checkbox';
+import { HistoryEmptyState } from './HistoryEmptyState';
 
 import { useAccountResource, useDashboardDraft, useDashboardCache } from './DashboardDataProvider';
 
@@ -406,7 +407,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
                 <header><h2 id='recent-sources-title'>Recent sources</h2></header>
                 {historyLoading && !recentSources.length ? <RecentSourcesSkeleton /> : null}
                 {historyError ? <div className='alert error' role='alert'>{historyError} <button onClick={() => void loadHistory()}>Retry recent sources</button></div> : null}
-                {!historyLoading && !historyError && !recentSources.length ? <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='search' size={21} /></span><div><h3>No recent sources yet</h3><p>Search YouTube or inspect a link to start your history.</p></div></div> : null}
+                {!historyLoading && !historyError && !recentSources.length ? <HistoryEmptyState title='No recent sources yet' description='Search for a topic or paste a YouTube link above. Your recent sources will appear here.' /> : null}
                 <div className='source-result-list recent-source-list' aria-busy={historyLoading}>{recentSources.map(source => <button key={source.id} onClick={() => void openRecentSource(source)}>
                   <span className='recent-source-visual'>{source.kind === 'search' ? <Icon name='search' size={20} /> : <><span aria-hidden='true'>YT</span>{source.thumbnailUrl && <img src={source.thumbnailUrl} alt='' loading='lazy' onError={event => { event.currentTarget.hidden = true; }} />}</>}</span>
                   <span className='source-result-copy'><b>{source.title}</b><small>{source.kind === 'search' ? 'Search' : source.input}</small><em>{new Date(source.updatedAt).toLocaleString()}</em></span>

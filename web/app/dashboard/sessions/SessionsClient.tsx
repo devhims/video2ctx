@@ -12,6 +12,7 @@ import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
 import { SessionLoading } from './SessionLoading';
 import { DashboardSkeleton } from '../DashboardSkeleton';
+import { HistoryEmptyState } from '../HistoryEmptyState';
 import { FramePreviews } from './FramePreviews';
 import { useAccountResource } from '../DashboardDataProvider';
 import { useRouter } from 'next/navigation';
@@ -108,7 +109,7 @@ function SessionResults({ search }: { search: string }) {
         <span className='agent-session-icon'><ChatCircleTextIcon size={19} aria-hidden='true' /></span><div className='agent-session-copy'><h3>{session.title || 'Untitled session'}</h3><p>{session.latestMessagePreview}</p></div>
         <div className='agent-session-meta'><time dateTime={new Date(session.updatedAt).toISOString()}>{formatTime(session.updatedAt)}</time><span>{session.runCount} {session.runCount === 1 ? 'run' : 'runs'} <ArrowUpRightIcon size={13} aria-hidden='true' /></span></div>
       </Link>)}
-      {!page.sessions.length && !loading && !error && <div className='agent-empty'><h3>{search ? 'No matching sessions' : 'No sessions yet'}</h3><p>{search ? 'Try another topic or clear your search.' : 'Start a session above. Requests from the API also appear here.'}</p></div>}
+      {!page.sessions.length && !loading && !error && <HistoryEmptyState title={search ? 'No matching sessions' : 'No sessions yet'} description={search ? 'Try another topic or clear your search.' : 'Start a session above. Requests from the API also appear here.'} />}
     </div>
     {loading && !page.sessions.length && <div className='agent-loading' role='status'><span className='sr-only'>Loading sessions…</span><span /><span /><span /></div>}
     {page.nextCursor && <button className='agent-load-more' disabled={loading} onClick={() => void loadMore()}>Load more sessions</button>}

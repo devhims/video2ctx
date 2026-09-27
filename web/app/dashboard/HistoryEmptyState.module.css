@@ -1,0 +1,3 @@
+.empty { padding: 34px 8px; }
+.empty h3 { margin: 0 0 12px; font: 600 18px/1.4 var(--font-dashboard-body); color: var(--color-dashboard-ink); }
+.empty p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--color-dashboard-muted); }

@@ -98,6 +98,36 @@ test('recent source load failures expose a retry and preserve the form', async (
   await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toBeVisible();
 });
 
+for (const theme of ['light', 'dark'] as const) test(`Sources and Agent share their empty history presentation (${theme})`, async ({ page }, testInfo) => {
+  await page.emulateMedia({ colorScheme: theme });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const scenario = await accountScenario(page, { responses: {
+    '/v1/sources/recent': { body: { sources: [] } },
+    '/v1/agent/sessions': { body: { sessions: [], nextCursor: null } },
+  } });
+  const presentation = async (title: string) => page.getByRole('heading', { name: title, exact: true }).evaluate(heading => {
+    const style = getComputedStyle(heading);
+    const container = getComputedStyle(heading.parentElement!);
+    return { fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight, padding: container.padding };
+  });
+  try {
+    await page.goto('/dashboard/sources');
+    await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
+    await expect(page.getByText('Search for a topic or paste a YouTube link above. Your recent sources will appear here.')).toBeVisible();
+    const sourceStyle = await presentation('No recent sources yet');
+    await page.screenshot({ path: testInfo.outputPath(`sources-empty-${theme}.png`), fullPage: true });
+    await page.getByRole('link', { name: 'Agent', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    expect(await presentation('No sessions yet')).toEqual(sourceStyle);
+    await page.screenshot({ path: testInfo.outputPath(`sessions-empty-${theme}.png`), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    await page.goto('/dashboard/sources');
+    await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally { await scenario.clear(); }
+});
+
 test('recent sources use matching skeleton rows while history is loading', async ({ page }, testInfo) => {
   const scenario = await accountScenario(page, { delays: ['/v1/sources/recent'] });
   try {
