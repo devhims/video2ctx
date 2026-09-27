@@ -2,6 +2,18 @@
   --page-gutter: 40px;
 }
 
+.pages :global(.source-operation-loading) { display: flex; align-items: center; gap: 16px; padding-top: 16px; }
+.pages :global(.source-operation-loading > .source-skeleton) { flex: 1; margin: 0; }
+.pages :global(.source-retry-actions) { padding-block: 16px; }
+.pages :global(.source-retry-actions button), .pages :global(.source-operation-loading > button) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 8px 14px; border: 1px solid var(--color-dashboard-rule-strong);
+  border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-surface);
+  color: var(--color-dashboard-ink); font: 500 12px/1.5 var(--font-dashboard-body); cursor: pointer;
+}
+.pages :global(.source-retry-actions button:hover), .pages :global(.source-operation-loading > button:hover) { background: var(--color-dashboard-surface-muted); }
+.pages :global(.source-retry-actions button:focus-visible), .pages :global(.source-operation-loading > button:focus-visible) { outline: 2px solid var(--color-dashboard-focus); outline-offset: 3px; }
+
 .pages :global(.source-studio),
 .pages :global(.source-results),
 .pages :global(.source-inspector),

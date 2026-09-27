@@ -71,6 +71,21 @@ test('an earlier upstream error is not overwritten by a later transcript NOT_FOU
   await expect(run(env(), operation)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
 });
 
+test('confirmed empty caption catalogs survive sanitization and an earlier proxy outage', async () => {
+  let calls = 0;
+  const playable = { playabilityStatus: { status: 'OK' }, videoDetails: { videoId: operation.id } };
+  const proxyFetch: typeof fetch = async input => String(input).includes('/watch?')
+    ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(playable)};`)
+    : Response.json(playable);
+  const execute: WorkerExtractionDependencies['execute'] = async (op, fetchImpl) => {
+    if (++calls === 1) throw unavailable();
+    return executeWorkerYouTubeOperation(op, fetchImpl);
+  };
+  const run = createWorkerExtractionRunner({ execute, proxyTransport: () => ({ fetch: proxyFetch, close: async () => {} }) });
+  await expect(run(env(), operation)).rejects.toMatchObject({ code: 'CAPTIONS_UNAVAILABLE', retryable: false });
+  expect(calls).toBe(2);
+});
+
 test('partial track catalogs visit each distinct route only once', async () => {
   const partial = { tracks: [], meta: { partial: true } } as unknown as CaptionTrackList;
   const execute = vi.fn(async () => partial);

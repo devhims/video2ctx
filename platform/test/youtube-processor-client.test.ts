@@ -353,6 +353,15 @@ describe('YouTube processor client', () => {
     expect(requested[0]).not.toBe(requested[1]);
   });
 
+  test('confirmed caption absence stops fallback immediately', async () => {
+    const { env, requested } = environment([Response.json({ error: {
+      code: 'CAPTIONS_UNAVAILABLE', message: 'Captions are not available for this video.', retryable: false,
+    } }, { status: 404 })]);
+    await expect(runYouTubeOperation(env, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }))
+      .rejects.toMatchObject({ code: 'CAPTIONS_UNAVAILABLE', status: 404, retryable: false });
+    expect(requested).toHaveLength(1);
+  });
+
   test('preserves missing captions only after exhausting four calls', async () => {
     const operation = {
       kind: 'transcript', id: 'abcdefghijk', granularity: 'word',

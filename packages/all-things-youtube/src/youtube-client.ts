@@ -1228,12 +1228,13 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     }
   };
 
-  const player = async (videoId: string, requireCaptionTrack = true, onFailure?: (error: YouTubeClientError) => void): Promise<JsonObject> => {
+  const player = async (videoId: string, requireCaptionTrack = true): Promise<JsonObject> => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
     const attempts: string[] = [];
     let firstResponse: JsonObject | undefined;
+    let playableResponse: JsonObject | undefined;
     for (const profile of PLAYER_PROFILES) {
       try {
         const response = await call(
@@ -1243,19 +1244,17 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         );
         firstResponse ??= response;
         const status = string(object(response.playabilityStatus).status);
+        if (status === 'OK') playableResponse ??= response;
         const tracks = parseCaptionTracks(response).internal;
         if (status === 'OK' && (!requireCaptionTrack || tracks.some(track => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? 'UNKNOWN'}`);
-        const failure = captionAvailabilityError(response);
-        if (failure) onFailure?.(failure);
       } catch (error) {
-        if (error instanceof YouTubeClientError) onFailure?.(error);
         attempts.push(
           `${profile.name}: ${error instanceof Error ? error.message : String(error)}`
         );
       }
     }
-    if (firstResponse) return firstResponse;
+    if (playableResponse || firstResponse) return playableResponse ?? firstResponse!;
     throw new YouTubeClientError(
       'UNAVAILABLE',
       `Video unavailable on every client. ${attempts.join('; ')}`,
@@ -1312,9 +1311,8 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
-    const failures: YouTubeClientError[] = [];
     const [raw, desktop] = await Promise.all([
-      player(videoId, true, error => { failures.push(error); }), desktopPlayer(videoId),
+      player(videoId, true), desktopPlayer(videoId),
     ]);
     const captions = mergeCaptionCatalog(parseCaptionTracks(raw),
       desktop.value ? parseCaptionTracks(desktop.value.raw) : undefined);
@@ -1323,7 +1321,9 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     if (captions.internal.length === 0) {
       const primaryError = captionAvailabilityError(raw);
       const desktopError = desktop.value ? captionAvailabilityError(desktop.value.raw) : desktop.error;
-      const failure = primaryError ?? desktopError ?? failures.find(error => error.retryable);
+      // Two playable empty catalogs are affirmative evidence. An earlier failed
+      // client must not override those later successful metadata checks.
+      const failure = primaryError ?? desktopError;
       if (failure) throw failure;
     }
     return { raw, captions, captionCookies: desktop.value?.cookies };
@@ -1812,6 +1812,9 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
       const requestedTranslation = transcriptOptions.translateTo?.trim();
       const prepareRequest = async () => {
         const { captions, captionCookies } = await playerWithCaptionCatalog(transcriptOptions.videoId);
+        if (!captions.internal.length) {
+          throw new YouTubeClientError('CAPTIONS_UNAVAILABLE', 'Captions are not available for this video.');
+        }
         const sourceLanguage = transcriptOptions.language ??
           (requestedTranslation && captions.internal.some(track => track.languageCode === requestedTranslation)
             ? requestedTranslation

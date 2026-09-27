@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Return non-retryable `CAPTIONS_UNAVAILABLE` when playable metadata confirms that no caption tracks exist. Missing requested languages still return `NOT_FOUND`. Upstream failures remain distinct.
+
 - Add `all-things-youtube/client` as a supported export for `createYouTubeClient`, including browse, video signals, custom fetch transport and shared types.
 
 ## 0.6.2

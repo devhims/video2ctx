@@ -43,6 +43,16 @@ describe('caption availability classification', () => {
   test('a playable video with confirmed empty catalogs still has missing captions', async () => {
     const { client } = fixture(playable);
     await expect(client.getTranscript({ videoId: 'AR1Gi3RHanE' }))
-      .rejects.toMatchObject({ code: 'NOT_FOUND', retryable: false });
+      .rejects.toMatchObject({ code: 'CAPTIONS_UNAVAILABLE', retryable: false });
+  });
+  test('an earlier challenged client does not mask playable empty player and desktop catalogs', async () => {
+    let playerCalls = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/watch?')) return new Response(`var ytInitialPlayerResponse = ${JSON.stringify(playable)};`);
+      return Response.json(++playerCalls === 1 ? challenged : playable);
+    });
+    const client = createYouTubeClient({ fetch, retry: { policy: { maxAttempts: 1 } } });
+    await expect(client.getTranscript({ videoId: 'AR1Gi3RHanE' }))
+      .rejects.toMatchObject({ code: 'CAPTIONS_UNAVAILABLE', retryable: false });
   });
 });

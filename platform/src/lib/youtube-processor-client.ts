@@ -59,6 +59,7 @@ export type YouTubeOperationResult<T extends YouTubeOperation> =
   never;
 
 export type ProcessorErrorCode = YouTubeErrorCode
+  | 'CAPTIONS_UNAVAILABLE'
   | 'PROCESSOR_BUSY'
   | 'PROCESSOR_UNAVAILABLE'
   | 'INVALID_PROCESSOR_RESPONSE'
@@ -187,7 +188,7 @@ export function shouldFallbackResult(operation: YouTubeOperation, result: unknow
 export function shouldFallbackError(operation: YouTubeOperation, error: YouTubeProcessorError): boolean {
   // Upstream transcript error labels are not reliable proof of permanent failure.
   // Retry across the pool, except invalid input or a confirmed access restriction.
-  if (operation.kind === 'transcript') return error.code !== 'INVALID_INPUT' && error.code !== 'AUTH_REQUIRED';
+  if (operation.kind === 'transcript') return !['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE'].includes(error.code);
   return error.retryable;
 }
 

@@ -10,7 +10,7 @@ export const extractionEventSchema = z.object({
   outcome: z.enum(['selected', 'skipped', 'error', 'success']).optional(),
   playabilityStatus: z.enum(['OK', 'LOGIN_REQUIRED', 'UNPLAYABLE', 'ERROR', 'LIVE_STREAM_OFFLINE', 'CONTENT_CHECK_REQUIRED', 'AGE_CHECK_REQUIRED', 'UNKNOWN']).optional(),
   specState: z.enum(['valid', 'missing', 'malformed']).optional(),
-  code: z.enum(['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'AUTH_REQUIRED',
+  code: z.enum(['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'AUTH_REQUIRED',
     'RATE_LIMITED', 'FRAME_EXTRACTION_FAILED', 'FRAME_TIMEOUT', 'FRAME_CANCELLED', 'MEDIA_UNAVAILABLE', 'UNKNOWN']).optional(),
   inputFormat: z.enum(['webp', 'jpeg']).optional(), outputFormat: z.enum(['webp', 'jpeg']).optional(),
   status: z.number().int().min(100).max(599).optional(), elapsedMs: metric.optional(),

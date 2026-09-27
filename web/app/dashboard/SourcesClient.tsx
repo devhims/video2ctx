@@ -2,9 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ArrowClockwiseIcon } from '@phosphor-icons/react';
 import { redirect, useRouter, useSearchParams } from 'next/navigation';
 import { platformRequest as api, isAbortError } from '../../lib/platform-request';
-import { loadSourceData, videoIdFromInput } from '../../lib/source-data';
+import { loadSourceData, videoIdFromInput, captionsUnavailable, retryableSourceDatasets } from '../../lib/source-data';
 
 import { Checkbox } from './Checkbox';
 import { HistoryEmptyState } from './HistoryEmptyState';
@@ -288,7 +289,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     const controller = beginOperation('Retrying failed source requests…');
     const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
     try {
-      await loadVideoData(next, Object.keys(next.dataErrors) as Array<SourceDataOption | 'metadata'>, controller);
+      await loadVideoData(next, retryableSourceDatasets(next.dataErrors), controller);
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'The request failed.');
     } finally { finishOperation(controller); }
@@ -395,7 +396,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
             </section>
 
             {(loading || error || notice) && <div className='source-feedback'>
-              {loading && <div className='operation-status' role='status' aria-live='polite'><span className='status-spinner' aria-hidden='true' /><div><strong>{operationLabel}</strong><small>Previous results stay available while this finishes.</small></div><button onClick={cancelOperation}>Cancel</button></div>}
+              {loading && <div className='source-operation-loading'><SourceSkeleton label={operationLabel} lines={2} /><button type='button' onClick={cancelOperation}>Cancel</button></div>}
               {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
@@ -568,7 +569,7 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
       </section>
     </> : null}
 
-    {Object.keys(inspector.dataErrors).length > 0 ? <button type='button' disabled={retrying} onClick={onRetry}>{retrying ? 'Retrying…' : 'Retry failed requests'}</button> : null}
+    {!retrying && retryableSourceDatasets(inspector.dataErrors).length > 0 ? <div className='source-retry-actions'><button type='button' onClick={onRetry}><ArrowClockwiseIcon size={16} aria-hidden='true' />Retry failed requests</button></div> : null}
     <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />
   </section>;
 }
@@ -650,7 +651,8 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 }
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
-  if (inspector.loadingData?.includes('transcript') && !inspector.transcript) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
+  if (inspector.loadingData?.includes('transcript') && (!inspector.transcript || inspector.dataErrors.transcript)) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
+  if (captionsUnavailable(inspector.dataErrors.transcript) && !inspector.transcript) return <HistoryEmptyState title='No captions available' description='This video does not have captions available on YouTube, so there is no transcript to display.' />;
   if (inspector.dataErrors.transcript && !inspector.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>

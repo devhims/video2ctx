@@ -308,6 +308,56 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
 });
 
+test('confirmed missing captions show an empty state without a retry action and survive history restore', async ({ page }, testInfo) => {
+  const message = 'Captions are not available for this video.';
+  const source = { id: 'ad8f901c-11e8-44e2-97cb-9a09b965c455', input: `https://youtu.be/${videoId}`, title: 'Video without captions', kind: 'inspection', updatedAt: Date.now() };
+  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
+    data: { id: videoId, title: source.title, thumbnails: [] }, requestedData: ['transcript'], dataErrors: { transcript: message } } };
+  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ status: 404, json: { error: { code: 'CAPTIONS_UNAVAILABLE', message } } }));
+  await page.route('**/api/platform/v1/sources/recent**', route => route.fulfill({ json: route.request().method() === 'POST'
+    ? { source } : route.request().url().endsWith(source.id) ? { source, snapshot } : { sources: [source] } }));
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByRole('heading', { name: 'No captions available' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry failed requests' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await page.getByRole('button', { name: /Video without captions/ }).click();
+  await expect(page.getByRole('heading', { name: 'No captions available' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry failed requests' })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('missing-captions.png'), fullPage: true });
+});
+
+for (const mobile of [false, true]) test(`retrying a transient transcript failure uses skeletons and a styled retry action (${mobile ? 'mobile' : 'desktop'})`, async ({ page }, testInfo) => {
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+  let reads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/videos/${videoId}/transcript`, async route => {
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'YouTube is temporarily unavailable.' } } });
+    await gate;
+    await route.fulfill({ json: transcript });
+  });
+  try {
+    await page.goto('/dashboard/sources');
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
+    await page.getByRole('button', { name: /Inspect/ }).click();
+    const retry = page.getByRole('button', { name: 'Retry failed requests' });
+    await expect(retry).toBeVisible();
+    await expect(retry).toHaveCSS('border-top-style', 'solid');
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('transcript-retry.png'), fullPage: true });
+    await retry.click();
+    await expect(page.getByRole('status', { name: 'Loading transcript', exact: true })).toBeVisible();
+    await expect(page.getByText('Retrying…', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('YouTube is temporarily unavailable.', { exact: true })).toHaveCount(0);
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('transcript-retrying.png'), fullPage: true });
+    release();
+    await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  } finally { release(); }
+});
+
 for (const hasKeys of [true, false]) {
   test(`API keys wait for a confirmed ${hasKeys ? 'populated' : 'empty'} response`, async ({ page }, testInfo) => {
     const scenario = await accountScenario(page, { delays: ['/api/auth/api-key/list'], responses: {'/api/auth/api-key/list': {body: {apiKeys: hasKeys ? [{id:'key-1',name:'Production integration',start:'aty_test',prefix:'aty_',createdAt:'2026-09-22T00:00:00Z',lastRequest:null}]:[],total:hasKeys?1:0}}}});
