@@ -43,11 +43,9 @@ export default {
     }
     const operation = cases[url.pathname.slice(1)];
     if (!operation) return new Response('Unknown test', { status: 404 });
-    const forced = url.searchParams.has('proxy');
     const attempts: ExtractionAttempt[] = [];
     let proxyConnections = 0;
     const run = createWorkerExtractionRunner({ execute: executeWorkerYouTubeOperation,
-      directFetch: forced ? async () => new Response('', { status: 429 }) : fetch,
       proxyTransport: proxy => { proxyConnections++; return createWorkerProxyTransport(proxy); },
     });
     const started = Date.now();

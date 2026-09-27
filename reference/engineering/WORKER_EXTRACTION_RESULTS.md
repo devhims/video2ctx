@@ -1,5 +1,27 @@
 # Worker extraction verification
 
+## Proxy-only follow-up after PR #99
+
+Tested on 2026-09-27 using temporary Worker `youtube-proxy-only-check-927`, with the production extraction runner, shared library, unchanged timeout settings and the single Decodo gateway from local configuration. The Worker had no production resource bindings. These are standalone Worker extraction timings, not full agent-tool durations or a comparison against the same requests through containers.
+
+All 17 extraction cases passed. Every case created a proxy transport; all recorded transcript attempts used proxy egress. Both invalid-certificate checks also passed. The remaining cases covered caption tracks, metadata, signals, search, browse, channels, playlists, comments and end screens.
+
+| Transcript case | Duration | Proxy attempts |
+| --- | --- | --- |
+| Segment transcript, first video | 2,196 ms | 1 |
+| French translation | 8,052 ms | 3 |
+| Word transcript | 2,422 ms | 1 |
+| Segment transcript, second video | 2,998 ms | 1 |
+| Segment transcript, third video | 2,033 ms | 1 |
+
+Other extraction cases took 898–3,086 ms. Translation required retries, so removing direct access does not eliminate upstream variability. This small live sample does not establish production latency percentiles or validate the production multi-gateway pool.
+
+Local verification: 817 platform unit tests passed, 11 skipped. The platform build, regenerated Worker types, generated API documentation check and diff whitespace check passed. Tests cover the required proxy configuration, proxy-only first attempt, pool rotation, timeouts, cleanup, translation without native fetch and retained storyboard routing.
+
+The temporary Worker and local copied secrets were deleted after verification. Production was not deployed by this test. The follow-up requires the existing proxy secrets after normal deployment and does not include PR #100's timeout changes.
+
+## Original direct-first rollout
+
 Tested on 2026-09-27 in temporary Cloudflare Worker `youtube-extraction-check-da29c5e2`, with no production resource bindings. The test used the repository's extraction runner and shared All Things YouTube library, plus the configured Decodo gateway. No production Worker deployment was performed.
 
 ## Deployed checks

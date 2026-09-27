@@ -94,16 +94,16 @@ async function boundedBody(response: Response, signal: AbortSignal): Promise<Uin
 export interface WorkerExtractionDependencies {
   execute: (operation: WorkerYouTubeOperation, fetchImpl: typeof fetch) => Promise<WorkerYouTubeResult>;
   proxyTransport: (url: string) => YouTubeFetchTransport;
-  directFetch: typeof fetch;
 }
 
-/** One direct attempt, then bounded whole-operation retries across the proxy pool. */
+/** Bounded whole-operation retries across the required proxy pool. */
 export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies) {
   return async function run<T extends WorkerYouTubeOperation>(env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink, signal?: AbortSignal): Promise<YouTubeOperationResult<T>> {
     const urls = workerProxyUrls(env);
-    const order = processorSlotOrder(Math.max(1, urls.length), randomProcessorSlot(Math.max(1, urls.length)));
-    const proxyAttempts = urls.length ? bounded(env.YOUTUBE_PROXY_MAX_ATTEMPTS, 4, 1, 4) : 0;
-    const routes: Array<{ egress: 'direct' | 'proxy'; slot: number; url?: string }> = [{ egress: 'direct', slot: 0 }];
+    if (!urls.length) throw new YouTubeProcessorError('PROCESSOR_UNAVAILABLE', 'A YouTube proxy must be configured for Worker extraction.', 503);
+    const order = processorSlotOrder(urls.length, randomProcessorSlot(urls.length));
+    const proxyAttempts = bounded(env.YOUTUBE_PROXY_MAX_ATTEMPTS, 4, 1, 4);
+    const routes: Array<{ egress: 'proxy'; slot: number; url: string }> = [];
     for (let i = 0; i < proxyAttempts; i++) { const slot = order[i % order.length]!; routes.push({ egress: 'proxy', slot, url: urls[slot]! }); }
     const total = new AbortController();
     const totalTimer = setTimeout(() => total.abort(new DOMException('Extraction deadline', 'TimeoutError')), bounded(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, 120_000, 1_000, 300_000));
@@ -115,7 +115,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
       for (const [index, route] of routes.entries()) {
         deadline.throwIfAborted();
         const attempt = new AbortController();
-        const timeout = route.egress === 'direct' ? bounded(env.YOUTUBE_DIRECT_TIMEOUT_MS, 8_000, 100, 25_000) : bounded(env.YOUTUBE_PROXY_TIMEOUT_MS, 25_000, 100, 60_000);
+        const timeout = bounded(env.YOUTUBE_PROXY_TIMEOUT_MS, 25_000, 100, 60_000);
         const timer = setTimeout(() => attempt.abort(new DOMException('Attempt deadline', 'TimeoutError')), timeout);
         const attemptSignal = AbortSignal.any([deadline, attempt.signal]);
         const started = Date.now();
@@ -130,8 +130,8 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
         let droppedEvents = 0;
         const record = (event: ExtractionAttempt['events'][number]) => { if (events.length < 64) events.push(event); else droppedEvents++; };
         try {
-          transport = route.url ? deps.proxyTransport(route.url) : undefined;
-          const fetchImpl = transport?.fetch ?? deps.directFetch;
+          transport = deps.proxyTransport(route.url);
+          const fetchImpl = transport.fetch;
           const trackedFetch: typeof fetch = async (input, init = {}) => {
             const requestSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
             const activeSignal = requestSignal ? AbortSignal.any([attemptSignal, requestSignal]) : attemptSignal;
@@ -156,7 +156,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           attemptSignal.throwIfAborted();
           if (operation.kind === 'video' && isVideoMetadataBotChallenge(value)) throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube blocked this connection.', 503, true);
           // Partial catalogs probe every distinct route once, without repeated pool passes.
-          if (shouldFallbackResult(operation, value) && index + 1 < Math.min(routes.length, urls.length + 1)) {
+          if (shouldFallbackResult(operation, value) && index + 1 < Math.min(routes.length, urls.length)) {
             outcome = 'fallback'; retry = true;
           } else {
             outcome = 'success'; status = 200;
@@ -199,4 +199,4 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
   };
 }
 
-export const runWorkerYouTubeOperation = createWorkerExtractionRunner({ execute: executeWorkerYouTubeOperation, proxyTransport: createWorkerProxyTransport, directFetch: (input, init) => fetch(input, init) });
+export const runWorkerYouTubeOperation = createWorkerExtractionRunner({ execute: executeWorkerYouTubeOperation, proxyTransport: createWorkerProxyTransport });
