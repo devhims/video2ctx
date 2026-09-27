@@ -45,14 +45,18 @@ Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array o
 | --- | --- | --- |
 | `YOUTUBE_EXTRACTION_BACKEND` | `worker` | Set to `container` to roll back core extraction |
 | `YOUTUBE_EXTRACTION_TIMEOUT_MS` | `120000` | Entire operation including retry waits |
-| `YOUTUBE_DIRECT_TIMEOUT_MS` | `8000` | Direct attempt budget |
-| `YOUTUBE_PROXY_TIMEOUT_MS` | `25000` | Budget for each proxy attempt |
+| `YOUTUBE_DIRECT_TIMEOUT_MS` | `5000` | Direct attempt budget |
+| `YOUTUBE_PROXY_TIMEOUT_MS` | `20000` | Budget for each proxy attempt |
 | `YOUTUBE_PROXY_MAX_ATTEMPTS` | `4` | Proxy attempts after direct access |
 | `YOUTUBE_EXTRACTION_RETRY_BASE_MS` | `250` | Initial jittered exponential delay |
 
 The pool starts at a random slot and visits every configured slot before repeating. A single gateway can receive several attempts; a changed exit IP depends on the Decodo session configuration. The runner honors `Retry-After`, bounded by the total deadline. Invalid input and confirmed authorization restrictions are terminal. Transcript failures otherwise retain the existing fallback policy because missing-caption labels can result from blocked upstream requests. Partial empty caption catalogs probe distinct routes once. Bot-challenged video metadata triggers fallback; ordinary private-video metadata does not.
 
-Limits are 8 MiB per response and 32 MiB across an attempt. Timeouts cover response reads as well as connection setup. The proxy library has additional per-request timeouts, including a 25-second total; increasing the operation setting does not raise that transport ceiling. Cleanup is attempted even after cancellation, with at most one second spent waiting for it.
+Limits are 8 MiB per response and 32 MiB across an attempt. Timeouts cover response reads as well as connection setup. The proxy library has additional per-request timeouts, including a 20-second total; increasing the operation setting does not raise that transport ceiling. Cleanup is attempted even after cancellation, with at most one second spent waiting for it.
+
+Proxy request phase limits are 5 seconds for connection/proxy setup, 8 seconds for TLS handshake, 12 seconds for response headers, and 8 seconds without incoming body data. The idle limit measures silence, not the total download duration. The platform explicitly sets the shared library's per-request deadline to 20 seconds as well; leaving its default would abort caption requests after 10 seconds despite the larger runner budget. A progressing request can still succeed after 10 seconds within the 20-second attempt budget.
+
+Transcript request errors record the allowlisted transport timeout code and phase before the library wraps them. They also record whether the fetch was waiting for headers or reading the body, and the request duration. Library request deadlines are labeled `request`; runner deadlines are labeled `attempt` or `extraction`. These optional fields preserve compatibility with historical diagnostics. All five attempts survive coordinator forwarding.
 
 Safe attempt logs contain route, slot, outcome, duration, byte count and status, without proxy credentials or signed YouTube URLs. Transcript diagnostics add optional `backend` and `egress` fields and allow five attempts, preserving older records. An earlier upstream transcript failure is retained when a later route reports `NOT_FOUND`.
 

@@ -33,3 +33,17 @@ The temporary Worker had a 30,000 ms CPU limit. Deployment reported 32 ms startu
 Skipped tests were reported by the existing suites. PR CI also passed auth and dashboard browser E2E. Sustained load testing and an independent review of the new TLS dependency remain follow-up work. The PR now configures Worker extraction as the default for the next deployment; the deployed production Worker has not been changed by this test.
 
 The temporary Worker was deleted after verification, and the local copied deployment secrets were removed. The checked-in fixture contains fixed test cases and no credentials. Follow `WORKER_EXTRACTION.md` for configuration, source dependency setup and rollback.
+
+## Timeout tuning verification
+
+A later isolated deployment on 2026-09-27 tested the 5-second direct attempt and 20-second proxy attempt budgets. Proxy phase limits were connection 5 seconds, TLS 8 seconds, headers 12 seconds, and body idle 8 seconds. The shared library request deadline was explicitly aligned to 20 seconds.
+
+All eight final live transcript checks passed: three videos plus word granularity, each with normal direct-first routing and forced proxy fallback. Normal runs took 787 to 6,975 ms; forced-proxy runs took 1,461 to 2,453 ms. The 6,975 ms run recorded a direct attempt timeout at exactly 5,000 ms and then recovered through the proxy. These checks verify nonempty transcript text and segments, not just metadata responses.
+
+Earlier live checks uncovered the library's previously inherited 10-second request deadline: two caption requests failed after exactly 10,000 ms, producing 11.9-second attempts after metadata preparation. This is why the platform now sets the library deadline explicitly. A deterministic regression through the real library proves a caption request can succeed after 12 seconds. Other tests cover all five transport timeout codes, response-body failures, redaction, runner deadlines, and forwarding all five attempt diagnostics.
+
+French translation returned HTTP 429 across direct and proxy attempts in both earlier translation checks. Those failures arrived before the timeout limits and were not timeout cancellations. Translation remains unverified against the live upstream in this tuning pass; mocked library translation coverage passes. The local single proxy setting was used, not the full production proxy pool.
+
+Platform type checking, generated API documentation checks, and 818 unit tests passed, with seven existing skips. The temporary Worker was `transcript-timeout-check-927`; production was not deployed by these checks. Monitor failure rate and latency after deployment because a bounded live sample does not establish long-term reliability.
+
+Wrangler confirmed deletion of the temporary timeout Worker, and its copied local secrets file was removed.

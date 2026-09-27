@@ -116,7 +116,7 @@ export class YouTubeCacheCoordinatorCore {
 
     const diagnostics: ExtractionAttempt[] = [];
     const onDiagnostic: ExtractionDiagnosticSink = event => {
-      if (['transcript','storyboard','frames'].includes(request.operation.kind) && diagnostics.length < 4) {
+      if (['transcript','storyboard','frames'].includes(request.operation.kind) && diagnostics.length < 5) {
         emitExtractionDiagnostic(item => { diagnostics.push(item); }, event);
       }
     };

@@ -11,7 +11,9 @@ export type WorkerYouTubeResult = YouTubeOperationResult<WorkerYouTubeOperation>
 export async function executeWorkerYouTubeOperation(operation: WorkerYouTubeOperation, fetchImpl: typeof fetch): Promise<WorkerYouTubeResult> {
   // Avoid multiplying library retries by operation retries. Fresh metadata is
   // retrieved on every operation retry, including malformed-caption recovery.
-  const options = { fetch: fetchImpl, retry: { policy: { maxAttempts: 1 } } };
+  // Match the proxy transport ceiling instead of inheriting the library's
+  // 10-second request deadline. The runner still enforces the shorter direct budget.
+  const options = { fetch: fetchImpl, retry: { policy: { maxAttempts: 1, attemptTimeoutMs: 20_000 } } };
   const client = createYouTubeClient(options);
   switch (operation.kind) {
     case 'search': return client.search(operation.query, operation.filters ?? {});

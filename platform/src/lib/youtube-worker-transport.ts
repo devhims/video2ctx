@@ -15,7 +15,7 @@ export function createWorkerProxyTransport(proxy: string): YouTubeFetchTransport
     trust: { mode: 'system' },
     maxBodyBytes: 8 * 1024 * 1024,
     maxRedirects: 3,
-    timeouts: { connectMs: 10_000, handshakeMs: 15_000, headersMs: 15_000, idleMs: 10_000, totalMs: 25_000 },
+    timeouts: { connectMs: 5_000, handshakeMs: 8_000, headersMs: 12_000, idleMs: 8_000, totalMs: 20_000 },
   });
   return {
     fetch: (input, init) => client.fetch(input, init),

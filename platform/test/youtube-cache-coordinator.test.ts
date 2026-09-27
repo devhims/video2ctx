@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { readYouTubeCacheEntry, YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import type { YouTubeOperation } from '../src/lib/youtube-processor-client';
 
@@ -109,4 +110,17 @@ describe('YouTube cache coordinator', () => {
     });
     expect(loader).not.toHaveBeenCalled();
   });
+});
+
+
+test('forwards all five Worker attempts including precise timeout events', async () => {
+  const cache = { get: vi.fn(async () => null), put: vi.fn(async () => {}) };
+  const coordinator = new YouTubeCacheCoordinatorCore(environment(cache), async (_env, _op, onDiagnostic) => {
+    for (let attempt = 1; attempt <= 5; attempt++) onDiagnostic?.({ ...extractionFixture, attempt,
+      events: [{ stage: 'download', outcome: 'error', transportCode: 'TIMEOUT_IDLE', timeoutPhase: 'idle', requestPhase: 'body', requestElapsedMs: 8000 }] });
+    return { text: 'Recovered', segments: [] };
+  });
+  const response = await coordinator.getOrLoad({ ...request, operation: { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' }, resourceType: 'transcript' });
+  expect(response.diagnostics).toHaveLength(5);
+  expect(response.diagnostics?.[4]).toMatchObject({ attempt: 5, events: [expect.objectContaining({ transportCode: 'TIMEOUT_IDLE', timeoutPhase: 'idle' })] });
 });

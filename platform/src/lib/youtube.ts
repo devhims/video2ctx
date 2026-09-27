@@ -144,7 +144,7 @@ async function cached<T extends VideoResourceOperation>(
     );
   }
   if (Array.isArray(response.diagnostics)) {
-    for (const event of response.diagnostics.slice(0, 4)) emitExtractionDiagnostic(onDiagnostic, event);
+    for (const event of response.diagnostics.slice(0, 5)) emitExtractionDiagnostic(onDiagnostic, event);
   }
   if (!response.ok && response.error) {
     if (response.error.apiStatus) throw new ApiError(response.error.apiStatus,response.error.code,response.error.message);

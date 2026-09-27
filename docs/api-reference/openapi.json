@@ -7959,6 +7959,41 @@
                                   "ffmpeg_success"
                                 ]
                               },
+                              "transportCode": {
+                                "type": "string",
+                                "enum": [
+                                  "TIMEOUT_CONNECT",
+                                  "TIMEOUT_HANDSHAKE",
+                                  "TIMEOUT_HEADERS",
+                                  "TIMEOUT_IDLE",
+                                  "TIMEOUT_TOTAL"
+                                ]
+                              },
+                              "timeoutPhase": {
+                                "type": "string",
+                                "enum": [
+                                  "connect",
+                                  "handshake",
+                                  "headers",
+                                  "idle",
+                                  "total",
+                                  "request",
+                                  "attempt",
+                                  "extraction"
+                                ]
+                              },
+                              "requestPhase": {
+                                "type": "string",
+                                "enum": [
+                                  "headers",
+                                  "body"
+                                ]
+                              },
+                              "requestElapsedMs": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
                               "profile": {
                                 "type": "string",
                                 "enum": [
@@ -9335,6 +9370,41 @@
                               "ffmpeg_success"
                             ]
                           },
+                          "transportCode": {
+                            "type": "string",
+                            "enum": [
+                              "TIMEOUT_CONNECT",
+                              "TIMEOUT_HANDSHAKE",
+                              "TIMEOUT_HEADERS",
+                              "TIMEOUT_IDLE",
+                              "TIMEOUT_TOTAL"
+                            ]
+                          },
+                          "timeoutPhase": {
+                            "type": "string",
+                            "enum": [
+                              "connect",
+                              "handshake",
+                              "headers",
+                              "idle",
+                              "total",
+                              "request",
+                              "attempt",
+                              "extraction"
+                            ]
+                          },
+                          "requestPhase": {
+                            "type": "string",
+                            "enum": [
+                              "headers",
+                              "body"
+                            ]
+                          },
+                          "requestElapsedMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "profile": {
                             "type": "string",
                             "enum": [
@@ -10163,6 +10233,41 @@
                               "ffmpeg",
                               "ffmpeg_success"
                             ]
+                          },
+                          "transportCode": {
+                            "type": "string",
+                            "enum": [
+                              "TIMEOUT_CONNECT",
+                              "TIMEOUT_HANDSHAKE",
+                              "TIMEOUT_HEADERS",
+                              "TIMEOUT_IDLE",
+                              "TIMEOUT_TOTAL"
+                            ]
+                          },
+                          "timeoutPhase": {
+                            "type": "string",
+                            "enum": [
+                              "connect",
+                              "handshake",
+                              "headers",
+                              "idle",
+                              "total",
+                              "request",
+                              "attempt",
+                              "extraction"
+                            ]
+                          },
+                          "requestPhase": {
+                            "type": "string",
+                            "enum": [
+                              "headers",
+                              "body"
+                            ]
+                          },
+                          "requestElapsedMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           },
                           "profile": {
                             "type": "string",

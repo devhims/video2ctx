@@ -198,3 +198,85 @@ test('a stalled transport close cannot hold the operation indefinitely', async (
   await vi.advanceTimersByTimeAsync(1001);
   await expect(pending).resolves.toBe(transcript);
 });
+
+test.each([
+  ['TIMEOUT_CONNECT', 'connect'], ['TIMEOUT_HANDSHAKE', 'handshake'],
+  ['TIMEOUT_HEADERS', 'headers'], ['TIMEOUT_IDLE', 'idle'], ['TIMEOUT_TOTAL', 'total'],
+] as const)('preserves %s before the real library wraps the caption failure', async (code, timeoutPhase) => {
+  const diagnostics: ExtractionAttempt[] = [];
+  let failed = false;
+  const proxyFetch: typeof fetch = async input => {
+    const url = String(input);
+    if (url.includes('/watch?')) return new Response('', { status: 404 });
+    if (url.includes('/player')) return Response.json({ playabilityStatus: { status: 'OK' }, captions: {
+      playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: 'https://captions.test/en?secret=signed', languageCode: 'en', vssId: '.en' }] },
+    } });
+    if (!failed) {
+      failed = true;
+      const error = Object.assign(new Error('secret proxy credentials and signed URL'), { code, detail: { secret: 'private' } });
+      if (code === 'TIMEOUT_IDLE') return new Response(new ReadableStream({ start(controller) { controller.error(error); } }));
+      throw error;
+    }
+    return Response.json({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'Recovered' }] }] });
+  };
+  const run = createWorkerExtractionRunner({ execute: executeWorkerYouTubeOperation,
+    directFetch: async () => new Response('', { status: 429 }),
+    proxyTransport: () => ({ fetch: proxyFetch, close: async () => {} }),
+  });
+  await expect(run(env(), { ...operation, lang: undefined }, e => diagnostics.push(e))).resolves.toMatchObject({ text: 'Recovered' });
+  expect(diagnostics[1]!.events).toContainEqual(expect.objectContaining({ stage: 'download', outcome: 'error', transportCode: code, timeoutPhase, requestPhase: code === 'TIMEOUT_IDLE' ? 'body' : 'headers', requestElapsedMs: expect.any(Number) }));
+  expect(diagnostics.at(-1)).toMatchObject({ outcome: 'success' });
+  expect(JSON.stringify(diagnostics)).not.toMatch(/secret|private|signed/);
+});
+
+test('the real library permits a proxy caption response taking twelve seconds', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+    return controller.signal;
+  });
+  const { run, directFetch, proxyFetch } = harness(executeWorkerYouTubeOperation);
+  directFetch.mockResolvedValue(new Response('', { status: 429 }));
+  proxyFetch.mockImplementation(async input => {
+    const url = String(input);
+    if (url.includes('/watch?')) return new Response('', { status: 404 });
+    if (url.includes('/player')) return Response.json({ playabilityStatus: { status: 'OK' }, captions: {
+      playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: 'https://captions.test/en', languageCode: 'en', vssId: '.en' }] },
+    } });
+    await new Promise(resolve => setTimeout(resolve, 12_000));
+    return Response.json({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'Recovered' }] }] });
+  });
+  const diagnostics: ExtractionAttempt[] = [];
+  const pending = run(env(), { ...operation, lang: undefined }, event => diagnostics.push(event));
+  await vi.advanceTimersByTimeAsync(12_010);
+  await expect(pending).resolves.toMatchObject({ text: 'Recovered' });
+  expect(diagnostics).toHaveLength(2);
+  expect(diagnostics.at(-1)).toMatchObject({ egress: 'proxy', outcome: 'success', elapsedMs: 12_000 });
+});
+
+test('default direct and proxy attempt deadlines bound stalled requests and identify the timeout', async () => {
+  vi.useFakeTimers();
+  const { run, directFetch, proxyFetch } = harness(async (_op, fetchImpl) => { await fetchImpl('https://captions.test'); return transcript; });
+  directFetch.mockImplementation(() => new Promise(() => {}));
+  proxyFetch.mockImplementationOnce(() => new Promise(() => {}));
+  const diagnostics: ExtractionAttempt[] = [];
+  const pending = run(env(), operation, event => diagnostics.push(event));
+  await vi.advanceTimersByTimeAsync(24_999);
+  expect(diagnostics).toHaveLength(1);
+  expect(diagnostics[0]).toMatchObject({ elapsedMs: 5000, failureKind: 'timeout' });
+  await vi.advanceTimersByTimeAsync(20);
+  await expect(pending).resolves.toBe(transcript);
+  expect(diagnostics[1]).toMatchObject({ elapsedMs: 20000, failureKind: 'timeout' });
+  for (const diagnostic of diagnostics.slice(0, 2)) expect(diagnostic.events).toContainEqual(expect.objectContaining({ timeoutPhase: 'attempt' }));
+});
+
+test('unknown transport codes remain private', async () => {
+  const diagnostics: ExtractionAttempt[] = [];
+  const { run, directFetch } = harness(async (_op, fetchImpl) => { await fetchImpl('https://captions.test'); return transcript; });
+  directFetch.mockRejectedValue({ code: 'secret credentials', message: 'private' });
+  await expect(run(env({ OUTBOUND_PROXY_URLS: '' }), operation, e => diagnostics.push(e))).rejects.toThrow();
+  expect(JSON.stringify(diagnostics)).not.toMatch(/secret|private/);
+  expect(diagnostics[0]!.events[0]).toMatchObject({ stage: 'download', outcome: 'error', requestPhase: 'headers' });
+  expect(diagnostics[0]!.events[0]!.transportCode).toBeUndefined();
+});

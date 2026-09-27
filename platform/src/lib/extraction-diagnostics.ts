@@ -6,6 +6,10 @@ const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const extractionEventSchema = z.object({
   stage: z.enum(['player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success']),
+  transportCode: z.enum(['TIMEOUT_CONNECT', 'TIMEOUT_HANDSHAKE', 'TIMEOUT_HEADERS', 'TIMEOUT_IDLE', 'TIMEOUT_TOTAL']).optional(),
+  timeoutPhase: z.enum(['connect', 'handshake', 'headers', 'idle', 'total', 'request', 'attempt', 'extraction']).optional(),
+  requestPhase: z.enum(['headers', 'body']).optional(),
+  requestElapsedMs: metric.optional(),
   profile: z.enum(['IOS', 'ANDROID_VR', 'MWEB', 'WEB', 'ios', 'android', 'android_vr', 'mweb', 'web']).optional(),
   outcome: z.enum(['selected', 'skipped', 'error', 'success']).optional(),
   playabilityStatus: z.enum(['OK', 'LOGIN_REQUIRED', 'UNPLAYABLE', 'ERROR', 'LIVE_STREAM_OFFLINE', 'CONTENT_CHECK_REQUIRED', 'AGE_CHECK_REQUIRED', 'UNKNOWN']).optional(),

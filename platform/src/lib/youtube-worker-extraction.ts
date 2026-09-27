@@ -115,7 +115,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
       for (const [index, route] of routes.entries()) {
         deadline.throwIfAborted();
         const attempt = new AbortController();
-        const timeout = route.egress === 'direct' ? bounded(env.YOUTUBE_DIRECT_TIMEOUT_MS, 8_000, 100, 25_000) : bounded(env.YOUTUBE_PROXY_TIMEOUT_MS, 25_000, 100, 60_000);
+        const timeout = route.egress === 'direct' ? bounded(env.YOUTUBE_DIRECT_TIMEOUT_MS, 5_000, 100, 25_000) : bounded(env.YOUTUBE_PROXY_TIMEOUT_MS, 20_000, 100, 60_000);
         const timer = setTimeout(() => attempt.abort(new DOMException('Attempt deadline', 'TimeoutError')), timeout);
         const attemptSignal = AbortSignal.any([deadline, attempt.signal]);
         const started = Date.now();
@@ -136,21 +136,39 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             const requestSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
             const activeSignal = requestSignal ? AbortSignal.any([attemptSignal, requestSignal]) : attemptSignal;
             activeSignal.throwIfAborted();
-            const response = await abortable(activeSignal, () => fetchImpl(input, { ...init, signal: activeSignal }));
-            if (response.status === 429 || response.status >= 500) {
-              const raw = response.headers.get('retry-after');
-              const seconds = raw === null ? NaN : Number(raw);
-              const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw ?? '') - Date.now();
-              if (Number.isFinite(delay)) retryAfter = Math.max(retryAfter, delay, 0);
-            }
-            const bytes = await boundedBody(response, activeSignal);
-            bytesRead += bytes.length;
-            if (bytesRead > MAX_ATTEMPT_BYTES) throw new YouTubeProcessorError('INVALID_RESPONSE', 'YouTube extraction exceeded the byte budget.', 502, true);
+            const requestStarted = Date.now();
             const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-            record({ stage: path === '/watch' || path.endsWith('/player') ? 'caption_metadata' : 'download', outcome: response.ok ? 'success' : 'error', status: response.status, elapsedMs: Date.now() - started });
-            const headers = new Headers(response.headers);
-            headers.delete('content-length'); headers.delete('content-encoding');
-            return new Response([204, 205, 304].includes(response.status) ? null : bytes, { status: response.status, statusText: response.statusText, headers });
+            const stage = path === '/watch' || path.endsWith('/player') ? 'caption_metadata' : 'download';
+            let requestPhase: 'headers' | 'body' = 'headers';
+            try {
+              const response = await abortable(activeSignal, () => fetchImpl(input, { ...init, signal: activeSignal }));
+              if (response.status === 429 || response.status >= 500) {
+                const raw = response.headers.get('retry-after');
+                const seconds = raw === null ? NaN : Number(raw);
+                const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw ?? '') - Date.now();
+                if (Number.isFinite(delay)) retryAfter = Math.max(retryAfter, delay, 0);
+              }
+              requestPhase = 'body';
+              const bytes = await boundedBody(response, activeSignal);
+              bytesRead += bytes.length;
+              if (bytesRead > MAX_ATTEMPT_BYTES) throw new YouTubeProcessorError('INVALID_RESPONSE', 'YouTube extraction exceeded the byte budget.', 502, true);
+              record({ stage, outcome: response.ok ? 'success' : 'error', status: response.status, elapsedMs: Date.now() - started });
+              const headers = new Headers(response.headers);
+              headers.delete('content-length'); headers.delete('content-encoding');
+              return new Response([204, 205, 304].includes(response.status) ? null : bytes, { status: response.status, statusText: response.statusText, headers });
+            } catch (error) {
+              // Capture before the library wraps transport errors as UPSTREAM_ERROR.
+              // Never copy error messages, detail objects, URLs, or nested causes.
+              const phases = { TIMEOUT_CONNECT: 'connect', TIMEOUT_HANDSHAKE: 'handshake', TIMEOUT_HEADERS: 'headers', TIMEOUT_IDLE: 'idle', TIMEOUT_TOTAL: 'total' } as const;
+              const transportCode = Object.keys(phases).find(code => code === (error as { code?: unknown } | null)?.code) as keyof typeof phases | undefined;
+              const timeoutPhase = deadline.aborted && deadline.reason?.name === 'TimeoutError' ? 'extraction'
+                : attempt.signal.aborted && attempt.signal.reason?.name === 'TimeoutError' ? 'attempt'
+                : requestSignal?.aborted && requestSignal.reason?.name === 'TimeoutError' ? 'request'
+                : transportCode ? phases[transportCode] : undefined;
+              record({ stage, outcome: 'error', transportCode, timeoutPhase, requestPhase,
+                requestElapsedMs: Date.now() - requestStarted, elapsedMs: Date.now() - started });
+              throw error;
+            }
           };
           const value = await abortable(attemptSignal, () => deps.execute(operation, trackedFetch));
           attemptSignal.throwIfAborted();
@@ -171,7 +189,10 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           failureKind = extractionFailureKind(error, attemptSignal);
           retry = !deadline.aborted && index + 1 < routes.length && shouldFallbackError(operation, failure);
           outcome = retry ? 'fallback' : 'failed';
-          record({ stage: 'request', outcome: 'error', code: SAFE_CODES.find(code => code === failure.code) ?? 'UNKNOWN', elapsedMs: Date.now() - started });
+          record({ stage: 'request', outcome: 'error', code: SAFE_CODES.find(code => code === failure.code) ?? 'UNKNOWN',
+            timeoutPhase: deadline.aborted && deadline.reason?.name === 'TimeoutError' ? 'extraction'
+              : attempt.signal.aborted && attempt.signal.reason?.name === 'TimeoutError' ? 'attempt' : undefined,
+            elapsedMs: Date.now() - started });
           if (!retry) throw operation.kind === 'transcript' && failure.code === 'NOT_FOUND' && upstreamFailure ? upstreamFailure : failure;
         } finally {
           clearTimeout(timer);
