@@ -367,6 +367,7 @@ export interface AllCommentOptions {
 export type YouTubeErrorCode =
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
+  | 'CAPTIONS_UNAVAILABLE'
   | 'UNAVAILABLE'
   | 'AUTH_REQUIRED'
   | 'RATE_LIMITED'

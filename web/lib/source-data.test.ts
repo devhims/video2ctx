@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { loadSourceData, videoIdFromInput } from './source-data.ts';
-import { platformRequest } from './platform-request.ts';
+import { loadSourceData, videoIdFromInput, CAPTIONS_UNAVAILABLE_MESSAGE, retryableSourceDatasets } from './source-data.ts';
+import { platformRequest, PlatformApiError } from './platform-request.ts';
 
 for (const [status, code, message] of [
   [404, 'NOT_FOUND', 'No transcript found for this video.'],
@@ -17,6 +17,14 @@ for (const [status, code, message] of [
 
 test('source cancellation is not classified as missing data', async () => {
   await assert.rejects(loadSourceData(async () => { throw new DOMException('Cancelled', 'AbortError'); }), { name: 'AbortError' });
+});
+
+test('only confirmed caption absence is excluded from failed-request retries', async () => {
+  const result = await loadSourceData(async () => { throw new PlatformApiError(404, 'CAPTIONS_UNAVAILABLE', 'Provider caption absence'); });
+  assert.deepEqual(result, { error: CAPTIONS_UNAVAILABLE_MESSAGE });
+  assert.deepEqual(retryableSourceDatasets({ transcript: result.error, metadata: 'Metadata timed out.' }), ['metadata']);
+  assert.deepEqual(retryableSourceDatasets({ transcript: 'YouTube is temporarily unavailable.' }), ['transcript']);
+  assert.deepEqual(retryableSourceDatasets({ transcript: 'The requested YouTube resource was not found.' }), ['transcript']);
 });
 
 for (const input of [

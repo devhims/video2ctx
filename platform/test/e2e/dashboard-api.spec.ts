@@ -146,15 +146,16 @@ test('recent sources use matching skeleton rows while history is loading', async
   } finally { await scenario.release(); await scenario.clear(); }
 });
 
-for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and search icons share dimensions on mobile (${theme})`, async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+for (const mobile of [false, true]) for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and search icons share dimensions on ${mobile ? 'mobile' : 'desktop'} (${theme})`, async ({ page }, testInfo) => {
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: theme });
   const sources = [
     { id: '25c715cb-30f4-4d24-a66f-1cab99d4b4c6', input: `https://youtube.com/watch?v=${videoId}`, title: 'Saved video thumbnail', kind: 'inspection', updatedAt: Date.now(), thumbnailUrl: 'https://thumb.example.test/video.svg' },
     { id: '90abdb7b-af0c-429c-9c9d-02949a76d1c6', input: 'Opus vs Astra', title: 'Saved search query', kind: 'search', updatedAt: Date.now() },
   ];
   await page.route('**/api/platform/v1/sources/recent', route => route.fulfill({ json: { sources } }));
-  await page.route('https://thumb.example.test/video.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#334155"/></svg>' }));
+  // YouTube's sddefault images are 4:3 with black bars around a 16:9 picture.
+  await page.route('https://thumb.example.test/video.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="black"/><rect y="30" width="320" height="180" fill="#334155"/></svg>' }));
   await page.goto('/dashboard/sources');
   const video = page.getByRole('button', { name: /Saved video thumbnail/ });
   const search = page.getByRole('button', { name: /Saved search query/ });
@@ -165,6 +166,11 @@ for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and 
   expect(videoBounds?.width).toBe(searchBounds?.width);
   expect(videoBounds?.height).toBe(searchBounds?.height);
   expect(videoBounds?.width).toBe(64);
+  expect(videoBounds?.height).toBe(36);
+  const imageBounds = await video.locator('img').boundingBox();
+  expect(imageBounds?.width).toBe(videoBounds?.width);
+  expect(imageBounds?.height).toBe(videoBounds?.height);
+  expect(imageBounds?.y).toBe(videoBounds?.y);
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   await page.screenshot({ path: testInfo.outputPath(`recent-sources-${theme}.png`), fullPage: true });
 });
@@ -306,6 +312,56 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Retry failed requests' }).click();
   await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible();
+});
+
+test('confirmed missing captions show an empty state without a retry action and survive history restore', async ({ page }, testInfo) => {
+  const message = 'Captions are not available for this video.';
+  const source = { id: 'ad8f901c-11e8-44e2-97cb-9a09b965c455', input: `https://youtu.be/${videoId}`, title: 'Video without captions', kind: 'inspection', updatedAt: Date.now() };
+  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
+    data: { id: videoId, title: source.title, thumbnails: [] }, requestedData: ['transcript'], dataErrors: { transcript: message } } };
+  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ status: 404, json: { error: { code: 'CAPTIONS_UNAVAILABLE', message } } }));
+  await page.route('**/api/platform/v1/sources/recent**', route => route.fulfill({ json: route.request().method() === 'POST'
+    ? { source } : route.request().url().endsWith(source.id) ? { source, snapshot } : { sources: [source] } }));
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByRole('heading', { name: 'No captions available' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry failed requests' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await page.getByRole('button', { name: /Video without captions/ }).click();
+  await expect(page.getByRole('heading', { name: 'No captions available' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry failed requests' })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('missing-captions.png'), fullPage: true });
+});
+
+for (const mobile of [false, true]) test(`retrying a transient transcript failure uses skeletons and a styled retry action (${mobile ? 'mobile' : 'desktop'})`, async ({ page }, testInfo) => {
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+  let reads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/videos/${videoId}/transcript`, async route => {
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'YouTube is temporarily unavailable.' } } });
+    await gate;
+    await route.fulfill({ json: transcript });
+  });
+  try {
+    await page.goto('/dashboard/sources');
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
+    await page.getByRole('button', { name: /Inspect/ }).click();
+    const retry = page.getByRole('button', { name: 'Retry failed requests' });
+    await expect(retry).toBeVisible();
+    await expect(retry).toHaveCSS('border-top-style', 'solid');
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('transcript-retry.png'), fullPage: true });
+    await retry.click();
+    await expect(page.getByRole('status', { name: 'Loading transcript', exact: true })).toBeVisible();
+    await expect(page.getByText('Retrying…', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('YouTube is temporarily unavailable.', { exact: true })).toHaveCount(0);
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('transcript-retrying.png'), fullPage: true });
+    release();
+    await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  } finally { release(); }
 });
 
 for (const hasKeys of [true, false]) {

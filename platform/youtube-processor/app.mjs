@@ -24,7 +24,7 @@ function isRecord(value) {
 
 function statusForCode(code) {
   if (code === 'INVALID_INPUT') return 422;
-  if (code === 'NOT_FOUND') return 404;
+  if (code === 'NOT_FOUND' || code === 'CAPTIONS_UNAVAILABLE') return 404;
   if (code === 'AUTH_REQUIRED') return 401;
   if (code === 'RATE_LIMITED') return 429;
   if (code === 'UNAVAILABLE') return 503;

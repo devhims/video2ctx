@@ -92,7 +92,7 @@ export function withYouTubeMetadata<T>(value: T): T {
 
 function processorError(error: {code: string; message: string}, extractionId?: string): ApiError {
   const status = error.code === 'INVALID_INPUT' ? 422
-    : error.code === 'NOT_FOUND' ? 404
+    : error.code === 'NOT_FOUND' || error.code === 'CAPTIONS_UNAVAILABLE' ? 404
     : error.code === 'AUTH_REQUIRED' ? 401
     : error.code === 'RATE_LIMITED' ? 429
     : error.code === 'UNAVAILABLE' || error.code === 'PROCESSOR_BUSY' || error.code === 'PROCESSOR_UNAVAILABLE' ? 503

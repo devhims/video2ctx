@@ -6,7 +6,7 @@ import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ATTEMPT_BYTES = 32 * 1024 * 1024;
-const SAFE_CODES = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'] as const;
+const SAFE_CODES = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'] as const;
 type SafeCode = typeof SAFE_CODES[number];
 
 function bounded(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -42,11 +42,12 @@ function safeFailure(error: unknown, signal: AbortSignal): YouTubeProcessorError
   const messages: Record<SafeCode, string> = {
     INVALID_INPUT: 'The YouTube request is invalid.', INVALID_RESPONSE: 'YouTube returned an unusable response.',
     NOT_FOUND: 'The requested YouTube resource was not found.', UNAVAILABLE: 'YouTube is temporarily unavailable.',
+    CAPTIONS_UNAVAILABLE: 'Captions are not available for this video.',
     UPSTREAM_ERROR: 'The YouTube request failed.', RATE_LIMITED: 'YouTube rate limited the request.',
     AUTH_REQUIRED: 'YouTube requires authorization for this resource.',
   };
   const status = typeof value?.status === 'number' && Number.isInteger(value.status) && value.status >= 100 && value.status <= 599 ? value.status : undefined;
-  return new YouTubeProcessorError(code, messages[code], status, !['INVALID_INPUT', 'AUTH_REQUIRED'].includes(code) && (value?.retryable === true || ['RATE_LIMITED', 'UPSTREAM_ERROR', 'INVALID_RESPONSE', 'UNAVAILABLE'].includes(code)));
+  return new YouTubeProcessorError(code, messages[code], status, !['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE'].includes(code) && (value?.retryable === true || ['RATE_LIMITED', 'UPSTREAM_ERROR', 'INVALID_RESPONSE', 'UNAVAILABLE'].includes(code)));
 }
 
 /** Stop waiting even if an underlying adapter does not implement cancellation. */

@@ -1,4 +1,15 @@
-import { isAbortError } from './platform-request.ts';
+import { isAbortError, PlatformApiError } from './platform-request.ts';
+
+export const CAPTIONS_UNAVAILABLE_MESSAGE = 'Captions are not available for this video.';
+
+// Keep the confirmed absence message in history, so restoring it has the same UI.
+export function captionsUnavailable(message: string | undefined): boolean {
+  return message === CAPTIONS_UNAVAILABLE_MESSAGE;
+}
+
+export function retryableSourceDatasets(errors: Partial<Record<'metadata' | 'transcript' | 'comments' | 'channel', string>>) {
+  return (Object.keys(errors) as Array<keyof typeof errors>).filter(dataset => dataset !== 'transcript' || !captionsUnavailable(errors.transcript));
+}
 
 export type SourceDataResult<T> = { value: T; error?: never } | { value?: never; error: string };
 
@@ -7,7 +18,8 @@ export async function loadSourceData<T>(request: () => Promise<T>): Promise<Sour
   try { return { value: await request() }; }
   catch (cause) {
     if (isAbortError(cause)) throw cause;
-    return { error: cause instanceof Error ? cause.message : 'The request failed. Please try again.' };
+    return { error: cause instanceof PlatformApiError && cause.code === 'CAPTIONS_UNAVAILABLE'
+      ? CAPTIONS_UNAVAILABLE_MESSAGE : cause instanceof Error ? cause.message : 'The request failed. Please try again.' };
   }
 }
 
