@@ -1,7 +1,7 @@
 import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { userAccountInstanceName } from '../../agents/runtime/identity';
 import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdSchema } from '../../lib/source-history';
-import { referenceSource, restoreSource } from '../../lib/source-history-storage';
+import { referenceSource, restoreSource, sourceThumbnail } from '../../lib/source-history-storage';
 import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
 import { Hono } from 'hono';
 import type { App, ImportPayload } from '../../types';
@@ -57,7 +57,16 @@ for (const path of SESSION_ONLY_ROUTE_PATTERNS) sessionRoutes.use(path, requireS
 
 sessionRoutes.get('/sources/recent', async (c) => {
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
-  return c.json({ sources: await account.listSources() });
+  const entries = await account.listSourceReferences();
+  const sources = await Promise.all(entries.map(async ({ source, snapshot }) => {
+    if (!snapshot) return source;
+    // Missing old metadata must not prevent the rest of the history from loading.
+    const thumbnailUrl = await sourceThumbnail(c.env, snapshot).catch(() => undefined);
+    if (!thumbnailUrl) return source;
+    await account.cacheSourceThumbnail(source.id, thumbnailUrl);
+    return { ...source, thumbnailUrl };
+  }));
+  return c.json({ sources });
 });
 
 sessionRoutes.post('/sources/recent', async (c) => {

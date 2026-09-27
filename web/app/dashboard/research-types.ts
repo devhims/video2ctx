@@ -76,7 +76,7 @@ export type Inspector = {
 };
 export type SourceSnapshot = { kind: 'search'; selectedData: SourceDataOption[]; items: SearchItem[] }
   | { kind: 'inspection'; inspector: Inspector };
-export type RecentSource = { id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number };
+export type RecentSource = { id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number; thumbnailUrl?: string };
 export type TrendVideo = {
   id: string; title: string; channel: { id: string; name: string }; thumbnails: Thumbnail[];
   durationSeconds?: number; publishedTimeText?: string; publishDate?: string; ageHours?: number;

@@ -3,7 +3,7 @@
 import { useAccountResource } from './DashboardDataProvider';
 
 import Link from 'next/link';
-import { dashboardPath } from './dashboard-routes';
+import { dashboardPath, SOURCES_HOME_EVENT } from './dashboard-routes';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon } from '@phosphor-icons/react';
@@ -68,7 +68,10 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
   };
   const run = (action: () => void) => { dialog.current?.close(); action(); };
   const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
-    <Link href={dashboardPath(section)} prefetch={false} aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={() => dialog.current?.close()}>
+    <Link href={dashboardPath(section)} prefetch={false} aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={event => {
+      dialog.current?.close();
+      if (section === 'discover' && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) window.dispatchEvent(new Event(SOURCES_HOME_EVENT));
+    }}>
       <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}
     </Link>
   );

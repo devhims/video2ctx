@@ -8,6 +8,7 @@ import { jsonError } from '../src/lib/http';
 import { Hono } from 'hono';
 import { sessionRoutes } from '../src/routes/session/session.index';
 import type { App, AuthPrincipal } from '../src/types';
+import { userAccountInstanceName } from '../src/agents/runtime/identity';
 const env = workerEnv as Env;
 
 function sourceApp(userId: string, method: AuthPrincipal['method'] = 'session') {
@@ -52,7 +53,8 @@ describe('UserAccountDO', () => {
   });
   test('recent videos store catalog references, reuse shared assets and restore the original version', async () => {
     const id = 'abcdefghijk';
-    const metadata = { id, title: 'Shared video', thumbnails: [] };
+    const thumbnailUrl = 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg';
+    const metadata = { id, title: 'Shared video', thumbnails: [{ url: thumbnailUrl, width: 480, height: 360 }] };
     const transcript = { videoId: id, text: 'Original transcript', segments: [{ text: 'Original transcript', startMs: 0, endMs: 1000, durationMs: 1000 }],
       track: { name: 'English', kind: 'asr', languageCode: 'en' }, meta: { source: 'youtube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } };
     await saveVideoResource(env, { kind: 'video', id }, metadata, Date.now(), 60_000);
@@ -62,6 +64,17 @@ describe('UserAccountDO', () => {
     } } });
     const first = env.USER_ACCOUNT.getByName('source-first'), second = env.USER_ACCOUNT.getByName('source-second');
     const saved = await first.saveSource(references);
+    expect(saved.thumbnailUrl).toBe(thumbnailUrl);
+    expect((await first.listSources())[0]?.thumbnailUrl).toBe(thumbnailUrl);
+    const legacy = structuredClone(references);
+    if (legacy.snapshot.kind === 'inspection') delete legacy.snapshot.inspector.thumbnailUrl;
+    const olderAccount = env.USER_ACCOUNT.getByName(await userAccountInstanceName('legacy-thumbnail'));
+    const olderEntry = await olderAccount.saveSource(legacy);
+    expect((await olderAccount.listSources())[0]?.thumbnailUrl).toBeUndefined();
+    const list = await sourceApp('legacy-thumbnail').request('/sources/recent', {}, env);
+    expect(await list.json()).toMatchObject({ sources: [{ id: olderEntry.id, thumbnailUrl }] });
+    expect((await olderAccount.listSources())[0]?.thumbnailUrl).toBe(thumbnailUrl);
+    expect((await olderAccount.listSources())[0]?.updatedAt).toBe(olderEntry.updatedAt);
     expect(await second.getSource(saved.id)).toBeNull();
     await second.saveSource(references);
     await runInDurableObject(first, (_instance, state) => {

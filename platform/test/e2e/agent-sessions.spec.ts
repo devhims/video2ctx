@@ -98,6 +98,7 @@ test('allowed account can search, paginate, open history and read cited answers'
   await page.getByRole('textbox', { name: 'Search your sessions' }).fill('does not exist');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByText('No matching sessions')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toBeVisible();
   await page.getByRole('textbox', { name: 'Search your sessions' }).fill('Fable');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();

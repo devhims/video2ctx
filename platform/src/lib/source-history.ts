@@ -50,13 +50,14 @@ export const sourceReferenceSchema = z.discriminatedUnion('kind', [
     requestedData: z.array(dataset), dataErrors: inspector.shape.dataErrors,
     assets: z.partialRecord(z.enum(['metadata', 'transcript', 'comments']), assetReference),
     entity: sharedReference.optional(), channel: sharedReference.optional(),
+    thumbnailUrl: z.string().url().optional(),
   }) }),
 ]);
 export const saveReferencedSourceSchema = z.object({ input: z.string().trim().min(1).max(500), title: z.string().max(300), snapshot: sourceReferenceSchema });
 export type SourceReference = z.infer<typeof sourceReferenceSchema>;
 export type SaveReferencedSource = z.infer<typeof saveReferencedSourceSchema>;
 export interface RecentSource {
-  id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number;
+  id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number; thumbnailUrl?: string;
 }
 
 export function sourceIdentity(input: SaveReferencedSource): string {

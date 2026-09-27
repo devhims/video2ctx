@@ -25,7 +25,8 @@
 .agent-prompt-shortcut + .agent-send { margin-left: 0; }
 .agent-composer-help { margin: 9px 4px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .agent-composer-dock { position: sticky; bottom: 0; z-index: 5; padding: 24px 0 16px; margin-top: auto; background: linear-gradient(to bottom, transparent, var(--paper) 20px); }
-.agent-search { margin: 44px 0 20px; }
+.agent-history { margin-top: 44px; }
+.agent-search { margin: 0 0 20px; }
 .agent-search > div { display: flex; align-items: center; gap: 10px; color: var(--muted); border-bottom: 1px solid var(--line); padding: 0 0 10px; }
 .agent-search input { flex: 1; min-width: 0; padding: 8px 0; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 13px; }
 .agent-search button { border-color: transparent; background: transparent; padding: 7px 10px; color: var(--muted); }

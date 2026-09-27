@@ -79,6 +79,10 @@ test('recent searches restore their saved result list and dataset choices', asyn
   await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue(source.input);
   await expect(page.getByRole('checkbox', { name: 'Comments' })).toBeChecked();
   expect(providerReads).toBe(1);
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+  await expect(page.getByText('Saved comparison result')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('');
 });
 
 test('recent source load failures expose a retry and preserve the form', async ({ page }) => {
@@ -92,6 +96,93 @@ test('recent source load failures expose a retry and preserve the form', async (
   await page.getByRole('button', { name: 'Retry recent sources' }).click();
   await expect(page.getByText('No recent sources yet')).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toBeVisible();
+});
+
+for (const theme of ['light', 'dark'] as const) test(`Sources and Agent share their empty history presentation (${theme})`, async ({ page }, testInfo) => {
+  await page.emulateMedia({ colorScheme: theme });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const scenario = await accountScenario(page, { responses: {
+    '/v1/sources/recent': { body: { sources: [] } },
+    '/v1/agent/sessions': { body: { sessions: [], nextCursor: null } },
+  } });
+  const presentation = async (title: string) => page.getByRole('heading', { name: title, exact: true }).evaluate(`heading => {
+    const style = getComputedStyle(heading);
+    const container = getComputedStyle(heading.parentElement);
+    return { fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight, padding: container.padding };
+  }`);
+  try {
+    await page.goto('/dashboard/sources');
+    await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
+    await expect(page.getByText('Search for a topic or paste a YouTube link above. Your recent sources will appear here.')).toBeVisible();
+    const sourceStyle = await presentation('No recent sources yet');
+    await page.screenshot({ path: testInfo.outputPath(`sources-empty-${theme}.png`), fullPage: true });
+    await page.getByRole('link', { name: 'Agent', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toHaveCount(0);
+    expect(await presentation('No sessions yet')).toEqual(sourceStyle);
+    await page.screenshot({ path: testInfo.outputPath(`sessions-empty-${theme}.png`), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('heading', { name: 'No sessions yet' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search your sessions' })).toHaveCount(0);
+    await page.goto('/dashboard/sources');
+    await expect(page.getByRole('heading', { name: 'No recent sources yet' })).toBeVisible();
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  } finally { await scenario.clear(); }
+});
+
+test('recent sources use matching skeleton rows while history is loading', async ({ page }, testInfo) => {
+  const scenario = await accountScenario(page, { delays: ['/v1/sources/recent'] });
+  try {
+    await page.goto('/dashboard/sources');
+    const skeleton = page.getByRole('status', { name: 'Loading recent sources', exact: true });
+    await expect(skeleton).toBeVisible();
+    await expect(skeleton.locator('.recent-source-skeleton')).toHaveCount(3);
+    await expect(skeleton.locator('.ui-bar').first()).toBeVisible();
+    await expect(page.locator('p').filter({ hasText: 'Loading recent sources' })).toHaveCount(0);
+    await expect(page.getByText('No recent sources yet')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('recent-sources-loading.png'), fullPage: true });
+    await scenario.release();
+    await expect(skeleton).toHaveCount(0);
+  } finally { await scenario.release(); await scenario.clear(); }
+});
+
+for (const theme of ['light', 'dark'] as const) test(`recent URL thumbnails and search icons share dimensions on mobile (${theme})`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: theme });
+  const sources = [
+    { id: '25c715cb-30f4-4d24-a66f-1cab99d4b4c6', input: `https://youtube.com/watch?v=${videoId}`, title: 'Saved video thumbnail', kind: 'inspection', updatedAt: Date.now(), thumbnailUrl: 'https://thumb.example.test/video.svg' },
+    { id: '90abdb7b-af0c-429c-9c9d-02949a76d1c6', input: 'Opus vs Astra', title: 'Saved search query', kind: 'search', updatedAt: Date.now() },
+  ];
+  await page.route('**/api/platform/v1/sources/recent', route => route.fulfill({ json: { sources } }));
+  await page.route('https://thumb.example.test/video.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#334155"/></svg>' }));
+  await page.goto('/dashboard/sources');
+  const video = page.getByRole('button', { name: /Saved video thumbnail/ });
+  const search = page.getByRole('button', { name: /Saved search query/ });
+  await expect(video.locator('img')).toBeVisible();
+  await expect(search.locator('svg')).toBeVisible();
+  const videoBounds = await video.locator('.recent-source-visual').boundingBox();
+  const searchBounds = await search.locator('.recent-source-visual').boundingBox();
+  expect(videoBounds?.width).toBe(searchBounds?.width);
+  expect(videoBounds?.height).toBe(searchBounds?.height);
+  expect(videoBounds?.width).toBe(64);
+  expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath(`recent-sources-${theme}.png`), fullPage: true });
+});
+
+test('clicking the active Sources sidebar clears an inspector and a pending request', async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/videos/${videoId}/transcript`, async route => { await gate; await route.fulfill({ json: transcript }).catch(() => {}); });
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByRole('heading', { name: 'Transcript deadline regression' })).toBeVisible();
+  await page.getByRole('link', { name: 'Sources', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('');
+  release();
+  await expect(page.getByText(transcript.text, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Transcript deadline regression' })).toHaveCount(0);
 });
 
 test('slow transcript finishes after the old browser deadline', async ({ page }) => {
@@ -345,13 +436,14 @@ test('settings renders account data on the server and requests only its own reso
   } finally { await scenario.clear(); }
 });
 
-test('research drafts survive a visit to the settings route', async ({ page }) => {
+test('the Sources sidebar opens the default view after visiting another route', async ({ page }) => {
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill('a draft research query');
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/settings$/);
   await page.getByRole('link', { name: 'Sources', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('a draft research query');
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
 });
 
 test('legacy settings links preserve checkout and email confirmation parameters', async ({ page }) => {
@@ -422,7 +514,7 @@ test('settings renders while navigation access checks are pending', async ({page
  }finally{await scenario.clear();}
 });
 
-test('an active transcript finishes while settings is open and is reused on return',async({page})=>{
+test('an active transcript finishes in the background and the Sources sidebar returns home',async({page})=>{
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
  await page.route(`**/videos/${videoId}/transcript`,async route=>{reads++;await gate;await route.fulfill({json:transcript});});
  await page.goto('/dashboard/sources');
@@ -431,9 +523,13 @@ test('an active transcript finishes while settings is open and is reused on retu
  await expect.poll(()=>reads).toBe(1);
  await page.getByRole('link',{name:'Settings',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Workspace settings'})).toBeVisible();
+ const remembered=page.waitForResponse(response=>response.url().endsWith('/v1/sources/recent')&&response.request().method()==='POST');
  release();
+ await remembered;
  await page.getByRole('link',{name:'Sources',exact:true}).click();
- await expect(page.getByText('Transcript arrived successfully.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Recent sources',exact:true})).toBeVisible();
+ await expect(page.getByText('Transcript arrived successfully.',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('textbox',{name:'Video search or YouTube URL'})).toHaveValue('');
  expect(reads).toBe(1);
 });
 
