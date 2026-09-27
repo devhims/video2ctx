@@ -31,7 +31,7 @@ const classifierDecisionSchema = z.object({
   researchVideoCount: z.number().int().min(0).max(8).describe('Use 0 for finalize. Required for every route. Number of distinct videos to research within the 40-second research budget, 1 to 8. For inspect_video use 1. Choose based on the question, not the number of requested answer items.'),
   requiredVideoCount: capabilityRouteDecisionSchema.options[0].shape.requiredVideoCount.describe('Only if the user explicitly requires a number of source videos. This is separate from the number of answer items. Preserve counts above the research capacity so incomplete source requirements remain visible.'),
   researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth,
-  searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery,
+  searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery.describe('A concise search that preserves the user\'s factual details and constraints: names, versions, dates, quantities, units, limits, exclusions and comparison subjects. Improve wording without changing the requested subject or inventing facts.'),
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
@@ -122,7 +122,9 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
         'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". Also set researchVideoCount explicitly. Usually choose 1-2 for a narrow question, 3 for an ordinary comparison, and 4-8 only when the requested breadth warrants it. Fewer focused sources leave more time for careful extraction. This is a research target, not proof that the answer is incomplete if fewer sufficient sources are found.',
         'For all finalize decisions set researchVideoCount to 0. For every executable route explicitly choose its researchVideoCount.',
         'Set requiredVideoCount only when the user explicitly requests that many source videos, not that many recommendations or answer items. Set researchVideoCount to that required count up to the capacity of 8; preserve the actual required count separately. For inspect_video set researchVideoCount to 1.',
-        'For topic_research, also provide one concise searchQuery for YouTube discovery. Preserve the product name and requested task. The application executes this search immediately; no separate search-planning step is needed.',
+        'For topic_research, provide one concise searchQuery for YouTube discovery. Rewrite for searchability, not to correct the user. Preserve the factual details that identify the subject and constrain the requested answer: names, model and version numbers, dates and date ranges, quantities and units, budgets and upper or lower limits, locations, comparison subjects, and exclusions or negation. You may remove conversational filler and add neutral task words such as tutorial or comparison, but must not change those details, reverse a constraint, broaden the scope, or invent a qualifier.',
+        'Treat user-supplied facts as search constraints, not as facts you must endorse. If a name, release, number or premise seems unfamiliar or mistaken, search it as supplied and let retrieved evidence establish what is available. Do not substitute something more familiar from memory. Before submitting searchQuery, compare it with the current request and relevant user history: does it still ask about the same subject, with the same important numbers, units and restrictions?',
+        'Search fidelity examples: "how to get the most out of opus 5.5?" -> "Opus 5.5 tips and prompting guide", never Opus 4.5. "run a 7B model locally with 8 GB RAM without a GPU" -> "7B model local inference 8 GB RAM CPU only", never a different model size or GPU setup. "20-minute vegetarian meals under 500 calories" -> "vegetarian meals under 500 calories ready in 20 minutes", preserving both limits and the dietary restriction. The application executes the query immediately; no separate search-planning step is needed.',
         'When the request targets a supplied channel, set channelId from suppliedChannelIds. The application will inspect its identity and Videos tab and restrict search to that channel. Do not replace channel research with an unrestricted search.',
         'Resolve every subject of a specific-video comparison into comparisonVideoIds using suppliedVideoIds and history. Do not drop an earlier video when the current message introduces a new URL. If all subjects have saved transcripts, choose finalize. If just one needs retrieval, choose inspect_video for that video and retain all comparisonVideoIds. If several need retrieval, choose topic_research with comparisonVideoIds and researchVideoCount matching that set; discovery will be skipped. If the earlier reference is ambiguous, ask for clarification.',
         'Otherwise return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
@@ -179,6 +181,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
     if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
+    if (parsed.success && feedback.length === 0) feedback = searchQueryNumberIssues(parsed.data, input);
     input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
       elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });
@@ -195,6 +198,25 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   }
   throw new ApiError(502, 'AGENT_CLASSIFICATION_INVALID',
     `Classification could not produce a valid routing decision after one repair. Invalid fields: ${feedback.map(issue => issue.path || 'tool call').join(', ')}. Please retry the request.`);
+}
+
+/** Dotted numeric constraints include model versions and must survive query rewriting.
+ * Keep this independent of a release catalog, which would repeat the model's mistake.
+ * URLs are references, not search constraints. Follow-ups without explicit numbers
+ * can still resolve their subject from conversation history.
+ */
+function searchQueryNumberIssues(
+  decision: z.infer<typeof classifierDecisionSchema>, input: CapabilityClassifierInput,
+): { path: string; code: string; message: string }[] {
+  if (decision.route !== 'topic_research' || decision.comparisonVideoIds?.length) return [];
+  const numbers = (text: string) => new Set(text.replace(/https?:\/\/\S+/gi, '').match(/(?<![\d.])\d+(?:\.\d+)+(?!\d|\.\d)/g) ?? []);
+  const requested = numbers(input.message);
+  if (!requested.size) return [];
+  const proposed = numbers(decision.searchQuery ?? '');
+  const allowed = new Set([...requested, ...(input.conversationHistory ?? []).flatMap(turn => [...numbers(turn.user)])]);
+  if ([...requested].every(value => proposed.has(value)) && [...proposed].every(value => allowed.has(value))) return [];
+  return [{ path: 'searchQuery', code: 'changed_numeric_constraint',
+    message: `Preserve these exact dotted numbers from the current request: ${[...requested].join(', ')}. Do not replace or drop them. Additional versions must come from supplied user messages, not remembered product releases. Search the requested subject as written.` }];
 }
 
 function comparisonScopeIssues(

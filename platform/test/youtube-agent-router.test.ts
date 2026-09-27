@@ -18,6 +18,49 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 
 describe('YouTube agent capability router', () => {
+  it.each(['how to get the most out of Claude Opus 4.5 tips and prompting guide', 'Opus prompting guide', 'Opus 5.5 and 4.5 prompting guide'])('rejects changed or dropped versions before discovery: %s', async searchQuery => {
+    const model = classifierModel({ route: 'topic_research', researchVideoCount: 2, researchBreadth: 'focused',
+      searchQuery });
+    await expect(classifyCapabilityWithModel({ message: 'how to get the most out of opus 5.5.',
+      model, signal: new AbortController().signal })).rejects.toThrow(/searchQuery/);
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('repairs a changed version and executes only the corrected routing decision', async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
+        route: 'topic_research', researchVideoCount: 2, answerDetail: 'standard', useStoryboard: false,
+        researchBreadth: 'focused', searchQuery: calls++ ? 'Opus 5.5 prompting guide' : 'Claude Opus 4.5 prompting guide',
+      }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [],
+    }) });
+    const diagnostic = vi.fn();
+    await expect(classifyCapabilityWithModel({ message: 'how to get the most out of opus 5.5?', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostic })).resolves.toMatchObject({searchQuery: 'Opus 5.5 prompting guide'});
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('changed_numeric_constraint');
+    expect(diagnostic.mock.calls[0]![0]).toMatchObject({outcome: 'invalid'});
+  });
+
+  it.each([
+    ['Compare Opus 5.5 and Sonnet 4.5', 'Opus 5.5 vs Sonnet 4.5'],
+    ['How do I use Blender v4.2.1?', 'Blender 4.2.1 tutorial'],
+    ['Explain Opus', 'Opus prompting guide'],
+  ])('preserves valid search refinement for %s', async (message, searchQuery) => {
+    const model = classifierModel({route: 'topic_research', researchBreadth: 'focused', searchQuery});
+    await expect(classifyCapabilityWithModel({message, model, signal: new AbortController().signal})).resolves.toMatchObject({searchQuery});
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('allows comparison with an earlier user-supplied version without dropping the current one', async () => {
+    const searchQuery = 'Opus 5.5 vs Opus 4.5';
+    await expect(classifyCapabilityWithModel({message: 'Compare that with Opus 5.5.',
+      conversationHistory: [conversationTurn({user: 'Explain Opus 4.5', assistant: 'Previous answer', resourceIds: []})],
+      model: classifierModel({route: 'topic_research', researchBreadth: 'comparative', searchQuery}),
+      signal: new AbortController().signal})).resolves.toMatchObject({searchQuery});
+  });
+
   it('refreshes dynamic data without refreshing transcripts or visuals', async () => {
     const base = providerWith({ video: vi.fn(), comments: vi.fn(), transcript: vi.fn(), storyboard: vi.fn() });
     const provider = createCapabilityProvider(base, {
