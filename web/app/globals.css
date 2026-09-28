@@ -346,6 +346,7 @@ html,body{overflow-x:clip}
 /* Notification inbox and delivery preferences */
 .notification-menu{position:relative;flex:none}
 .notification-trigger{position:relative;display:grid;place-items:center;width:2.5rem;height:2.5rem;padding:0;border:1px solid var(--color-dashboard-rule);border-radius:999px;background:var(--color-dashboard-surface);color:var(--color-dashboard-ink-soft);cursor:pointer}
+.notification-trigger:focus-visible{outline:2px solid var(--color-dashboard-ink-soft);outline-offset:2px}
 .notification-trigger>span{position:absolute;top:-.3rem;right:-.35rem;display:grid;place-items:center;min-width:1.15rem;height:1.15rem;padding:0 .22rem;border:2px solid var(--color-dashboard-paper);border-radius:999px;background:var(--color-dashboard-accent);color:var(--color-dashboard-accent-ink);font-size:.58rem;font-weight:800;font-variant-numeric:tabular-nums}
 .notification-popover{position:absolute;top:calc(100% + .75rem);right:0;width:min(23rem,calc(100vw - 2rem));overflow:hidden;border:1px solid var(--color-dashboard-rule-strong);border-radius:var(--radius-dashboard-md);background:var(--color-dashboard-surface);box-shadow:var(--shadow-dashboard-modal);color:var(--color-dashboard-ink)}
 .notification-popover>header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);padding:var(--space-md);border-bottom:1px solid var(--color-dashboard-rule)}
@@ -3873,7 +3874,7 @@ html:has(.developer-page) body {
 }
 
 /* Dashboard page headers scroll with their content. Homepage navigation is separate. */
-.workspace-shell .topbar { position: static; top: auto; z-index: auto; }
+.workspace-shell .topbar { position: relative; top: auto; z-index: 10; }
 
 .dashboard-signout-error{position:fixed;bottom:1.5rem;right:1.5rem;z-index:100;max-width:calc(100vw - 3rem);padding:1rem 1.25rem;border:1px solid var(--color-dashboard-rule);border-radius:6px;background:var(--color-dashboard-surface);color:var(--color-dashboard-ink);font-size:.85rem}
 

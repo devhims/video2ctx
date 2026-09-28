@@ -427,6 +427,37 @@ test('settings cards load independently and preserve their layout', async ({ pag
   } finally { await scenario.clear(); }
 });
 
+test('notification panel stays opaque and above the Sources form on a narrow screen', async ({ page }, testInfo) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/notifications': { body: { notifications: Array.from({ length: 5 }, (_, index) => ({
+    id: `notice-${index}`, type: 'monitor', title: 'New video', body: 'A monitor found a match', data_json: '{}',
+    read_at: null, created_at: Date.now() - index * 60_000,
+  })) } } } });
+  try {
+    await page.setViewportSize({ width: 491, height: 610 });
+    await page.goto('/dashboard/sources');
+    const trigger = page.getByRole('button', { name: '5 unread notifications' });
+    await trigger.click();
+    const panel = page.getByRole('dialog', { name: 'Notifications' });
+    await expect(panel).toBeVisible();
+    const panelBox = (await panel.boundingBox())!;
+    const inspectBox = (await page.getByRole('button', { name: /Inspect/ }).boundingBox())!;
+    const left = Math.max(panelBox.x, inspectBox.x);
+    const right = Math.min(panelBox.x + panelBox.width, inspectBox.x + inspectBox.width);
+    const top = Math.max(panelBox.y, inspectBox.y);
+    const bottom = Math.min(panelBox.y + panelBox.height, inspectBox.y + inspectBox.height);
+    expect(right).toBeGreaterThan(left);
+    expect(bottom).toBeGreaterThan(top);
+    const x = (left + right) / 2, y = (top + bottom) / 2;
+    await page.screenshot({ path: testInfo.outputPath('notifications-over-sources.png') });
+    const overlay = await page.evaluate(({ x, y }) => ({
+      panelIsTopmost: Boolean(document.elementFromPoint(x, y)?.closest('.notification-popover')),
+      background: getComputedStyle(document.querySelector('.notification-popover')!).backgroundColor,
+    }), { x, y });
+    expect(overlay.panelIsTopmost).toBe(true);
+    expect(overlay.background).not.toMatch(/\/\s*0(?:\.0+)?\)/);
+  } finally { await scenario.clear(); }
+});
+
 test('dashboard navigation reuses account data without browser refetches', async ({ page }) => {
   const scenario = await accountScenario(page, {});
   const reads: string[] = [];
