@@ -93,6 +93,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       if (source) setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
       setFailedSaves(current => current.filter(item => item.id !== save.id));
       if (save.projectId) {
+        void cache.projectDetails.invalidate(save.projectId);
         // Reconcile counts even when a retry follows a lost successful response.
         void projectsResource.refresh();
         setNotice(`Added to ${save.projectName}`);
@@ -347,6 +348,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
           content: inspector.transcript?.segments.map((segment) => `[${segment.startMs}] ${segment.text}`).join('\n'),
         }),
       });
+      void cache.projectDetails.invalidate(project.id);
       setNotice(`Saved to ${project.name}`);
       await api('/v1/imports', {
         method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),

@@ -73,3 +73,17 @@ export function useDashboardCache() {
   if (!cache) throw new Error('DashboardDataProvider is missing');
   return cache;
 }
+
+// The sidebar and project page consume the same in-flight read and saved data.
+export function useProjectDetail(id: string | null) {
+  const cache = useDashboardCache().projectDetails;
+  const snapshot = useSyncExternalStore(cache.subscribe, () => cache.read(id), () => cache.read(null));
+  useEffect(() => {
+    if (!id) return;
+    void cache.load(id);
+    const refresh = () => { if (document.visibilityState === 'visible') void cache.load(id); };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [cache, id]);
+  return { ...snapshot, refresh: () => id ? cache.load(id, true) : Promise.resolve() };
+}

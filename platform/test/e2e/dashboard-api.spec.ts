@@ -712,6 +712,48 @@ test('failed search saves survive video success and retry into their original pr
   } finally { releaseVideo(); await scenario.clear(); }
 });
 
+test('project header and Add sources stay usable while sources are delayed', async ({ page }) => {
+  const project = { id: 'fast-project', name: 'Immediate project', item_count: 1 };
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  let release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/projects/fast-project', async route => {
+    await gate;
+    return route.fulfill({ json: { ...project, items: [] } });
+  });
+  try {
+    await page.goto('/dashboard/projects');
+    await page.getByRole('button', { name: 'Immediate project 1 sources' }).click();
+    await expect(page.getByRole('heading', { name: 'Immediate project', exact: true })).toBeVisible({ timeout: 800 });
+    await expect(page.getByRole('button', { name: 'Add sources', exact: true })).toBeEnabled();
+    await expect(page.getByRole('status', { name: 'Loading saved sources' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add sources', exact: true }).click();
+    await expect(page.getByText('Adding sources to')).toContainText('Immediate project');
+  } finally { release(); await scenario.clear(); }
+});
+
+test('project page reuses sources loaded by the sidebar and on repeat visits', async ({ page }) => {
+  const project = { id: 'warm-project', name: 'Warm project', item_count: 1 };
+  let reads = 0, release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route('**/api/platform/v1/projects/warm-project', async route => {
+    reads++;
+    if (reads > 1) await gate;
+    return route.fulfill({ json: { ...project, items: [{ id: 'item', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Warm saved video' }] } });
+  });
+  try {
+    await page.goto('/dashboard/projects');
+    await page.getByRole('button', { name: 'Warm project', exact: true }).click();
+    await expect(page.getByRole('group', { name: 'Sources in Warm project' }).getByRole('button', { name: 'Warm saved video' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible({ timeout: 800 });
+    await page.getByRole('button', { name: '← All projects' }).click();
+    await page.getByRole('button', { name: 'Warm project 1 sources' }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible({ timeout: 800 });
+    expect(reads).toBe(1);
+  } finally { release(); await scenario.clear(); }
+});
+
 test('project creation shows progress and adds the project without another list request', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [] } } } });
   let release!: () => void;
