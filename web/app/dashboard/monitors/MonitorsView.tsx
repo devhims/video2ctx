@@ -1,8 +1,9 @@
 'use client';
 import { Icon } from '../DashboardSidebar';
 import pageStyles from '../DashboardPages.module.css';
+import type { ReactNode } from 'react';
 import type {Monitor} from '../research-types';
-const MONITOR_INTERVAL_OPTIONS = [
+export const MONITOR_INTERVAL_OPTIONS = [
   { minutes: 60, label: 'Hour' },
   { minutes: 360, label: '6 hours' },
   { minutes: 720, label: '12 hours' },
@@ -12,10 +13,11 @@ const MONITOR_INTERVAL_OPTIONS = [
 ] as const;
 
 
-export function MonitorsView({ monitors, knownChannel, savingId, onFindSource, onOpenTarget, onSchedule, onRemove }: { monitors: Monitor[]; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onFindSource:()=>void; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
+export function MonitorsView({ monitors, knownChannel, savingId, onAddChannel, onOpenTarget, onSchedule, onRemove, addChannelForm }: { monitors: Monitor[]; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onAddChannel:()=>void; addChannelForm?: ReactNode; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
   const activeCount = monitors.filter(monitor => monitor.enabled).length;
   return <section className='content-section standalone monitor-section'>
-    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Get updates from channels and searches you follow.</p></div><button className={pageStyles.primaryAction} onClick={onFindSource}><Icon name='plus' size={15} />Find a source</button></header>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Choose channels and how often to check for new videos.</p></div><button className={pageStyles.primaryAction} onClick={onAddChannel}><Icon name='plus' size={15} />Add channel</button></header>
+    {addChannelForm}
     <div className={pageStyles.listHeading}><h3>Monitors <span>{monitors.length}</span></h3><span>{activeCount} active</span></div>
     <div className={pageStyles.recordList}>{monitors.map(monitor => {
       const details = monitorDetails(monitor, knownChannel);
@@ -23,12 +25,12 @@ export function MonitorsView({ monitors, knownChannel, savingId, onFindSource, o
       return <article className={pageStyles.monitorRow} key={monitor.id}>
         <span className={pageStyles.rowIcon}><Icon name={channelWatch ? 'monitor' : 'search'} size={19} /></span>
         <div className={pageStyles.recordCopy}><div className={pageStyles.monitorTitle}><h3>{details.label}</h3><span data-active={Boolean(monitor.enabled)}>{monitor.enabled ? 'Active' : 'Paused'}</span></div><small>{[channelWatch ? 'Channel' : 'Search', details.handle].filter(Boolean).join(' · ')}</small><p>{monitorStatusText(monitor)}</p>
-          <div className={pageStyles.rowActions}><button className={pageStyles.textAction} onClick={() => onOpenTarget(details.label)}>Open in Sources ↗</button>{channelWatch && <a href={`https://www.youtube.com/channel/${encodeURIComponent(monitor.target)}`} target='_blank' rel='noreferrer'>YouTube ↗</a>}</div>
+          <div className={pageStyles.rowActions}>{!channelWatch && <button className={pageStyles.textAction} onClick={() => onOpenTarget(details.label)}>Open in Sources ↗</button>}{channelWatch && <a href={`https://www.youtube.com/channel/${encodeURIComponent(monitor.target)}`} target='_blank' rel='noreferrer'>Open channel on YouTube ↗</a>}</div>
         </div>
         <div className={pageStyles.monitorSchedule}><label><span>Check every</span><select aria-label={`Monitoring frequency for ${details.label}`} value={monitor.interval_minutes ?? 1440} disabled={savingId === monitor.id} onChange={event => onSchedule(monitor.id, Number(event.target.value))}>{MONITOR_INTERVAL_OPTIONS.map(option => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}</select></label><button className={pageStyles.deleteMonitor} aria-label={`Delete monitor for ${details.label}`} title='Delete monitor' onClick={() => onRemove(monitor.id)}><Icon name='trash' size={16} /></button></div>
       </article>;
     })}</div>
-    {!monitors.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='monitor' size={21} /></span><div><h3>No monitors yet</h3><p>Open a video and select Monitor channel to get new upload alerts.</p></div></div>}
+    {!monitors.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='monitor' size={21} /></span><div><h3>No monitors yet</h3><p>Add a YouTube channel and choose how often to check for new uploads.</p></div></div>}
   </section>;
 }
 
