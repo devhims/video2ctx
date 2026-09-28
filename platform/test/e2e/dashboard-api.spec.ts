@@ -576,17 +576,53 @@ test('warm settings stays usable while a return visit server read is delayed', a
   } finally { await scenario.clear(); }
 });
 
-test('settings sidebar opens the selected project and the new-project dialog', async ({ page }) => {
+test('settings sidebar expands project sources and opens the new-project dialog', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [{ id: 'research', name: 'Saved research' }] } } } });
   try {
-    await page.route('**/api/platform/v1/projects/research', route => route.fulfill({ json: { id: 'research', name: 'Saved research', items: [] } }));
+    await page.route('**/api/platform/v1/projects/research', route => route.fulfill({ json: { id: 'research', name: 'Saved research', items: [{ id: 'item-1', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Sample video' }] } }));
     await page.goto('/dashboard/settings');
-    await page.getByRole('button', { name: 'Saved research', exact: true }).click();
+    const folder = page.getByRole('button', { name: 'Saved research', exact: true }).first();
+    await folder.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('group', { name: 'Sources in Saved research' }).first().getByRole('button', { name: 'Sample video' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Saved research', exact: true })).toBeVisible();
+    await folder.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('group', { name: 'Sources in Saved research' }).first()).toHaveCount(0);
     await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Create a new project', exact: true }).first().click();
-    await expect(page.getByRole('dialog', { name: 'Name this line of inquiry' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'New project' })).toBeVisible();
   } finally { await scenario.clear(); }
+});
+
+test('project creation shows progress and adds the project without another list request', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [] } } } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let creates = 0;
+  await page.route('**/api/platform/v1/projects', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    creates++;
+    await gate;
+    return route.fulfill({ status: 201, json: { id: 'new-research', name: 'Video research' } });
+  });
+  try {
+    await page.goto('/dashboard/projects');
+    const readsBefore = (await scenario.reads())['/v1/projects'] ?? 0;
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'New project' });
+    await expect(dialog.getByText('Keep related sources in one place.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeDisabled();
+    await dialog.getByRole('textbox', { name: 'Name' }).fill('Video research');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(dialog).toHaveAttribute('aria-busy', 'true');
+    await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+    expect(creates).toBe(1);
+    release();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Video research', exact: true }).first()).toBeVisible();
+    expect((await scenario.reads())['/v1/projects'] ?? 0).toBe(readsBefore);
+  } finally { release(); await scenario.clear(); }
 });
 
 test('settings renders while navigation access checks are pending', async ({page})=>{

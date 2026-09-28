@@ -14,6 +14,7 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   const [selected, setSelected] = useDashboardDraft<ProjectDetail | null>('selected-project', null);
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(''),
+    [createError, setCreateError] = useState(''),
     [create, setCreate] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const open = useCallback(
@@ -41,16 +42,19 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
     const id = params.get('project'),
       newProject = params.get('newProject');
     if (id) void open({ id, name: '' });
-    if (newProject) setCreate(true);
+    if (newProject) { setCreateError(''); setCreate(true); }
     if (id || newProject) router.replace('/dashboard/projects', { scroll: false });
   }, [params, open, router]);
-  const add = async (name: string) => {
+  const add = async (name: string): Promise<boolean> => {
+    setCreateError('');
     try {
-      await api('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
-      await resource.refresh();
+      const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
+      resource.setData(current => [project, ...current]);
       setCreate(false);
+      return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not create project.');
+      setCreateError(cause instanceof Error ? cause.message : 'Could not create project.');
+      return false;
     }
   };
   return (
@@ -66,7 +70,7 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
           selectedProject={selected}
           loading={loading}
           error={error}
-          onCreate={() => setCreate(true)}
+          onCreate={() => { setCreateError(''); setCreate(true); }}
           onOpen={(p) => void open(p)}
           onBack={() => {
             setSelected(null);
@@ -78,12 +82,7 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
           }
         />
       )}
-      {create && (
-        <>
-          <NewProjectDialog onClose={() => setCreate(false)} onCreate={(name) => void add(name)} />
-          {error && <p role='alert'>{error}</p>}
-        </>
-      )}
+      {create && <NewProjectDialog onClose={() => { setCreate(false); setCreateError(''); }} onCreate={add} error={createError} />}
     </>
   );
 }

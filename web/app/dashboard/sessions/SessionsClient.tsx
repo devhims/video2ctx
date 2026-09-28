@@ -36,8 +36,9 @@ export function AgentShell({ children }: { children: ReactNode }) {
   return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
       onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
-      onNewProject={() => router.push('/dashboard?section=projects')}
-      onOpenProject={() => router.push('/dashboard?section=projects')}
+      onNewProject={() => router.push('/dashboard/projects?newProject=1')}
+      onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={item => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fsessions')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>

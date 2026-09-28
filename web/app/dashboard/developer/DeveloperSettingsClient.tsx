@@ -87,6 +87,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
       onNavigate={navigateToDashboard}
       onNewProject={() => router.push('/dashboard/projects?newProject=1')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={item => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fdeveloper')}
       accountName={displayUser.name ?? displayUser.email}
       credits={credits}

@@ -1,12 +1,14 @@
 'use client';
 
-import { useAccountResource } from './DashboardDataProvider';
+import { useAccountResource, useDashboardDraft } from './DashboardDataProvider';
 
 import Link from 'next/link';
 import { dashboardPath, SOURCES_HOME_EVENT } from './dashboard-routes';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon } from '@phosphor-icons/react';
+import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon, FolderIcon, FolderOpenIcon } from '@phosphor-icons/react';
+import { platformRequest as api, isAbortError } from '../../lib/platform-request';
+import type { ProjectDetail, ProjectItem } from './research-types';
 import styles from './DashboardSidebar.module.css';
 
 export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
@@ -38,6 +40,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
   onNavigate: (section: DashboardSection) => void;
   onNewProject: () => void;
   onOpenProject: (project: Project) => void;
+  onOpenProjectItem: (item: ProjectItem) => void;
   onSignIn: () => void;
   accountName?: string;
   credits?: number;
@@ -46,12 +49,27 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
 
 const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
-export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
+export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onOpenProjectItem, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
   const { agentAccess, adminAccess, isSigningOut } = useDashboardSession();
   const projectsResource = useAccountResource('projects', []);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [expandedProjectId, setExpandedProjectId] = useDashboardDraft<string | null>('expanded-sidebar-project', null);
+  const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
+  const [projectError, setProjectError] = useState('');
+  const [retryProject, setRetryProject] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (!expandedProjectId || !projects.some(project => project.id === expandedProjectId)) return;
+    const controller = new AbortController();
+    setProjectDetail(null);
+    setProjectError('');
+    void api<ProjectDetail>(`/v1/projects/${encodeURIComponent(expandedProjectId)}`, { signal: controller.signal })
+      .then(setProjectDetail)
+      .catch(cause => { if (!isAbortError(cause)) setProjectError(cause instanceof Error ? cause.message : 'Could not load saved sources.'); });
+    return () => controller.abort();
+  }, [expandedProjectId, projects, retryProject]);
 
   useEffect(() => {
     try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === 'true'); } catch { /* Storage may be disabled. */ }
@@ -67,6 +85,12 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
     try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* Keep the toggle usable without storage. */ }
   };
   const run = (action: () => void) => { dialog.current?.close(); action(); };
+  const toggleProject = (project: Project) => {
+    if (expandedProjectId === project.id) { setExpandedProjectId(null); return; }
+    setProjectDetail(null);
+    setExpandedProjectId(project.id);
+    onOpenProject(project);
+  };
   const navButton = (section: DashboardSection, label: string, icon: IconName, suffix?: ReactNode) => (
     <Link href={dashboardPath(section)} prefetch={false} aria-label={label} title={collapsed ? label : undefined} data-tooltip={label} aria-current={activeSection === section ? 'page' : undefined} className={styles.item} onClick={event => {
       dialog.current?.close();
@@ -105,8 +129,23 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       </nav>
       <section className={styles.projects} aria-label='Recent projects'>
         <div className={styles.projectHeading}><span>Recent projects</span><button type='button' aria-label='Create a new project' onClick={() => run(onNewProject)}><Icon name='plus' size={15} /></button></div>
-        {projects.slice(0, 5).map(project => <button type='button' className={styles.project} key={project.id} title={project.name} onClick={() => run(() => onOpenProject(project))}><span className={styles.projectDot} /><span>{project.name}</span></button>)}
-        {!projectsResource.ready && !projectsResource.error && <div role='status' aria-label='Loading recent projects'>{[0, 1, 2].map(index => <div className={styles.project} key={index} aria-hidden='true'><span className={styles.projectDot} /><span className='skeleton-action'><i className='ui-bar' /></span></div>)}</div>}
+        {projects.slice(0, 5).map(project => {
+          const expanded = expandedProjectId === project.id;
+          return <div className={styles.projectGroup} key={project.id}>
+            <button type='button' className={styles.project} title={project.name} aria-expanded={expanded} onClick={() => toggleProject(project)}>
+              {expanded ? <FolderOpenIcon size={17} aria-hidden='true' /> : <FolderIcon size={17} aria-hidden='true' />}
+              <span className={styles.projectName}>{project.name}</span>
+            </button>
+            {expanded && <div className={styles.projectItems} role='group' aria-label={`Sources in ${project.name}`}>
+              {!projectDetail && !projectError && <div role='status' aria-label={`Loading sources in ${project.name}`} className={styles.projectItemSkeleton}><i className='ui-bar' /><i className='ui-bar' /></div>}
+              {projectError && <button type='button' className={styles.projectItem} onClick={() => setRetryProject(value => value + 1)}>Retry loading sources</button>}
+              {projectDetail?.id === project.id && (projectDetail.items.length
+                ? projectDetail.items.map(item => <button type='button' className={styles.projectItem} key={item.id} title={item.title || item.entity_id} onClick={() => run(() => onOpenProjectItem(item))}><Icon name='search' size={14} /><span>{item.title || item.entity_id}</span></button>)
+                : <span className={styles.projectEmpty}>No saved sources</span>)}
+            </div>}
+          </div>;
+        })}
+        {!projectsResource.ready && !projectsResource.error && <div role='status' aria-label='Loading recent projects'>{[0, 1, 2].map(index => <div className={styles.project} key={index} aria-hidden='true'><FolderIcon size={17} /><span className='skeleton-action'><i className='ui-bar' /></span></div>)}</div>}
         {projectsResource.ready && !projects.length && <p>Save a source to start a project.</p>}
       </section>
       <button type='button' className={styles.item + ' ' + styles.quickCreate} aria-label='Create a new project' title='New project' data-tooltip='New project' onClick={() => run(onNewProject)}><span className={styles.iconTile}><Icon name='plus' /></span></button>
