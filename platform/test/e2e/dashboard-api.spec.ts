@@ -564,9 +564,12 @@ test('settings renders while navigation access checks are pending', async ({page
   await page.goto('/dashboard/settings',{waitUntil:'commit'});
   await expect(page.getByRole('switch',{name:/In-app alerts/})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Upgrade to Builder'})).toBeEnabled();
+  const navigation = page.getByRole('navigation', { name: 'Dashboard navigation' });
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toHaveCount(0);
+  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 2).map(label => label.trim())).toEqual(['Sources', 'Trends']);
   await scenario.release();
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
+  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
  }finally{await scenario.clear();}
 });
 
@@ -599,7 +602,7 @@ test('an active trend request survives projects navigation without restarting',a
  await page.getByRole('link',{name:'Projects',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Your projects'})).toBeVisible();
  release();
- await page.getByRole('link',{name:'Trend Lab',exact:true}).click();
+ await page.getByRole('link',{name:'Trends',exact:true}).click();
  await expect(page.getByRole('alert').filter({hasText:'Retained scan completed'})).toBeVisible();
  expect(reads).toBe(1);
 });

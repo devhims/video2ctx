@@ -87,9 +87,9 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
     <div className={styles.scrollArea}>
       <nav aria-label='Dashboard navigation' className={styles.navigation}>
         <div className={styles.group}>
-          {navButton('trends', 'Trend Lab', 'trend')}
           {navButton('discover', 'Sources', 'search')}
           {agentAccess && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
+          {navButton('trends', 'Trends', 'trend')}
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Workspace</p>
