@@ -313,6 +313,60 @@ for (const section of ['projects', 'monitors']) {
   });
 }
 
+test('Monitors header and channel lookup remain interactive while the list is pending', async ({ page }) => {
+  const scenario = await accountScenario(page, { delays: ['/v1/monitors'] });
+  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'Science channel' } }));
+  try {
+    await page.goto('/dashboard/monitors', { waitUntil: 'commit' });
+    await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add channel', exact: true }).click();
+    const form = page.getByRole('region', { name: 'Add channel' });
+    await form.getByRole('textbox').fill('@science');
+    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await expect(form.getByRole('radio')).toBeChecked();
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toBeVisible();
+    await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
+    await scenario.release();
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeEnabled();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
+    expect((await scenario.reads())['/v1/monitors']).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('Monitors reuses cached rows on return navigation', async ({ page }) => {
+  const monitor = { id: 'cached-monitor', provider: 'youtube', kind: 'channel', target: `UC${'a'.repeat(22)}`, query_json: JSON.stringify({ label: 'Cached channel' }), interval_minutes: 1440, enabled: 1 };
+  const initial = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [monitor] } } } });
+  let pending: Awaited<ReturnType<typeof accountScenario>> | undefined;
+  let browserReads = 0;
+  page.on('request', request => { if (request.url().endsWith('/api/platform/v1/monitors')) browserReads++; });
+  try {
+    await page.goto('/dashboard/monitors');
+    await expect(page.getByRole('heading', { name: 'Cached channel', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Sources', exact: true }).click();
+    await expect(page).toHaveURL(/dashboard\/sources/);
+    pending = await accountScenario(page, { delays: ['/v1/monitors'] });
+    await page.getByRole('link', { name: 'Monitors', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Cached channel', exact: true })).toBeVisible();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
+    expect(browserReads).toBe(0);
+  } finally { await pending?.clear(); await initial.clear(); }
+});
+
+test('Monitors keeps its header after a load error and can retry the list', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { status: 503, body: { error: { message: 'Monitors unavailable' } } } } });
+  try {
+    await page.goto('/dashboard/monitors');
+    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
+    await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
+    await page.route('**/api/platform/v1/monitors', route => route.fulfill({ json: { monitors: [] } }));
+    await page.getByRole('button', { name: 'Retry monitors' }).click();
+    await expect(page.getByText('No monitors yet', { exact: true })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
+  } finally { await scenario.clear(); }
+});
+
 test('account errors do not show fabricated empty project results', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Projects are temporarily unavailable.' } } } } });
   try {

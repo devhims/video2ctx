@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { platformRequest as api } from '../../../lib/platform-request';
-import { useStreamedAccountResource } from '../DashboardDataProvider';
+import { useAccountResource } from '../DashboardDataProvider';
 import type { ResourceResult } from '../../../lib/dashboard-cache';
 import type { Monitor, ChannelInfo } from '../research-types';
 import { AddChannelForm } from './AddChannelForm';
@@ -10,7 +10,7 @@ import type { MonitorChannel } from '../../../lib/monitor-channels';
 import { MonitorsView, monitorIntervalLabel, monitorQueryMetadata, isYouTubeChannelId } from './MonitorsView';
 export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Monitor[]>> }) {
   const router = useRouter();
-  const resource = useStreamedAccountResource('monitors', [], promise);
+  const resource = useAccountResource('monitors', [], undefined, promise);
   const { data: monitors, setData: setMonitors } = resource;
   const [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
@@ -106,17 +106,17 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
           {notice}
         </div>
       )}
-      {resource.ready && (
-        <MonitorsView
-          monitors={monitors}
-          savingId={savingId}
-          onAddChannel={() => { setNotice(''); setAddingChannel(true); }}
-          addChannelForm={addingChannel ? <AddChannelForm monitors={monitors} onAdd={addChannel} onCancel={() => setAddingChannel(false)} /> : undefined}
-          onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
-          onSchedule={(id, n) => void schedule(id, n)}
-          onRemove={(id) => void remove(id)}
-        />
-      )}
+      <MonitorsView
+        monitors={monitors}
+        ready={resource.ready}
+        loading={resource.loading}
+        savingId={savingId}
+        onAddChannel={() => { setNotice(''); setAddingChannel(true); }}
+        addChannelForm={addingChannel ? <AddChannelForm monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => setAddingChannel(false)} /> : undefined}
+        onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
+        onSchedule={(id, n) => void schedule(id, n)}
+        onRemove={(id) => void remove(id)}
+      />
     </>
   );
 }

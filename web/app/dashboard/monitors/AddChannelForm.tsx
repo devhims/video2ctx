@@ -8,8 +8,8 @@ import { MONITOR_INTERVAL_OPTIONS } from './MonitorsView';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './AddChannelForm.module.css';
 
-export function AddChannelForm({ monitors, onAdd, onCancel }: {
-  monitors: Monitor[]; onAdd: (channel: MonitorChannel, interval: number) => Promise<void>; onCancel: () => void;
+export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel }: {
+  monitors: Monitor[]; monitorsReady?: boolean; onAdd: (channel: MonitorChannel, interval: number) => Promise<void>; onCancel: () => void;
 }) {
   const [input, setInput] = useState('');
   const [channels, setChannels] = useState<MonitorChannel[]>([]);
@@ -36,7 +36,7 @@ export function AddChannelForm({ monitors, onAdd, onCancel }: {
     finally { if (!next.signal.aborted) setSearching(false); }
   };
   const add = async () => {
-    if (!selected || alreadyMonitored(selected.id) || savingRef.current) return;
+    if (!monitorsReady || !selected || alreadyMonitored(selected.id) || savingRef.current) return;
     savingRef.current = true; setSaving(true); setError('');
     try { await onAdd(selected, interval); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add channel.'); }
@@ -63,7 +63,7 @@ export function AddChannelForm({ monitors, onAdd, onCancel }: {
       {MONITOR_INTERVAL_OPTIONS.map(option => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
     </select></label></div>}
     <div className={styles.actions}>
-      <button type='button' className={pageStyles.primaryAction} disabled={!selected || alreadyMonitored(selected.id) || saving} onClick={() => void add()}>{saving ? 'Adding…' : 'Add channel'}</button>
+      <button type='button' className={pageStyles.primaryAction} disabled={!monitorsReady || !selected || alreadyMonitored(selected.id) || saving} onClick={() => void add()}>{saving ? 'Adding…' : 'Add channel'}</button>
       <button type='button' className={pageStyles.textAction} disabled={saving} onClick={onCancel}>Cancel</button>
     </div>
   </section>;

@@ -1,4 +1,5 @@
 'use client';
+import { AccountSectionSkeleton } from '../AccountSectionSkeleton';
 import { Icon } from '../DashboardSidebar';
 import pageStyles from '../DashboardPages.module.css';
 import type { ReactNode } from 'react';
@@ -13,11 +14,12 @@ export const MONITOR_INTERVAL_OPTIONS = [
 ] as const;
 
 
-export function MonitorsView({ monitors, knownChannel, savingId, onAddChannel, onOpenTarget, onSchedule, onRemove, addChannelForm }: { monitors: Monitor[]; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onAddChannel:()=>void; addChannelForm?: ReactNode; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
+export function MonitorsView({ monitors, knownChannel, savingId, onAddChannel, onOpenTarget, onSchedule, onRemove, addChannelForm, ready = true, loading = false }: { monitors: Monitor[]; ready?: boolean; loading?: boolean; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; onAddChannel:()=>void; addChannelForm?: ReactNode; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
   const activeCount = monitors.filter(monitor => monitor.enabled).length;
   return <section className='content-section standalone monitor-section'>
     <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Choose channels and how often to check for new videos.</p></div><button className={pageStyles.primaryAction} onClick={onAddChannel}><Icon name='plus' size={15} />Add channel</button></header>
     {addChannelForm}
+    {!ready ? (loading ? <AccountSectionSkeleton section='monitors' listOnly /> : null) : <>
     <div className={pageStyles.listHeading}><h3>Monitors <span>{monitors.length}</span></h3><span>{activeCount} active</span></div>
     <div className={pageStyles.recordList}>{monitors.map(monitor => {
       const details = monitorDetails(monitor, knownChannel);
@@ -31,6 +33,7 @@ export function MonitorsView({ monitors, knownChannel, savingId, onAddChannel, o
       </article>;
     })}</div>
     {!monitors.length && <div className={pageStyles.emptyState}><span className={pageStyles.rowIcon}><Icon name='monitor' size={21} /></span><div><h3>No monitors yet</h3><p>Add a YouTube channel and choose how often to check for new uploads.</p></div></div>}
+    </>}
   </section>;
 }
 
