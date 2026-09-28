@@ -1,8 +1,8 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { platformRequest as api } from '../../../lib/platform-request';
-import { useDashboardDraft, useStreamedAccountResource, useProjectDetail, useDashboardCache } from '../DashboardDataProvider';
+import { useStreamedAccountResource, useProjectDetail, useDashboardCache } from '../DashboardDataProvider';
 import type { ResourceResult } from '../../../lib/dashboard-cache';
 import type { Project } from '../research-types';
 import { ProjectsView } from './ProjectsView';
@@ -12,18 +12,21 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   const router = useRouter(),
     params = useSearchParams();
   const resource = useStreamedAccountResource('projects', [], promise);
-  const [selected, setSelected] = useDashboardDraft<Project | null>('selected-project', null);
+  const selectedId = params.get('project');
+  const selected = selectedId ? resource.data.find(project => project.id === selectedId) ?? { id: selectedId, name: 'Project' } : null;
   const cache = useDashboardCache();
   const detail = useProjectDetail(selected?.id ?? null);
   const [createError, setCreateError] = useState(''), [create, setCreate] = useState(false);
-  const open = useCallback((project: Project) => { setSelected(project); }, [setSelected]);
+  // Keep selection in the URL; generic Projects navigation always shows the list.
+  // Native history updates integrate with Next without waiting for another server render.
+  const open = (project: Project) => window.history.pushState(null, '', `/dashboard/projects?project=${encodeURIComponent(project.id)}`);
   useEffect(() => {
-    const id = params.get('project'),
-      newProject = params.get('newProject');
-    if (id) void open({ id, name: '' });
-    if (newProject) { setCreateError(''); setCreate(true); }
-    if (id || newProject) router.replace('/dashboard/projects', { scroll: false });
-  }, [params, open, router]);
+    if (!params.get('newProject')) return;
+    setCreateError(''); setCreate(true);
+    const next = new URLSearchParams(params);
+    next.delete('newProject');
+    window.history.replaceState(null, '', `/dashboard/projects${next.size ? `?${next}` : ''}`);
+  }, [params]);
   const add = async (name: string): Promise<boolean> => {
     setCreateError('');
     try {
@@ -53,9 +56,7 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
           onPrefetch={project => void cache.projectDetails.load(project.id)}
           onCreate={() => { setCreateError(''); setCreate(true); }}
           onOpen={(p) => void open(p)}
-          onBack={() => {
-            setSelected(null);
-          }}
+          onBack={() => window.history.pushState(null, '', '/dashboard/projects')}
           onFindSources={() => selected && router.push(`/dashboard/sources?project=${encodeURIComponent(selected.id)}`)}
           onOpenItem={(item) => selected && router.push(projectItemPath(selected.id, item))}
         />

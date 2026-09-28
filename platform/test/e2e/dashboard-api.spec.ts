@@ -646,7 +646,7 @@ test('adding sources from a project saves the search and opened video in that pr
     await page.getByRole('button', { name: /Codex tips video/ }).click();
     releaseSearchSave();
     await expect.poll(() => projectItems.length).toBe(2);
-    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('link', { name: 'View project', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
     await expect(page.getByRole('button', { name: /codex gpt 6 astra tips/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Codex tips video/ })).toBeVisible();
@@ -658,7 +658,7 @@ test('adding sources from a project saves the search and opened video in that pr
     page.on('request', request => { if (request.method() === 'POST' && /\/v1\/(sources|projects)\//.test(request.url())) restoreWrites++; });
     await savedInSidebar.getByRole('button', { name: query }).click();
     await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
-    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('link', { name: 'View project', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
     expect(projectItems).toHaveLength(2);
     expect(restoreWrites).toBe(0);
@@ -710,6 +710,38 @@ test('failed search saves survive video success and retry into their original pr
     await expect(failure).toHaveCount(0);
     expect(saved).toEqual([{ projectId: first, kind: 'inspection' }, { projectId: first, kind: 'search' }]);
   } finally { releaseVideo(); await scenario.clear(); }
+});
+
+test('Projects navigation always returns to all projects after opening a project', async ({ page }) => {
+  const projects = [{ id: 'first-project', name: 'First project', item_count: 0 }, { id: 'second-project', name: 'Second project', item_count: 0 }];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects } } } });
+  for (const project of projects) await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
+  const expectList = async () => {
+    await expect(page.getByRole('heading', { name: 'Your projects', exact: true })).toBeVisible({ timeout: 1500 });
+    await expect(page.getByRole('button', { name: 'First project 0 sources' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Second project 0 sources' })).toBeVisible();
+  };
+  try {
+    await page.goto('/dashboard/projects');
+    await page.getByRole('button', { name: 'First project 0 sources' }).click();
+    await expect(page.getByRole('heading', { name: 'First project', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expectList();
+    await page.getByRole('button', { name: 'Second project 0 sources' }).click();
+    await page.getByRole('button', { name: 'Add sources', exact: true }).click();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expectList();
+    await page.getByRole('button', { name: 'Second project', exact: true }).first().click();
+    await expect(page.getByRole('heading', { name: 'Second project', exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Second project', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '← All projects' }).click();
+    await expectList();
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Second project', exact: true })).toBeVisible();
+    await page.goForward();
+    await expectList();
+  } finally { await scenario.clear(); }
 });
 
 test('project header and Add sources stay usable while sources are delayed', async ({ page }) => {
