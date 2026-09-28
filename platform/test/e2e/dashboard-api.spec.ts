@@ -449,10 +449,10 @@ test('notification panel stays opaque and above the Sources form on a narrow scr
     expect(bottom).toBeGreaterThan(top);
     const x = (left + right) / 2, y = (top + bottom) / 2;
     await page.screenshot({ path: testInfo.outputPath('notifications-over-sources.png') });
-    const overlay = await page.evaluate(({ x, y }) => ({
-      panelIsTopmost: Boolean(document.elementFromPoint(x, y)?.closest('.notification-popover')),
-      background: getComputedStyle(document.querySelector('.notification-popover')!).backgroundColor,
-    }), { x, y });
+    const overlay = await page.evaluate<{ panelIsTopmost: boolean; background: string }>(`({
+      panelIsTopmost: Boolean(document.elementFromPoint(${x}, ${y})?.closest('.notification-popover')),
+      background: getComputedStyle(document.querySelector('.notification-popover')).backgroundColor,
+    })`);
     expect(overlay.panelIsTopmost).toBe(true);
     expect(overlay.background).not.toMatch(/\/\s*0(?:\.0+)?\)/);
   } finally { await scenario.clear(); }
