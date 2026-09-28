@@ -1,3 +1,4 @@
+import { createProjectDetailCache } from './project-detail-cache.ts';
 import type { DashboardAccountData } from './dashboard-data.ts';
 
 export type AccountResource = keyof DashboardAccountData;
@@ -29,6 +30,7 @@ export async function readAccountResource<K extends AccountResource>(key: K, req
 
 // A provider owns this cache. Nothing private is shared between users or requests.
 export function createDashboardCache(request: (path: string) => Promise<unknown>, seeds: AccountSeeds = {}) {
+  const projectDetails = createProjectDetailCache(request);
   const listeners = new Set<() => void>();
   const snapshots = new Map<AccountResource, ResourceSnapshot<unknown>>();
   const pending = new Map<AccountResource, Promise<void>>();
@@ -78,5 +80,5 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
   }
   // Hydration always starts from the same empty snapshot as the server render.
   function readServer<K extends AccountResource>(_key: K): ResourceSnapshot<DashboardAccountData[K]> { return initial; }
-  return { read, readServer, load, set, initialize, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { projectDetails, read, readServer, load, set, initialize, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
