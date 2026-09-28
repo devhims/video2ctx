@@ -5,7 +5,7 @@ import { useAccountResource } from './DashboardDataProvider';
 import { DashboardSidebar, type DashboardSidebarSection } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { DashboardHeader } from './DashboardHeader';
-import { dashboardPath } from './dashboard-routes';
+import { dashboardPath, projectItemPath } from './dashboard-routes';
 import { PlatformStatus } from './PlatformStatus';
 import { WorkspaceNotifications } from './WorkspaceNotifications';
 import pageStyles from './DashboardPages.module.css';
@@ -30,7 +30,7 @@ export function WorkspaceShell({
         onNavigate={(s) => router.push(dashboardPath(s))}
         onNewProject={() => router.push('/dashboard/projects?newProject=1')}
         onOpenProject={(p) => router.push(`/dashboard/projects?project=${encodeURIComponent(p.id)}`)}
-        onOpenProjectItem={(item) => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
+        onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
         onSignIn={() => router.push('/login')}
         accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
         credits={usage?.creditBalance}

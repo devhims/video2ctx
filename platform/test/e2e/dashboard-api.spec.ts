@@ -595,6 +595,123 @@ test('settings sidebar expands project sources and opens the new-project dialog'
   } finally { await scenario.clear(); }
 });
 
+test('adding sources from a project saves the search and opened video in that project', async ({ page }) => {
+  const projectId = '1e498a23-56a6-4834-a1c3-57cc019b14a5';
+  const query = 'codex gpt 6 astra tips';
+  const projectItems: Array<Record<string, unknown>> = [];
+  const sources = new Map<string, { title: string; kind: string; input: string }>();
+  let releaseSearchSave = () => {};
+  const searchSaveGate = new Promise<void>(resolve => { releaseSearchSave = resolve; });
+  const scenario = await accountScenario(page, { responses: {
+    '/v1/projects': { body: { projects: [{ id: projectId, name: 'codex', item_count: 0 }] } },
+  } });
+  await page.route(`**/api/platform/v1/projects/${projectId}`, route => route.fulfill({ json: {
+    id: projectId, name: 'codex', items: projectItems,
+  } }));
+  await page.route('**/api/platform/v1/sources/recent', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    const input = route.request().postDataJSON();
+    expect(input.projectId).toBe(projectId);
+    if (input.snapshot.kind === 'search') await searchSaveGate;
+    const id = crypto.randomUUID();
+    const title = input.snapshot.kind === 'search' ? query : 'Codex tips video';
+    sources.set(id, { title, kind: input.snapshot.kind, input: input.input });
+    projectItems.push({ id, source_id: id, provider: 'youtube', entity_type: input.snapshot.kind === 'search' ? 'search' : 'video', entity_id: id, title });
+    return route.fulfill({ status: 201, json: { source: { id, input: input.input, title, kind: input.snapshot.kind, updatedAt: Date.now() } } });
+  });
+  await page.route(`**/api/platform/v1/projects/${projectId}/sources/*`, route => {
+    const id = route.request().url().split('/').at(-1)!;
+    const source = sources.get(id)!;
+    const snapshot = source.kind === 'search'
+      ? { kind: 'search', selectedData: ['transcript'], items: [{ provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [] }] }
+      : { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
+        data: { id: videoId, title: 'Codex tips video', thumbnails: [] }, requestedData: ['transcript'], dataErrors: {} } };
+    return route.fulfill({ json: { source: { id, ...source, updatedAt: Date.now() }, snapshot } });
+  });
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [{
+    provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [],
+  }] } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: {
+    id: videoId, title: 'Codex tips video', thumbnails: [], channel: { id: 'channel', name: 'Creator' },
+  } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto('/dashboard/projects');
+    await page.getByRole('button', { name: 'codex 0 sources' }).click();
+    await page.getByRole('button', { name: 'Add sources' }).click();
+    await expect(page.getByText('Adding sources to')).toBeVisible();
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(query);
+    await page.getByRole('button', { name: /Inspect/ }).click();
+    await page.getByRole('button', { name: /Codex tips video/ }).click();
+    releaseSearchSave();
+    await expect.poll(() => projectItems.length).toBe(2);
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /codex gpt 6 astra tips/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Codex tips video/ })).toBeVisible();
+    await page.getByRole('button', { name: 'codex', exact: true }).first().click();
+    const savedInSidebar = page.getByRole('group', { name: 'Sources in codex' }).first();
+    await expect(savedInSidebar.getByRole('button', { name: query })).toBeVisible();
+    await expect(savedInSidebar.getByRole('button', { name: 'Codex tips video' })).toBeVisible();
+    let restoreWrites = 0;
+    page.on('request', request => { if (request.method() === 'POST' && /\/v1\/(sources|projects)\//.test(request.url())) restoreWrites++; });
+    await savedInSidebar.getByRole('button', { name: query }).click();
+    await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
+    expect(projectItems).toHaveLength(2);
+    expect(restoreWrites).toBe(0);
+  } finally { releaseSearchSave(); await scenario.clear(); }
+});
+
+test('failed search saves survive video success and retry into their original project', async ({ page }) => {
+  const first = 'cae4ebba-7a0d-402f-bf5c-852a34ef2815', second = 'b681c6e2-bdf8-4df5-b7ee-4fa218a3e9bc';
+  const query = 'retry this search';
+  const saved: Array<{ projectId: string; kind: string }> = [];
+  let searchAttempts = 0, releaseVideo = () => {};
+  const videoGate = new Promise<void>(resolve => { releaseVideo = resolve; });
+  const projects = [{ id: first, name: 'First project', item_count: 0 }, { id: second, name: 'Second project', item_count: 0 }];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects } } } });
+  for (const project of projects) await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
+  await page.route('**/api/platform/v1/sources/recent', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    const body = route.request().postDataJSON();
+    if (body.snapshot.kind === 'search' && ++searchAttempts === 1) {
+      return route.fulfill({ status: 503, json: { error: { code: 'SAVE_FAILED', message: 'Temporary save failure' } } });
+    }
+    if (body.snapshot.kind === 'inspection') await videoGate;
+    saved.push({ projectId: body.projectId, kind: body.snapshot.kind });
+    return route.fulfill({ status: 201, json: { source: { id: crypto.randomUUID(), input: body.input, title: body.input, kind: body.snapshot.kind, updatedAt: Date.now() } } });
+  });
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [{
+    provider: 'youtube', type: 'video', id: videoId, title: 'Retry test video', thumbnails: [],
+  }] } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: {
+    id: videoId, title: 'Retry test video', thumbnails: [], channel: { id: 'channel', name: 'Creator' },
+  } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto(`/dashboard/sources?project=${first}`);
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(query);
+    await page.getByRole('button', { name: /Inspect/ }).click();
+    await page.getByRole('button', { name: /Retry test video/ }).click();
+    const failure = page.getByRole('alert').filter({ hasText: 'Could not save retry this search to First project' });
+    await expect(failure).toBeVisible();
+    releaseVideo();
+    await expect.poll(() => saved.length).toBe(1);
+    await expect(failure).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Second project 0 sources' }).click();
+    await page.getByRole('button', { name: 'Add sources' }).click();
+    await expect(page.getByText('Adding sources to')).toContainText('Second project');
+    await failure.getByRole('button', { name: 'Retry saving' }).click();
+    await expect(failure).toHaveCount(0);
+    expect(saved).toEqual([{ projectId: first, kind: 'inspection' }, { projectId: first, kind: 'search' }]);
+  } finally { releaseVideo(); await scenario.clear(); }
+});
+
 test('project creation shows progress and adds the project without another list request', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [] } } } });
   let release!: () => void;

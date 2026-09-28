@@ -55,7 +55,7 @@ export type ChannelInfo = {
   meta: SourceMetadata;
 };
 export type Project = { id: string; name: string; description?: string; item_count?: number };
-export type ProjectItem = { id: string; provider: ProviderId; entity_type: EntityType; entity_id: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
+export type ProjectItem = { id: string; provider: ProviderId; entity_type: EntityType | 'search'; entity_id: string; source_id?: string; title?: string; note?: string; start_ms?: number | null; created_at?: number };
 export type ProjectDetail = Project & { items: ProjectItem[] };
 export type Monitor = {
   id: string; provider: ProviderId; kind: string; target: string; query_json?: string; cadence?: string;

@@ -1,6 +1,7 @@
 'use client';
 
 import { platformRequest } from '../../../lib/platform-request';
+import { projectItemPath } from '../dashboard-routes';
 
 import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
@@ -38,7 +39,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
       onNewProject={() => router.push('/dashboard/projects?newProject=1')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
-      onOpenProjectItem={item => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
+      onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fsessions')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>

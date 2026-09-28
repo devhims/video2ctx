@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import type { SaveReferencedSource } from '../src/lib/source-history';
 import { referenceSource, restoreSource } from '../src/lib/source-history-storage';
 import { saveVideoResource } from '../src/lib/video-resources';
+import { createProjectExport } from '../src/lib/exports';
 import { sha256 } from '../src/lib/http';
 import { jsonError } from '../src/lib/http';
 import { Hono } from 'hono';
@@ -138,6 +139,131 @@ describe('UserAccountDO', () => {
     await account.getSource(sources.at(-1)!.id);
     expect((await account.listSources())[0]?.id).toBe(sources.at(-1)!.id);
   });
+  test('project source references survive recent-source eviction and remain user-owned', async () => {
+    const account = env.USER_ACCOUNT.getByName('source-project-owner');
+    const other = env.USER_ACCOUNT.getByName('source-project-other');
+    const projectId = 'c4433ab2-a989-48f8-8d84-97ab518ff429';
+    const snapshot: SaveReferencedSource['snapshot'] = { kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${'a'.repeat(64)}.json` };
+    const saved = await account.saveSource({ input: 'codex gpt 6 astra tips', title: 'codex gpt 6 astra tips', snapshot });
+    const first = await account.linkSourceToProject(projectId, saved.id);
+    expect(first).toMatchObject({ added: true, item: { source_id: saved.id, entity_type: 'search', title: 'codex gpt 6 astra tips' } });
+    expect((await account.linkSourceToProject(projectId, saved.id))?.added).toBe(false);
+    expect(await account.listProjectSources(projectId)).toHaveLength(1);
+    expect(await account.projectSourceCounts()).toEqual([{ projectId, count: 1 }]);
+    expect(await other.linkSourceToProject(projectId, saved.id)).toBeNull();
+    for (let i = 0; i < 31; i++) await account.saveSource({ input: `new query ${i}`, title: `new query ${i}`, snapshot });
+    expect((await account.listSources()).some(source => source.id === saved.id)).toBe(false);
+    expect(await account.getSource(saved.id)).toBeNull();
+    expect((await account.getProjectSource(projectId, first!.item.id))?.source.title).toBe('codex gpt 6 astra tips');
+    expect((await account.linkSourceToProject(projectId, saved.id))?.added).toBe(false);
+    expect(await other.getSource(saved.id)).toBeNull();
+    await account.removeProjectSources(projectId);
+    expect(await account.getSource(saved.id)).toBeNull();
+    expect(await account.projectSourceCounts()).toEqual([]);
+  });
+  test('project routes count linked sources and reject links to another user’s project', async () => {
+    const userId = 'project-link-route-owner';
+    const projectId = 'd0171de7-b960-4245-b137-973757910b43';
+    const stamp = Date.now();
+    await env.DB.prepare('INSERT INTO user (id, name, email, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)')
+      .bind(userId, 'Owner', 'project-link-route-owner@example.test', stamp, stamp).run();
+    await env.DB.prepare('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(projectId, userId, 'codex', stamp, stamp).run();
+    const account = env.USER_ACCOUNT.getByName(await userAccountInstanceName(userId));
+    const snapshot: SaveReferencedSource['snapshot'] = { kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${'b'.repeat(64)}.json` };
+    const source = await account.saveSource({ input: 'codex gpt 6 astra tips', title: 'codex gpt 6 astra tips', snapshot });
+    const app = sourceApp(userId);
+    const link = () => app.request(`/projects/${projectId}/sources`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }) }, env);
+    expect((await link()).status).toBe(201);
+    expect((await link()).status).toBe(200);
+    expect(await (await app.request('/projects', {}, env)).json()).toMatchObject({ projects: [{ id: projectId, item_count: 1 }] });
+    expect(await (await app.request(`/projects/${projectId}`, {}, env)).json()).toMatchObject({ items: [{
+      source_id: source.id, entity_type: 'search', title: 'codex gpt 6 astra tips',
+    }] });
+    const unauthorized = await sourceApp('project-link-route-other').request(`/projects/${projectId}/sources`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }),
+    }, env);
+    expect(unauthorized.status).toBe(404);
+    expect((await sourceApp(userId, 'api-key').request(`/projects/${projectId}/sources`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }),
+    }, env)).status).toBe(403);
+  });
+  test('project snapshots stay isolated across refreshes, other projects and history eviction', async () => {
+    const account = env.USER_ACCOUNT.getByName('project-snapshot-isolation');
+    const projectA = crypto.randomUUID(), projectB = crypto.randomUUID();
+    const value = (hash: string): SaveReferencedSource => ({ input: 'same query', title: 'Same query',
+      snapshot: { kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${hash.repeat(64)}.json` } });
+    const first = await account.saveSourceWithProject(value('a'), projectA);
+    const second = await account.saveSourceWithProject(value('b'), projectB);
+    expect(first.source.id).toBe(second.source.id);
+    await account.saveSource(value('c'));
+    expect((await account.getProjectSource(projectA, first.linked!.item.id))?.snapshot).toEqual(value('a').snapshot);
+    expect((await account.getProjectSource(projectB, second.linked!.item.id))?.snapshot).toEqual(value('b').snapshot);
+    expect(await account.getProjectSource(projectB, first.linked!.item.id)).toBeNull();
+    for (let i = 0; i < 31; i++) await account.saveSource({ ...value('c'), input: `eviction ${i}` });
+    expect((await account.getProjectSource(projectA, first.linked!.item.id))?.snapshot).toEqual(value('a').snapshot);
+    expect((await account.getProjectSource(projectB, second.linked!.item.id))?.snapshot).toEqual(value('b').snapshot);
+    const refreshed = await account.saveSourceWithProject(value('d'), projectA);
+    expect(refreshed.linked).toMatchObject({ added: false, item: { id: first.linked!.item.id } });
+    expect((await account.getProjectSource(projectA, first.linked!.item.id))?.snapshot).toEqual(value('d').snapshot);
+    expect((await account.getProjectSource(projectB, second.linked!.item.id))?.snapshot).toEqual(value('b').snapshot);
+  });
+
+  test('a project write failure rolls back history and its eviction', async () => {
+    const account = env.USER_ACCOUNT.getByName('project-atomic-rollback');
+    const value: SaveReferencedSource = { input: 'original', title: 'Original', snapshot: {
+      kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${'a'.repeat(64)}.json`,
+    } };
+    for (let i = 0; i < 30; i++) await account.saveSource({ ...value, input: `original ${i}` });
+    const before = await account.listSources();
+    await runInDurableObject(account, (instance, state) => {
+      state.storage.sql.exec(`CREATE TRIGGER fail_project_write BEFORE INSERT ON project_sources BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+      expect(() => instance.saveSourceWithProject(value, crypto.randomUUID())).toThrow('injected failure');
+      state.storage.sql.exec('DROP TRIGGER fail_project_write');
+    });
+    expect(await account.listSources()).toEqual(before);
+    expect(await account.projectSourceCounts()).toEqual([]);
+  });
+
+  test('atomic save and project restore routes enforce ownership and include sources in exports', async () => {
+    const userId = 'atomic-project-routes';
+    const projectId = crypto.randomUUID(), stamp = Date.now();
+    await env.DB.prepare('INSERT INTO user (id, name, email, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)')
+      .bind(userId, 'Owner', `${userId}@example.test`, stamp, stamp).run();
+    await env.DB.prepare('INSERT INTO projects (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(projectId, userId, 'Research', '', stamp, stamp).run();
+    const playlist = { id: 'PLatomic', title: 'Atomic playlist', videos: [] };
+    const key = `youtube:v1:${await sha256(JSON.stringify(['playlist-v2', playlist.id]))}`;
+    await env.YOUTUBE_CACHE.put(key, JSON.stringify({ version: 1, fetchedAt: stamp, freshUntil: stamp + 60_000, value: playlist }));
+    const request = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId,
+      input: 'https://youtube.com/playlist?list=PLatomic', snapshot: { kind: 'inspection', inspector: {
+        provider: 'youtube', type: 'playlist', id: playlist.id, requestedData: [], dataErrors: {}, loadedData: ['metadata'],
+      } },
+    }) };
+    const app = sourceApp(userId);
+    const response = await app.request('/sources/recent', request, env);
+    expect(response.status).toBe(201);
+    const saved = await response.json() as { source: { id: string }; linked: { item: { id: string }; added: boolean } };
+    expect(saved.linked.added).toBe(true);
+    expect(await (await app.request('/sources/recent', request, env)).json()).toMatchObject({ linked: { added: false } });
+    const path = `/projects/${projectId}/sources/${saved.linked.item.id}`;
+    expect(await (await app.request(path, {}, env)).json()).toMatchObject({ snapshot: { inspector: { data: playlist } } });
+    expect((await sourceApp('other-atomic-user').request(path, {}, env)).status).toBe(404);
+    expect((await sourceApp(userId, 'api-key').request(path, {}, env)).status).toBe(403);
+    expect((await sourceApp('other-atomic-user').request('/sources/recent', request, env)).status).toBe(404);
+    const other = env.USER_ACCOUNT.getByName(await userAccountInstanceName('other-atomic-user'));
+    expect(await other.listSources()).toEqual([]);
+    // Legacy saved moments remain in the same export alongside the new source.
+    await env.DB.prepare('INSERT INTO project_items (id, project_id, user_id, provider, entity_type, entity_id, title, start_ms, end_ms, note, tags_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), projectId, userId, 'youtube', 'video', 'abcdefghijk', 'Saved moment', 1000, 2000, 'A note', '[]', stamp).run();
+    const exported = await createProjectExport(env, userId, projectId, 'json');
+    const content = await (await env.RESEARCH.get(exported.key))!.json() as { items: Array<{ title: string }> };
+    expect(content.items.map(item => item.title).sort()).toEqual(['Atomic playlist', 'Saved moment']);
+    const subtitles = await createProjectExport(env, userId, projectId, 'srt');
+    expect(await (await env.RESEARCH.get(subtitles.key))!.text()).toContain('A note');
+    expect(await (await env.RESEARCH.get(subtitles.key))!.text()).not.toContain('Atomic playlist');
+  });
+
   test('deletion includes admissions without catalog entries and blocks late writes', async () => {
     const account = env.USER_ACCOUNT.getByName('user:deletion');
     await account.registerConversation(CONVERSATION_A);

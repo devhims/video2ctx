@@ -1095,10 +1095,10 @@ export const openApiDocument = {
       },
       post: {
         tags: ['Projects'], operationId: 'saveRecentSource', summary: 'Remember a Sources search or inspection', security: privateSecurity,
-        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data.',
+        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data. An optional projectId saves the project reference in the same user-storage transaction.',
         requestBody: jsonBody(z.toJSONSchema(saveSourceSchema, { target: 'openapi-3.0' })),
-        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource') } }),
-          '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), ...standardErrors },
+        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource'), linked: { anyOf: [schemaRef('ProjectSourceLink'), { type: 'null' }] } } }),
+          '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
     '/v1/sources/recent/{id}': {
@@ -1176,6 +1176,35 @@ export const openApiDocument = {
         requestBody: jsonBody(schemaRef('CreateProjectItemRequest')),
         responses: {
           '201': jsonResponse('Project item created.', schemaRef('IdResponse')),
+          ...standardErrors,
+          '404': responseRef('NotFound'),
+        },
+      },
+    },
+    '/v1/projects/{id}/sources/{itemId}': {
+      get: {
+        tags: ['Projects'], operationId: 'getProjectSource', summary: 'Restore a project source snapshot', security: privateSecurity,
+        description: 'Restores this project item without updating history or project references. Survives recent-source eviction.',
+        parameters: [idParameter, pathParameter('itemId', 'Project item UUID, not the recent source UUID.')],
+        responses: { '200': jsonResponse('Saved project source and displayed data.', { type: 'object', properties: {
+          source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }),
+        } }), '404': responseRef('NotFound'), ...standardErrors },
+      },
+    },
+    '/v1/projects/{id}/sources': {
+      post: {
+        tags: ['Projects'],
+        operationId: 'linkProjectSource',
+        summary: 'Add a saved Sources search or inspection to a project',
+        description: 'Keeps a user-owned reference to the shared source assets even after the recent Sources list rotates.',
+        security: privateSecurity,
+        parameters: [idParameter],
+        requestBody: jsonBody({ type: 'object', required: ['sourceId'], properties: {
+          sourceId: { type: 'string', format: 'uuid' },
+        } }),
+        responses: {
+          '201': jsonResponse('Source linked to the project.', schemaRef('ProjectSourceLink')),
+          '200': jsonResponse('Existing project source refreshed.', schemaRef('ProjectSourceLink')),
           ...standardErrors,
           '404': responseRef('NotFound'),
         },
@@ -2142,6 +2171,9 @@ export const openApiDocument = {
       Project: { allOf: [storedRecord, { properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, item_count: { type: 'integer' } } }] },
       ProjectDetail: { allOf: [schemaRef('Project'), { type: 'object', required: ['items'], properties: { items: { type: 'array', items: schemaRef('ProjectItem') } } }] },
       ProjectItem: storedRecord,
+      ProjectSourceLink: { type: 'object', required: ['item', 'added'], properties: {
+        item: schemaRef('ProjectItem'), added: { type: 'boolean' },
+      } },
       CreateProjectRequest: {
         type: 'object', required: ['name'], properties: {
           name: { type: 'string', minLength: 1, maxLength: 120, example: 'Research inbox' },

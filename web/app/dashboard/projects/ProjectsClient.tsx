@@ -7,11 +7,13 @@ import type { ResourceResult } from '../../../lib/dashboard-cache';
 import type { Project, ProjectDetail } from '../research-types';
 import { ProjectsView } from './ProjectsView';
 import { NewProjectDialog } from '../NewProjectDialog';
+import { projectItemPath } from '../dashboard-routes';
 export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Project[]>> }) {
   const router = useRouter(),
     params = useSearchParams();
   const resource = useStreamedAccountResource('projects', [], promise);
   const [selected, setSelected] = useDashboardDraft<ProjectDetail | null>('selected-project', null);
+  const resumeProject = useRef(selected?.id ?? null);
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(''),
     [createError, setCreateError] = useState(''),
@@ -39,11 +41,13 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   );
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
-    const id = params.get('project'),
+    const requestedId = params.get('project'),
       newProject = params.get('newProject');
+    const id = requestedId ?? resumeProject.current;
+    resumeProject.current = null;
     if (id) void open({ id, name: '' });
     if (newProject) { setCreateError(''); setCreate(true); }
-    if (id || newProject) router.replace('/dashboard/projects', { scroll: false });
+    if (requestedId || newProject) router.replace('/dashboard/projects', { scroll: false });
   }, [params, open, router]);
   const add = async (name: string): Promise<boolean> => {
     setCreateError('');
@@ -76,10 +80,8 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
             setSelected(null);
             setError('');
           }}
-          onFindSources={() => router.push('/dashboard/sources')}
-          onOpenItem={(item) =>
-            router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)
-          }
+          onFindSources={() => selected && router.push(`/dashboard/sources?project=${encodeURIComponent(selected.id)}`)}
+          onOpenItem={(item) => selected && router.push(projectItemPath(selected.id, item))}
         />
       )}
       {create && <NewProjectDialog onClose={() => { setCreate(false); setCreateError(''); }} onCreate={add} error={createError} />}

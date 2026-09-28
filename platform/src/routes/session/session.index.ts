@@ -1,3 +1,4 @@
+import { listProjectItems } from '../../lib/project-items';
 import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { userAccountInstanceName } from '../../agents/runtime/identity';
 import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdSchema } from '../../lib/source-history';
@@ -47,6 +48,8 @@ export const ACCOUNT_ROUTE_PATTERNS = [
 export const SESSION_ONLY_ROUTE_PATTERNS = [
   '/sources/recent',
   '/sources/recent/*',
+  '/projects/:id/sources',
+  '/projects/:id/sources/*',
   '/oauth/youtube/connect',
   '/oauth/youtube',
   '/billing',
@@ -78,8 +81,9 @@ sessionRoutes.post('/sources/recent', async (c) => {
   const parsed = saveSourceSchema.safeParse(json);
   if (!parsed.success) throw new ApiError(422, 'INVALID_SOURCE', 'The recent source data is invalid.');
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
+  if (parsed.data.projectId) await ownProject(c.env, requireUser(c).id, parsed.data.projectId);
   const referenced = await referenceSource(c.env, parsed.data);
-  return c.json({ source: await account.saveSource(referenced) }, 201);
+  return c.json(await account.saveSourceWithProject(referenced, parsed.data.projectId), 201);
 });
 
 sessionRoutes.get('/sources/recent/:id', async (c) => {
@@ -105,7 +109,11 @@ sessionRoutes.get('/projects', async (c) => {
     `SELECT p.*,COUNT(i.id) AS item_count FROM projects p LEFT JOIN project_items i ON i.project_id=p.id
      WHERE p.user_id=? GROUP BY p.id ORDER BY p.updated_at DESC`
   ).bind(user.id).all();
-  return c.json({ projects: result.results });
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const counts = new Map((await account.projectSourceCounts()).map(({ projectId, count }) => [projectId, count]));
+  return c.json({ projects: result.results.map(project => ({
+    ...project, item_count: Number(project.item_count ?? 0) + (counts.get(String(project.id)) ?? 0),
+  })) });
 });
 
 sessionRoutes.post('/projects', async (c) => {
@@ -127,9 +135,31 @@ sessionRoutes.get('/projects/:id', async (c) => {
   const id = asId(c.req.param('id'));
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id=? AND user_id=?').bind(id, user.id).first();
   if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project not found.');
-  const items = await c.env.DB.prepare('SELECT * FROM project_items WHERE project_id=? AND user_id=? ORDER BY created_at DESC')
-    .bind(id, user.id).all();
-  return c.json({ ...project, items: items.results });
+  return c.json({ ...project, items: await listProjectItems(c.env, user.id, id) });
+});
+
+sessionRoutes.get('/projects/:id/sources/:itemId', async (c) => {
+  const user = requireUser(c);
+  const projectId = asId(c.req.param('id'));
+  await ownProject(c.env, user.id, projectId);
+  const itemId = c.req.param('itemId');
+  if (!sourceIdSchema.safeParse(itemId).success) throw new ApiError(422, 'INVALID_ID', 'Invalid project source ID.');
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const saved = await account.getProjectSource(projectId, itemId);
+  if (!saved) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This project source was not found.');
+  return c.json({ source: saved.source, snapshot: await restoreSource(c.env, saved.snapshot) });
+});
+
+sessionRoutes.post('/projects/:id/sources', async (c) => {
+  const user = requireUser(c);
+  const projectId = asId(c.req.param('id'));
+  await ownProject(c.env, user.id, projectId);
+  const input = await body<{ sourceId?: string }>(c.req.raw);
+  if (!sourceIdSchema.safeParse(input.sourceId).success) throw new ApiError(422, 'INVALID_SOURCE_ID', 'A saved source ID is required.');
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const linked = await account.linkSourceToProject(projectId, input.sourceId!);
+  if (!linked) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This recent source was not found.');
+  return c.json(linked, linked.added ? 201 : 200);
 });
 
 sessionRoutes.post('/projects/:id/items', async (c) => {
@@ -176,6 +206,8 @@ sessionRoutes.delete('/projects/:id', async (c) => {
   await deleteProjectAssets(c.env, user.id, id);
   const result = await c.env.DB.prepare('DELETE FROM projects WHERE id=? AND user_id=?').bind(id, user.id).run();
   if (!result.meta.changes) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  await account.removeProjectSources(id);
   return c.body(null, 204);
 });
 

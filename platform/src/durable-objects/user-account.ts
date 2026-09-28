@@ -2,7 +2,7 @@ import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
 import type { AgentRequest, AgentAdmission } from '../agents/contracts';
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
-import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
+import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, sourceIdSchema, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
 
 const MAX_SEARCH_TEXT_LENGTH = 32_000;
 const MAX_TITLE_LENGTH = 80;
@@ -44,6 +44,26 @@ export interface UserSessionSummary {
 export interface UserSessionPage {
   sessions: UserSessionSummary[];
   nextCursor: UserSessionCursor | null;
+}
+
+export interface ProjectSourceItem {
+  id: string;
+  source_id: string;
+  provider: 'youtube';
+  entity_type: 'search' | 'video' | 'playlist' | 'channel';
+  entity_id: string;
+  title: string;
+  created_at: number;
+}
+
+interface ProjectSourceRow extends Record<string, SqlStorageValue> {
+  id: string;
+  source_id: string;
+  input: string;
+  title: string;
+  kind: RecentSource['kind'];
+  snapshot: string;
+  created_at: number;
 }
 
 interface SessionRow extends Record<string, SqlStorageValue> {
@@ -102,6 +122,7 @@ export class UserAccountDO extends DurableObject<Env> {
     this.ctx.storage.sql.exec('DELETE FROM user_sessions');
     this.ctx.storage.sql.exec('DELETE FROM agent_conversations');
     this.ctx.storage.sql.exec('DELETE FROM recent_sources');
+    this.ctx.storage.sql.exec('DELETE FROM project_sources');
     // Keep only a tombstone so already-authenticated requests cannot recreate data.
   }
 
@@ -153,10 +174,99 @@ export class UserAccountDO extends DurableObject<Env> {
 
   getSource(id: string): { source: RecentSource; snapshot: SourceReference } | null {
     this.assertActive();
-    const row = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?', z.string().uuid().parse(id)).toArray()[0];
-    if (!row) return null;
-    this.ctx.storage.sql.exec('UPDATE recent_sources SET updated_at = ? WHERE id = ?', this.nextSourceUpdate(), id);
-    return { source: this.listSources().find(source => source.id === id)!, snapshot: sourceReferenceSchema.parse(JSON.parse(row.snapshot)) };
+    const sourceId = sourceIdSchema.parse(id);
+    const row = this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number; snapshot: string }>(
+      'SELECT id, input, title, kind, updated_at, snapshot FROM recent_sources WHERE id = ?', sourceId,
+    ).toArray()[0];
+    if (row) {
+      const updatedAt = this.nextSourceUpdate();
+      this.ctx.storage.sql.exec('UPDATE recent_sources SET updated_at = ? WHERE id = ?', updatedAt, id);
+      return { source: { id: row.id, input: row.input, title: row.title, kind: row.kind, updatedAt },
+        snapshot: sourceReferenceSchema.parse(JSON.parse(row.snapshot)) };
+    }
+    return null;
+  }
+
+  saveSourceWithProject(value: SaveReferencedSource, projectId?: string) {
+    this.assertActive();
+    const project = projectId === undefined ? undefined : z.string().uuid().parse(projectId);
+    return this.ctx.storage.transactionSync(() => {
+      const source = this.saveSource(value);
+      const linked = project ? this.linkSourceToProject(project, source.id) : null;
+      if (project && !linked) throw new Error('Saved source could not be linked.');
+      return { source, linked };
+    });
+  }
+
+  getProjectSource(projectId: string, itemId: string): { source: RecentSource; snapshot: SourceReference } | null {
+    this.assertActive();
+    const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
+      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND id = ?',
+      z.string().uuid().parse(projectId), sourceIdSchema.parse(itemId),
+    ).toArray()[0];
+    if (!saved) return null;
+    return { source: { id: saved.source_id, input: saved.input, title: saved.title, kind: saved.kind, updatedAt: saved.created_at },
+      snapshot: sourceReferenceSchema.parse(JSON.parse(saved.snapshot)) };
+  }
+
+  linkSourceToProject(projectId: string, sourceId: string): { item: ProjectSourceItem; added: boolean } | null {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId);
+    const source = sourceIdSchema.parse(sourceId);
+    const recent = this.ctx.storage.sql.exec<{ source_key: string; input: string; title: string; kind: RecentSource['kind']; snapshot: string }>(
+      'SELECT source_key, input, title, kind, snapshot FROM recent_sources WHERE id = ?', source,
+    ).toArray()[0];
+    if (!recent) {
+      const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
+        'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND source_id = ?', project, source,
+      ).toArray()[0];
+      return saved ? { item: this.toProjectSourceItem(saved), added: false } : null;
+    }
+    const existing = this.ctx.storage.sql.exec<{ id: string }>(
+      'SELECT id FROM project_sources WHERE project_id = ? AND source_key = ?', project, recent.source_key,
+    ).toArray()[0];
+    const id = existing?.id ?? crypto.randomUUID();
+    const createdAt = Date.now();
+    this.ctx.storage.sql.exec(`INSERT INTO project_sources
+      (id, project_id, source_key, source_id, input, title, kind, snapshot, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, source_key) DO UPDATE SET
+        source_id=excluded.source_id, input=excluded.input, title=excluded.title,
+        kind=excluded.kind, snapshot=excluded.snapshot`,
+      id, project, recent.source_key, source, recent.input, recent.title, recent.kind, recent.snapshot, createdAt);
+    const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
+      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE id = ?', id,
+    ).one();
+    return { item: this.toProjectSourceItem(saved), added: !existing };
+  }
+
+  listProjectSources(projectId: string): ProjectSourceItem[] {
+    this.assertActive();
+    const rows = this.ctx.storage.sql.exec<ProjectSourceRow>(
+      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? ORDER BY created_at DESC',
+      z.string().uuid().parse(projectId),
+    ).toArray();
+    return rows.map(row => this.toProjectSourceItem(row));
+  }
+
+  projectSourceCounts(): Array<{ projectId: string; count: number }> {
+    this.assertActive();
+    return this.ctx.storage.sql.exec<{ project_id: string; count: number }>(
+      'SELECT project_id, COUNT(*) AS count FROM project_sources GROUP BY project_id',
+    ).toArray().map(row => ({ projectId: row.project_id, count: row.count }));
+  }
+
+  removeProjectSources(projectId: string): void {
+    this.assertActive();
+    this.ctx.storage.sql.exec('DELETE FROM project_sources WHERE project_id = ?', z.string().uuid().parse(projectId));
+  }
+
+  private toProjectSourceItem(row: ProjectSourceRow): ProjectSourceItem {
+    const snapshot = sourceReferenceSchema.parse(JSON.parse(row.snapshot));
+    return { id: row.id, source_id: row.source_id, provider: 'youtube',
+      entity_type: snapshot.kind === 'search' ? 'search' : snapshot.inspector.type,
+      entity_id: snapshot.kind === 'search' ? row.source_id : snapshot.inspector.id,
+      title: row.title, created_at: row.created_at };
   }
 
   private nextSourceUpdate(): number {
@@ -342,6 +452,13 @@ export class UserAccountDO extends DurableObject<Env> {
       id TEXT PRIMARY KEY, source_key TEXT NOT NULL UNIQUE, input TEXT NOT NULL, title TEXT NOT NULL,
       kind TEXT NOT NULL, updated_at INTEGER NOT NULL, snapshot TEXT NOT NULL
     )`);
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS project_sources (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_key TEXT NOT NULL,
+      source_id TEXT NOT NULL, input TEXT NOT NULL, title TEXT NOT NULL,
+      kind TEXT NOT NULL, snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
+      UNIQUE(project_id, source_key)
+    )`);
+    this.ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS project_sources_project_idx ON project_sources (project_id, created_at DESC)');
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS account_deletion (id INTEGER PRIMARY KEY)');
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_conversations (conversation_id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(`

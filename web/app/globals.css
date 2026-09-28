@@ -1230,6 +1230,17 @@ html:has(.developer-page) body {
 }
 
 /* Sources studio — one input, a small data contract, then results. */
+.source-project-context {
+  display: flex; align-items: center; gap: .35rem; width: min(100%, 88rem);
+  margin: var(--space-lg) auto 0;
+  padding-inline: clamp(var(--space-md), 4vw, var(--space-2xl));
+  color: var(--color-dashboard-muted); font-size: .75rem;
+}
+.source-project-context strong { color: var(--color-dashboard-ink); font-weight: 650; }
+.source-project-context a { margin-left: auto; color: var(--color-dashboard-accent); text-decoration: none; font-weight: 650; }
+.source-project-context a:hover { text-decoration: underline; }
+.source-project-context + .source-studio { padding-top: var(--space-lg); }
+.source-project-save-error { width: fit-content; max-width: calc(100% - 2rem); margin: var(--space-md) auto 0; }
 .source-studio,
 .source-results,
 .source-inspector {

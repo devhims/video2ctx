@@ -40,7 +40,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
   onNavigate: (section: DashboardSection) => void;
   onNewProject: () => void;
   onOpenProject: (project: Project) => void;
-  onOpenProjectItem: (item: ProjectItem) => void;
+  onOpenProjectItem: (project: Project, item: ProjectItem) => void;
   onSignIn: () => void;
   accountName?: string;
   credits?: number;
@@ -140,7 +140,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
               {!projectDetail && !projectError && <div role='status' aria-label={`Loading sources in ${project.name}`} className={styles.projectItemSkeleton}><i className='ui-bar' /><i className='ui-bar' /></div>}
               {projectError && <button type='button' className={styles.projectItem} onClick={() => setRetryProject(value => value + 1)}>Retry loading sources</button>}
               {projectDetail?.id === project.id && (projectDetail.items.length
-                ? projectDetail.items.map(item => <button type='button' className={styles.projectItem} key={item.id} title={item.title || item.entity_id} onClick={() => run(() => onOpenProjectItem(item))}><Icon name='search' size={14} /><span>{item.title || item.entity_id}</span></button>)
+                ? projectDetail.items.map(item => <button type='button' className={styles.projectItem} key={item.id} title={item.title || item.entity_id} onClick={() => run(() => onOpenProjectItem(project, item))}><Icon name='search' size={14} /><span>{item.title || item.entity_id}</span></button>)
                 : <span className={styles.projectEmpty}>No saved sources</span>)}
             </div>}
           </div>;

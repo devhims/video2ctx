@@ -6864,6 +6864,21 @@
         "description": "A persisted D1 record. Database timestamps are Unix milliseconds.",
         "additionalProperties": true
       },
+      "ProjectSourceLink": {
+        "type": "object",
+        "required": [
+          "item",
+          "added"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ProjectItem"
+          },
+          "added": {
+            "type": "boolean"
+          }
+        }
+      },
       "CreateProjectRequest": {
         "type": "object",
         "required": [
