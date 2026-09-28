@@ -138,6 +138,53 @@ describe('UserAccountDO', () => {
     await account.getSource(sources.at(-1)!.id);
     expect((await account.listSources())[0]?.id).toBe(sources.at(-1)!.id);
   });
+  test('project source references survive recent-source eviction and remain user-owned', async () => {
+    const account = env.USER_ACCOUNT.getByName('source-project-owner');
+    const other = env.USER_ACCOUNT.getByName('source-project-other');
+    const projectId = 'c4433ab2-a989-48f8-8d84-97ab518ff429';
+    const snapshot: SaveReferencedSource['snapshot'] = { kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${'a'.repeat(64)}.json` };
+    const saved = await account.saveSource({ input: 'codex gpt 6 astra tips', title: 'codex gpt 6 astra tips', snapshot });
+    const first = await account.linkSourceToProject(projectId, saved.id);
+    expect(first).toMatchObject({ added: true, item: { source_id: saved.id, entity_type: 'search', title: 'codex gpt 6 astra tips' } });
+    expect((await account.linkSourceToProject(projectId, saved.id))?.added).toBe(false);
+    expect(await account.listProjectSources(projectId)).toHaveLength(1);
+    expect(await account.projectSourceCounts()).toEqual([{ projectId, count: 1 }]);
+    expect(await other.linkSourceToProject(projectId, saved.id)).toBeNull();
+    for (let i = 0; i < 31; i++) await account.saveSource({ input: `new query ${i}`, title: `new query ${i}`, snapshot });
+    expect((await account.listSources()).some(source => source.id === saved.id)).toBe(false);
+    expect((await account.getSource(saved.id))?.source.title).toBe('codex gpt 6 astra tips');
+    expect(await other.getSource(saved.id)).toBeNull();
+    await account.removeProjectSources(projectId);
+    expect(await account.getSource(saved.id)).toBeNull();
+    expect(await account.projectSourceCounts()).toEqual([]);
+  });
+  test('project routes count linked sources and reject links to another user’s project', async () => {
+    const userId = 'project-link-route-owner';
+    const projectId = 'd0171de7-b960-4245-b137-973757910b43';
+    const stamp = Date.now();
+    await env.DB.prepare('INSERT INTO user (id, name, email, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)')
+      .bind(userId, 'Owner', 'project-link-route-owner@example.test', stamp, stamp).run();
+    await env.DB.prepare('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(projectId, userId, 'codex', stamp, stamp).run();
+    const account = env.USER_ACCOUNT.getByName(await userAccountInstanceName(userId));
+    const snapshot: SaveReferencedSource['snapshot'] = { kind: 'search', selectedData: ['transcript'], results: `youtube/source-history/${'b'.repeat(64)}.json` };
+    const source = await account.saveSource({ input: 'codex gpt 6 astra tips', title: 'codex gpt 6 astra tips', snapshot });
+    const app = sourceApp(userId);
+    const link = () => app.request(`/projects/${projectId}/sources`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }) }, env);
+    expect((await link()).status).toBe(201);
+    expect((await link()).status).toBe(200);
+    expect(await (await app.request('/projects', {}, env)).json()).toMatchObject({ projects: [{ id: projectId, item_count: 1 }] });
+    expect(await (await app.request(`/projects/${projectId}`, {}, env)).json()).toMatchObject({ items: [{
+      source_id: source.id, entity_type: 'search', title: 'codex gpt 6 astra tips',
+    }] });
+    const unauthorized = await sourceApp('project-link-route-other').request(`/projects/${projectId}/sources`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }),
+    }, env);
+    expect(unauthorized.status).toBe(404);
+    expect((await sourceApp(userId, 'api-key').request(`/projects/${projectId}/sources`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: source.id }),
+    }, env)).status).toBe(403);
+  });
   test('deletion includes admissions without catalog entries and blocks late writes', async () => {
     const account = env.USER_ACCOUNT.getByName('user:deletion');
     await account.registerConversation(CONVERSATION_A);

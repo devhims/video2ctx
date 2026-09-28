@@ -51,6 +51,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [hasSearched, setHasSearched] = useDashboardDraft('source-searched', false);
   const projectsResource = useAccountResource('projects', []);
   const { data: projects } = projectsResource;
+  const projectId = params.get('project');
+  const projectName = projects.find(project => project.id === projectId)?.name ?? 'project';
   const [inspector, setInspector] = useDashboardDraft<Inspector | null>('source-inspector', null);
   const [transcriptQuery, setTranscriptQuery] = useDashboardDraft('transcript-query', '');
   const [loading, setLoading] = useState(false);
@@ -60,6 +62,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState('');
+  const [projectSaveError, setProjectSaveError] = useState('');
+  const [pendingProjectSource, setPendingProjectSource] = useState<string | null>(null);
   const historyInput = useRef('');
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -82,7 +86,25 @@ export default function SourcesClient({ active }: {active:boolean}) {
     return () => controller.abort();
   }, [active, authenticated, loadHistory]);
 
-  const rememberSource = async (input: string, snapshot: SourceSnapshot, signal: AbortSignal) => {
+  const linkProjectSource = async (sourceId: string) => {
+    if (!projectId) return;
+    try {
+      const { added } = await api<{ added: boolean }>(`/v1/projects/${encodeURIComponent(projectId)}/sources`, {
+        method: 'POST', body: JSON.stringify({ sourceId }),
+      });
+      if (added) projectsResource.setData(current => current.map(project => project.id === projectId
+        ? { ...project, item_count: (project.item_count ?? 0) + 1 } : project));
+      setPendingProjectSource(null);
+      setProjectSaveError('');
+      setNotice(`Added to ${projectName}`);
+    } catch (cause) {
+      setPendingProjectSource(sourceId);
+      setProjectSaveError(cause instanceof Error ? cause.message : 'Could not add this source to the project.');
+    }
+  };
+
+  const rememberSource = async (input: string, snapshot: SourceSnapshot) => {
+    let source: RecentSource;
     try {
       const request = snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
         : { kind: snapshot.kind, inspector: {
@@ -90,21 +112,23 @@ export default function SourcesClient({ active }: {active:boolean}) {
           requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
           loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
         } };
-      const { source } = await api<{ source: RecentSource }>('/v1/sources/recent', {
-        method: 'POST', body: JSON.stringify({ input, snapshot: request }), signal,
-      });
+      ({ source } = await api<{ source: RecentSource }>('/v1/sources/recent', {
+        method: 'POST', body: JSON.stringify({ input, snapshot: request }),
+      }));
       setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
       setHistoryError('');
-    } catch (cause) { if (!isAbortError(cause)) setHistoryError(cause instanceof Error ? `Could not save recent source: ${cause.message}` : 'Could not save recent source.'); }
+    } catch (cause) { setHistoryError(cause instanceof Error ? `Could not save recent source: ${cause.message}` : 'Could not save recent source.'); return; }
+    await linkProjectSource(source.id);
   };
 
-  const openRecentSource = async (entry: RecentSource) => {
+  const openRecentSource = async (entry: Pick<RecentSource, 'id'>) => {
     const controller = beginOperation('Loading saved source data…');
     try {
       const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(`/v1/sources/recent/${entry.id}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       setQuery(source.input); historyInput.current = source.input; setTranscriptQuery('');
       setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)]);
+      void linkProjectSource(source.id);
       if (snapshot.kind === 'search') {
         setSelectedData(snapshot.selectedData); setItems(snapshot.items); setInspector(null); setHasSearched(true);
       } else {
@@ -190,7 +214,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
       const results = data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' as const }));
       setItems(results);
-      await rememberSource(input, { kind: 'search', selectedData: [...selectedData], items: results }, controller.signal);
+      await rememberSource(input, { kind: 'search', selectedData: [...selectedData], items: results });
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Search failed.');
     } finally { finishOperation(controller); }
@@ -231,7 +255,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       await fetchSourceData(next, option, controller.signal, next.refreshData?.includes(option));
     }))]);
     if (!controller.signal.aborted && operationController.current === controller) {
-      await rememberSource(input, { kind: 'inspection', inspector: { ...next, loadingData: [] } }, controller.signal);
+      await rememberSource(input, { kind: 'inspection', inspector: { ...next, loadingData: [] } });
     }
   };
 
@@ -252,7 +276,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         if (!controller.signal.aborted) {
           const next: Inspector = { provider, type, id, data, requestedData: [], dataErrors: {} };
           setInspector(next);
-          await rememberSource(historyInput.current, { kind: 'inspection', inspector: next }, controller.signal);
+          await rememberSource(historyInput.current, { kind: 'inspection', inspector: next });
         }
       }
     } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
@@ -297,10 +321,11 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   useEffect(() => {
     if (!active) return;
-    const q=params.get('q'), id=params.get('id'), type=params.get('type');
+    const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
     if (q) { setQuery(q); searchInput.current?.focus(); }
     if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
-    if (q||id) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
+    if (saved) void openRecentSource({ id: saved });
+    if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
   }, [active, params, router]);
   const createProject = async (name:string) => {
     const project = await api<Project>('/v1/projects',{method:'POST',body:JSON.stringify({name})});
@@ -309,6 +334,10 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   const saveInspector = async () => {
     if (!inspector) return;
+    if (projectId) {
+      await rememberSource(historyInput.current, { kind: 'inspection', inspector });
+      return;
+    }
     try {
       await cache.load('projects');
       if (cache.read('projects').error) throw new Error(cache.read('projects').error);
@@ -367,6 +396,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     {projectsResource.error && <div className="alert error" role="alert">{projectsResource.error} <button onClick={()=>void projectsResource.refresh()}>Retry projects</button></div>}
         <div className='workspace-view'>
           <>
+            {projectId && <div className='source-project-context' role='status'>Adding sources to <strong>{projectName}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(projectId)}`}>View project</Link></div>}
             <section className='source-studio' aria-labelledby='source-studio-title'>
               <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={showRecentSources}>Recent sources</button>}</header>
               <form onSubmit={runSearch} className='source-studio-form'>
@@ -400,6 +430,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
               {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
+            {projectSaveError && projectId && <div className='source-project-save-error alert error' role='alert'><span>Could not add to {projectName}: {projectSaveError}</span>{pendingProjectSource && <button type='button' onClick={() => void linkProjectSource(pendingProjectSource)}>Retry adding</button>}</div>}
             {inspector ? (
               <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (

@@ -558,6 +558,77 @@ test('settings sidebar opens the selected project and the new-project dialog', a
   } finally { await scenario.clear(); }
 });
 
+test('adding sources from a project saves the search and opened video in that project', async ({ page }) => {
+  const projectId = '1e498a23-56a6-4834-a1c3-57cc019b14a5';
+  const query = 'codex gpt 6 astra tips';
+  const projectItems: Array<Record<string, unknown>> = [];
+  const sources = new Map<string, { title: string; kind: string; input: string }>();
+  let releaseSearchSave = () => {};
+  const searchSaveGate = new Promise<void>(resolve => { releaseSearchSave = resolve; });
+  const scenario = await accountScenario(page, { responses: {
+    '/v1/projects': { body: { projects: [{ id: projectId, name: 'codex', item_count: 0 }] } },
+  } });
+  await page.route(`**/api/platform/v1/projects/${projectId}`, route => route.fulfill({ json: {
+    id: projectId, name: 'codex', items: projectItems,
+  } }));
+  await page.route(`**/api/platform/v1/projects/${projectId}/sources`, async route => {
+    const { sourceId } = route.request().postDataJSON();
+    const source = sources.get(sourceId)!;
+    const existing = projectItems.find(item => item.source_id === sourceId);
+    if (existing) return route.fulfill({ status: 200, json: { item: existing, added: false } });
+    const item = { id: `saved-${projectItems.length}`, source_id: sourceId, provider: 'youtube',
+      entity_type: source.kind === 'search' ? 'search' : 'video', entity_id: sourceId, title: source.title };
+    projectItems.push(item);
+    return route.fulfill({ status: 201, json: { item, added: true } });
+  });
+  await page.route('**/api/platform/v1/sources/recent', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    const input = route.request().postDataJSON();
+    if (input.snapshot.kind === 'search') await searchSaveGate;
+    const id = crypto.randomUUID();
+    const title = input.snapshot.kind === 'search' ? query : 'Codex tips video';
+    sources.set(id, { title, kind: input.snapshot.kind, input: input.input });
+    return route.fulfill({ status: 201, json: { source: { id, input: input.input, title, kind: input.snapshot.kind, updatedAt: Date.now() } } });
+  });
+  await page.route('**/api/platform/v1/sources/recent/*', route => {
+    const id = route.request().url().split('/').at(-1)!;
+    const source = sources.get(id)!;
+    const snapshot = source.kind === 'search'
+      ? { kind: 'search', selectedData: ['transcript'], items: [{ provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [] }] }
+      : { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
+        data: { id: videoId, title: 'Codex tips video', thumbnails: [] }, requestedData: ['transcript'], dataErrors: {} } };
+    return route.fulfill({ json: { source: { id, ...source, updatedAt: Date.now() }, snapshot } });
+  });
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [{
+    provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [],
+  }] } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: {
+    id: videoId, title: 'Codex tips video', thumbnails: [], channel: { id: 'channel', name: 'Creator' },
+  } }));
+  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto('/dashboard/projects');
+    await page.getByRole('button', { name: 'codex 0 sources' }).click();
+    await page.getByRole('button', { name: 'Add sources' }).click();
+    await expect(page.getByText('Adding sources to')).toBeVisible();
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(query);
+    await page.getByRole('button', { name: /Inspect/ }).click();
+    await page.getByRole('button', { name: /Codex tips video/ }).click();
+    releaseSearchSave();
+    await expect.poll(() => projectItems.length).toBe(2);
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /codex gpt 6 astra tips/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Codex tips video/ })).toBeVisible();
+    await page.getByRole('button', { name: /codex gpt 6 astra tips/ }).click();
+    await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 2' })).toBeVisible();
+    expect(projectItems).toHaveLength(2);
+  } finally { releaseSearchSave(); await scenario.clear(); }
+});
+
 test('settings renders while navigation access checks are pending', async ({page})=>{
  const scenario=await accountScenario(page,{delays:['/v1/agent/access','/v1/admin/access']});
  try{

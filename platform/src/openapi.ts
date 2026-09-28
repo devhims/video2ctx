@@ -1181,6 +1181,25 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/projects/{id}/sources': {
+      post: {
+        tags: ['Projects'],
+        operationId: 'linkProjectSource',
+        summary: 'Add a saved Sources search or inspection to a project',
+        description: 'Keeps a user-owned reference to the shared source assets even after the recent Sources list rotates.',
+        security: privateSecurity,
+        parameters: [idParameter],
+        requestBody: jsonBody({ type: 'object', required: ['sourceId'], properties: {
+          sourceId: { type: 'string', format: 'uuid' },
+        } }),
+        responses: {
+          '201': jsonResponse('Source linked to the project.', schemaRef('ProjectSourceLink')),
+          '200': jsonResponse('Existing project source refreshed.', schemaRef('ProjectSourceLink')),
+          ...standardErrors,
+          '404': responseRef('NotFound'),
+        },
+      },
+    },
     '/v1/imports': {
       post: {
         tags: ['Research'],
@@ -2142,6 +2161,9 @@ export const openApiDocument = {
       Project: { allOf: [storedRecord, { properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, item_count: { type: 'integer' } } }] },
       ProjectDetail: { allOf: [schemaRef('Project'), { type: 'object', required: ['items'], properties: { items: { type: 'array', items: schemaRef('ProjectItem') } } }] },
       ProjectItem: storedRecord,
+      ProjectSourceLink: { type: 'object', required: ['item', 'added'], properties: {
+        item: schemaRef('ProjectItem'), added: { type: 'boolean' },
+      } },
       CreateProjectRequest: {
         type: 'object', required: ['name'], properties: {
           name: { type: 'string', minLength: 1, maxLength: 120, example: 'Research inbox' },
