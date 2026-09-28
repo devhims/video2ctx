@@ -46,7 +46,7 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
     <form className={styles.lookup} onSubmit={event => void search(event)}>
       <label htmlFor='monitor-channel-input'>Channel name, handle, or URL</label>
       <div className={styles.searchRow}>
-        <input id='monitor-channel-input' autoFocus maxLength={500} placeholder='e.g. @veritasium or a YouTube channel URL' value={input} disabled={saving} onChange={event => {
+        <input id='monitor-channel-input' maxLength={500} placeholder='e.g. @veritasium or a YouTube channel URL' value={input} disabled={saving} onChange={event => {
           controller.current?.abort(); setSearching(false); setInput(event.target.value); setSelected(null); setChannels([]); setSearched(false); setError('');
         }} />
         <button className={pageStyles.primaryAction} disabled={!input.trim() || searching || saving}>{searching ? 'Searching…' : 'Search'}</button>

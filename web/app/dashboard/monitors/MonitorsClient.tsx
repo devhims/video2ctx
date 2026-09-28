@@ -15,7 +15,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
   const [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [savingId, setSavingId] = useState<string>();
-  const [addingChannel, setAddingChannel] = useState(false);
+  const [formVersion, setFormVersion] = useState(0);
   const attempted = useRef(new Set<string>());
   useEffect(() => {
     const legacy = monitors.filter(
@@ -54,7 +54,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
     });
     setMonitors(current => [{ id: created.id, provider: 'youtube', kind: 'channel', target: channel.id,
       query_json: JSON.stringify(query), interval_minutes: created.intervalMinutes, next_check_at: created.nextCheckAt, enabled: 1 }, ...current]);
-    setAddingChannel(false); setError('');
+    setFormVersion(version => version + 1); setError('');
     setNotice(`${channel.name} will be checked every ${monitorIntervalLabel(created.intervalMinutes)}. The first check establishes the starting point for new upload alerts.`);
   };
   const remove = async (id: string) => {
@@ -111,8 +111,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
         ready={resource.ready}
         loading={resource.loading}
         savingId={savingId}
-        onAddChannel={() => { setNotice(''); setAddingChannel(true); }}
-        addChannelForm={addingChannel ? <AddChannelForm monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => setAddingChannel(false)} /> : undefined}
+        addChannelForm={<AddChannelForm key={formVersion} monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => { setFormVersion(version => version + 1); setNotice(''); setError(''); }} />}
         onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
         onSchedule={(id, n) => void schedule(id, n)}
         onRemove={(id) => void remove(id)}
