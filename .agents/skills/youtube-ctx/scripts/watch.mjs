@@ -19714,6 +19714,7 @@ function normalizeBrowseLanguage(value) {
 // ../all-things-youtube/src/youtube-client.ts
 var API_ROOT = "https://youtubei.googleapis.com/youtubei/v1";
 var SEARCH_CAPTIONS_PARAM = "EgIoAQ==";
+var SEARCH_CHANNELS_PARAM = "EgIQAg==";
 var BROWSE_DESTINATIONS = {
   music: { category: "music", browseId: "UC-9-kyTW8ZkZNDHQJ6FgpwQ" },
   news: { category: "news", browseId: "UCYfdidRxbB8Qhf0Nx7ioOYw" },
@@ -20882,7 +20883,7 @@ function createYouTubeClient(options = {}) {
         "search",
         filters.continuation ? { continuation: filters.continuation } : {
           query: query.trim(),
-          ...filters.captionsOnly ? { params: SEARCH_CAPTIONS_PARAM } : {}
+          ...filters.type === "channel" ? { params: SEARCH_CHANNELS_PARAM } : filters.captionsOnly ? { params: SEARCH_CAPTIONS_PARAM } : {}
         }
       );
       const allResults = parseSearchResults(raw).map(
