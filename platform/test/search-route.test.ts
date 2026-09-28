@@ -10,7 +10,7 @@ import { app } from '../src/index';
 import { sha256 } from '../src/lib/http';
 
 describe('provider search route', () => {
-  test('includes the continuation token in the cached search request', async () => {
+  test.each(['all', 'channel'])('includes continuation and uses the correct cache namespace for %s search', async (type) => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const get = vi.fn();
     const cachedResponse = {
@@ -34,16 +34,16 @@ describe('provider search route', () => {
     } as unknown as Env;
 
     const response = await app.request(
-      '/v1/providers/youtube/search?q=research&type=all&continuation=NEXT_SEARCH_PAGE',
+      `/v1/providers/youtube/search?q=research&type=${type}&continuation=NEXT_SEARCH_PAGE`,
       {},
       env,
       { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,
     );
     const expectedKey = await sha256(JSON.stringify({
       query: 'research',
-      filters: { type: 'all', continuation: 'NEXT_SEARCH_PAGE' },
+      filters: { type, continuation: 'NEXT_SEARCH_PAGE' },
     }));
-    const expectedCacheKey = `youtube:v1:${await sha256(JSON.stringify(['search-v3', expectedKey]))}`;
+    const expectedCacheKey = `youtube:v1:${await sha256(JSON.stringify([type === 'channel' ? 'search-channels-v4' : 'search-v3', expectedKey]))}`;
 
     expect(response.status).toBe(200);
     expect(get).toHaveBeenCalledWith(expectedCacheKey, { type: 'json', cacheTtl: 60 });

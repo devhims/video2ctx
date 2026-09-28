@@ -250,7 +250,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await page.getByRole('button', { name: 'Add channel', exact: true }).click();
     const form = page.getByRole('region', { name: 'Add channel', exact: true });
     await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill(inputMode === 'name' ? 'Science channel' : inputMode === 'handle' ? '@science' : 'https://youtube.com/@science');
-    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio', { name: /Science channel/ })).toBeChecked();
     await form.getByRole('combobox', { name: 'Check channel every' }).selectOption('360');
     await form.getByRole('button', { name: 'Add channel', exact: true }).click();
@@ -268,7 +268,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     // An existing channel stays visible but cannot be added again.
     await page.getByRole('button', { name: 'Add channel', exact: true }).click();
     await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill('@science');
-    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByText(/Already monitored/)).toBeVisible();
     await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
   } finally { await scenario.clear(); }
@@ -286,11 +286,11 @@ test('Monitors rejects video URLs and shows an empty channel search without crea
     const form = page.getByRole('region', { name: 'Add channel', exact: true });
     const input = form.getByRole('textbox', { name: 'Channel name, handle, or URL' });
     await input.fill(`https://youtube.com/watch?v=${videoId}`);
-    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('alert')).toContainText('Enter a channel URL or @handle');
     await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
     await input.fill('Missing channel');
-    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('status')).toContainText('No channels found');
     expect(creates).toBe(0);
   } finally { await scenario.clear(); }
@@ -322,7 +322,7 @@ test('Monitors header and channel lookup remain interactive while the list is pe
     await page.getByRole('button', { name: 'Add channel', exact: true }).click();
     const form = page.getByRole('region', { name: 'Add channel' });
     await form.getByRole('textbox').fill('@science');
-    await form.getByRole('button', { name: 'Find channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio')).toBeChecked();
     await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
     await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toBeVisible();

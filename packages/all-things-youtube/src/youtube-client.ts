@@ -72,6 +72,7 @@ interface DesktopPlayerResult {
 
 const API_ROOT = 'https://youtubei.googleapis.com/youtubei/v1';
 const SEARCH_CAPTIONS_PARAM = 'EgIoAQ==';
+const SEARCH_CHANNELS_PARAM = 'EgIQAg==';
 
 const BROWSE_DESTINATIONS: Record<string, { category: string; browseId: string }> = {
   music: { category: 'music', browseId: 'UC-9-kyTW8ZkZNDHQJ6FgpwQ' },
@@ -1475,7 +1476,9 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
           ? { continuation: filters.continuation }
           : {
               query: query.trim(),
-              ...(filters.captionsOnly ? { params: SEARCH_CAPTIONS_PARAM } : {}),
+              ...(filters.type === 'channel'
+                ? { params: SEARCH_CHANNELS_PARAM }
+                : filters.captionsOnly ? { params: SEARCH_CAPTIONS_PARAM } : {}),
             }
       );
       const allResults = parseSearchResults(raw).map((result) =>
