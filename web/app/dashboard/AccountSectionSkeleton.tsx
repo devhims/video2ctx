@@ -1,14 +1,14 @@
 import pageStyles from './DashboardPages.module.css';
-export function AccountSectionSkeleton({ section, detail = false }: { section: 'projects' | 'monitors'; detail?: boolean }) {
+export function AccountSectionSkeleton({ section, detail = false, listOnly = false }: { section: 'projects' | 'monitors'; detail?: boolean; listOnly?: boolean }) {
   const projects = section === 'projects';
-  return <section className='content-section standalone' role='status' aria-label={`Loading ${detail ? 'project' : section}`} aria-busy='true'>
+  return <section className={listOnly ? undefined : 'content-section standalone'} role='status' aria-label={`Loading ${detail ? 'project' : section}`} aria-busy='true'>
     <span className='sr-only'>Loading {detail ? 'project' : section}</span>
     <div aria-hidden='true'>
       {detail && <span className='back'><i className='ui-bar' data-width='short' /></span>}
-      <header className={pageStyles.pageHeading}>
-        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Get updates from channels and searches you follow.'}</p></div>
+      {!listOnly && <header className={pageStyles.pageHeading}>
+        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Choose channels and how often to check for new videos.'}</p></div>
         <span className='skeleton-control' />
-      </header>
+      </header>}
       <div className={pageStyles.listHeading}><h3>{detail ? 'Saved sources' : projects ? 'Projects' : 'Monitors'}</h3></div>
       <div className={pageStyles.recordList}>{Array.from({ length: 3 }, (_, index) => <div key={index} className={`${projects ? pageStyles.projectRow : pageStyles.monitorRow} ${pageStyles.skeletonRow}`}>
         <span className={pageStyles.rowIcon} />

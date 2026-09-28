@@ -204,7 +204,7 @@ export async function searchYouTube(env: Env, query: string, filters: SearchFilt
 
 export async function searchYouTubeWithCache(env: Env, query: string, filters: SearchFilters = {}) {
   const key = await hash(JSON.stringify({ query, filters }));
-  return cached(env, 'search-v3', key, 5 * 60_000, { kind: 'search', query, filters });
+  return cached(env, filters.type === 'channel' ? 'search-channels-v4' : 'search-v3', key, 5 * 60_000, { kind: 'search', query, filters });
 }
 
 export async function browseYouTube(env: Env, options: BrowseOptions = {}) {

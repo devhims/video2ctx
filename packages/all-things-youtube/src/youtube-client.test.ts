@@ -24,6 +24,31 @@ function commentRenderer(id: string, text: string): Record<string, unknown> {
 }
 
 describe('normalized YouTube client', () => {
+  test('finds openai channels when the unfiltered search page contains only videos', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      // YouTube's channel filter is required; a relevance page need not include a channel card.
+      return jsonResponse({ contents: body.params === 'EgIQAg=='
+        ? { channelRenderer: { channelId: 'UCXZCJLdBC09xxGZ6gcdrc6A', title: { simpleText: 'OpenAI' } } }
+        : { videoRenderer: { videoId: 'abcdefghijk', title: { simpleText: 'OpenAI news' } } } });
+    }) as unknown as typeof fetch;
+    const response = await createYouTubeClient({ fetch: fetchMock }).search('openai', { type: 'channel' });
+    expect(response.channels.map(channel => channel.name)).toContain('OpenAI');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('channel continuation requests preserve the token without replacing it with search filters', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.continuation).toBe('NEXT_CHANNELS');
+      expect(body).not.toHaveProperty('query');
+      expect(body).not.toHaveProperty('params');
+      return jsonResponse({ contents: [] });
+    }) as unknown as typeof fetch;
+    await createYouTubeClient({ fetch: fetchMock }).search('openai', { type: 'channel', continuation: 'NEXT_CHANNELS' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test('uses YouTube caption filtering instead of relying on omitted result badges', async () => {
     const requestBodies: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

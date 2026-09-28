@@ -224,6 +224,78 @@ test('source errors mirror the API and retry only the failed dataset', async ({ 
   expect(videoReads).toBe(1);
 });
 
+for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds a channel directly by ${inputMode}`, async ({ page }) => {
+  const channelId = `UC${'a'.repeat(22)}`;
+  const created: Array<Record<string, unknown>> = [];
+  let attempts = 0;
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'channel', id: '@science' } }));
+  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: channelId, name: 'Science channel', handle: '@science' } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => {
+    expect(new URL(route.request().url()).searchParams.get('type')).toBe('channel');
+    return route.fulfill({ json: { results: [{ type: 'channel', id: channelId, name: 'Science channel', thumbnails: [] }] } });
+  });
+  await page.route('**/api/platform/v1/monitors', route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const body = route.request().postDataJSON();
+    attempts++;
+    if (inputMode === 'name' && attempts === 1) return route.fulfill({ status: 503, json: { error: { message: 'Try adding again' } } });
+    created.push(body);
+    return route.fulfill({ status: 201, json: { id: 'new-monitor', intervalMinutes: body.intervalMinutes, nextCheckAt: Date.now() + 60_000 } });
+  });
+  try {
+    if (inputMode === 'url') await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/dashboard/monitors');
+    await expect(page.getByRole('button', { name: 'Find a source' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Add channel', exact: true }).click();
+    const form = page.getByRole('region', { name: 'Add channel', exact: true });
+    await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill(inputMode === 'name' ? 'Science channel' : inputMode === 'handle' ? '@science' : 'https://youtube.com/@science');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('radio', { name: /Science channel/ })).toBeChecked();
+    await form.getByRole('combobox', { name: 'Check channel every' }).selectOption('360');
+    await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+    if (inputMode === 'name') {
+      await expect(form.getByRole('alert')).toContainText('Try adding again');
+      await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+    }
+    await expect(form).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard\/monitors$/);
+    await expect(page.getByRole('heading', { name: 'Science channel', exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Monitoring frequency for Science channel' })).toHaveValue('360');
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ provider: 'youtube', kind: 'channel', target: channelId, intervalMinutes: 360, query: { label: 'Science channel' } });
+    await expect(page.getByRole('button', { name: 'Open in Sources ↗' })).toHaveCount(0);
+    // An existing channel stays visible but cannot be added again.
+    await page.getByRole('button', { name: 'Add channel', exact: true }).click();
+    await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill('@science');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByText(/Already monitored/)).toBeVisible();
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+  } finally { await scenario.clear(); }
+});
+
+test('Monitors rejects video URLs and shows an empty channel search without creating a monitor', async ({ page }) => {
+  let creates = 0;
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
+  page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/v1/monitors')) creates++; });
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'video', id: videoId } }));
+  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [] } }));
+  try {
+    await page.goto('/dashboard/monitors');
+    await page.getByRole('button', { name: 'Add channel', exact: true }).click();
+    const form = page.getByRole('region', { name: 'Add channel', exact: true });
+    const input = form.getByRole('textbox', { name: 'Channel name, handle, or URL' });
+    await input.fill(`https://youtube.com/watch?v=${videoId}`);
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('alert')).toContainText('Enter a channel URL or @handle');
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await input.fill('Missing channel');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('status')).toContainText('No channels found');
+    expect(creates).toBe(0);
+  } finally { await scenario.clear(); }
+});
+
 for (const section of ['projects', 'monitors']) {
   test(`${section} shows matching rows while its own data is pending`, async ({ page }, testInfo) => {
     const scenario = await accountScenario(page, { delays: [`/v1/${section}`] });
@@ -240,6 +312,60 @@ for (const section of ['projects', 'monitors']) {
     await scenario.clear();
   });
 }
+
+test('Monitors header and channel lookup remain interactive while the list is pending', async ({ page }) => {
+  const scenario = await accountScenario(page, { delays: ['/v1/monitors'] });
+  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'Science channel' } }));
+  try {
+    await page.goto('/dashboard/monitors', { waitUntil: 'commit' });
+    await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add channel', exact: true }).click();
+    const form = page.getByRole('region', { name: 'Add channel' });
+    await form.getByRole('textbox').fill('@science');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('radio')).toBeChecked();
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toBeVisible();
+    await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
+    await scenario.release();
+    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeEnabled();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
+    expect((await scenario.reads())['/v1/monitors']).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('Monitors reuses cached rows on return navigation', async ({ page }) => {
+  const monitor = { id: 'cached-monitor', provider: 'youtube', kind: 'channel', target: `UC${'a'.repeat(22)}`, query_json: JSON.stringify({ label: 'Cached channel' }), interval_minutes: 1440, enabled: 1 };
+  const initial = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [monitor] } } } });
+  let pending: Awaited<ReturnType<typeof accountScenario>> | undefined;
+  let browserReads = 0;
+  page.on('request', request => { if (request.url().endsWith('/api/platform/v1/monitors')) browserReads++; });
+  try {
+    await page.goto('/dashboard/monitors');
+    await expect(page.getByRole('heading', { name: 'Cached channel', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Sources', exact: true }).click();
+    await expect(page).toHaveURL(/dashboard\/sources/);
+    pending = await accountScenario(page, { delays: ['/v1/monitors'] });
+    await page.getByRole('link', { name: 'Monitors', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Cached channel', exact: true })).toBeVisible();
+    await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
+    expect(browserReads).toBe(0);
+  } finally { await pending?.clear(); await initial.clear(); }
+});
+
+test('Monitors keeps its header after a load error and can retry the list', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { status: 503, body: { error: { message: 'Monitors unavailable' } } } } });
+  try {
+    await page.goto('/dashboard/monitors');
+    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
+    await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
+    await page.route('**/api/platform/v1/monitors', route => route.fulfill({ json: { monitors: [] } }));
+    await page.getByRole('button', { name: 'Retry monitors' }).click();
+    await expect(page.getByText('No monitors yet', { exact: true })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
+  } finally { await scenario.clear(); }
+});
 
 test('account errors do not show fabricated empty project results', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Projects are temporarily unavailable.' } } } } });

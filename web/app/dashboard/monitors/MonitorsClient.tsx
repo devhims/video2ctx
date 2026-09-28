@@ -2,17 +2,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { platformRequest as api } from '../../../lib/platform-request';
-import { useStreamedAccountResource } from '../DashboardDataProvider';
+import { useAccountResource } from '../DashboardDataProvider';
 import type { ResourceResult } from '../../../lib/dashboard-cache';
 import type { Monitor, ChannelInfo } from '../research-types';
+import { AddChannelForm } from './AddChannelForm';
+import type { MonitorChannel } from '../../../lib/monitor-channels';
 import { MonitorsView, monitorIntervalLabel, monitorQueryMetadata, isYouTubeChannelId } from './MonitorsView';
 export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Monitor[]>> }) {
   const router = useRouter();
-  const resource = useStreamedAccountResource('monitors', [], promise);
+  const resource = useAccountResource('monitors', [], undefined, promise);
   const { data: monitors, setData: setMonitors } = resource;
   const [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [savingId, setSavingId] = useState<string>();
+  const [addingChannel, setAddingChannel] = useState(false);
   const attempted = useRef(new Set<string>());
   useEffect(() => {
     const legacy = monitors.filter(
@@ -41,6 +44,19 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
       cancelled = true;
     };
   }, [monitors, setMonitors]);
+  const addChannel = async (channel: MonitorChannel, intervalMinutes: number) => {
+    if (monitors.some(monitor => monitor.provider === 'youtube' && monitor.kind === 'channel' && monitor.target === channel.id)) {
+      throw new Error('This channel is already monitored. Change its frequency in the list below.');
+    }
+    const query = { label: channel.name, handle: channel.handle };
+    const created = await api<{ id: string; intervalMinutes: number; nextCheckAt: number }>('/v1/monitors', {
+      method: 'POST', body: JSON.stringify({ provider: 'youtube', kind: 'channel', target: channel.id, intervalMinutes, query }),
+    });
+    setMonitors(current => [{ id: created.id, provider: 'youtube', kind: 'channel', target: channel.id,
+      query_json: JSON.stringify(query), interval_minutes: created.intervalMinutes, next_check_at: created.nextCheckAt, enabled: 1 }, ...current]);
+    setAddingChannel(false); setError('');
+    setNotice(`${channel.name} will be checked every ${monitorIntervalLabel(created.intervalMinutes)}. The first check establishes the starting point for new upload alerts.`);
+  };
   const remove = async (id: string) => {
     try {
       await api(`/v1/monitors/${id}`, { method: 'DELETE' });
@@ -90,16 +106,17 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
           {notice}
         </div>
       )}
-      {resource.ready && (
-        <MonitorsView
-          monitors={monitors}
-          savingId={savingId}
-          onFindSource={() => router.push('/dashboard/sources')}
-          onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
-          onSchedule={(id, n) => void schedule(id, n)}
-          onRemove={(id) => void remove(id)}
-        />
-      )}
+      <MonitorsView
+        monitors={monitors}
+        ready={resource.ready}
+        loading={resource.loading}
+        savingId={savingId}
+        onAddChannel={() => { setNotice(''); setAddingChannel(true); }}
+        addChannelForm={addingChannel ? <AddChannelForm monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => setAddingChannel(false)} /> : undefined}
+        onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
+        onSchedule={(id, n) => void schedule(id, n)}
+        onRemove={(id) => void remove(id)}
+      />
     </>
   );
 }
