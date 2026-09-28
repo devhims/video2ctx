@@ -184,9 +184,25 @@ export class UserAccountDO extends DurableObject<Env> {
       return { source: { id: row.id, input: row.input, title: row.title, kind: row.kind, updatedAt },
         snapshot: sourceReferenceSchema.parse(JSON.parse(row.snapshot)) };
     }
-    // A project keeps its own reference after the 30-entry recent list rotates.
+    return null;
+  }
+
+  saveSourceWithProject(value: SaveReferencedSource, projectId?: string) {
+    this.assertActive();
+    const project = projectId === undefined ? undefined : z.string().uuid().parse(projectId);
+    return this.ctx.storage.transactionSync(() => {
+      const source = this.saveSource(value);
+      const linked = project ? this.linkSourceToProject(project, source.id) : null;
+      if (project && !linked) throw new Error('Saved source could not be linked.');
+      return { source, linked };
+    });
+  }
+
+  getProjectSource(projectId: string, itemId: string): { source: RecentSource; snapshot: SourceReference } | null {
+    this.assertActive();
     const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
-      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE source_id = ? LIMIT 1', sourceId,
+      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND id = ?',
+      z.string().uuid().parse(projectId), sourceIdSchema.parse(itemId),
     ).toArray()[0];
     if (!saved) return null;
     return { source: { id: saved.source_id, input: saved.input, title: saved.title, kind: saved.kind, updatedAt: saved.created_at },
@@ -200,7 +216,12 @@ export class UserAccountDO extends DurableObject<Env> {
     const recent = this.ctx.storage.sql.exec<{ source_key: string; input: string; title: string; kind: RecentSource['kind']; snapshot: string }>(
       'SELECT source_key, input, title, kind, snapshot FROM recent_sources WHERE id = ?', source,
     ).toArray()[0];
-    if (!recent) return null;
+    if (!recent) {
+      const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
+        'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND source_id = ?', project, source,
+      ).toArray()[0];
+      return saved ? { item: this.toProjectSourceItem(saved), added: false } : null;
+    }
     const existing = this.ctx.storage.sql.exec<{ id: string }>(
       'SELECT id FROM project_sources WHERE project_id = ? AND source_key = ?', project, recent.source_key,
     ).toArray()[0];

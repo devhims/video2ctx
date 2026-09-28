@@ -1095,10 +1095,10 @@ export const openApiDocument = {
       },
       post: {
         tags: ['Projects'], operationId: 'saveRecentSource', summary: 'Remember a Sources search or inspection', security: privateSecurity,
-        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data.',
+        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data. An optional projectId saves the project reference in the same user-storage transaction.',
         requestBody: jsonBody(z.toJSONSchema(saveSourceSchema, { target: 'openapi-3.0' })),
-        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource') } }),
-          '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), ...standardErrors },
+        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource'), linked: { anyOf: [schemaRef('ProjectSourceLink'), { type: 'null' }] } } }),
+          '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
     '/v1/sources/recent/{id}': {
@@ -1179,6 +1179,16 @@ export const openApiDocument = {
           ...standardErrors,
           '404': responseRef('NotFound'),
         },
+      },
+    },
+    '/v1/projects/{id}/sources/{itemId}': {
+      get: {
+        tags: ['Projects'], operationId: 'getProjectSource', summary: 'Restore a project source snapshot', security: privateSecurity,
+        description: 'Restores this project item without updating history or project references. Survives recent-source eviction.',
+        parameters: [idParameter, pathParameter('itemId', 'Project item UUID, not the recent source UUID.')],
+        responses: { '200': jsonResponse('Saved project source and displayed data.', { type: 'object', properties: {
+          source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }),
+        } }), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
     '/v1/projects/{id}/sources': {

@@ -1,4 +1,5 @@
 import { ApiError, now } from './http';
+import { listProjectItems } from './project-items';
 
 type Format = 'txt' | 'md' | 'json' | 'csv' | 'srt' | 'vtt';
 
@@ -17,11 +18,11 @@ export async function createProjectExport(env: Env, userId: string, projectId: s
   const project = await env.DB.prepare('SELECT name,description FROM projects WHERE id=? AND user_id=?')
     .bind(projectId, userId).first<{ name: string; description: string }>();
   if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project not found.');
-  const rows = await env.DB.prepare(
-    `SELECT provider,title,entity_type,entity_id,start_ms,end_ms,note,tags_json
-     FROM project_items WHERE project_id=? AND user_id=? ORDER BY created_at`
-  ).bind(projectId, userId).all<ItemRow>();
-  const content = serialize(format, project, rows.results);
+  const items = await listProjectItems(env, userId, projectId);
+  const rows: ItemRow[] = items.reverse().map(({ provider, title, entity_type, entity_id, start_ms, end_ms, note, tags_json }) => ({
+    provider, title, entity_type, entity_id, start_ms, end_ms, note, tags_json,
+  }));
+  const content = serialize(format, project, rows);
   const id = crypto.randomUUID();
   const key = `private/${userId}/exports/${id}.${format}`;
   await env.RESEARCH.put(key, content, { httpMetadata: { contentType: contentType(format) } });

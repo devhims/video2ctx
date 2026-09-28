@@ -34,7 +34,7 @@ export const sourceSnapshotSchema = z.discriminatedUnion('kind', [
   })) }),
   z.object({ kind: z.literal('inspection'), inspector }),
 ]);
-export const saveSourceSchema = z.object({ input: z.string().trim().min(1).max(500), snapshot: z.discriminatedUnion('kind', [
+export const saveSourceSchema = z.object({ projectId: z.string().uuid().optional(), input: z.string().trim().min(1).max(500), snapshot: z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('search'), selectedData: z.array(dataset).min(1) }),
   z.object({ kind: z.literal('inspection'), inspector: inspector.pick({ provider: true, type: true, id: true, requestedData: true, dataErrors: true })
     .extend({ loadedData: z.array(z.enum(['metadata', 'transcript', 'comments', 'channel'])) }) }),

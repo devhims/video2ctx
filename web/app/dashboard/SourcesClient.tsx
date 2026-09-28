@@ -40,6 +40,8 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   else delete inspector.dataErrors[option];
 }
 
+type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string };
+
 export default function SourcesClient({ active }: {active:boolean}) {
   const params = useSearchParams();
   const cache = useDashboardCache();
@@ -62,8 +64,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState('');
-  const [projectSaveError, setProjectSaveError] = useState('');
-  const [pendingProjectSource, setPendingProjectSource] = useState<string | null>(null);
+  const [failedSaves, setFailedSaves] = useState<Array<SourceSave & { error: string }>>([]);
   const historyInput = useRef('');
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -86,49 +87,46 @@ export default function SourcesClient({ active }: {active:boolean}) {
     return () => controller.abort();
   }, [active, authenticated, loadHistory]);
 
-  const linkProjectSource = async (sourceId: string) => {
-    if (!projectId) return;
+  const persistSource = async (save: SourceSave) => {
     try {
-      const { added } = await api<{ added: boolean }>(`/v1/projects/${encodeURIComponent(projectId)}/sources`, {
-        method: 'POST', body: JSON.stringify({ sourceId }),
-      });
-      if (added) projectsResource.setData(current => current.map(project => project.id === projectId
-        ? { ...project, item_count: (project.item_count ?? 0) + 1 } : project));
-      setPendingProjectSource(null);
-      setProjectSaveError('');
-      setNotice(`Added to ${projectName}`);
+      const { source } = await api<{ source?: RecentSource }>(save.path, { method: 'POST', body: save.body });
+      if (source) setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
+      setFailedSaves(current => current.filter(item => item.id !== save.id));
+      if (save.projectId) {
+        // Reconcile counts even when a retry follows a lost successful response.
+        void projectsResource.refresh();
+        setNotice(`Added to ${save.projectName}`);
+      }
     } catch (cause) {
-      setPendingProjectSource(sourceId);
-      setProjectSaveError(cause instanceof Error ? cause.message : 'Could not add this source to the project.');
+      const failed = { ...save, error: cause instanceof Error ? cause.message : 'Could not save this source.' };
+      setFailedSaves(current => [...current.filter(item => item.id !== save.id), failed]);
     }
   };
 
   const rememberSource = async (input: string, snapshot: SourceSnapshot) => {
-    let source: RecentSource;
-    try {
-      const request = snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
-        : { kind: snapshot.kind, inspector: {
-          provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
-          requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
-          loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
-        } };
-      ({ source } = await api<{ source: RecentSource }>('/v1/sources/recent', {
-        method: 'POST', body: JSON.stringify({ input, snapshot: request }),
-      }));
-      setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
-      setHistoryError('');
-    } catch (cause) { setHistoryError(cause instanceof Error ? `Could not save recent source: ${cause.message}` : 'Could not save recent source.'); return; }
-    await linkProjectSource(source.id);
+    const request = snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
+      : { kind: snapshot.kind, inspector: {
+        provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
+        requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
+        loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
+      } };
+    await persistSource({ id: crypto.randomUUID(), input, projectId, projectName, path: '/v1/sources/recent',
+      body: JSON.stringify({ input, snapshot: request, ...(projectId ? { projectId } : {}) }),
+    });
   };
 
-  const openRecentSource = async (entry: Pick<RecentSource, 'id'>) => {
+  const openRecentSource = async (entry: Pick<RecentSource, 'id'>, savedProjectId?: string) => {
     const controller = beginOperation('Loading saved source data…');
     try {
-      const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(`/v1/sources/recent/${entry.id}`, { signal: controller.signal });
+      const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(savedProjectId ? `/v1/projects/${encodeURIComponent(savedProjectId)}/sources/${encodeURIComponent(entry.id)}` : `/v1/sources/recent/${entry.id}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       setQuery(source.input); historyInput.current = source.input; setTranscriptQuery('');
-      setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)]);
-      void linkProjectSource(source.id);
+      if (!savedProjectId) {
+        setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
+        if (projectId) void persistSource({ id: crypto.randomUUID(), input: source.input, projectId, projectName,
+          path: `/v1/projects/${encodeURIComponent(projectId)}/sources`, body: JSON.stringify({ sourceId: source.id }),
+        });
+      }
       if (snapshot.kind === 'search') {
         setSelectedData(snapshot.selectedData); setItems(snapshot.items); setInspector(null); setHasSearched(true);
       } else {
@@ -324,7 +322,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
     if (q) { setQuery(q); searchInput.current?.focus(); }
     if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
-    if (saved) void openRecentSource({ id: saved });
+    if (saved && projectId) void openRecentSource({ id: saved }, projectId);
     if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
   }, [active, params, router]);
   const createProject = async (name:string) => {
@@ -430,7 +428,10 @@ export default function SourcesClient({ active }: {active:boolean}) {
               {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
-            {projectSaveError && projectId && <div className='source-project-save-error alert error' role='alert'><span>Could not add to {projectName}: {projectSaveError}</span>{pendingProjectSource && <button type='button' onClick={() => void linkProjectSource(pendingProjectSource)}>Retry adding</button>}</div>}
+            {failedSaves.map(save => <div key={save.id} className='source-project-save-error alert error' role='alert'>
+              <span>Could not save {save.input}{save.projectId ? ` to ${save.projectName}` : ''}: {save.error}</span>
+              <button type='button' onClick={() => void persistSource(save)}>Retry saving</button>
+            </div>)}
             {inspector ? (
               <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
