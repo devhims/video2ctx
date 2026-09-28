@@ -68,6 +68,7 @@ export default function AdminAccessClient() {
       onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
       onNewProject={() => router.push('/dashboard?section=projects')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={item => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       credits={credits} onSignOut={() => void signOut()} />
     <div className='workspace-main'>

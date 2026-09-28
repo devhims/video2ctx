@@ -13,7 +13,7 @@ export default async function Page({
   const section =
     typeof params.section === 'string' && valid.includes(params.section)
       ? (params.section as DashboardSection)
-      : 'trends';
+      : 'discover';
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (key === 'section' || value === undefined) continue;

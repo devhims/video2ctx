@@ -427,6 +427,37 @@ test('settings cards load independently and preserve their layout', async ({ pag
   } finally { await scenario.clear(); }
 });
 
+test('notification panel stays opaque and above the Sources form on a narrow screen', async ({ page }, testInfo) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/notifications': { body: { notifications: Array.from({ length: 5 }, (_, index) => ({
+    id: `notice-${index}`, type: 'monitor', title: 'New video', body: 'A monitor found a match', data_json: '{}',
+    read_at: null, created_at: Date.now() - index * 60_000,
+  })) } } } });
+  try {
+    await page.setViewportSize({ width: 491, height: 610 });
+    await page.goto('/dashboard/sources');
+    const trigger = page.getByRole('button', { name: '5 unread notifications' });
+    await trigger.click();
+    const panel = page.getByRole('dialog', { name: 'Notifications' });
+    await expect(panel).toBeVisible();
+    const panelBox = (await panel.boundingBox())!;
+    const inspectBox = (await page.getByRole('button', { name: /Inspect/ }).boundingBox())!;
+    const left = Math.max(panelBox.x, inspectBox.x);
+    const right = Math.min(panelBox.x + panelBox.width, inspectBox.x + inspectBox.width);
+    const top = Math.max(panelBox.y, inspectBox.y);
+    const bottom = Math.min(panelBox.y + panelBox.height, inspectBox.y + inspectBox.height);
+    expect(right).toBeGreaterThan(left);
+    expect(bottom).toBeGreaterThan(top);
+    const x = (left + right) / 2, y = (top + bottom) / 2;
+    await page.screenshot({ path: testInfo.outputPath('notifications-over-sources.png') });
+    const overlay = await page.evaluate<{ panelIsTopmost: boolean; background: string }>(`({
+      panelIsTopmost: Boolean(document.elementFromPoint(${x}, ${y})?.closest('.notification-popover')),
+      background: getComputedStyle(document.querySelector('.notification-popover')).backgroundColor,
+    })`);
+    expect(overlay.panelIsTopmost).toBe(true);
+    expect(overlay.background).not.toMatch(/\/\s*0(?:\.0+)?\)/);
+  } finally { await scenario.clear(); }
+});
+
 test('dashboard navigation reuses account data without browser refetches', async ({ page }) => {
   const scenario = await accountScenario(page, {});
   const reads: string[] = [];
@@ -545,17 +576,53 @@ test('warm settings stays usable while a return visit server read is delayed', a
   } finally { await scenario.clear(); }
 });
 
-test('settings sidebar opens the selected project and the new-project dialog', async ({ page }) => {
+test('settings sidebar expands project sources and opens the new-project dialog', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [{ id: 'research', name: 'Saved research' }] } } } });
   try {
-    await page.route('**/api/platform/v1/projects/research', route => route.fulfill({ json: { id: 'research', name: 'Saved research', items: [] } }));
+    await page.route('**/api/platform/v1/projects/research', route => route.fulfill({ json: { id: 'research', name: 'Saved research', items: [{ id: 'item-1', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Sample video' }] } }));
     await page.goto('/dashboard/settings');
-    await page.getByRole('button', { name: 'Saved research', exact: true }).click();
+    const folder = page.getByRole('button', { name: 'Saved research', exact: true }).first();
+    await folder.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('group', { name: 'Sources in Saved research' }).first().getByRole('button', { name: 'Sample video' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Saved research', exact: true })).toBeVisible();
+    await folder.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('group', { name: 'Sources in Saved research' }).first()).toHaveCount(0);
     await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Create a new project', exact: true }).first().click();
-    await expect(page.getByRole('dialog', { name: 'Name this line of inquiry' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'New project' })).toBeVisible();
   } finally { await scenario.clear(); }
+});
+
+test('project creation shows progress and adds the project without another list request', async ({ page }) => {
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [] } } } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let creates = 0;
+  await page.route('**/api/platform/v1/projects', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    creates++;
+    await gate;
+    return route.fulfill({ status: 201, json: { id: 'new-research', name: 'Video research' } });
+  });
+  try {
+    await page.goto('/dashboard/projects');
+    const readsBefore = (await scenario.reads())['/v1/projects'] ?? 0;
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'New project' });
+    await expect(dialog.getByText('Keep related sources in one place.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeDisabled();
+    await dialog.getByRole('textbox', { name: 'Name' }).fill('Video research');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(dialog).toHaveAttribute('aria-busy', 'true');
+    await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeDisabled();
+    expect(creates).toBe(1);
+    release();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Video research', exact: true }).first()).toBeVisible();
+    expect((await scenario.reads())['/v1/projects'] ?? 0).toBe(readsBefore);
+  } finally { release(); await scenario.clear(); }
 });
 
 test('settings renders while navigation access checks are pending', async ({page})=>{
@@ -564,9 +631,12 @@ test('settings renders while navigation access checks are pending', async ({page
   await page.goto('/dashboard/settings',{waitUntil:'commit'});
   await expect(page.getByRole('switch',{name:/In-app alerts/})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Upgrade to Builder'})).toBeEnabled();
+  const navigation = page.getByRole('navigation', { name: 'Dashboard navigation' });
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toHaveCount(0);
+  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 2).map(label => label.trim())).toEqual(['Sources', 'Trends']);
   await scenario.release();
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
+  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
  }finally{await scenario.clear();}
 });
 
@@ -599,7 +669,7 @@ test('an active trend request survives projects navigation without restarting',a
  await page.getByRole('link',{name:'Projects',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Your projects'})).toBeVisible();
  release();
- await page.getByRole('link',{name:'Trend Lab',exact:true}).click();
+ await page.getByRole('link',{name:'Trends',exact:true}).click();
  await expect(page.getByRole('alert').filter({hasText:'Retained scan completed'})).toBeVisible();
  expect(reads).toBe(1);
 });

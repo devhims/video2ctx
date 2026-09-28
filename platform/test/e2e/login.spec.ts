@@ -16,6 +16,10 @@ test('signed-out dashboard visits redirect to login and preserve the destination
   await page.goto('/login?returnTo=%2Fdashboard%2Fdeveloper');
   await expect(page).toHaveURL('/dashboard/developer');
   await page.goto('/login?returnTo=https%3A%2F%2Fevil.test');
+  await expect(page).toHaveURL('/dashboard/sources');
+  await page.goto('/dashboard');
+  await expect(page).toHaveURL('/dashboard/sources');
+  await page.goto('/dashboard?section=trends');
   await expect(page).toHaveURL('/dashboard/trends');
 });
 

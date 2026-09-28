@@ -18,6 +18,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
     <DashboardSidebar activeSection='settings' projects={projects} onNavigate={navigate}
       onNewProject={() => router.push('/dashboard/projects?newProject=1')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={item => router.push(`/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)}
       onSignIn={() => router.push('/login')} accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
       credits={usage?.creditBalance} onSignOut={() => void signOut()} />
     <div className={`workspace-main ${styles.pages}`}>
