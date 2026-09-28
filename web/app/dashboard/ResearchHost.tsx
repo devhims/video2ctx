@@ -48,7 +48,7 @@ export function ResearchHost() {
       )}
       {(visited.trend || trend) && (
         <div hidden={!trend} data-research-panel='trends'>
-          <WorkspaceShell section='trends' title='Trend Lab'>
+          <WorkspaceShell section='trends' title='Trends'>
             <Suspense fallback={<ResearchSkeleton />}>
               <Trends />
             </Suspense>

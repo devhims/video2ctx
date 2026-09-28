@@ -9,6 +9,7 @@ import { useAccountResource } from '../DashboardDataProvider';
 import { DashboardSkeleton } from '../DashboardSkeleton';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
+import { projectItemPath } from '../dashboard-routes';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './AdminAccess.module.css';
@@ -68,6 +69,7 @@ export default function AdminAccessClient() {
       onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
       onNewProject={() => router.push('/dashboard?section=projects')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       credits={credits} onSignOut={() => void signOut()} />
     <div className='workspace-main'>

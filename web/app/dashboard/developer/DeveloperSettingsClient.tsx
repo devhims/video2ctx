@@ -9,6 +9,7 @@ import { DashboardHeader } from '../DashboardHeader';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './DeveloperSettings.module.css';
 import { DashboardSidebar, type DashboardSection } from '../DashboardSidebar';
+import { projectItemPath } from '../dashboard-routes';
 import { useDashboardSession } from '../DashboardSessionProvider';
 
 import type { DashboardApiKey as ManagedApiKey } from '../../../lib/dashboard-data';
@@ -87,6 +88,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
       onNavigate={navigateToDashboard}
       onNewProject={() => router.push('/dashboard/projects?newProject=1')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
+      onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fdeveloper')}
       accountName={displayUser.name ?? displayUser.email}
       credits={credits}

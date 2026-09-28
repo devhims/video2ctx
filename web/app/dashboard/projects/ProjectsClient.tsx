@@ -7,6 +7,7 @@ import type { ResourceResult } from '../../../lib/dashboard-cache';
 import type { Project, ProjectDetail } from '../research-types';
 import { ProjectsView } from './ProjectsView';
 import { NewProjectDialog } from '../NewProjectDialog';
+import { projectItemPath } from '../dashboard-routes';
 export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Project[]>> }) {
   const router = useRouter(),
     params = useSearchParams();
@@ -15,6 +16,7 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   const resumeProject = useRef(selected?.id ?? null);
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(''),
+    [createError, setCreateError] = useState(''),
     [create, setCreate] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const open = useCallback(
@@ -44,16 +46,19 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
     const id = requestedId ?? resumeProject.current;
     resumeProject.current = null;
     if (id) void open({ id, name: '' });
-    if (newProject) setCreate(true);
+    if (newProject) { setCreateError(''); setCreate(true); }
     if (requestedId || newProject) router.replace('/dashboard/projects', { scroll: false });
   }, [params, open, router]);
-  const add = async (name: string) => {
+  const add = async (name: string): Promise<boolean> => {
+    setCreateError('');
     try {
-      await api('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
-      await resource.refresh();
+      const project = await api<Project>('/v1/projects', { method: 'POST', body: JSON.stringify({ name }) });
+      resource.setData(current => [project, ...current]);
       setCreate(false);
+      return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not create project.');
+      setCreateError(cause instanceof Error ? cause.message : 'Could not create project.');
+      return false;
     }
   };
   return (
@@ -69,26 +74,17 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
           selectedProject={selected}
           loading={loading}
           error={error}
-          onCreate={() => setCreate(true)}
+          onCreate={() => { setCreateError(''); setCreate(true); }}
           onOpen={(p) => void open(p)}
           onBack={() => {
             setSelected(null);
             setError('');
           }}
           onFindSources={() => selected && router.push(`/dashboard/sources?project=${encodeURIComponent(selected.id)}`)}
-          onOpenItem={(item) =>
-            router.push(item.source_id
-              ? `/dashboard/sources?project=${encodeURIComponent(selected?.id ?? '')}&saved=${encodeURIComponent(item.source_id)}`
-              : `/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`)
-          }
+          onOpenItem={(item) => selected && router.push(projectItemPath(selected.id, item))}
         />
       )}
-      {create && (
-        <>
-          <NewProjectDialog onClose={() => setCreate(false)} onCreate={(name) => void add(name)} />
-          {error && <p role='alert'>{error}</p>}
-        </>
-      )}
+      {create && <NewProjectDialog onClose={() => { setCreate(false); setCreateError(''); }} onCreate={add} error={createError} />}
     </>
   );
 }
