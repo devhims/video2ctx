@@ -11,6 +11,8 @@
  */
 
 import { CraftDemo } from './craft-demo';
+import { CraftAgentRun } from './craft-agent-run';
+import { CraftCloseAction } from './craft-close-action';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
 import { CraftPricing } from './craft-pricing';
@@ -82,6 +84,53 @@ const TRUST = [
   },
 ];
 
+const LICENSE_HREF = 'https://github.com/devhims/video2ctx/blob/main/LICENSE';
+
+/* Grouped by who is looking: a user, a developer, a contributor, or legal. */
+const COLOPHON = [
+  {
+    title: 'Product',
+    links: [
+      { label: 'Workspace', href: '/dashboard' },
+      { label: 'Pricing', href: '#pricing' },
+      { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
+    ],
+  },
+  {
+    title: 'Developers',
+    links: [
+      { label: 'Docs', href: 'https://docs.video2ctx.dev' },
+      {
+        label: 'API reference',
+        href: 'https://docs.video2ctx.dev/api-reference/introduction',
+      },
+      { label: 'CLI + Skill', href: '#agent-setup' },
+    ],
+  },
+  {
+    title: 'Open source',
+    links: [
+      { label: 'GitHub', href: 'https://github.com/devhims/video2ctx' },
+      {
+        label: '@video2ctx/cli',
+        href: 'https://www.npmjs.com/package/@video2ctx/cli',
+      },
+      {
+        label: 'all-things-youtube',
+        href: 'https://www.npmjs.com/package/all-things-youtube',
+      },
+    ],
+  },
+  {
+    title: 'Legal',
+    links: [
+      { label: 'Privacy', href: '/privacy' },
+      { label: 'Terms', href: '/terms' },
+      { label: 'License', href: LICENSE_HREF },
+    ],
+  },
+];
+
 export function CraftDirection() {
   const scenePoster = '/scene/fold-scene-symbols-poster.webp';
   const staticScene = '/scene/voxel-horizon-symbols.webp';
@@ -117,8 +166,11 @@ export function CraftDirection() {
           </picture>
           <Flashlight />
         </div>
-        <a className='craft-build-cta' href='https://docs.video2ctx.dev/'>
-          <span>Get Started</span>
+        {/* Announces the agent by scrolling to its section rather than
+            linking straight to the dashboard, which is behind sign-in. */}
+        <a className='craft-build-cta' href='#agent'>
+          <span className='craft-build-cta-new'>NEW</span>{' '}
+          <span>Video Agent</span>
           <span className='craft-build-cta-icon' aria-hidden='true'>
             <ArrowRight size={12} weight='bold' />
           </span>
@@ -174,6 +226,32 @@ export function CraftDirection() {
               </li>
             ))}
           </ul>
+        </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <section
+          id='agent'
+          className='craft-band craft-agent'
+          aria-labelledby='craft-agent-title'
+        >
+          <div className='craft-band-head'>
+            <h2 id='craft-agent-title'>
+              Ask a question.
+              <br />
+              Video agent watches the video for you.
+            </h2>
+            <p>
+              Video agent reads transcripts, frames, and comments across up to
+              eight videos, then answers with sources.
+            </p>
+          </div>
+          <CraftAgentRun />
+          <div className='craft-agent-actions'>
+            <a className='craft-primary' href='/dashboard/sessions'>
+              Try Video Agent
+            </a>
+          </div>
         </section>
       </div>
 
@@ -246,43 +324,59 @@ export function CraftDirection() {
 
       <div className='craft-reveal'>
         <section className='craft-close' aria-labelledby='craft-close-title'>
-          <h2 id='craft-close-title'>Built to be cited, not scraped.</h2>
+          <h2 id='craft-close-title'>Liked the preview? Save the full results.</h2>
           <p>
-            Every segment keeps the timestamp it came from, so an agent can
-            point at the source instead of paraphrasing it.
+            Full transcripts and comments, saved to your projects.
+            <br />
+            Start with 1,000 free credits.
           </p>
           <div className='craft-actions'>
-            <a className='craft-primary' href='/dashboard'>
-              Open the workspace
-            </a>
-            <a className='craft-secondary' href='/dashboard/developer'>
-              Get an API key
-            </a>
+            <CraftCloseAction />
           </div>
         </section>
       </div>
 
-      {/* Ft4 — dense typographic colophon. */}
+      {/* Ft4 — typographic colophon, grouped so each link has a place. */}
       <footer className='craft-colophon'>
-        <p>
-          <b>video2ctx</b> - turn videos into context for LLMs and agents.
-          YouTube first, not YouTube only. Apache 2.0.
-        </p>
-        <p>
-          <a href='/privacy'>Privacy</a> · <a href='/terms'>Terms</a> ·{' '}
-          <a href='#pricing'>Pricing</a> ·{' '}
-          <a href='https://docs.video2ctx.dev/api-reference/introduction'>
-            API reference
-          </a>{' '}
-          ·{' '}
-          <a href='https://www.npmjs.com/package/@video2ctx/cli'>
-            @video2ctx/cli
-          </a>{' '}
-          ·{' '}
-          <a href='https://www.npmjs.com/package/all-things-youtube'>
-            all-things-youtube
-          </a>
-        </p>
+        <div className='craft-colophon-inner'>
+          <p className='craft-colophon-lede'>
+            <b>video2ctx</b>
+            Turn videos into context for LLMs and agents. YouTube first, not
+            YouTube only.
+          </p>
+          <nav aria-label='Footer'>
+            {COLOPHON.map((group) => (
+              <div key={group.title}>
+                <h2>{group.title}</h2>
+                <ul>
+                  {group.links.map((link) => {
+                    const external = link.href.startsWith('http');
+                    return (
+                      <li key={link.label}>
+                        <a
+                          href={link.href}
+                          target={external ? '_blank' : undefined}
+                          rel={external ? 'noreferrer' : undefined}
+                        >
+                          {link.label}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </nav>
+        </div>
+        <div className='craft-colophon-base'>
+          <p>© 2026 video2ctx</p>
+          <p>
+            Open source under{' '}
+            <a href={LICENSE_HREF} target='_blank' rel='noreferrer'>
+              Apache 2.0
+            </a>
+          </p>
+        </div>
       </footer>
     </main>
   );
