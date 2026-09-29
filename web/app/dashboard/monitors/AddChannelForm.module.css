@@ -14,3 +14,6 @@
 .panel button:disabled { opacity: .5; cursor: default; }
 .panel :is(input, button, select):focus-visible { outline: 2px solid var(--color-dashboard-focus); outline-offset: 3px; }
 @media (max-width: 600px) { .panel { padding: 16px; } .searchRow { flex-direction: column; } }
+
+.upgradeLink { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.upgradeLink:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 2px; }

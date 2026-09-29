@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useErrorToast } from '../../../lib/use-error-toast';
 import { platformRequest, isAbortError, PlatformApiError } from '../../../lib/platform-request';
 import { findMonitorChannels, type MonitorChannel } from '../../../lib/monitor-channels';
@@ -13,7 +13,6 @@ import styles from './AddChannelForm.module.css';
 export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel }: {
   monitors: Monitor[]; monitorsReady?: boolean; onAdd: (channel: MonitorChannel, interval: number) => Promise<void>; onCancel: () => void;
 }) {
-  const router = useRouter();
   const [input, setInput] = useState('');
   const [channels, setChannels] = useState<MonitorChannel[]>([]);
   const [selected, setSelected] = useState<MonitorChannel | null>(null);
@@ -45,7 +44,7 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
     catch (cause) {
       showError(cause instanceof Error ? cause.message : 'Could not create monitor.',
         cause instanceof PlatformApiError && cause.code === 'PLAN_LIMIT_REACHED'
-          ? { duration: Infinity, action: { label: 'Upgrade plan', onClick: () => router.push('/dashboard/settings#billing-settings-heading') } }
+          ? { duration: Infinity, description: <Link className={styles.upgradeLink} href='/dashboard/settings#billing-settings-heading'>Upgrade plan to create more monitors</Link> }
           : undefined);
     }
     finally { savingRef.current = false; setSaving(false); }

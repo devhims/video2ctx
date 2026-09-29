@@ -255,7 +255,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     if (inputMode === 'name') {
       await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Try adding again');
-      await expect(page.getByRole('button', { name: 'Upgrade plan' })).toHaveCount(0);
+      await expect(page.getByRole('link', { name: 'Upgrade plan to create more monitors' })).toHaveCount(0);
       await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     }
     await expect(form).toBeVisible();
@@ -335,7 +335,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
     const error = page.locator('[data-sonner-toast][data-type=error]');
     await expect(error).toHaveCount(1);
     await expect(error).toContainText('Your plan allows up to 1 monitors.');
-    await expect(error.getByRole('button', { name: 'Upgrade plan' })).toBeVisible();
+    await expect(error.getByRole('link', { name: 'Upgrade plan to create more monitors' })).toBeVisible();
     await expect(form.locator('.alert')).toHaveCount(0);
     await expect(form.getByRole('radio')).toBeChecked();
     await expect(form.getByRole('combobox')).toHaveValue('360');
@@ -348,7 +348,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
     await expect(error).toHaveCount(0);
     await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     await expect(error).toHaveCount(1);
-    await error.getByRole('button', { name: 'Upgrade plan' }).click();
+    await error.getByRole('link', { name: 'Upgrade plan to create more monitors' }).click();
     await expect(page).toHaveURL(/\/dashboard\/settings#billing-settings-heading$/);
   } finally { await scenario.clear(); }
 });
