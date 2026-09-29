@@ -6,7 +6,7 @@ import { dataOperationCost } from '../../../../lib/metering';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 
-import { TranscriptToolStageError } from './transcript-tool-errors';
+import { captionsUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
 
 export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -46,11 +46,20 @@ export function executeGetVideoTranscript(
     operation: 'transcript',
     execute: async () => {
       context.signal.throwIfAborted();
+      const selection = context.transcriptSelection;
+      if (selection?.unavailable.has(parsed.videoId)) {
+        throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', 'No captions were available for this video in this run. Select another search result.');
+      }
+      selection?.attempted.add(parsed.videoId);
       let response;
       try {
         response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })));
       } catch (error) {
         if (context.signal.aborted) throw error;
+        if (captionsUnavailable(error)) {
+          selection?.unavailable.add(parsed.videoId);
+          throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', error);
+        }
         throw new TranscriptToolStageError('TRANSCRIPT_FETCH_FAILED', error);
       }
       context.signal.throwIfAborted();

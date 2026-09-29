@@ -61,6 +61,8 @@ For a supplied channel URL or handle, classification preserves the channel ident
 
 This is a typical successful flow, not a rigid script. Research still has a flexible model-driven tool loop. One search_youtube invocation is enforced per research run, including a failed invocation and across recovery. After use, the tool is removed from the next model step; an execution guard also blocks duplicate searches in the same batch. Provider-internal retries have separate behavior. The trends composite is no longer exposed to the agent. Metadata, comments, channel, and playlist tools may also be selected. The application bounds distinct transcript-analysis semantic keys, currently video ID plus focus, by the classified researchVideoCount. Repeating identical input reuses evidence; changing focus can consume another slot for the same video.
 
+During topic research, `research_video_transcripts` replaces a video when retrieval returns `CAPTIONS_UNAVAILABLE`. It selects an unused video from the existing search evidence, prefers positive `hasCaptions` badges, and reserves replacements before concurrent retrievals can select the same video. A false or missing badge remains eligible because it is not proof that captions are absent. Each pipeline call tries at most eight replacements within the research deadline and existing analysis budget. Captionless videos are remembered in the active research context, including across requested languages. No new search is issued. Other provider errors retain their existing handling. Explicit video comparisons and single-video inspection keep the requested subjects. Provider-level retry verification remains unchanged; replacement begins when the provider reports unavailable captions.
+
 ## Inspection sequence
 
 ```mermaid

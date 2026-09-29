@@ -1,5 +1,6 @@
 type TranscriptToolErrorCode =
   | 'TRANSCRIPT_FETCH_FAILED'
+  | 'CAPTIONS_UNAVAILABLE'
   | 'TRANSCRIPT_ANALYSIS_TIMEOUT'
   | 'TRANSCRIPT_ANALYSIS_INVALID_REFERENCE'
   | 'TRANSCRIPT_ANALYSIS_UNGROUNDED'
@@ -18,4 +19,9 @@ export class TranscriptToolStageError extends Error {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function captionsUnavailable(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && error.code === 'CAPTIONS_UNAVAILABLE';
 }

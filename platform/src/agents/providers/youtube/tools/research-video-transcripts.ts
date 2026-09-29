@@ -4,6 +4,7 @@ import type { AgentToolContext } from '../tool-context';
 import { evidencePacketForModel } from '../../../runtime/model-evidence';
 import { analyzeVideoTranscriptsInputSchema, executeAnalyzeVideoTranscript } from './analyze-video-transcripts';
 import { executeGetVideoTranscript, getVideoTranscriptInputSchema } from './get-video-transcript';
+import { captionsUnavailable } from './transcript-tool-errors';
 import { assetVersionSchema } from './stored-analysis';
 
 export const researchVideoTranscriptsInputSchema = z.object({
@@ -18,7 +19,7 @@ export const researchVideoTranscriptsInputSchema = z.object({
 
 export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
   return tool({
-    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Completed evidence is retained even if another video fails or the research deadline expires.',
+    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Videos with confirmed unavailable captions are immediately replaced with unused search candidates, preferring a captions badge, unless the request names specific comparison videos. At most eight replacement candidates are attempted. Completed evidence is retained even if another video fails or the research deadline expires.',
     inputSchema: researchVideoTranscriptsInputSchema,
     execute: async ({ sources, focus }, { toolCallId }) => {
       context.signal.throwIfAborted();
@@ -26,16 +27,51 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
         throw new Error('Transcript research is unavailable in single-video inspection.');
       // Do not wrap the whole pipeline in executeEvidenceTool: its children
       // acquire their own concurrency slots and persist their results separately.
+      const budget = context.transcriptPolicy.budget;
+      const selection = context.transcriptSelection;
+      // Reserve selected videos before concurrent retrievals can choose backups.
+      for (const source of sources) {
+        if ('videoId' in source) selection?.attempted.add(source.videoId);
+        else {
+          const asset = context.session?.brief().assets.find(asset => asset.version === source.assetVersion);
+          if (asset) selection?.attempted.add(asset.videoId);
+        }
+      }
+      const candidates = replacementCandidates(context);
+      let replacements = 0;
+      const skipped: Array<{ videoId: string; code: 'CAPTIONS_UNAVAILABLE'; replacementVideoId?: string }> = [];
       const outcomes = await Promise.allSettled(sources.map(async (source, index) => {
-        context.signal.throwIfAborted();
-        const assetVersion = 'assetVersion' in source ? source.assetVersion
-          : (await executeGetVideoTranscript(source, context, `${toolCallId}:${index}:retrieve`)).assetVersions?.[0];
-        context.signal.throwIfAborted();
-        if (!assetVersion) throw new Error('Analysis requires a complete nonempty saved transcript.');
-        return executeAnalyzeVideoTranscript({ assetVersion, focus }, context, `${toolCallId}:${index}:analyze`);
+        let current = source;
+        let attempt = 0;
+        while (true) {
+          context.signal.throwIfAborted();
+          let assetVersion: string | undefined;
+          const childId = `${toolCallId}:${index}${attempt ? `:replacement:${attempt}` : ''}`;
+          try {
+            assetVersion = 'assetVersion' in current ? current.assetVersion
+              : (await executeGetVideoTranscript(current, context, `${childId}:retrieve`)).assetVersions?.[0];
+          } catch (error) {
+            context.signal.throwIfAborted();
+            if (!captionsUnavailable(error) || !('videoId' in current)) throw error;
+            const next = selection?.allowReplacement && replacements < 8
+              && !budget?.isExhausted()
+              ? candidates.find(id => !selection.attempted.has(id)) : undefined;
+            skipped.push({ videoId: current.videoId, code: 'CAPTIONS_UNAVAILABLE', ...(next ? { replacementVideoId: next } : {}) });
+            if (!next) throw error;
+            selection!.attempted.add(next);
+            replacements++;
+            attempt++;
+            current = { videoId: next, ...('language' in current ? { language: current.language } : {}) };
+            continue;
+          }
+          context.signal.throwIfAborted();
+          if (!assetVersion) throw new Error('Analysis requires a complete nonempty saved transcript.');
+          return executeAnalyzeVideoTranscript({ assetVersion, focus }, context, `${childId}:analyze`);
+        }
       }));
       context.signal.throwIfAborted();
       return {
+        skipped,
         evidence: outcomes.flatMap(outcome => outcome.status === 'fulfilled' ? [evidencePacketForModel(outcome.value)] : []),
         failures: outcomes.flatMap((outcome, index) => outcome.status === 'rejected'
           ? [{ source: sources[index], error: outcome.reason instanceof Error ? outcome.reason.message : 'Transcript research failed.' }]
@@ -43,4 +79,25 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
       };
     },
   });
+}
+
+// Search badges are hints, not a negative caption-availability test. Unknown or
+// false flags remain eligible after candidates with a positive badge.
+function replacementCandidates(context: AgentToolContext): string[] {
+  const ranked = new Map<string, boolean>();
+  for (const packet of context.getEvidence?.() ?? []) {
+    if (packet.kind !== 'youtube_search') continue;
+    const allowed = new Set(packet.sources.flatMap(source => source.videoId ? [source.videoId] : []));
+    for (const artifact of packet.artifacts) {
+      if (artifact.type !== 'youtube_search_candidates') continue;
+      const parsed = z.array(z.object({ type: z.string(), id: z.string(), hasCaptions: z.boolean().optional() }))
+        .safeParse(artifact.data.candidates);
+      if (!parsed.success) continue;
+      for (const candidate of parsed.data) {
+        if (candidate.type !== 'video' || !allowed.has(candidate.id) || !/^[A-Za-z0-9_-]{11}$/.test(candidate.id)) continue;
+        ranked.set(candidate.id, ranked.get(candidate.id) === true || candidate.hasCaptions === true);
+      }
+    }
+  }
+  return [...ranked].sort((a, b) => Number(b[1]) - Number(a[1])).map(([id]) => id);
 }

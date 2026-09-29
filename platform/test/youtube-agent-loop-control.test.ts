@@ -20,6 +20,76 @@ import type { EvidencePacket } from '../src/agents/contracts';
 import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
 
 describe('YouTube AgentCore loop control', () => {
+  it.each([
+    { code: 'CAPTIONS_UNAVAILABLE', comparison: false, expected: ['video000003', 'video000004'] },
+    { code: 'UPSTREAM_ERROR', comparison: false, expected: [] },
+    { code: 'CAPTIONS_UNAVAILABLE', comparison: true, expected: [] },
+  ])('replaces captionless research sources only when appropriate ($code, comparison=$comparison)', async ({ code, comparison, expected }) => {
+    const context = await transcriptResearchContext();
+    const fetch = context.provider.transcript;
+    context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (['video000001', 'video000002'].includes(args[0])) throw new ApiError(404, code, 'Captions unavailable');
+      return fetch(...args);
+    });
+    const discovery: EvidencePacket = {
+      packetId: 'search-candidates', kind: 'youtube_search',
+      sources: [1, 2, 5, 3, 4].map(n => ({ id: `candidate-${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+      excerpts: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+        candidates: [1, 2, 5, 3, 4].map(n => ({ type: 'video', id: `video00000${n}`, hasCaptions: n === 3 || n === 4 })),
+      } }], warnings: [], usage: [],
+    };
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
+        input: JSON.stringify({ sources: [{ videoId: 'video000001' }, { videoId: 'video000002' }], focus: 'Practical tasks' }) });
+      if (expected.length) {
+        expect(JSON.stringify(call.prompt)).toContain('CAPTIONS_UNAVAILABLE');
+        expect(JSON.stringify(call.prompt)).toContain('video000003');
+      }
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: expected.length ? [{ text: 'Supported finding.', evidenceIds: ['transcript:video000003:window:0:0'] }] : [],
+        intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+      }) });
+    } });
+    const run = runResearchAgentWithModel({ model, message: 'Research tasks', context,
+      recoveredEvidence: [discovery], decision: { route: 'topic_research', researchVideoCount: 2,
+        ...(comparison ? { comparisonVideoIds: ['video000001', 'video000002'] } : {}) } });
+    if (expected.length) await run;
+    else await expect(run).rejects.toThrow('Evidence collection failed');
+    expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', 'video000002', ...expected]);
+    if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
+    expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(expected.length);
+    if (expected.length) expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: 'research_coverage', data: { targetVideos: 2, reviewedVideos: 2 } })]),
+    }));
+  });
+
+  it.each([3, 12])('does not refetch captionless videos and bounds replacement attempts (%s candidates)', async count => {
+    const context = await transcriptResearchContext();
+    context.provider.transcript = vi.fn(async () => { throw new ApiError(404, 'CAPTIONS_UNAVAILABLE', 'No caption tracks'); });
+    const candidateIds = Array.from({ length: count }, (_, index) => `video${String(index + 1).padStart(6, '0')}`);
+    const discovery: EvidencePacket = {
+      packetId: 'search-candidates', kind: 'youtube_search',
+      sources: candidateIds.map(id => ({ id: `candidate-${id}`, provider: 'youtube', kind: 'search', videoId: id })),
+      excerpts: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+        candidates: candidateIds.map(id => ({ type: 'video', id, hasCaptions: false })),
+      } }], warnings: [], usage: [],
+    };
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
+        input: JSON.stringify({ sources: [{ videoId: 'video000001' }], focus: 'Practical tasks' }) });
+      if (step === 2) return modelResult({ toolCallId: 'retry', toolName: 'get_video_transcript',
+        input: JSON.stringify({ videoId: 'video000001', language: 'fr' }) });
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [], intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [],
+      }) });
+    } });
+    await expect(runResearchAgentWithModel({ model, message: 'Research tasks', context,
+      recoveredEvidence: [discovery], decision: { route: 'topic_research', researchVideoCount: 1 } })).rejects.toThrow('Evidence collection failed');
+    expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(candidateIds.slice(0, 9));
+  });
+
   it.each(['error', 'partial', 'empty'] as const)('pipelines ready transcripts without waiting for slow or unusable retrievals (%s)', async failure => {
     const context = await transcriptResearchContext();
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
