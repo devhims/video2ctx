@@ -8,7 +8,7 @@ const LINKS = [
   { label: 'Docs', href: 'https://docs.video2ctx.dev' },
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
-  { label: 'CLI + Skill', href: '#agent-setup', isNew: true },
+  { label: 'CLI + Skill', href: '#agent-setup' },
 ];
 
 export function CraftNav() {
@@ -52,7 +52,6 @@ export function CraftNav() {
                 onClick={() => setOpen(false)}
               >
                 {link.label}
-                {link.isNew ? <span className='craft-nav-new'>NEW</span> : null}
               </a>
             );
           })}

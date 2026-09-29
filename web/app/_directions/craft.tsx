@@ -165,8 +165,11 @@ export function CraftDirection() {
           </picture>
           <Flashlight />
         </div>
-        <a className='craft-build-cta' href='https://docs.video2ctx.dev/'>
-          <span>Get Started</span>
+        {/* Announces the agent by scrolling to its section rather than
+            linking straight to the dashboard, which is behind sign-in. */}
+        <a className='craft-build-cta' href='#agent'>
+          <span className='craft-build-cta-new'>NEW</span>{' '}
+          <span>Video Agent</span>
           <span className='craft-build-cta-icon' aria-hidden='true'>
             <ArrowRight size={12} weight='bold' />
           </span>

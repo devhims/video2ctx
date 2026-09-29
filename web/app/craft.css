@@ -121,7 +121,7 @@ html:has(.craft) body {
   transition: color var(--control) var(--out);
 }
 
-.craft-nav-new {
+.craft-build-cta-new {
   padding: 0.1rem 0.28rem;
   border-radius: 0.2rem;
   background: var(--accent);
@@ -130,7 +130,6 @@ html:has(.craft) body {
   font-weight: 800;
   line-height: 1.15;
   letter-spacing: 0.025em;
-  transform: translateY(-0.26rem);
 }
 
 .craft-nav-actions {
@@ -2671,10 +2670,6 @@ html:has(.craft) body {
     align-items: center;
     color: var(--ink-soft);
     font-size: 0.82rem;
-  }
-
-  .craft-nav-new {
-    transform: translateY(-0.2rem);
   }
 
   .craft-nav-menu {
