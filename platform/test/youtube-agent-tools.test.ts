@@ -27,6 +27,10 @@ async function retrieveAndAnalyzeTranscript(input: Parameters<typeof executeGetV
 describe('YouTube agent evidence tools', () => {
   it('maps one search tool call to one provider request and bounds candidates', async () => {
     const videos = Array.from({ length: 15 }, (_, index) => video(`video0000${String(index).padStart(2, '0')}`.slice(-11), index));
+    videos[0]!.isLive = true;
+    videos[1]!.isLive = false;
+    // Older cached provider results may omit the flag.
+    Reflect.deleteProperty(videos[2]!, 'isLive');
     const search = vi.fn(async (): Promise<{ value: SearchResponse; cacheStatus: 'miss' }> => ({
       cacheStatus: 'miss',
       value: {
@@ -49,6 +53,14 @@ describe('YouTube agent evidence tools', () => {
 
     expect(search).toHaveBeenCalledTimes(1);
     expect(search).toHaveBeenCalledWith('agent UI design skills', expect.objectContaining({ type: 'video', captionsOnly: true }));
+    const projected = evidencePacketForModel(packet);
+    const candidates = packet.artifacts.find(a => a.type === 'youtube_search_candidates')!.data.candidates as Array<Record<string, unknown>>;
+    expect(candidates[0]!.isLive).toBe(true);
+    expect(candidates[1]!.isLive).toBe(false);
+    expect(candidates[2]!.isLive).toBeUndefined();
+    expect(projected.excerpts![0]!.text).toContain('Live now: yes');
+    expect(projected.excerpts![1]!.text).toContain('Live now: no');
+    expect(projected.excerpts![2]!.text).not.toContain('Live now:');
     expect(packet.sources).toHaveLength(12);
     expect(packet.excerpts).toHaveLength(12);
     expect(packet.continuation).toBe('next-page');

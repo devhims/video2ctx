@@ -123,6 +123,7 @@ function summarizeResult(result: SearchResult): string {
     return bounded([
       result.title,
       `Channel: ${result.channel.name}`,
+      result.isLive === undefined ? undefined : `Live now: ${result.isLive ? 'yes' : 'no'}`,
       result.description,
       result.viewCountText ? `Views: ${result.viewCountText}` : undefined,
       result.publishedTimeText ? `Published: ${result.publishedTimeText}` : undefined,
@@ -158,6 +159,7 @@ function candidateArtifact(result: SearchResult): Record<string, unknown> {
       publishedTimeText: result.publishedTimeText,
       durationSeconds: result.durationSeconds,
       hasCaptions: result.hasCaptions,
+      isLive: result.isLive,
     } : {}),
   };
 }

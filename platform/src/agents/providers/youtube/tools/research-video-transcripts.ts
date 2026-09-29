@@ -19,7 +19,7 @@ export const researchVideoTranscriptsInputSchema = z.object({
 
 export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
   return tool({
-    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Videos with confirmed unavailable captions are immediately replaced with unused search candidates, preferring a captions badge, unless the request names specific comparison videos. At most eight replacement candidates are attempted. Completed evidence is retained even if another video fails or the research deadline expires.',
+    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Videos with confirmed unavailable captions are immediately replaced with unused search candidates, preferring completed videos, then unknown live status, then active streams, with captions badges breaking ties, unless the request names specific comparison videos. At most eight replacement candidates are attempted. Completed evidence is retained even if another video fails or the research deadline expires.',
     inputSchema: researchVideoTranscriptsInputSchema,
     execute: async ({ sources, focus }, { toolCallId }) => {
       context.signal.throwIfAborted();
@@ -81,23 +81,29 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
   });
 }
 
-// Search badges are hints, not a negative caption-availability test. Unknown or
-// false flags remain eligible after candidates with a positive badge.
+// Prefer recordings over active streams, regardless of title or captions badge.
+// Missing live flags remain eligible for older saved search evidence.
 function replacementCandidates(context: AgentToolContext): string[] {
-  const ranked = new Map<string, boolean>();
+  const ranked = new Map<string, { isLive?: boolean; hasCaptions: boolean }>();
   for (const packet of context.getEvidence?.() ?? []) {
     if (packet.kind !== 'youtube_search') continue;
     const allowed = new Set(packet.sources.flatMap(source => source.videoId ? [source.videoId] : []));
     for (const artifact of packet.artifacts) {
       if (artifact.type !== 'youtube_search_candidates') continue;
-      const parsed = z.array(z.object({ type: z.string(), id: z.string(), hasCaptions: z.boolean().optional() }))
+      const parsed = z.array(z.object({ type: z.string(), id: z.string(), hasCaptions: z.boolean().optional(), isLive: z.boolean().optional() }))
         .safeParse(artifact.data.candidates);
       if (!parsed.success) continue;
       for (const candidate of parsed.data) {
         if (candidate.type !== 'video' || !allowed.has(candidate.id) || !/^[A-Za-z0-9_-]{11}$/.test(candidate.id)) continue;
-        ranked.set(candidate.id, ranked.get(candidate.id) === true || candidate.hasCaptions === true);
+        const previous = ranked.get(candidate.id);
+        ranked.set(candidate.id, {
+          isLive: candidate.isLive ?? previous?.isLive,
+          hasCaptions: previous?.hasCaptions === true || candidate.hasCaptions === true,
+        });
       }
     }
   }
-  return [...ranked].sort((a, b) => Number(b[1]) - Number(a[1])).map(([id]) => id);
+  const liveRank = (isLive: boolean | undefined) => isLive === false ? 0 : isLive === undefined ? 1 : 2;
+  return [...ranked].sort((a, b) => liveRank(a[1].isLive) - liveRank(b[1].isLive)
+    || Number(b[1].hasCaptions) - Number(a[1].hasCaptions)).map(([id]) => id);
 }
