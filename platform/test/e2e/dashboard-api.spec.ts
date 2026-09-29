@@ -252,10 +252,10 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio', { name: /Science channel/ })).toBeChecked();
     await form.getByRole('combobox', { name: 'Check channel every' }).selectOption('360');
-    await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     if (inputMode === 'name') {
       await expect(form.getByRole('alert')).toContainText('Try adding again');
-      await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+      await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     }
     await expect(form).toBeVisible();
     await expect(form.getByRole('textbox')).toHaveValue('');
@@ -269,7 +269,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill('@science');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByText(/Already monitored/)).toBeVisible();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await form.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(form).toBeVisible();
     await expect(form.getByRole('textbox')).toHaveValue('');
@@ -291,7 +291,7 @@ test('Monitors rejects video URLs and shows an empty channel search without crea
     await input.fill(`https://youtube.com/watch?v=${videoId}`);
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('alert')).toContainText('Enter a channel URL or @handle');
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await input.fill('Missing channel');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('status')).toContainText('No channels found');
@@ -326,11 +326,11 @@ test('Monitors header and channel lookup remain interactive while the list is pe
     await form.getByRole('textbox').fill('@science');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio')).toBeChecked();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toBeVisible();
     await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
     await scenario.release();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeEnabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeEnabled();
     await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
     expect((await scenario.reads())['/v1/monitors']).toBe(1);
   } finally { await scenario.clear(); }

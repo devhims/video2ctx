@@ -63,7 +63,7 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
       {MONITOR_INTERVAL_OPTIONS.map(option => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
     </select></label></div>}
     <div className={styles.actions}>
-      <button type='button' className={pageStyles.primaryAction} disabled={!monitorsReady || !selected || alreadyMonitored(selected.id) || saving} onClick={() => void add()}>{saving ? 'Adding…' : 'Add channel'}</button>
+      <button type='button' className={pageStyles.primaryAction} disabled={!monitorsReady || !selected || alreadyMonitored(selected.id) || saving} onClick={() => void add()}>{saving ? 'Creating…' : 'Create monitor'}</button>
       <button type='button' className={pageStyles.textAction} disabled={saving} onClick={onCancel}>Cancel</button>
     </div>
   </section>;
