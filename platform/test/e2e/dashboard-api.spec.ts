@@ -255,6 +255,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     if (inputMode === 'name') {
       await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Try adding again');
+      await expect(page.getByRole('button', { name: 'Upgrade plan' })).toHaveCount(0);
       await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     }
     await expect(form).toBeVisible();
@@ -322,7 +323,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
   await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'OpenAI', handle: '@OpenAI' } }));
   await page.route('**/api/platform/v1/monitors', route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 403, json: { error: { message: 'Your plan allows up to 1 monitors.' } } }) : route.continue());
+    ? route.fulfill({ status: 403, json: { error: { code: 'PLAN_LIMIT_REACHED', message: 'Your plan allows up to 1 monitors.' } } }) : route.continue());
   try {
     await page.goto('/dashboard/monitors');
     const form = page.getByRole('region', { name: 'Add channel' });
@@ -334,6 +335,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
     const error = page.locator('[data-sonner-toast][data-type=error]');
     await expect(error).toHaveCount(1);
     await expect(error).toContainText('Your plan allows up to 1 monitors.');
+    await expect(error.getByRole('button', { name: 'Upgrade plan' })).toBeVisible();
     await expect(form.locator('.alert')).toHaveCount(0);
     await expect(form.getByRole('radio')).toBeChecked();
     await expect(form.getByRole('combobox')).toHaveValue('360');
@@ -346,6 +348,8 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
     await expect(error).toHaveCount(0);
     await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     await expect(error).toHaveCount(1);
+    await error.getByRole('button', { name: 'Upgrade plan' }).click();
+    await expect(page).toHaveURL(/\/dashboard\/settings#billing-settings-heading$/);
   } finally { await scenario.clear(); }
 });
 

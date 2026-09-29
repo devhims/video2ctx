@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { useErrorToast } from '../../../lib/use-error-toast';
-import { platformRequest, isAbortError } from '../../../lib/platform-request';
+import { platformRequest, isAbortError, PlatformApiError } from '../../../lib/platform-request';
 import { findMonitorChannels, type MonitorChannel } from '../../../lib/monitor-channels';
 import type { Monitor } from '../research-types';
 import { MONITOR_INTERVAL_OPTIONS } from './MonitorsView';
@@ -12,6 +13,7 @@ import styles from './AddChannelForm.module.css';
 export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel }: {
   monitors: Monitor[]; monitorsReady?: boolean; onAdd: (channel: MonitorChannel, interval: number) => Promise<void>; onCancel: () => void;
 }) {
+  const router = useRouter();
   const [input, setInput] = useState('');
   const [channels, setChannels] = useState<MonitorChannel[]>([]);
   const [selected, setSelected] = useState<MonitorChannel | null>(null);
@@ -40,7 +42,12 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
     if (!monitorsReady || !selected || alreadyMonitored(selected.id) || savingRef.current) return;
     savingRef.current = true; setSaving(true); clearError();
     try { await onAdd(selected, interval); }
-    catch (cause) { showError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
+    catch (cause) {
+      showError(cause instanceof Error ? cause.message : 'Could not create monitor.',
+        cause instanceof PlatformApiError && cause.code === 'PLAN_LIMIT_REACHED'
+          ? { duration: Infinity, action: { label: 'Upgrade plan', onClick: () => router.push('/dashboard/settings#billing-settings-heading') } }
+          : undefined);
+    }
     finally { savingRef.current = false; setSaving(false); }
   };
   return <section className={styles.panel} aria-label='Add channel'>
