@@ -357,6 +357,12 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     refreshEvidence: options.decision.refreshEvidence,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
     getEvidence: () => [...evidence.values()],
+    transcriptSelection: {
+      allowReplacement: options.decision.route === 'topic_research' && !options.decision.comparisonVideoIds?.length,
+      attempted: new Set([...evidence.values()].filter(packet => packet.kind === 'youtube_transcript')
+        .flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : []))),
+      unavailable: new Set(),
+    },
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {
       await startFinalization();

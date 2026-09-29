@@ -24,6 +24,11 @@ export interface EvidenceToolExecution {
 
 export interface AgentToolContext {
   pinnedVideoId?: string;
+  transcriptSelection?: {
+    allowReplacement: boolean;
+    attempted: Set<string>;
+    unavailable: Set<string>;
+  };
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
