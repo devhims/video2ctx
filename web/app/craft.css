@@ -76,7 +76,7 @@ html:has(.craft) body {
 
 .craft-nav-inner {
   min-height: 3.25rem;
-  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs);
   border: 1px solid var(--rule);
   border-radius: calc(var(--radius-home-control) + var(--space-2xs));
   background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
