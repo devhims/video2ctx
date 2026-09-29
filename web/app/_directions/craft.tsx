@@ -12,6 +12,7 @@
 
 import { CraftDemo } from './craft-demo';
 import { CraftAgentRun } from './craft-agent-run';
+import { CraftCloseAction } from './craft-close-action';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
 import { CraftPricing } from './craft-pricing';
@@ -323,18 +324,14 @@ export function CraftDirection() {
 
       <div className='craft-reveal'>
         <section className='craft-close' aria-labelledby='craft-close-title'>
-          <h2 id='craft-close-title'>Built to be cited, not scraped.</h2>
+          <h2 id='craft-close-title'>Liked the preview? Save the full results.</h2>
           <p>
-            Every segment keeps the timestamp it came from, so an agent can
-            point at the source instead of paraphrasing it.
+            Full transcripts and comments, saved to your projects.
+            <br />
+            Start with 1,000 free credits.
           </p>
           <div className='craft-actions'>
-            <a className='craft-primary' href='/dashboard'>
-              Open the workspace
-            </a>
-            <a className='craft-secondary' href='/dashboard/developer'>
-              Get an API key
-            </a>
+            <CraftCloseAction />
           </div>
         </section>
       </div>

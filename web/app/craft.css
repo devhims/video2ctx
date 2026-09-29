@@ -1827,10 +1827,17 @@ html:has(.craft) body {
 
 /* ----------------------------------------------------------------- close */
 
+/* Same width as the bands above, so the hairlines line up down the page. */
 .craft-close {
-  width: min(100%, 46rem);
+  width: min(100%, 58rem);
   margin-inline: auto;
+  padding-bottom: clamp(var(--space-2xl), 8vh, 5rem);
   text-align: center;
+}
+
+.craft-close h2 {
+  max-width: 24ch;
+  margin-inline: auto;
 }
 
 .craft-close p {
