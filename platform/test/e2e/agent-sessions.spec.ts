@@ -134,11 +134,12 @@ test('failed runs show the error, and running history can retrieve the completed
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
 });
 
-test('non-admin and signed-out accounts have no menu and cannot open a session directly', async ({ page, context }) => {
+test('restricted accounts see Agent navigation but cannot open a session; signed-out accounts must log in', async ({ page, context }) => {
   for (const role of ['denied', 'signed-out']) {
     await login(context, role);
     await page.goto('/dashboard/developer');
-    await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
+    if (role === 'signed-out') await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
+    else await expect(page.getByRole('link', { name: 'Agent', exact: true })).toBeVisible();
     await page.goto(`/dashboard/sessions/${sessionId}`);
     if (role === 'signed-out') {
       await expect(page).toHaveURL(`/login?returnTo=${encodeURIComponent(`/dashboard/sessions/${sessionId}`)}`);
@@ -308,7 +309,7 @@ test('revoking access removes the remembered session list', async ({ page, conte
   await page.evaluate("window.dispatchEvent(new Event('focus'))");
   await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'Agent', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Agent', exact: true })).toBeVisible();
 });
 
 for (const newSession of [true, false]) {
