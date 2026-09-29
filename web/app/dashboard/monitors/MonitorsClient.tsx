@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { useErrorToast } from '../../../lib/use-error-toast';
 import { useRouter } from 'next/navigation';
 import { platformRequest as api } from '../../../lib/platform-request';
 import { useAccountResource } from '../DashboardDataProvider';
@@ -12,10 +13,19 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
   const router = useRouter();
   const resource = useAccountResource('monitors', [], undefined, promise);
   const { data: monitors, setData: setMonitors } = resource;
-  const [error, setError] = useState(''),
-    [notice, setNotice] = useState(''),
+  const [notice, setNotice] = useState(''),
     [savingId, setSavingId] = useState<string>();
   const [formVersion, setFormVersion] = useState(0);
+  const { show: showLoadError, clear: clearLoadError } = useErrorToast();
+  const { show: showActionError, clear: clearActionError } = useErrorToast();
+  useEffect(() => {
+    if (resource.error) showLoadError(resource.error, {
+      duration: Infinity,
+      action: { label: 'Retry monitors', onClick: () => { void resource.refresh(); } },
+    });
+    else clearLoadError();
+    return clearLoadError;
+  }, [resource.error, resource.refresh, showLoadError, clearLoadError]);
   const attempted = useRef(new Set<string>());
   useEffect(() => {
     const legacy = monitors.filter(
@@ -54,7 +64,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
     });
     setMonitors(current => [{ id: created.id, provider: 'youtube', kind: 'channel', target: channel.id,
       query_json: JSON.stringify(query), interval_minutes: created.intervalMinutes, next_check_at: created.nextCheckAt, enabled: 1 }, ...current]);
-    setFormVersion(version => version + 1); setError('');
+    setFormVersion(version => version + 1); clearActionError();
     setNotice(`${channel.name} will be checked every ${monitorIntervalLabel(created.intervalMinutes)}. The first check establishes the starting point for new upload alerts.`);
   };
   const remove = async (id: string) => {
@@ -63,12 +73,12 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
       setMonitors((items) => items.filter((m) => m.id !== id));
       setNotice('Monitor removed');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not remove monitor.');
+      showActionError(cause instanceof Error ? cause.message : 'Could not remove monitor.');
     }
   };
   const schedule = async (id: string, intervalMinutes: number) => {
     setSavingId(id);
-    setError('');
+    clearActionError();
     try {
       const next = await api<{ intervalMinutes: number; enabled: boolean; nextCheckAt?: number }>(
         `/v1/monitors/${id}`,
@@ -88,19 +98,13 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
       );
       setNotice(`This monitor will check for new videos every ${monitorIntervalLabel(next.intervalMinutes)}.`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not update the monitoring schedule.');
+      showActionError(cause instanceof Error ? cause.message : 'Could not update the monitoring schedule.');
     } finally {
       setSavingId(undefined);
     }
   };
   return (
     <>
-      {(error || resource.error) && (
-        <div role='alert' className='alert error'>
-          {error || resource.error}
-          {resource.error && <button onClick={() => void resource.refresh()}>Retry monitors</button>}
-        </div>
-      )}
       {notice && (
         <div role='status' className='alert success'>
           {notice}
@@ -111,7 +115,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
         ready={resource.ready}
         loading={resource.loading}
         savingId={savingId}
-        addChannelForm={<AddChannelForm key={formVersion} monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => { setFormVersion(version => version + 1); setNotice(''); setError(''); }} />}
+        addChannelForm={<AddChannelForm key={formVersion} monitors={monitors} monitorsReady={resource.ready} onAdd={addChannel} onCancel={() => { setFormVersion(version => version + 1); setNotice(''); clearActionError(); }} />}
         onOpenTarget={(target) => router.push(`/dashboard/sources?q=${encodeURIComponent(target)}`)}
         onSchedule={(id, n) => void schedule(id, n)}
         onRemove={(id) => void remove(id)}

@@ -254,7 +254,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('combobox', { name: 'Check channel every' }).selectOption('360');
     await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     if (inputMode === 'name') {
-      await expect(form.getByRole('alert')).toContainText('Try adding again');
+      await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Try adding again');
       await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     }
     await expect(form).toBeVisible();
@@ -290,7 +290,7 @@ test('Monitors rejects video URLs and shows an empty channel search without crea
     const input = form.getByRole('textbox', { name: 'Channel name, handle, or URL' });
     await input.fill(`https://youtube.com/watch?v=${videoId}`);
     await form.getByRole('button', { name: 'Search', exact: true }).click();
-    await expect(form.getByRole('alert')).toContainText('Enter a channel URL or @handle');
+    await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Enter a channel URL or @handle');
     await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await input.fill('Missing channel');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
@@ -315,6 +315,39 @@ for (const section of ['projects', 'monitors']) {
     await scenario.clear();
   });
 }
+
+for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan limits in a dismissible Sonner toast (${colorScheme})`, async ({ page }, testInfo) => {
+  await page.emulateMedia({ colorScheme });
+  if (colorScheme === 'dark') await page.setViewportSize({ width: 390, height: 844 });
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
+  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'OpenAI', handle: '@OpenAI' } }));
+  await page.route('**/api/platform/v1/monitors', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 403, json: { error: { message: 'Your plan allows up to 1 monitors.' } } }) : route.continue());
+  try {
+    await page.goto('/dashboard/monitors');
+    const form = page.getByRole('region', { name: 'Add channel' });
+    await form.getByRole('textbox').fill('@OpenAI');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('radio')).toBeChecked();
+    await form.getByRole('combobox').selectOption('360');
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
+    const error = page.locator('[data-sonner-toast][data-type=error]');
+    await expect(error).toHaveCount(1);
+    await expect(error).toContainText('Your plan allows up to 1 monitors.');
+    await expect(form.locator('.alert')).toHaveCount(0);
+    await expect(form.getByRole('radio')).toBeChecked();
+    await expect(form.getByRole('combobox')).toHaveValue('360');
+    await expect(error).toHaveAttribute('data-mounted', 'true');
+    await expect(error).toBeVisible();
+    await expect(error).toBeInViewport();
+    await expect(error).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: testInfo.outputPath(`monitor-error-${colorScheme}.png`), fullPage: true, animations: 'disabled' });
+    await error.getByRole('button', { name: 'Close toast' }).click();
+    await expect(error).toHaveCount(0);
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
+    await expect(error).toHaveCount(1);
+  } finally { await scenario.clear(); }
+});
 
 test('Monitors header and channel lookup remain interactive while the list is pending', async ({ page }) => {
   const scenario = await accountScenario(page, { delays: ['/v1/monitors'] });
@@ -359,13 +392,13 @@ test('Monitors keeps its header after a load error and can retry the list', asyn
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { status: 503, body: { error: { message: 'Monitors unavailable' } } } } });
   try {
     await page.goto('/dashboard/monitors');
-    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
     await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
     await page.route('**/api/platform/v1/monitors', route => route.fulfill({ json: { monitors: [] } }));
     await page.getByRole('button', { name: 'Retry monitors' }).click();
     await expect(page.getByText('No monitors yet', { exact: true })).toBeVisible();
-    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
   } finally { await scenario.clear(); }
 });
 

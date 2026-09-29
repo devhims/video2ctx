@@ -4,6 +4,7 @@ import { GeistMono } from 'geist/font/mono';
 import { Analytics } from '@vercel/analytics/next';
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '../lib/site';
 import './globals.css';
+import { Toaster } from '../components/ui/sonner';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -25,6 +26,7 @@ export default function RootLayout({
           after the server-rendered HTML has been sent. */}
       <body className='font-sans antialiased' suppressHydrationWarning>
         {children}
+        <Toaster />
         <Analytics />
       </body>
     </html>

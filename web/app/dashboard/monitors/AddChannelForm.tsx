@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useErrorToast } from '../../../lib/use-error-toast';
 import { platformRequest, isAbortError } from '../../../lib/platform-request';
 import { findMonitorChannels, type MonitorChannel } from '../../../lib/monitor-channels';
 import type { Monitor } from '../research-types';
@@ -16,7 +17,7 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
   const [selected, setSelected] = useState<MonitorChannel | null>(null);
   const [interval, setInterval] = useState(1440);
   const [searched, setSearched] = useState(false), [searching, setSearching] = useState(false), [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const { show: showError, clear: clearError } = useErrorToast();
   const controller = useRef<AbortController | null>(null);
   const savingRef = useRef(false);
   useEffect(() => () => controller.current?.abort(), []);
@@ -26,20 +27,20 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
     if (!input.trim() || savingRef.current) return;
     controller.current?.abort();
     const next = new AbortController(); controller.current = next;
-    setSearching(true); setError(''); setSelected(null); setChannels([]); setSearched(false);
+    setSearching(true); clearError(); setSelected(null); setChannels([]); setSearched(false);
     try {
       const found = await findMonitorChannels(input, platformRequest, next.signal);
       if (next.signal.aborted) return;
       setChannels(found); setSearched(true);
       if (found.length === 1) setSelected(found[0]);
-    } catch (cause) { if (!isAbortError(cause) && !next.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not find channels.'); }
+    } catch (cause) { if (!isAbortError(cause) && !next.signal.aborted) showError(cause instanceof Error ? cause.message : 'Could not find channels.'); }
     finally { if (!next.signal.aborted) setSearching(false); }
   };
   const add = async () => {
     if (!monitorsReady || !selected || alreadyMonitored(selected.id) || savingRef.current) return;
-    savingRef.current = true; setSaving(true); setError('');
+    savingRef.current = true; setSaving(true); clearError();
     try { await onAdd(selected, interval); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add channel.'); }
+    catch (cause) { showError(cause instanceof Error ? cause.message : 'Could not create monitor.'); }
     finally { savingRef.current = false; setSaving(false); }
   };
   return <section className={styles.panel} aria-label='Add channel'>
@@ -47,12 +48,11 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
       <label htmlFor='monitor-channel-input'>Channel name, handle, or URL</label>
       <div className={styles.searchRow}>
         <input id='monitor-channel-input' maxLength={500} placeholder='e.g. @veritasium or a YouTube channel URL' value={input} disabled={saving} onChange={event => {
-          controller.current?.abort(); setSearching(false); setInput(event.target.value); setSelected(null); setChannels([]); setSearched(false); setError('');
+          controller.current?.abort(); setSearching(false); setInput(event.target.value); setSelected(null); setChannels([]); setSearched(false); clearError();
         }} />
         <button className={pageStyles.primaryAction} disabled={!input.trim() || searching || saving}>{searching ? 'Searching…' : 'Search'}</button>
       </div>
     </form>
-    {error && <div className='alert error' role='alert'>{error}</div>}
     {searching && <p role='status'>Finding YouTube channels…</p>}
     {searched && !channels.length && <p role='status'>No channels found. Try a channel URL or @handle.</p>}
     {channels.length > 0 && <fieldset className={styles.results} disabled={saving}><legend>Select a channel</legend>{channels.map(channel => <label key={channel.id} className={styles.channel}>
