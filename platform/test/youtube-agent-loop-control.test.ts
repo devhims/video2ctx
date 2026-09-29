@@ -64,6 +64,41 @@ describe('YouTube AgentCore loop control', () => {
     }));
   });
 
+  it.each([
+    { candidates: [2, 3, 4, 5], chosen: 5 },
+    { candidates: [2, 3, 4], chosen: 3 },
+    { candidates: [2, 4], chosen: 4 },
+    { candidates: [2], chosen: 2 },
+  ])('prioritizes completed recordings over unknown and live replacements ($candidates)', async ({ candidates, chosen }) => {
+    const context = await transcriptResearchContext();
+    const fetch = context.provider.transcript;
+    context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (args[0] === 'video000001') throw new ApiError(404, 'CAPTIONS_UNAVAILABLE', 'No caption tracks');
+      return fetch(...args);
+    });
+    const discovery: EvidencePacket = {
+      packetId: 'search-candidates', kind: 'youtube_search',
+      sources: candidates.map(n => ({ id: `candidate-${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+      excerpts: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+        candidates: candidates.map(n => ({ type: 'video', id: `video00000${n}`,
+          title: n === 3 ? 'LIVE keynote recording' : 'A video', hasCaptions: n !== 3,
+          ...(n === 4 ? {} : { isLive: n === 2 }) })),
+      } }], warnings: [], usage: [],
+    };
+    let step = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
+        input: JSON.stringify({ sources: [{ videoId: 'video000001' }], focus: 'Practical tasks' }) });
+      return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+        blocks: [{ text: 'Supported finding.', evidenceIds: [`transcript:video00000${chosen}:window:0:0`] }],
+        intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+      }) });
+    } });
+    await runResearchAgentWithModel({ model, message: 'Research tasks', context,
+      recoveredEvidence: [discovery], decision: { route: 'topic_research', researchVideoCount: 1 } });
+    expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', `video00000${chosen}`]);
+  });
+
   it.each([3, 12])('does not refetch captionless videos and bounds replacement attempts (%s candidates)', async count => {
     const context = await transcriptResearchContext();
     context.provider.transcript = vi.fn(async () => { throw new ApiError(404, 'CAPTIONS_UNAVAILABLE', 'No caption tracks'); });
