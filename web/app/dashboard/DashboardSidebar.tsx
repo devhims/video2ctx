@@ -49,7 +49,7 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
 const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
 export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onOpenProjectItem, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
-  const { agentAccess, adminAccess, isSigningOut } = useDashboardSession();
+  const { user, adminAccess, isSigningOut } = useDashboardSession();
   const projectsResource = useAccountResource('projects', []);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -100,7 +100,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       <nav aria-label='Dashboard navigation' className={styles.navigation}>
         <div className={styles.group}>
           {navButton('discover', 'Sources', 'search')}
-          {agentAccess && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
+          {user && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
           {navButton('trends', 'Trends', 'trend')}
         </div>
         <div className={styles.group}>
