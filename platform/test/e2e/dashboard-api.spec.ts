@@ -1134,3 +1134,28 @@ test('a known video opens without waiting for the remote URL resolver', async ({
     expect(resolveReads).toBe(0);
   } finally { release(); }
 });
+
+for (const width of [320, 375, 390, 430, 1280]) test(`homepage inspection stays centered at ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/platform/v1/demo/youtube/inspect', route => route.fulfill({ json: {
+    video: { id: videoId, title: 'A video about building useful software', channel: { id: 'channel', name: 'Example channel', url: 'https://youtube.com/@example' }, thumbnails: [], url: `https://youtube.com/watch?v=${videoId}` },
+    channel: { status: 'unavailable' },
+    transcript: { status: 'ready', track: { name: 'English', languageCode: 'en' }, segmentCount: 1, segments: transcript.segments },
+    comments: { status: 'ready', totalCount: 0, comments: [] },
+    quota: { limit: 3, remaining: 2, resetAt: '2026-09-30', repeated: false }, partial: false,
+  } }));
+  await page.goto('/');
+  await page.getByRole('textbox', { name: 'Public YouTube video URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click();
+  const result = page.getByRole('region', { name: 'Inspection result' });
+  await expect(result).toBeVisible();
+  const bounds = await result.boundingBox();
+  expect(bounds).not.toBeNull();
+  const left = bounds!.x, right = width - bounds!.x - bounds!.width;
+  expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+  expect(left).toBeGreaterThanOrEqual(12);
+  expect(right).toBeGreaterThanOrEqual(12);
+  await page.locator('.craft-source-grid').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('homepage-result.png'), animations: 'disabled' });
+});
