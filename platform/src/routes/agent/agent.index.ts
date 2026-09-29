@@ -54,7 +54,7 @@ const sessionDetailQuerySchema = z.object({
   cursor: z.string().trim().min(1).max(500).optional(),
 });
 
-// Uses the same authentication and verified-email gate as every agent route.
+// Uses the same authentication and access gate as every agent route.
 agentRoutes.get('/agent/access', (c) => c.json({ enabled: true }));
 
 agentRoutes.get('/agent/sessions', async (c) => {
@@ -335,7 +335,7 @@ async function requireAgentAccess(c: Context<App>): Promise<void> {
   if (String(c.env.AGENT_RUNTIME_ENABLED) !== 'true') {
     throw new ApiError(503, 'AGENT_DISABLED', 'The agent endpoint is not enabled.');
   }
-  const accessMode = String(c.env.AGENT_ACCESS_MODE ?? 'allowlist');
+  const accessMode = String(c.env.AGENT_ACCESS_MODE ?? 'all');
   if (accessMode === 'all') return; // Authentication and credential scopes still apply.
   // Keep the old rollout spelling usable, but never consult the admin allowlist.
   if (accessMode !== 'allowlist' && accessMode !== 'admins') {

@@ -33,8 +33,8 @@
     "YOUTUBE_PROCESSOR_RETRY_BASE_MS": "25",
     "YOUTUBE_PROCESSOR_MAX_CONCURRENCY": "4",
     "AGENT_RUNTIME_ENABLED": "true",
-    // Rollout: Agent-only allowlist by default; all permits every authenticated user with data access.
-    "AGENT_ACCESS_MODE": "allowlist",
+    // All authenticated users with data access can use the Agent.
+    "AGENT_ACCESS_MODE": "all",
     "LOCAL_AUTH_BYPASS_ENABLED": "false",
   },
   "containers": [
