@@ -44,7 +44,7 @@ export function AddChannelForm({ monitors, monitorsReady = true, onAdd, onCancel
     catch (cause) {
       showError(cause instanceof Error ? cause.message : 'Could not create monitor.',
         cause instanceof PlatformApiError && cause.code === 'PLAN_LIMIT_REACHED'
-          ? { duration: Infinity, description: <Link className={styles.upgradeLink} href='/dashboard/settings#billing-settings-heading'>Upgrade plan to create more monitors</Link> }
+          ? { duration: Infinity, description: <><Link className={styles.upgradeLink} href='/dashboard/settings#billing-settings-heading'>Upgrade plan</Link> to create more monitors</> }
           : undefined);
     }
     finally { savingRef.current = false; setSaving(false); }
