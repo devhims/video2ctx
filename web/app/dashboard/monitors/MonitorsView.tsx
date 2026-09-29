@@ -17,7 +17,7 @@ export const MONITOR_INTERVAL_OPTIONS = [
 export function MonitorsView({ monitors, knownChannel, savingId, onOpenTarget, onSchedule, onRemove, addChannelForm, ready = true, loading = false }: { monitors: Monitor[]; ready?: boolean; loading?: boolean; knownChannel?: { id: string; name: string; handle?: string }; savingId?: string; addChannelForm?: ReactNode; onOpenTarget:(target:string)=>void; onSchedule:(id:string, intervalMinutes:number)=>void; onRemove:(id:string)=>void }) {
   const activeCount = monitors.filter(monitor => monitor.enabled).length;
   return <section className='content-section standalone monitor-section'>
-    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Choose channels and how often to check for new videos.</p></div></header>
+    <header className={pageStyles.pageHeading}><div className={pageStyles.intro}><h2>Watch for new videos</h2><p>Select your favourite channels and how often to check for new videos.</p></div></header>
     {addChannelForm}
     {!ready ? (loading ? <AccountSectionSkeleton section='monitors' listOnly /> : null) : <>
     <div className={pageStyles.listHeading}><h3>Monitors <span>{monitors.length}</span></h3><span>{activeCount} active</span></div>
