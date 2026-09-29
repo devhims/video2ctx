@@ -1531,6 +1531,301 @@ html:has(.craft) body {
   font-size: 0.85rem;
 }
 
+/* ----------------------------------------------------------------- agent */
+
+/* The hero announcement jumps here; clear the fixed nav like the other anchors. */
+.craft-agent {
+  scroll-margin-top: 5.5rem;
+}
+
+/* Two deliberate lines; the band's 22ch cap would split the second one. The
+ * intro is one sentence, so it follows the heading's width instead of 48ch. */
+.craft-agent .craft-band-head h2,
+.craft-agent .craft-band-head p {
+  max-width: none;
+}
+
+.craft-agent-actions {
+  margin-top: var(--space-xl);
+}
+
+/* ----------------------------------------------------------- agent run */
+
+/* A vertical flow (ask, sources, agent, answer) so the same figure reads on a
+ * phone without a second layout. Everything animates by transition on
+ * data-state / data-on, transform and opacity only. */
+.craft-run {
+  margin: clamp(var(--space-xl), 4vh, var(--space-2xl)) 0 0;
+}
+
+.craft-run-panel {
+  padding: var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0.75rem;
+  background: var(--paper-raised);
+  display: grid;
+  gap: var(--space-md);
+}
+
+.craft-run-ask {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  display: grid;
+  gap: 0.2rem;
+}
+
+.craft-run-video {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-run-ask p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+}
+
+.craft-run-sources {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.craft-run-sources li {
+  min-width: 0;
+  position: relative;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--rule);
+  display: grid;
+  align-content: start;
+  gap: 0.15rem;
+  opacity: 0.35;
+  transition:
+    opacity var(--control) var(--out),
+    border-color var(--control) var(--out);
+}
+
+.craft-run-sources li[data-state='active'] {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.craft-run-sources li[data-state='done'] {
+  border-color: var(--rule-strong);
+  opacity: 1;
+}
+
+.craft-run-sources b {
+  font-size: 0.8rem;
+  font-weight: 620;
+}
+
+.craft-run-sources span {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-run-frames {
+  margin-top: 0.3rem;
+  display: flex;
+  gap: 0.25rem;
+}
+
+/* Stand-ins for board frames: a checker pattern, not a picture of the video. */
+.craft-run-frames i {
+  width: 1.1rem;
+  aspect-ratio: 1;
+  border-radius: 0.15rem;
+  background: repeating-conic-gradient(var(--rule-strong) 0 25%, var(--paper) 0 50%) 0 0 / 50% 50%;
+  transform: scale(0.6);
+  opacity: 0;
+  transition:
+    transform var(--enter) var(--out),
+    opacity var(--enter) var(--out);
+  transition-delay: calc(var(--i) * 60ms);
+}
+
+.craft-run-sources li:not([data-state='pending']) .craft-run-frames i {
+  transform: none;
+  opacity: 1;
+}
+
+/* The "injection": a dot drops from each source into the agent bar below. It
+ * travels on entry and fades out quickly once the next source takes over. */
+.craft-run-packet {
+  width: 0.35rem;
+  height: 0.35rem;
+  position: absolute;
+  left: 50%;
+  bottom: -0.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  transform: translate(-50%, -0.4rem);
+}
+
+.craft-run-sources li[data-state='active'] .craft-run-packet {
+  opacity: 1;
+  transform: translate(-50%, 0.5rem);
+  transition:
+    transform var(--enter) var(--out),
+    opacity var(--control) var(--out);
+}
+
+.craft-run-sources li[data-state='done'] .craft-run-packet {
+  opacity: 0;
+  transform: translate(-50%, 0.9rem);
+  transition:
+    transform var(--exit) var(--out),
+    opacity var(--exit) var(--out);
+}
+
+.craft-run-agent {
+  min-height: 2.5rem;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.8rem;
+}
+
+.craft-run-agent b {
+  flex: none;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.craft-run-mark {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 0.1rem;
+  background: var(--accent);
+}
+
+.craft-run[data-running='true'] .craft-run-mark {
+  animation: craft-run-pulse 900ms var(--in-out) infinite alternate;
+}
+
+@keyframes craft-run-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+
+/* Status labels stack in one cell and cross-fade, so the bar never reflows. */
+.craft-run-status {
+  min-width: 0;
+  display: grid;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.68rem;
+}
+
+.craft-run-status > span {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--control) var(--out);
+}
+
+.craft-run-status > span[data-on='true'] {
+  opacity: 1;
+}
+
+.craft-run-answer {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.craft-run-answer p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.craft-run-answer p,
+.craft-run-answer footer {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity var(--enter) var(--out),
+    transform var(--enter) var(--out);
+}
+
+.craft-run-answer [data-on='true'] {
+  opacity: 1;
+  transform: none;
+}
+
+.craft-run-answer time {
+  padding: 0 0.2rem;
+  border-radius: 0.2rem;
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--font-home-mono);
+  font-size: 0.78em;
+}
+
+.craft-run-answer sup {
+  margin-left: 0.2rem;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+}
+
+.craft-run-answer footer {
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-xs) var(--space-md);
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-run figcaption {
+  margin-top: var(--space-sm);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-xs) var(--space-md);
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-run figcaption button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.craft-run figcaption button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ----------------------------------------------------------------- close */
 
 .craft-close {
@@ -2426,6 +2721,16 @@ html:has(.craft) body {
 }
 
 @media (max-width: 640px) {
+  .craft-run-sources {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: var(--space-md);
+  }
+
+  /* In a 2x2 grid the top row would drop onto the bottom row, not the agent. */
+  .craft-run-packet {
+    display: none;
+  }
+
   .craft-inquiry-dialog {
     width: calc(100% - 1rem);
     max-height: calc(100dvh - 1rem);

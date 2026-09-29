@@ -11,6 +11,7 @@
  */
 
 import { CraftDemo } from './craft-demo';
+import { CraftAgentRun } from './craft-agent-run';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
 import { CraftPricing } from './craft-pricing';
@@ -221,6 +222,32 @@ export function CraftDirection() {
               </li>
             ))}
           </ul>
+        </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <section
+          id='agent'
+          className='craft-band craft-agent'
+          aria-labelledby='craft-agent-title'
+        >
+          <div className='craft-band-head'>
+            <h2 id='craft-agent-title'>
+              Ask a question.
+              <br />
+              Video agent watches the video for you.
+            </h2>
+            <p>
+              Video agent reads transcripts, frames, and comments across up to
+              eight videos, then answers with sources.
+            </p>
+          </div>
+          <CraftAgentRun />
+          <div className='craft-agent-actions'>
+            <a className='craft-primary' href='/dashboard/sessions'>
+              Try Video Agent
+            </a>
+          </div>
         </section>
       </div>
 
