@@ -988,8 +988,9 @@ test('settings renders while navigation access checks are pending', async ({page
   await expect(page.getByRole('switch',{name:/In-app alerts/})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Upgrade to Builder'})).toBeEnabled();
   const navigation = page.getByRole('navigation', { name: 'Dashboard navigation' });
-  await expect(page.getByRole('link',{name:'Agent',exact:true})).toHaveCount(0);
-  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 2).map(label => label.trim())).toEqual(['Sources', 'Trends']);
+  await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Admin',exact:true})).toHaveCount(0);
+  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
   await scenario.release();
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
   await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
