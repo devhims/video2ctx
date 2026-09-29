@@ -753,6 +753,74 @@ html:has(.craft) body {
   }
 }
 
+/* Example videos: quiet pills under the input, so the one-click path is
+ * visible without competing with the Inspect button. */
+.craft-examples {
+  margin-top: var(--space-sm);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.craft-examples-label {
+  margin-right: var(--space-2xs);
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.68rem;
+}
+
+.craft-examples button {
+  min-height: 1.75rem;
+  padding-inline: 0.55rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--paper-raised) 70%, transparent);
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  transition:
+    transform var(--press) var(--out),
+    border-color var(--control) var(--out),
+    color var(--control) var(--out);
+}
+
+.craft-examples button svg {
+  flex: none;
+  color: var(--ink-muted);
+  transition: color var(--control) var(--out);
+}
+
+.craft-examples time {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+}
+
+.craft-examples button:active {
+  transform: scale(0.97);
+}
+
+.craft-examples button[data-active='true'] {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--rule-strong));
+  color: var(--ink);
+}
+
+.craft-examples button[data-active='true'] svg {
+  color: var(--accent);
+}
+
+/* While one runs, the others step back rather than vanish. */
+.craft-examples button:disabled:not([data-active='true']) {
+  opacity: 0.45;
+  cursor: progress;
+}
+
 .craft-form-note {
   min-height: 1.5rem;
   margin: var(--space-md) 0 0;
@@ -2575,6 +2643,15 @@ html:has(.craft) body {
     transform: translateY(-1px);
   }
 
+  .craft-examples button:enabled:hover {
+    border-color: var(--ink-muted);
+    color: var(--ink);
+  }
+
+  .craft-examples button:enabled:hover svg {
+    color: var(--accent);
+  }
+
   .craft-nav-github:hover {
     border-color: var(--accent);
     background: color-mix(in oklch, var(--accent) 16%, transparent);
@@ -2723,6 +2800,14 @@ html:has(.craft) body {
 }
 
 @media (max-width: 640px) {
+  .craft-examples {
+    flex-wrap: nowrap;
+  }
+
+  .craft-examples [data-phones='hidden'] {
+    display: none;
+  }
+
   .craft-run-sources {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: var(--space-md);
@@ -2896,5 +2981,13 @@ html:has(.craft) body {
   .craft-spinner {
     animation-duration: 900ms !important;
     animation-iteration-count: infinite !important;
+  }
+}
+
+/* The smallest phones cannot fit the label and two pills on one line; the
+ * pills explain themselves, so the label is what gives way. */
+@media (max-width: 352px) {
+  .craft-examples-label {
+    display: none;
   }
 }

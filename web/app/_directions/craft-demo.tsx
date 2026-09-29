@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { ChecksIcon, CopyIcon } from '@phosphor-icons/react';
+import { ChecksIcon, CopyIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 import { ClipTabs } from './clip-tabs';
 import {
   type DemoResponse,
@@ -28,6 +28,16 @@ const INSPECTION_STEPS = [
   'Fetching captions',
   'Reading comments',
   'Exploring channel',
+];
+
+/* One click instead of a trip to YouTube for a link. Short, recognisable
+ * names rather than URLs, each with a full transcript and a busy comment
+ * section so the first result shows everything the demo can do. Phones show
+ * two, so the row stays on one line; the longest label is the one that goes. */
+const EXAMPLES = [
+  { label: 'Feynman on miracles', duration: '5:20', url: 'https://youtu.be/bAX27XRHMH8', onPhones: false },
+  { label: 'This Is Water', duration: '9:23', url: 'https://youtu.be/eC7xzavzEKY' },
+  { label: 'Young Sheldon', duration: '4:40', url: 'https://youtu.be/Vyb-sTrY_Y8' },
 ];
 
 const INITIAL_COMMENT_COUNT = 4;
@@ -58,14 +68,13 @@ export function CraftDemo() {
     return () => window.clearInterval(timer);
   }, [state]);
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const run = async (target: string) => {
     setState('loading');
     setError('');
     setLimitReached(false);
 
     try {
-      const payload = await inspect(url);
+      const payload = await inspect(target);
       setResult(payload);
       setState('done');
     } catch (cause) {
@@ -76,6 +85,18 @@ export function CraftDemo() {
       }
       setState('error');
     }
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void run(url);
+  };
+
+  /* Fill the input as well as running it, so the visitor sees what kind of
+   * link the field takes and can swap in their own next. */
+  const tryExample = (target: string) => {
+    setUrl(target);
+    void run(target);
   };
 
   return (
@@ -107,6 +128,24 @@ export function CraftDemo() {
           ) : null}
         </button>
       </form>
+
+      <div className='craft-examples'>
+        <span className='craft-examples-label'>Try</span>
+        {EXAMPLES.map((example) => (
+          <button
+            key={example.url}
+            type='button'
+            onClick={() => tryExample(example.url)}
+            disabled={state === 'loading'}
+            data-active={url === example.url && state !== 'idle'}
+            data-phones={example.onPhones === false ? 'hidden' : undefined}
+          >
+            <YoutubeLogoIcon size={12} weight='fill' aria-hidden='true' />
+            <span>{example.label}</span>
+            <time>{example.duration}</time>
+          </button>
+        ))}
+      </div>
 
       {state === 'loading' ? (
         <InspectionProgress currentStep={inspectionStep} />
