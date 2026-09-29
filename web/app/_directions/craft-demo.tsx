@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { ChecksIcon, CopyIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
+import { ChecksIcon, CopyIcon, PlayIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 import { ClipTabs } from './clip-tabs';
 import {
   type DemoResponse,
@@ -428,7 +428,10 @@ function VideoPreview({ video }: { video: DemoResponse['video'] }) {
               width={thumbnail?.width ?? 640}
               height={thumbnail?.height ?? 360}
             />
-            <span>Play video</span>
+            {/* The button's aria-label names the video; this is only the mark. */}
+            <span className='craft-video-play' aria-hidden='true'>
+              <PlayIcon size={18} weight='fill' />
+            </span>
           </button>
         )}
       </div>

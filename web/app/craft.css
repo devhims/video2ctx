@@ -1021,20 +1021,35 @@ html:has(.craft) body {
   pointer-events: none;
 }
 
-.craft-video-frame button span {
-  min-height: 2.5rem;
-  padding-inline: var(--space-lg);
+/* A round play mark in the bottom-left, over the gradient where the thumbnail
+ * is darkest. The whole thumbnail is the button; this only says so. */
+.craft-video-play {
+  width: 2.75rem;
+  height: 2.75rem;
   border: 1px solid oklch(95% 0.006 83 / 0.32);
-  border-radius: var(--radius-home-control);
+  border-radius: 50%;
   background: oklch(15.5% 0.006 75 / 0.82);
   backdrop-filter: blur(0.5rem);
-  display: inline-flex;
-  align-items: center;
+  display: grid;
+  place-items: center;
   position: absolute;
   z-index: 1;
-  inset: auto auto var(--space-lg) var(--space-lg);
-  font-size: 0.78rem;
-  font-weight: 650;
+  inset: auto auto var(--space-md) var(--space-md);
+  color: var(--ink);
+  transition:
+    background-color var(--control) var(--out),
+    border-color var(--control) var(--out),
+    color var(--control) var(--out),
+    transform var(--press) var(--out);
+}
+
+/* A centred triangle reads as sitting left; nudge it to the optical centre. */
+.craft-video-play svg {
+  transform: translateX(1px);
+}
+
+.craft-video-frame button:active .craft-video-play {
+  transform: scale(0.94);
 }
 
 .craft-video-facts {
@@ -2679,6 +2694,12 @@ html:has(.craft) body {
     transform: scale(1.015);
   }
 
+  .craft-video-frame button:hover .craft-video-play {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
   .craft-colophon a:hover,
   .craft-result-head a:hover {
     color: var(--ink);
@@ -2907,6 +2928,12 @@ html:has(.craft) body {
   .craft-video-preview,
   .craft-channel-overview {
     padding: var(--space-sm);
+  }
+
+  .craft-video-play {
+    width: 2.5rem;
+    height: 2.5rem;
+    inset: auto auto var(--space-sm) var(--space-sm);
   }
 
   .craft-video-facts {
