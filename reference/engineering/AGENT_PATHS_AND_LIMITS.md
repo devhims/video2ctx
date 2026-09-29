@@ -240,13 +240,13 @@ Agent execution, access discovery, session reads, and run reads require the exis
 - `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=allowlist`: require a current, verified Better Auth email present in D1 `agent_access_allowlist`. Otherwise return `403 AGENT_ACCESS_REQUIRED`.
 - `AGENT_RUNTIME_ENABLED=true`, `AGENT_ACCESS_MODE=all`: allow authenticated users with the required credential scope. Account ownership and credit checks still apply.
 
-Missing access mode defaults to `allowlist`. The legacy spelling `admins` remains an alias for this Agent-only allowlist; it never reads `ADMIN_EMAILS_SECRET`. Invalid modes or unavailable database reads fail closed. No Agent grant confers operator privileges, and operator membership alone does not grant Agent access. Verified operators in `ADMIN_EMAILS_SECRET` and accounts with the Better Auth `admin` role can use `/v1/admin/*` independently. See [admin dashboard](./ADMIN_DASHBOARD.md).
+Production and local configuration use `all`, and a missing access mode also defaults to `all`. This path skips the tester membership lookup and does not require an Agent access secret. Restricted modes remain available only when explicitly configured. The legacy spelling `admins` remains an alias for this Agent-only allowlist; it never reads `ADMIN_EMAILS_SECRET`. Invalid modes or unavailable allowlist database reads fail closed in restricted mode. No Agent grant confers operator privileges, and operator membership alone does not grant Agent access. Verified operators in `ADMIN_EMAILS_SECRET` and accounts with the Better Auth `admin` role can use `/v1/admin/*` independently. See [admin dashboard](./ADMIN_DASHBOARD.md).
 
 The authenticated account ID resolves the current email, verification status, and D1 membership on every restricted request. The gate does not trust request-supplied email headers, cached session emails, or stored admin claims. Browser sessions, CLI sessions, and API keys use the same gate. The dashboard checks `/v1/agent/access` without caching on login/page load, navigation, and window focus, so a page refresh picks up grants or revocations without signing out.
 
-### Manage testers in D1
+### Optional restricted access
 
-Operators can also add and remove these same rows in **Dashboard → Admin** at `/dashboard/admin`. Existing D1 entries appear automatically; there is no second tester list.
+When explicitly configured with `AGENT_ACCESS_MODE=allowlist`, operators can add and remove these same rows in **Dashboard → Admin** at `/dashboard/admin`. Existing D1 entries appear automatically; there is no second tester list.
 
 Apply migration `0015_agent_access_allowlist.sql` before deploying the new gate. In the target database's D1 console, add one row per email, even before the person signs up:
 
@@ -267,7 +267,7 @@ D1 is the sole source for tester membership; no Agent email secret is needed. Al
 
 ### Rollout
 
-For production rollout, first apply the migration and populate D1 with everyone who should retain Agent access, including operators who also test the Agent. The old admin list is intentionally not copied or used as a fallback. Then deploy the Worker with `AGENT_ACCESS_MODE=allowlist`. Changing checked-in files does not change a running Worker. D1 changes after deployment require no redeploy.
+Deploy the Worker with the checked-in `AGENT_ACCESS_MODE=all` to enable Agent access for every authenticated account. No tester grants or Agent access secret are required. Changing checked-in files does not change a running Worker. Any environment override must also use `all` or be removed. To restore restricted testing, explicitly configure `allowlist` and populate D1 before deploying.
 
 For unauthenticated local Postman testing, explicitly set `AGENT_ACCESS_MODE=all` with the existing local-only authentication bypass. Production never permits that bypass.
 

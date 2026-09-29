@@ -110,7 +110,7 @@ describe('agent routes', () => {
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
-  test.each([undefined, 'allowlist', 'admins', 'invalid'])('fails closed for access mode %s', async (mode) => {
+  test.each(['allowlist', 'admins', 'invalid'])('fails closed for access mode %s', async (mode) => {
     const harness = agentHarness();
     harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
     Object.assign(harness.env, { AGENT_ACCESS_MODE: mode });
@@ -119,9 +119,13 @@ describe('agent routes', () => {
     expect(harness.startRun).not.toHaveBeenCalled();
   });
 
-  test('supports an explicit rollout to authenticated non-admin users', async () => {
+  test.each([undefined, 'all'])('allows authenticated users without access lookups in mode %s', async mode => {
     const harness = agentHarness();
-    Object.assign(harness.env, { AGENT_ACCESS_MODE: 'all' });
+    Object.assign(harness.env, { AGENT_ACCESS_MODE: mode, ADMIN_EMAILS_SECRET: '' });
+    harness.accessUser.mockRejectedValue(new Error('Allowlist must not be queried'));
+    const access = await app.request('/v1/agent/access', {}, harness.env, executionContext);
+    expect(access.status).toBe(200);
+    expect(await access.json()).toEqual({ enabled: true });
     expect((await postAgent(harness.env, { message: 'Research' })).status).toBe(202);
     expect(harness.accessUser).not.toHaveBeenCalled();
   });
@@ -145,7 +149,7 @@ describe('agent routes', () => {
     expect((await check()).status).toBe(403);
   });
 
-  test.each([undefined, 'allowlist', 'admins'])('admin membership alone never grants Agent access in mode %s', async mode => {
+  test.each(['allowlist', 'admins'])('admin membership alone never grants Agent access in mode %s', async mode => {
     const harness = agentHarness();
     harness.accessUser.mockResolvedValue({ email: 'agent@example.com', emailVerified: 1, agentAllowed: 0 });
     Object.assign(harness.env, { AGENT_ACCESS_MODE: mode, ADMIN_EMAILS_SECRET: 'agent@example.com' });

@@ -1,8 +1,8 @@
 # Copy to .dev.vars. Never commit real values.
 # Optional local-only bypass. Prefer `npm run dev:local:no-auth` when testing private routes without credentials.
 LOCAL_AUTH_BYPASS_ENABLED=false
-# Agent rollout defaults to the Agent-only allowlist. Use all only for deliberate broader access/local demo testing.
-AGENT_ACCESS_MODE=allowlist
+# Agent access is open to all authenticated users.
+AGENT_ACCESS_MODE=all
 BETTER_AUTH_SECRET=replace-with-32-plus-random-characters
 # Shared only by trusted OAuth proxy callback contexts. Keep separate from BETTER_AUTH_SECRET.
 OAUTH_PROXY_SECRET=replace-with-32-plus-random-characters

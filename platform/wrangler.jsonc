@@ -46,8 +46,8 @@
     "AGENT_FINALIZER_PROVIDER": "fireworks",
     "AGENT_FINALIZER_MODEL": "glm-5p3-flash",
     "AGENT_FINALIZER_REASONING_EFFORT": "medium",
-    // Rollout: Agent-only allowlist by default; all permits every authenticated user with data access.
-    "AGENT_ACCESS_MODE": "allowlist",
+    // All authenticated users with data access can use the Agent.
+    "AGENT_ACCESS_MODE": "all",
     "LOCAL_AUTH_BYPASS_ENABLED": "false",
   },
   "containers": [

@@ -1,6 +1,6 @@
 # Admin dashboard
 
-Open **Dashboard → Admin** at `/dashboard/admin` to add, search, or remove Agent tester emails. It edits the existing D1 `agent_access_allowlist`; existing entries are preserved. Adding an email grants Agent testing access only. The account must verify its email, and its next dashboard refresh or Agent request picks up the change.
+Open **Dashboard → Admin** at `/dashboard/admin` to add, search, or remove Agent tester emails. It edits the existing D1 `agent_access_allowlist`; existing entries are preserved. The default `AGENT_ACCESS_MODE=all` allows every authenticated account, so tester entries do not affect Agent access. When explicitly configured with `AGENT_ACCESS_MODE=allowlist`, adding an email grants Agent testing access only. The account must verify its email, and its next dashboard refresh or Agent request picks up the change.
 
 ## Operator authorization
 
