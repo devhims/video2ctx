@@ -6,7 +6,7 @@ export function AccountSectionSkeleton({ section, detail = false, listOnly = fal
     <div aria-hidden='true'>
       {detail && <span className='back'><i className='ui-bar' data-width='short' /></span>}
       {!listOnly && <header className={pageStyles.pageHeading}>
-        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Choose channels and how often to check for new videos.'}</p></div>
+        <div className={pageStyles.intro}><h2>{detail ? <i className='ui-bar' /> : projects ? 'Your projects' : 'Watch for new videos'}</h2><p>{detail ? <i className='ui-bar' /> : projects ? 'Keep related sources and saved moments together.' : 'Select your favourite channels and how often to check for new videos.'}</p></div>
         <span className='skeleton-control' />
       </header>}
       <div className={pageStyles.listHeading}><h3>{detail ? 'Saved sources' : projects ? 'Projects' : 'Monitors'}</h3></div>

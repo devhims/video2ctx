@@ -252,10 +252,11 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio', { name: /Science channel/ })).toBeChecked();
     await form.getByRole('combobox', { name: 'Check channel every' }).selectOption('360');
-    await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     if (inputMode === 'name') {
-      await expect(form.getByRole('alert')).toContainText('Try adding again');
-      await form.getByRole('button', { name: 'Add channel', exact: true }).click();
+      await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Try adding again');
+      await expect(page.getByRole('link', { name: 'Upgrade plan', exact: true })).toHaveCount(0);
+      await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
     }
     await expect(form).toBeVisible();
     await expect(form.getByRole('textbox')).toHaveValue('');
@@ -269,7 +270,7 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
     await form.getByRole('textbox', { name: 'Channel name, handle, or URL' }).fill('@science');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByText(/Already monitored/)).toBeVisible();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await form.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(form).toBeVisible();
     await expect(form.getByRole('textbox')).toHaveValue('');
@@ -290,8 +291,8 @@ test('Monitors rejects video URLs and shows an empty channel search without crea
     const input = form.getByRole('textbox', { name: 'Channel name, handle, or URL' });
     await input.fill(`https://youtube.com/watch?v=${videoId}`);
     await form.getByRole('button', { name: 'Search', exact: true }).click();
-    await expect(form.getByRole('alert')).toContainText('Enter a channel URL or @handle');
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(page.locator('[data-sonner-toast][data-type=error]')).toContainText('Enter a channel URL or @handle');
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await input.fill('Missing channel');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('status')).toContainText('No channels found');
@@ -316,6 +317,42 @@ for (const section of ['projects', 'monitors']) {
   });
 }
 
+for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan limits in a dismissible Sonner toast (${colorScheme})`, async ({ page }, testInfo) => {
+  await page.emulateMedia({ colorScheme });
+  if (colorScheme === 'dark') await page.setViewportSize({ width: 390, height: 844 });
+  const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
+  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'OpenAI', handle: '@OpenAI' } }));
+  await page.route('**/api/platform/v1/monitors', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 403, json: { error: { code: 'PLAN_LIMIT_REACHED', message: 'Your plan allows up to 1 monitors.' } } }) : route.continue());
+  try {
+    await page.goto('/dashboard/monitors');
+    const form = page.getByRole('region', { name: 'Add channel' });
+    await form.getByRole('textbox').fill('@OpenAI');
+    await form.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(form.getByRole('radio')).toBeChecked();
+    await form.getByRole('combobox').selectOption('360');
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
+    const error = page.locator('[data-sonner-toast][data-type=error]');
+    await expect(error).toHaveCount(1);
+    await expect(error).toContainText('Your plan allows up to 1 monitors.');
+    await expect(error.getByRole('link', { name: 'Upgrade plan', exact: true })).toBeVisible();
+    await expect(form.locator('.alert')).toHaveCount(0);
+    await expect(form.getByRole('radio')).toBeChecked();
+    await expect(form.getByRole('combobox')).toHaveValue('360');
+    await expect(error).toHaveAttribute('data-mounted', 'true');
+    await expect(error).toBeVisible();
+    await expect(error).toBeInViewport();
+    await expect(error).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: testInfo.outputPath(`monitor-error-${colorScheme}.png`), fullPage: true, animations: 'disabled' });
+    await error.getByRole('button', { name: 'Close toast' }).click();
+    await expect(error).toHaveCount(0);
+    await form.getByRole('button', { name: 'Create monitor', exact: true }).click();
+    await expect(error).toHaveCount(1);
+    await error.getByRole('link', { name: 'Upgrade plan', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard\/settings#billing-settings-heading$/);
+  } finally { await scenario.clear(); }
+});
+
 test('Monitors header and channel lookup remain interactive while the list is pending', async ({ page }) => {
   const scenario = await accountScenario(page, { delays: ['/v1/monitors'] });
   await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'Science channel' } }));
@@ -326,11 +363,11 @@ test('Monitors header and channel lookup remain interactive while the list is pe
     await form.getByRole('textbox').fill('@science');
     await form.getByRole('button', { name: 'Search', exact: true }).click();
     await expect(form.getByRole('radio')).toBeChecked();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeDisabled();
     await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toBeVisible();
     await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
     await scenario.release();
-    await expect(form.getByRole('button', { name: 'Add channel', exact: true })).toBeEnabled();
+    await expect(form.getByRole('button', { name: 'Create monitor', exact: true })).toBeEnabled();
     await expect(page.getByRole('status', { name: 'Loading monitors', exact: true })).toHaveCount(0);
     expect((await scenario.reads())['/v1/monitors']).toBe(1);
   } finally { await scenario.clear(); }
@@ -359,13 +396,13 @@ test('Monitors keeps its header after a load error and can retry the list', asyn
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { status: 503, body: { error: { message: 'Monitors unavailable' } } } } });
   try {
     await page.goto('/dashboard/monitors');
-    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Monitors unavailable' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
     await expect(page.getByText('No monitors yet', { exact: true })).toHaveCount(0);
     await page.route('**/api/platform/v1/monitors', route => route.fulfill({ json: { monitors: [] } }));
     await page.getByRole('button', { name: 'Retry monitors' }).click();
     await expect(page.getByText('No monitors yet', { exact: true })).toBeVisible();
-    await expect(page.getByRole('alert').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Monitors unavailable' })).toHaveCount(0);
   } finally { await scenario.clear(); }
 });
 
@@ -1096,4 +1133,29 @@ test('a known video opens without waiting for the remote URL resolver', async ({
     await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible({ timeout: 1500 });
     expect(resolveReads).toBe(0);
   } finally { release(); }
+});
+
+for (const width of [320, 375, 390, 430, 1280]) test(`homepage inspection stays centered at ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/platform/v1/demo/youtube/inspect', route => route.fulfill({ json: {
+    video: { id: videoId, title: 'A video about building useful software', channel: { id: 'channel', name: 'Example channel', url: 'https://youtube.com/@example' }, thumbnails: [], url: `https://youtube.com/watch?v=${videoId}` },
+    channel: { status: 'unavailable' },
+    transcript: { status: 'ready', track: { name: 'English', languageCode: 'en' }, segmentCount: 1, segments: transcript.segments },
+    comments: { status: 'ready', totalCount: 0, comments: [] },
+    quota: { limit: 3, remaining: 2, resetAt: '2026-09-30', repeated: false }, partial: false,
+  } }));
+  await page.goto('/');
+  await page.getByRole('textbox', { name: 'Public YouTube video URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click();
+  const result = page.getByRole('region', { name: 'Inspection result' });
+  await expect(result).toBeVisible();
+  const bounds = await result.boundingBox();
+  expect(bounds).not.toBeNull();
+  const left = bounds!.x, right = width - bounds!.x - bounds!.width;
+  expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+  expect(left).toBeGreaterThanOrEqual(12);
+  expect(right).toBeGreaterThanOrEqual(12);
+  await page.locator('.craft-source-grid').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('homepage-result.png'), animations: 'disabled' });
 });

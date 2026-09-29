@@ -76,7 +76,7 @@ html:has(.craft) body {
 
 .craft-nav-inner {
   min-height: 3.25rem;
-  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs);
   border: 1px solid var(--rule);
   border-radius: calc(var(--radius-home-control) + var(--space-2xs));
   background: color-mix(in oklch, var(--paper-raised) 82%, transparent);
@@ -490,6 +490,7 @@ html:has(.craft) body {
   padding: clamp(7.5rem, 15vh, 9.5rem) clamp(var(--space-md), 6vw, 3rem)
     clamp(4rem, 10vh, 7rem);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   justify-items: center;
   text-align: center;
