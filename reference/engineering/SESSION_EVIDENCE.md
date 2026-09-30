@@ -94,3 +94,26 @@ If final synthesis fails, the deterministic fallback preserves only deduplicated
 ### Shared-source validation
 
 Local Workers tests use actual D1 migrations, R2 and Durable Object SQLite. They cover two sessions sharing a version, deletion isolated to one session, exact historical reads after refresh, missing historical objects, stable legacy citation IDs, failed backfills, deletion during retrieval/backfill, transaction rollback, frame/sheet references, private-field rejection and preview revocation. Catalog tests also cover interrupted historical writes without changing current pointers or live-write recovery intent.
+
+## Storyboard discovery in agent tools
+
+`get_video` includes a storyboard metadata artifact when the provider is enabled and the lookup succeeds. The model sees its manifest, total frame count, sampling interval, and zero sampled images. Metadata is not visual evidence. A failed optional lookup adds a warning while preserving the video details; cancellation still aborts the tool. Successful metadata retrieval contributes its existing storyboard usage charge and saved asset versions to the video evidence packet.
+
+`get_video_storyboard` accepts an image selection without a separate metadata call. It reuses valid evidence metadata or obtains metadata before validating the selection. The session provider reuses its stored manifest and sheets. `maxSheets` selects a bounded spread across the video; `timestampsMs` selects sheets containing those moments; `sheetIndexes` selects specific sheets. Transcript findings can guide the agent's timestamps, but a transcript is not required. Image retrieval and visual analysis remain separate.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "actorBkg": "#eef2ff", "actorTextColor": "#111827", "signalColor": "#475569", "signalTextColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Tool
+    participant Provider
+    Agent->>Tool: Request selected storyboard sheets
+    Tool->>Provider: Read metadata if missing
+    Provider-->>Tool: Manifest without images
+    Note over Tool: Validate selection
+    Tool->>Provider: Retrieve selected sheets
+    Provider-->>Agent: Saved image references for analysis
+```
+
+For routes with `useStoryboard: true`, transcript-analysis quota exhaustion no longer forces finalization. The planner must check visual coverage for each requested subject and attribute, and try targeted frames when storyboards fail or lack detail. Ordinary finalization is withheld while no visual observations exist and a usable visual path remains. Stored frames can still be analyzed after the deadline filter disables new frame extraction. Existing global step, call, time, and model-cost ceilings still force completion when necessary. If finalization has no analyzed visual observations, the result carries `VISUAL_EVIDENCE_INCOMPLETE`; the finalizer is instructed to name unanswered parts and report `ANSWER_SCOPE_SHORTFALL`. This guard detects absent observations, not semantic completeness for every subject, which remains a planner/finalizer coverage check.

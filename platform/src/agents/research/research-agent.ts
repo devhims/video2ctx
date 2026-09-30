@@ -377,6 +377,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
       const warnings = input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL');
+      if (options.decision.useStoryboard === true && !hasVisualObservations()) {
+        warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
+          message: 'The request required visual evidence, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.' });
+      }
       if (requiredVideos !== undefined && reviewedVideos.size < requiredVideos) {
         warnings.push({ code: 'PARTIAL_EVIDENCE',
           message: `The user requested ${requiredVideos} source videos; usable transcript evidence was reviewed from ${reviewedVideos.size}.` });
@@ -446,6 +450,24 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
     },
   };
+  const hasVisualObservations = () => [...evidence.values()].some(packet =>
+    packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
+      ['youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)));
+  // Transcript breadth is not completion when the requested facts need images.
+  // Keep the existing time, total-call, step and cost ceilings authoritative.
+  const needsVisualWork = () => {
+    if (options.decision.useStoryboard !== true || hasVisualObservations()) return false;
+    const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
+    const savedFrames = [...evidence.values()].some(packet => packet.kind === 'youtube_frames' && packet.assetVersions?.length);
+    const framesPossible = toolNames.includes('get_video_frames') && toolNames.includes('analyze_video_frames')
+      && !!options.context.provider.frames && !!options.context.analyzeFrames
+      && !failed.has('get_video_frames') && !failed.has('analyze_video_frames')
+      && (savedFrames || frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS);
+    const storyboardPossible = toolNames.includes('get_video_storyboard') && toolNames.includes('analyze_video_storyboard')
+      && !!options.context.provider.storyboard && !!options.context.analyzeStoryboard
+      && !failed.has('get_video_storyboard') && !failed.has('analyze_video_storyboard');
+    return framesPossible || storyboardPossible;
+  };
   let completedModelSteps = 0;
   const finalizationHandoff = new Error('Research complete: hand off to finalization.');
 
@@ -513,9 +535,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           unavailableTools: () => [
             ...(searchUsed || !!options.decision.comparisonVideoIds?.length || (options.decision.route === 'topic_research' && !!options.decision.channelId) ? ['search_youtube'] : []),
             ...(frameExtractionBudget(options.researchDeadlineAt) < FRAME_EXTRACTION_MIN_MS ? ['get_video_frames'] : []),
+            ...(needsVisualWork() ? [FINALIZE_ANSWER_TOOL_NAME] : []),
           ],
           finalizationToolName: FINALIZE_ANSWER_TOOL_NAME,
-          isToolBudgetExhausted: transcriptBudget?.isExhausted,
+          isToolBudgetExhausted: () => transcriptBudget?.isExhausted() === true && options.decision.useStoryboard !== true,
         },
         messages: conversationModelMessages(
           options.conversationHistory ?? [],
@@ -836,6 +859,7 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. Limit memory updates to at most two useful entries and omit them during repair. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
+          'For visual questions, check each requested subject and attribute against analyzed image evidence. Presenter names may come from introductions or on-screen labels; clothing requires visual observations. Identify missing subjects or attributes, add ANSWER_SCOPE_SHORTFALL for unanswered parts, and explain the actual failure or budget limit. Transcript silence does not establish that visual facts are unknowable. Never invent clothing details or imply images were inspected when only metadata was retrieved.',
           'If validationFeedback is present, repair the previousCandidate using its errors. Preserve valid content and return complete corrected JSON.',
         ].join('\n'),
         messages: [{role:'user',content:JSON.stringify({

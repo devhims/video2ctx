@@ -76,7 +76,8 @@ test('reports an interrupted frame call to the finalizer before cancellation ack
   expect(prompt).toContain('get_video_frames');
   expect(prompt).toContain('Research phase timeout');
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
-    expect.arrayContaining([expect.objectContaining({ code: 'EVIDENCE_TOOL_FAILED', message: expect.stringContaining('get_video_frames') })]) }));
+    expect.arrayContaining([expect.objectContaining({ code: 'EVIDENCE_TOOL_FAILED', message: expect.stringContaining('get_video_frames') }),
+      expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
   await vi.advanceTimersByTimeAsync(50);
 });
 
@@ -87,6 +88,73 @@ test('removes frame extraction from the next model step when only completion tim
   await run;
   expect(context.provider.frames).toHaveBeenCalledOnce();
   const nextTools = options.model.doGenerateCalls[1]?.tools?.map(tool => tool.name);
-  expect(nextTools).toContain('finalize_answer');
+  expect(nextTools).toContain('analyze_video_frames');
+  expect(nextTools).not.toContain('finalize_answer');
   expect(nextTools).not.toContain('get_video_frames');
+});
+
+
+test('continues after the transcript target and a failed storyboard to retrieve and analyze presenter frames', async () => {
+  const { options, context, analyzed, finalizer } = setup(0);
+  analyzed.mockResolvedValue({ findings: [{ observation: 'The presenter wears a blue jacket.', timestampsMs: [28000] }], warnings: [] });
+  context.provider.storyboard = vi.fn(async () => { throw new Error('Storyboard unavailable'); });
+  const transcript: EvidencePacket = { ...metadata, packetId: 'transcript', kind: 'youtube_transcript',
+    excerpts: [{ id: 'intro', sourceId: 'video', text: 'At 28 seconds, the host introduces presenter Alex.' }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { analysisKey: 'reviewed-video' } }] };
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    const names = call.tools?.map(tool => tool.name) ?? [];
+    // The transcript target is already exhausted, but visual work is still required.
+    expect(names).toContain(step < 2 ? 'get_video_frames' : 'analyze_video_frames');
+    if (step < 3) expect(names).not.toContain('finalize_answer');
+    else expect(names).toContain('finalize_answer');
+    expect(JSON.stringify(call.prompt)).toContain('clothing');
+    const calls = [
+      { name: 'get_video_storyboard', input: { videoId, maxSheets: 2 } },
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [28000] } },
+      { name: 'analyze_video_frames', input: { assetVersions: ['1'.padStart(64, '0')], focus: 'Describe the presenter clothing visible on stage.' } },
+      { name: 'finalize_answer', input: { intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'The presenter wears a blue jacket.', evidenceIds: ['ref_2'] }] } },
+    ];
+    const selected = calls[step++]!;
+    if (step === 2) expect(JSON.stringify(call.prompt)).toContain('Storyboard unavailable');
+    return { content: [{ type: 'tool-call', toolCallId: `visual-${step}`, toolName: selected.name,
+      input: JSON.stringify(selected.input) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
+  } });
+  const run = runResearchAgentWithModel({ ...options, model,
+    message: 'What were the names of the presenters and what were they wearing on stage?',
+    decision: { route: 'topic_research', useStoryboard: true, researchVideoCount: 1 },
+    recoveredSearchUsed: true, recoveredEvidence: [transcript],
+    toolNames: ['get_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'finalize_answer'] });
+  await vi.advanceTimersByTimeAsync(0);
+  await run;
+  expect(context.provider.storyboard).toHaveBeenCalledOnce();
+  expect(context.provider.frames).toHaveBeenCalledOnce();
+  expect(analyzed).toHaveBeenCalledOnce();
+  expect(model.doGenerateCalls).toHaveLength(4);
+  expect(JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt)).toContain('The presenter wears a blue jacket.');
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
+    expect.not.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
+});
+
+
+test('allows partial finalization after both visual retrieval paths fail', async () => {
+  const { options, context, finalizer } = setup(0);
+  context.provider.storyboard = vi.fn(async () => { throw new Error('Storyboard unavailable'); });
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    expect(call.tools?.map(tool => tool.name)).toContain('finalize_answer');
+    return { content: [{ type: 'tool-call', toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+      intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [], blocks: [{ text: 'Clothing could not be verified.', evidenceIds: ['ref_1'] }],
+    }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
+  } });
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+    toolNames: ['get_video_storyboard', 'analyze_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'finalize_answer'],
+    recoveredToolFailures: [
+      { toolCallId: 'storyboard', toolName: 'get_video_storyboard', operation: 'storyboard', message: 'Storyboard unavailable' },
+      { toolCallId: 'frames', toolName: 'get_video_frames', operation: 'frames', message: 'Frame extraction failed' },
+    ] });
+  expect(context.provider.frames).not.toHaveBeenCalled();
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
+    expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
+  expect(JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt)).toContain('check each requested subject and attribute');
 });
