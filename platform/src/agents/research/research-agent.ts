@@ -1,4 +1,4 @@
-import { traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
+import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
@@ -488,6 +488,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         for (const packet of packets) evidence.set(packet.packetId,packet);
       },signal) ?? {};
       return runAgentCoreWithModel({
+        traceToolCall: phaseContext.traceToolCall,
         model: options.model,
         finalizationModel: options.finalizationModel,
         definition: {
@@ -751,6 +752,7 @@ async function runUnifiedFinalizer(options: {
             conversationHistory:conversationHistoryForModel(options.conversationHistory),historyPage,
             session:sessionBriefForModel(options.context.session!.brief()),evidence:prepared.evidence}),
           tools: traceToolSet(contextTools, options.context.traceToolCall),
+          repairToolCall: traceToolCallRepair(options.context.traceToolCall),
           stopWhen: stepCountIs(4),
           prepareStep: ({stepNumber}) => {
             assertModelCostAvailable(options.modelBudget);

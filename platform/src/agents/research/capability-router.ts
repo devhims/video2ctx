@@ -1,4 +1,4 @@
-import type { TraceToolCall } from '../runtime/tool-call-trace';
+import { traceToolCallRepair, type TraceToolCall } from '../runtime/tool-call-trace';
 import { z } from 'zod';
 import { ApiError } from '../../lib/http';
 import { fireworksModelPricing } from '../fireworks-finalizer';
@@ -107,6 +107,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
     assertModelCostAvailable(input.modelBudget);
     const startedAt = Date.now();
     const result = await generateText({
+      repairToolCall: traceToolCallRepair(input.traceToolCall, undefined, 'classification'),
       model: input.model,
       instructions: [
         'Requests for current view counts, likes, or comments require an executable route with refreshDynamicData true, even when past values are in history. Use saved data for historical questions. This does not require refreshing transcripts or images.',
@@ -185,6 +186,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
     if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
     if (parsed.success && feedback.length === 0) feedback = searchQueryNumberIssues(parsed.data, input);
     for (const call of result.toolCalls) {
+      if (call.invalid) continue; // Already captured at the SDK validation boundary.
       await input.traceToolCall?.({toolCallId:call.toolCallId,name:call.toolName,operation:'classification',source:'model',
         input:call.input,execute:async()=>({accepted:feedback.length===0,decision:parsed.success ? parsed.data : null,issues:feedback})});
     }

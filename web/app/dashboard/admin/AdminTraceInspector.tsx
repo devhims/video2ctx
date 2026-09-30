@@ -25,8 +25,10 @@ export default function AdminTraceInspector() {
     const controller=new AbortController();
     setLoading(true);setError('');setDetail(undefined);setCopied(false);
     const request=runId
-      ? traceId ? fetchAdminTrace(`/${runId}/calls/${traceId}`,adminTraceDetailSchema,controller.signal).then(value=>{if (!controller.signal.aborted) setDetail(value);})
-        : fetchAdminTrace(`/${runId}`,adminTraceRunSchema,controller.signal).then(value=>{if (!controller.signal.aborted) setRun(value);})
+      ? Promise.all([
+          fetchAdminTrace(`/${runId}`,adminTraceRunSchema,controller.signal).then(value=>{if (!controller.signal.aborted) setRun(value);}),
+          ...(traceId ? [fetchAdminTrace(`/${runId}/calls/${traceId}`,adminTraceDetailSchema,controller.signal).then(value=>{if (!controller.signal.aborted) setDetail(value);})] : []),
+        ])
       : fetchAdminTrace(`?${new URLSearchParams({q:search,status,offset:String(offset)})}`,adminTraceListSchema,controller.signal).then(value=>{if (!controller.signal.aborted) setPage(value);});
     void request.catch(cause=>{if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not load diagnostic traces.');})
       .finally(()=>{if (!controller.signal.aborted) setLoading(false);});

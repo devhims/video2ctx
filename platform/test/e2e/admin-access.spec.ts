@@ -85,3 +85,33 @@ test('admin diagnoses a run using complete nested payloads and downloads its tim
   await page.getByRole('button',{name:'Search traces',exact:true}).click();
   await expect(page.getByText(/No traces found/)).toBeVisible();
 });
+
+test('refresh updates the run timeline and status while keeping a call selected',async({page,context})=>{
+  await context.addCookies([
+    {name:'agent-ui',value:'allowed',url:'http://127.0.0.1:3021'},
+    {name:'admin-ui',value:'allowed',url:'http://127.0.0.1:3021'},
+  ]);
+  const runId='a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
+  let completed=false;
+  await page.route(`**/api/platform/v1/admin/agent-traces/${runId}`,async route=>{
+    const response=await route.fetch();
+    const run=await response.json();
+    run.status=completed ? 'completed' : 'running';
+    if (completed) run.calls.push({...run.calls[0],traceId:'52c8b6e4-3219-4580-99d7-aaa6c774f618',
+      toolCallId:'later-call',name:'read_session_evidence',callSequence:3,resultSequence:4});
+    await route.fulfill({response,json:run});
+  });
+  await page.goto('/dashboard/admin');
+  await page.getByRole('button',{name:'Tool call traces',exact:true}).click();
+  await page.getByRole('button').filter({hasText:runId}).click();
+  await page.getByRole('button').filter({hasText:'1. research_video_transcripts'}).click();
+  await expect(page.getByText(/User fixture-user · Session .* · running/)).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Output',exact:true})).toBeVisible();
+  await expect(page.getByRole('button').filter({hasText:'3. read_session_evidence'})).toHaveCount(0);
+  completed=true;
+  await page.getByRole('button',{name:'Refresh traces',exact:true}).click();
+  await expect(page.getByText(/User fixture-user · Session .* · completed/)).toBeVisible();
+  await expect(page.getByRole('button').filter({hasText:'3. read_session_evidence'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Output',exact:true})).toBeVisible();
+  await expect(page.locator('pre').last()).toContainText('COMPLETE_OUTPUT_TAIL');
+});

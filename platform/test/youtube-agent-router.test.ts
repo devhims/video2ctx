@@ -1,4 +1,5 @@
 import { MockLanguageModelV4 } from 'ai/test';
+import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
 import { describe, expect, it, vi } from 'vitest';
 import {
   agentCoreReasoningEffort,
@@ -121,9 +122,19 @@ describe('YouTube agent capability router', () => {
     }) });
     const recordUsage = vi.fn();
     const diagnostics = vi.fn();
-    expect(await classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal,
+    const traces: Array<{id:string;input:unknown;error?:unknown;output?:unknown}>=[];
+    const traceToolCall:TraceToolCall=async call=>{
+      const trace:typeof traces[number]={id:call.toolCallId,input:call.input};
+      traces.push(trace);
+      try {const output=await call.execute();trace.output=output;return output;}
+      catch(error) {trace.error=error;throw error;}
+    };
+    expect(await classifyCapabilityWithModel({ traceToolCall, message: 'Compare models', model, signal: new AbortController().signal,
       modelCallId: 'classifier-test', modelBudget: { limitMicros: 10000, currentCostMicros: () => 0, recordUsage },
       onDiagnostic: diagnostics })).toEqual(valid);
+    expect(traces).toHaveLength(2);
+    expect(traces[0]).toMatchObject({id:'classification-1',input:{researchBreadth:'comparative'},error:{name:'AI_InvalidToolInputError'}});
+    expect(traces[1]).toMatchObject({id:'classification-2',input:valid,output:{accepted:true}});
     expect(model.doGenerateCalls.map(call => call.toolChoice)).toEqual([{ type: 'auto' }, { type: 'auto' }]);
     expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('researchVideoCount');
     expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['classifier-test', 'classifier-test:repair']);

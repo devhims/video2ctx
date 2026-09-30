@@ -1,4 +1,4 @@
-import type { ToolSet } from 'ai';
+import type { ToolSet, ToolCallRepairFunction } from 'ai';
 import { z } from 'zod';
 
 export const toolCallDetailSchema = z.object({
@@ -303,4 +303,28 @@ export function traceToolSet(tools: ToolSet, trace?: TraceToolCall): ToolSet {
       trace({ toolCallId: options.toolCallId, name, operation: name, input, source: 'model',
         execute: () => Promise.resolve(execute(input, options)) }) }];
   }));
+}
+
+// The SDK rejects malformed/unknown calls before execute. Record that attempt
+// before repair starts, so a repaired execution retains the same call ID but
+// gets its own attempt. Keep raw argument text when it is not valid JSON.
+export function traceToolCallRepair<TOOLS extends ToolSet>(
+  trace: TraceToolCall | undefined,
+  repair?: ToolCallRepairFunction<TOOLS>,
+  operation?: string,
+): ToolCallRepairFunction<TOOLS> | undefined {
+  if (!trace) return repair;
+  return async options => {
+    const { toolCall, error } = options;
+    let input: unknown = toolCall.input;
+    try { input = JSON.parse(toolCall.input); } catch { /* Preserve malformed JSON. */ }
+    try {
+      await trace({toolCallId:toolCall.toolCallId,name:toolCall.toolName,
+        operation:operation ?? toolCall.toolName,source:'model',input,
+        execute:async()=>{throw error;}});
+    } catch (capturedError) {
+      if (capturedError !== error) throw capturedError;
+    }
+    return repair ? repair(options) : null;
+  };
 }
