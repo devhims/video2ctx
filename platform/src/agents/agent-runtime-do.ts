@@ -141,13 +141,16 @@ export interface AgentRunRejection {
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   #traceManager?: ToolCallTraceManager;
   private get traceManager() {
-    return (this.#traceManager ??= new ToolCallTraceManager(this.ctx.storage.sql, work => this.ctx.storage.transactionSync(work),
-      this.env.RESEARCH, `agent-traces/${this.ctx.id.toString()}/`, keys => this.sessionStore.queueCleanup(keys),
-      () => this.sessionStore.cleanup(), this.env.DB, runId => {
-        const run = this.readRun(runId);
-        return run ? { userId: run.user_id, sessionId: run.conversation_id, status: run.status } : undefined;
-      }, () => this.scheduleTraceRetry(),
-      work => this.ctx.waitUntil(work)));
+    return (this.#traceManager ??= new ToolCallTraceManager({
+      sql:this.ctx.storage.sql, transaction:work=>this.ctx.storage.transactionSync(work),
+      bucket:this.env.RESEARCH, prefix:`agent-traces/${this.ctx.id.toString()}/`,
+      queueCleanup:keys=>this.sessionStore.queueCleanup(keys), cleanup:()=>this.sessionStore.cleanup(),
+      db:this.env.DB, metadata:runId=>{
+        const run=this.readRun(runId);
+        return run ? {userId:run.user_id,sessionId:run.conversation_id,status:run.status} : undefined;
+      }, retryIndex:()=>this.scheduleTraceRetry(), background:work=>this.ctx.waitUntil(work),
+      cancelRetry:()=>this.cancelTraceRetry(),
+    }));
   }
   #sessionStore?: SessionEvidenceStore;
   private get sessionStore() {
@@ -260,8 +263,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.sql`UPDATE agent_tool_calls SET result_json=${serialized} WHERE run_id=${row.id} AND tool_name='finalize_answer'`;
     }
     this.sessionStore.queueCleanup(previews);
-    await this.traceManager.publishPending();
     await this.sessionStore.delete(version);
+    await this.traceManager.publishPending();
     return {deleted:true};
   }
   initialState: AgentRuntimeState = { version: 1 };
@@ -271,6 +274,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private scheduleTraceRetry() {
     return this.schedule(new Date(Date.now()+15_000), 'retryTraceIndex', {}, {idempotent:true});
+  }
+
+  private async cancelTraceRetry() {
+    for (const schedule of this.getSchedules()) if (schedule.callback === 'retryTraceIndex') await this.cancelSchedule(schedule.id);
   }
 
   async retryTraceIndex() {
@@ -539,7 +546,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.syncSessionHistory();
       this.sessionStore.beginRun(runId);
       await executeResearchRun({
-        traceToolCall: call => { this.assertRunActive(runId); return this.traceManager.track(runId, call); },
+        traceToolCall: call => this.traceToolCall(runId, call),
         session: this.sessionStore,
         classificationDeadlineAt: row.classification_deadline_at ?? undefined,
         onClassifying: deadlineAt => this.updatePhase(runId, 'routing', deadlineAt),
@@ -620,8 +627,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
   }
 
+  private traceToolCall<T>(runId: string, call: import('./runtime/tool-call-trace').TraceExecution<T>): Promise<T> {
+    if (this.#deleted) throw new Error('Agent account was deleted.');
+    // Execution owns lifecycle checks, including returning already saved results.
+    return this.traceManager.track(runId, call);
+  }
+
   private executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
-    this.assertRunActive(runId);
+    if (this.#deleted) throw new Error('Agent account was deleted.');
     return this.traceManager.track(runId, {
       toolCallId: execution.toolCallId, name: execution.toolName, operation: execution.operation,
       input: execution.input, execute: () => this.executeStoredEvidenceTool(runId, execution),
@@ -655,6 +668,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     this.assertRunActive(runId);
+    const generation = this.sessionStore.generation();
     // Separate analysis records must not consume the provider credit reservation twice.
     // Both classes remain bounded, including failed attempts and resumed runs.
     const counts = this.sql<{ provider_count: number; analysis_count: number }>`
@@ -688,6 +702,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
     try {
       const packet = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
+      if (generation !== this.sessionStore.generation()) throw new Error('Evidence was deleted during execution. Retry the request.');
       if (packet.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
       this.assertRunActive(runId);
       const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
@@ -894,7 +909,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     await this.sessionStore.delete();
     this.sessionStore.search.clearHistory();
     for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations']) {
+      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations', 'agent_trace_run_index', 'agent_trace_publish_order']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
     // SDK snapshots contain run identifiers only, but clear those too.
@@ -1333,7 +1348,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         WHERE phase = 'finalizing' AND status IN ('pending', 'running')`;
     }
     this.ensureTurnOrdinalColumn();
-    void this.traceManager;
+    this.traceManager.initialize();
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_tool_calls (
         run_id TEXT NOT NULL,

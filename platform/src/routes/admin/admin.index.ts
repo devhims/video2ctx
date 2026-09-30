@@ -77,13 +77,16 @@ adminRoutes.get('/admin/agent-traces', async c => {
   const parsed=traceQuerySchema.safeParse({...c.req.query(),status:c.req.query('status') || undefined});
   if (!parsed.success) throw new ApiError(422,'INVALID_TRACE_QUERY','Invalid trace search or pagination.');
   const {q,status,limit,offset}=parsed.data;
+  const conditions:string[]=[];
+  const values:(string|number)[]=[];
+  if (q) { conditions.push('(run_id=? OR user_id=? OR session_id=?)'); values.push(q,q,q); }
+  if (status) { conditions.push('status=?'); values.push(status); }
   const rows=await c.env.DB.prepare(`SELECT run_id AS runId,user_id AS userId,session_id AS sessionId,
-    MAX(run_status) AS status,MIN(started_at) AS startedAt,MAX(COALESCE(finished_at,started_at)) AS updatedAt,
-    COUNT(*) AS callCount,SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failedCalls,
-    SUM(CASE WHEN capture_error IS NOT NULL THEN 1 ELSE 0 END) AS captureFailures
-    FROM agent_tool_traces WHERE (?='' OR run_id=? OR user_id=? OR session_id=?) AND (?='' OR run_status=?)
-    GROUP BY run_id,user_id,session_id ORDER BY startedAt DESC,run_id DESC LIMIT ? OFFSET ?`)
-    .bind(q,q,q,q,status ?? '',status ?? '',limit+1,offset).all();
+    status,started_at AS startedAt,updated_at AS updatedAt,call_count AS callCount,
+    failed_calls AS failedCalls,capture_failures AS captureFailures FROM agent_trace_runs
+    ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+    ORDER BY started_at DESC,run_id DESC LIMIT ? OFFSET ?`)
+    .bind(...values,limit+1,offset).all();
   return c.json({runs:rows.results.slice(0,limit),nextOffset:rows.results.length>limit ? offset+limit : null});
 });
 adminRoutes.get('/admin/agent-traces/:runId', async c => {
@@ -93,8 +96,10 @@ adminRoutes.get('/admin/agent-traces/:runId', async c => {
   if (!rows.results.length) throw new ApiError(404,'TRACE_RUN_NOT_FOUND','No diagnostic trace was recorded for this run.');
   if (rows.results.length>500) throw new ApiError(422,'TRACE_RUN_TOO_LARGE','This run has more than 500 calls. Query its D1 index for additional records.');
   const first=rows.results[0]!;
-  return c.json({runId,userId:first.user_id,sessionId:first.session_id,status:first.run_status,
-    calls:rows.results.map(adminTraceSummary)});
+  const summary=await c.env.DB.prepare('SELECT status FROM agent_trace_runs WHERE run_id=?').bind(runId).first<{status:string}>();
+  const status=summary?.status ?? first.run_status;
+  return c.json({runId,userId:first.user_id,sessionId:first.session_id,status,
+    calls:rows.results.map(row=>adminTraceSummary({...row,run_status:status}))});
 });
 adminRoutes.get('/admin/agent-traces/:runId/calls/:traceId', async c => {
   const runId=traceRunId(c.req.param('runId'));
@@ -112,17 +117,25 @@ adminRoutes.get('/admin/agent-traces/:runId/export', async c => {
     .bind(runId).all<AdminTraceRow>();
   if (!rows.results.length) throw new ApiError(404,'TRACE_RUN_NOT_FOUND','No diagnostic trace was recorded for this run.');
   if (rows.results.length>500) throw new ApiError(422,'TRACE_RUN_TOO_LARGE','This run has more than 500 calls. Query its D1 index for additional records.');
+  const summary=await c.env.DB.prepare('SELECT status FROM agent_trace_runs WHERE run_id=?').bind(runId).first<{status:string}>();
+  const runStatus=summary?.status ?? rows.results[0]!.run_status;
   const events=rows.results.flatMap(row=>[
     {row,seq:row.call_sequence,type:'tool/call' as const},
     ...(row.result_sequence !== null ? [{row,seq:row.result_sequence,type:'tool/result' as const}] : []),
   ]).sort((a,b)=>a.seq-b.seq);
+  // Leave headroom for admin authentication and metadata queries within the
+  // Workers Paid subrequest budget. Reject before starting an incomplete file.
+  const reads=events.reduce((total,{row,type})=>total+1+(type==='tool/call'
+    ? Number(!!row.input_key) : Number(!!row.output_key)+Number(!!row.error_key)),0);
+  if (reads>800) throw new ApiError(422,'TRACE_EXPORT_TOO_LARGE',
+    'This run exceeds the export read budget. Inspect individual calls instead.');
   c.header('Content-Type','application/x-ndjson');
   c.header('Content-Disposition',`attachment; filename="agent-trace-${runId}.jsonl"`);
   return stream(c,async output=>{
-    await output.write(JSON.stringify({type:'trace/header',version:1,runId,sessionId:rows.results[0]!.session_id,userId:rows.results[0]!.user_id,runStatus:rows.results[0]!.run_status})+'\n');
+    await output.write(JSON.stringify({type:'trace/header',version:1,runId,sessionId:rows.results[0]!.session_id,userId:rows.results[0]!.user_id,runStatus})+'\n');
     for (const {row,seq,type} of events) {
       if (output.aborted) break;
-      const detail=await readAdminToolTrace(c.env,runId,row.trace_id);
+      const detail=await readAdminToolTrace(c.env,runId,row.trace_id,{snapshot:{...row,run_status:runStatus},event:type});
       if (!detail) continue;
       await output.write(JSON.stringify({type,seq,runId,traceId:detail.traceId,callId:detail.toolCallId,
         attempt:detail.attempt,name:detail.name,source:detail.source,operation:detail.operation,captureError:detail.captureError,time:type==='tool/call' ? detail.startedAt : detail.finishedAt,

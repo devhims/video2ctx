@@ -32,19 +32,43 @@ type PayloadField = 'input' | 'output' | 'error';
 const PAYLOAD_CHUNK_BYTES = 128 * 1024;
 const FLUSH_BATCH_SIZE = 32;
 
+interface ToolCallTraceOptions {
+  sql: SqlStorage;
+  transaction: <T>(work: () => T) => T;
+  bucket: R2Bucket;
+  prefix: string;
+  queueCleanup: (keys: string[]) => void;
+  cleanup: () => Promise<void>;
+  db: D1Database;
+  metadata: (runId: string) => { userId: string; sessionId: string; status: string } | undefined;
+  retryIndex?: () => Promise<unknown>;
+  background?: (work: Promise<void>) => void;
+  cancelRetry?: () => Promise<void>;
+}
+
 // Tool execution only snapshots into local durable storage. A single background
 // publisher moves payloads to R2 and metadata to D1, with alarm-backed recovery.
 export class ToolCallTraceManager {
   private publishing?: Promise<void>;
   private flushRequested = false;
 
-  constructor(private sql: SqlStorage, private transaction: <T>(work: () => T) => T,
-    private bucket: R2Bucket, private prefix: string,
-    private queueCleanup: (keys: string[]) => void, private cleanup: () => Promise<void>,
-    private db: D1Database,
-    private metadata: (runId: string) => { userId: string; sessionId: string; status: string } | undefined,
-    private retryIndex?: () => Promise<unknown>,
-    private background?: (work: Promise<void>) => void) {
+  private initialized = false;
+  constructor(private readonly options: ToolCallTraceOptions) { this.initialize(); }
+  private get sql() { return this.options.sql; }
+  private get transaction() { return this.options.transaction; }
+  private get bucket() { return this.options.bucket; }
+  private get prefix() { return this.options.prefix; }
+  private get queueCleanup() { return this.options.queueCleanup; }
+  private get cleanup() { return this.options.cleanup; }
+  private get db() { return this.options.db; }
+  private get metadata() { return this.options.metadata; }
+  private get retryIndex() { return this.options.retryIndex; }
+  private get background() { return this.options.background; }
+  private get cancelRetry() { return this.options.cancelRetry; }
+
+  initialize() {
+    if (this.initialized) return;
+    const {sql} = this.options;
     sql.exec(`CREATE TABLE IF NOT EXISTS agent_call_traces (
       trace_id TEXT PRIMARY KEY,call_sequence INTEGER NOT NULL,result_sequence INTEGER,
       run_id TEXT NOT NULL, tool_call_id TEXT NOT NULL, name TEXT NOT NULL, operation TEXT NOT NULL,
@@ -58,6 +82,12 @@ export class ToolCallTraceManager {
     sql.exec(`CREATE TABLE IF NOT EXISTS agent_trace_payload_chunks (
       trace_id TEXT NOT NULL, field TEXT NOT NULL, chunk_index INTEGER NOT NULL,
       data BLOB NOT NULL, PRIMARY KEY (trace_id,field,chunk_index))`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS agent_trace_run_index (
+      run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1, index_pending INTEGER NOT NULL DEFAULT 1, attempted_at INTEGER NOT NULL DEFAULT 0)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS agent_trace_publish_order (
+      trace_id TEXT PRIMARY KEY, attempted_at INTEGER NOT NULL)`);
+    sql.exec('CREATE INDEX IF NOT EXISTS agent_trace_status_idx ON agent_call_traces(local_run_status,run_id)');
+    this.initialized = true;
   }
 
   async track<T>(runId: string, call: TraceExecution<T>): Promise<T> {
@@ -122,10 +152,12 @@ export class ToolCallTraceManager {
 
   get hasPending() {
     return this.sql.exec(`SELECT trace_id FROM agent_call_traces WHERE index_pending=1 OR EXISTS (
-      SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=agent_call_traces.trace_id) LIMIT 1`).toArray().length > 0;
+      SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=agent_call_traces.trace_id)
+      UNION ALL SELECT run_id FROM agent_trace_run_index WHERE index_pending=1 LIMIT 1`).toArray().length > 0;
   }
 
   private requestPublish(runId?: string) {
+    if (runId) this.markRunDirty(runId);
     const alreadyPublishing = !!this.publishing;
     const work = this.publishPending(runId);
     if (!alreadyPublishing) this.background?.(work);
@@ -141,11 +173,12 @@ export class ToolCallTraceManager {
       try {
         while (this.flushRequested) {
           this.flushRequested = false;
-          const rows = this.sql.exec<TraceRow>(`SELECT * FROM agent_call_traces
-            WHERE index_pending=1 OR EXISTS (
-              SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=agent_call_traces.trace_id)
-            ORDER BY call_sequence LIMIT ?`,FLUSH_BATCH_SIZE).toArray();
-          if (!rows.length) break;
+          const rows = this.sql.exec<TraceRow>(`SELECT t.* FROM agent_call_traces t
+            LEFT JOIN agent_trace_publish_order o ON o.trace_id=t.trace_id
+            WHERE t.index_pending=1 OR EXISTS (
+              SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=t.trace_id)
+            ORDER BY COALESCE(o.attempted_at,0),t.call_sequence,t.trace_id LIMIT ?`,FLUSH_BATCH_SIZE).toArray();
+          if (!rows.length && !this.hasPending) break;
           // Arm durable recovery before the first remote write, including when
           // a reset interrupts an upload rather than rejecting its promise.
           try { await this.retryIndex?.(); } catch {
@@ -153,19 +186,27 @@ export class ToolCallTraceManager {
           }
           let failed = false;
           for (const row of rows) {
+            // Persist rotation before I/O so a failing batch cannot monopolize retries.
+            this.sql.exec('INSERT OR REPLACE INTO agent_trace_publish_order VALUES (?,?)',row.trace_id,Date.now());
             if (!await this.uploadPayloads(row.trace_id)) failed = true;
             // Always load the newest revision after R2 awaits. A tool may have
             // settled, or deletion may have revoked it while upload was running.
             const latest = this.byId(row.trace_id);
             if (latest?.index_pending && !await this.publishRow(latest)) failed = true;
           }
-          if (failed) break; // The scheduled retry owns outages, not a busy loop.
+          if (!await this.publishRunSummaries()) failed = true;
+          if (failed) break; // The 15-second retry backs off failures, with fair selection.
           if (rows.length === FLUSH_BATCH_SIZE) this.flushRequested = true;
         }
       } catch {
         console.error({event:'agent_trace_background_failed'});
         try { await this.retryIndex?.(); } catch { /* Restart also recovers the durable outbox. */ }
       } finally {
+        try {
+          if (!this.hasPending) await this.cancelRetry?.();
+          // New calls can arrive while cancellation awaits the SDK.
+          if (this.hasPending) await this.retryIndex?.();
+        } catch { console.error({event:'agent_trace_retry_schedule_failed'}); }
         this.publishing = undefined;
       }
     });
@@ -234,6 +275,7 @@ export class ToolCallTraceManager {
   }
 
   private async publishRow(row: TraceRow): Promise<boolean> {
+    this.markRunDirty(row.run_id);
     const run = this.metadata(row.run_id);
     if (!run) {
       this.sql.exec('UPDATE agent_call_traces SET index_pending=0 WHERE trace_id=?',row.trace_id);
@@ -264,12 +306,56 @@ export class ToolCallTraceManager {
   }
 
   private syncStatus(runId?: string) {
-    const runs = runId ? [{run_id:runId}] : this.sql.exec<{run_id:string}>('SELECT DISTINCT run_id FROM agent_call_traces').toArray();
+    const runs = runId ? [{run_id:runId}] : this.sql.exec<{run_id:string}>(`SELECT DISTINCT run_id FROM agent_call_traces
+      WHERE local_run_status IS NULL OR local_run_status IN ('pending','running')`).toArray();
     for (const row of runs) {
       const run = this.metadata(row.run_id);
       if (run) this.sql.exec(`UPDATE agent_call_traces SET local_run_status=?,index_pending=1,index_version=index_version+1
         WHERE run_id=? AND (local_run_status IS NULL OR local_run_status!=?)`,run.status,row.run_id,run.status);
     }
+  }
+
+  private markRunDirty(runId: string) {
+    this.sql.exec(`INSERT INTO agent_trace_run_index(run_id) VALUES (?) ON CONFLICT(run_id)
+      DO UPDATE SET revision=revision+1,index_pending=1`,runId);
+  }
+
+  private async publishRunSummaries(): Promise<boolean> {
+    let success = true;
+    const pending = this.sql.exec<{run_id:string;revision:number}>(
+      'SELECT run_id,revision FROM agent_trace_run_index WHERE index_pending=1 ORDER BY attempted_at,run_id LIMIT 32').toArray();
+    for (const item of pending) {
+      this.sql.exec('UPDATE agent_trace_run_index SET attempted_at=? WHERE run_id=?',Date.now(),item.run_id);
+      const run = this.metadata(item.run_id);
+      if (!run) {
+        this.sql.exec('DELETE FROM agent_trace_run_index WHERE run_id=?',item.run_id);
+        continue;
+      }
+      const counts = this.sql.exec<{started:number|null;updated:number|null;calls:number;failed:number;captures:number}>(`
+        SELECT MIN(started_at) AS started,MAX(COALESCE(finished_at,started_at)) AS updated,COUNT(*) AS calls,
+        SUM(status='failed') AS failed,SUM(capture_error IS NOT NULL) AS captures
+        FROM agent_call_traces WHERE run_id=?`,item.run_id).one();
+      if (!counts.calls) {
+        this.sql.exec('DELETE FROM agent_trace_run_index WHERE run_id=?',item.run_id);
+        continue;
+      }
+      try {
+        await this.db.prepare(`INSERT INTO agent_trace_runs
+          (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version)
+          VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET
+          status=excluded.status,started_at=excluded.started_at,updated_at=excluded.updated_at,
+          call_count=excluded.call_count,failed_calls=excluded.failed_calls,capture_failures=excluded.capture_failures,
+          index_version=excluded.index_version WHERE excluded.index_version>agent_trace_runs.index_version`)
+          .bind(item.run_id,run.userId,run.sessionId,run.status,counts.started,counts.updated,counts.calls,
+            counts.failed,counts.captures,item.revision).run();
+        this.sql.exec('UPDATE agent_trace_run_index SET index_pending=0 WHERE run_id=? AND revision=?',item.run_id,item.revision);
+      } catch {
+        success = false;
+        console.error({event:'agent_trace_run_index_failed',runId:item.run_id});
+      }
+    }
+    if (success && pending.length===32) this.flushRequested=true;
+    return success;
   }
 
   revokePayloads() {

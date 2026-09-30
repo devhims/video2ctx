@@ -21,6 +21,7 @@ export default function AdminTraceInspector() {
   const [error,setError]=useState('');
   const [loading,setLoading]=useState(false);
   const [copied,setCopied]=useState(false);
+  const [exporting,setExporting]=useState(false);
   useEffect(()=>{
     const controller=new AbortController();
     setLoading(true);setError('');setDetail(undefined);setCopied(false);
@@ -36,6 +37,22 @@ export default function AdminTraceInspector() {
   },[runId,traceId,search,status,offset,revision]);
   function submit(event:FormEvent) {event.preventDefault();setSearch(query.trim());setOffset(0);setRevision(value=>value+1);}
   function openRun(id:string) {setRun(undefined);setDetail(undefined);setTraceId('');setRunId(id);}
+  async function downloadTrace() {
+    setExporting(true);setError('');
+    try {
+      const response=await fetch(`/api/platform/v1/admin/agent-traces/${runId}/export`,{cache:'no-store'});
+      if (!response.ok) {
+        const body=await response.json().catch(()=>null);
+        throw new Error(body?.error?.message ?? 'Could not export this trace. Please try again.');
+      }
+      const url=URL.createObjectURL(await response.blob());
+      const link=document.createElement('a');
+      link.href=url;link.download=`agent-trace-${runId}.jsonl`;
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch(cause) {setError(cause instanceof Error ? cause.message : 'Could not export this trace.');}
+    finally {setExporting(false);}
+  }
   return <section className={styles.inspector} aria-label='Agent tool traces'>
     <header className={styles.header}><div><h2>Agent tool traces</h2><p>Inspect tool arguments, results and failed attempts across agent runs.</p></div>
       <button onClick={()=>setRevision(value=>value+1)} disabled={loading}>Refresh traces</button></header>
@@ -57,7 +74,7 @@ export default function AdminTraceInspector() {
         <button disabled={loading || page?.nextOffset==null} onClick={()=>setOffset(page!.nextOffset!)}>Next</button></nav>
     </> : <>
       <div className={styles.actions}><button onClick={()=>{setRunId('');setRun(undefined);setTraceId('');}}>All trace runs</button>
-        <a href={`/api/platform/v1/admin/agent-traces/${runId}/export`} download>Download timeline JSONL</a></div>
+        <button onClick={downloadTrace} disabled={exporting}>{exporting ? 'Downloading…' : 'Download timeline JSONL'}</button></div>
       <h3 className={styles.identifier}>Run {runId}</h3>
       {run && <p className={styles.metadata}>User {run.userId} · Session {run.sessionId} · {run.status}</p>}
       <div className={styles.layout}>

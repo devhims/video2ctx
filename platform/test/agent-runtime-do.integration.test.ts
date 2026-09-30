@@ -989,8 +989,8 @@ test('a fresh trace manager recovers large immutable UTF-8 snapshots from the du
     } finally {storage.mockRestore();log.mockRestore();}
     const key=instance.sql<{input_key:string}>`SELECT input_key FROM agent_call_traces`[0]!.input_key;
     const prefix=key.slice(0,key.indexOf(runId));
-    const recovered=new ToolCallTraceManager(state.storage.sql,work=>state.storage.transactionSync(work),env.RESEARCH,prefix,
-      ()=>{},async()=>{},env.DB,()=>({userId,sessionId:conversationId,status:'running'}));
+    const recovered=new ToolCallTraceManager({sql:state.storage.sql,transaction:work=>state.storage.transactionSync(work),bucket:env.RESEARCH,prefix,
+      queueCleanup:()=>{},cleanup:async()=>{},db:env.DB,metadata:()=>({userId,sessionId:conversationId,status:'running'})});
     await recovered.publishPending();
     const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{trace_id:string}>();
     const detail=await readAdminToolTrace(env,runId,row!.trace_id);
@@ -1051,5 +1051,134 @@ test('alarm retries rearm through an outage and drain more than one trace batch'
     const rows=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence').bind(runId).all<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
     expect(rows.results).toHaveLength(40);
     expect((await readAdminToolTrace(env,runId,rows.results[39]!.trace_id))?.output).toEqual({complete:39});
+  });
+});
+
+test('evidence deletion fences an in-flight result before waiting for trace publication',async()=>{
+  const {runtime,runId,conversationId,userId}=await seed('trace-delete-fence','running');
+  await runInDurableObject(runtime,async instance=>{
+    const writer=instance as unknown as {
+      performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;
+      traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager;
+      sessionStore:import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+    };
+    let releaseTool!:()=>void,releasePublish!:()=>void;
+    const toolGate=new Promise<void>(resolve=>{releaseTool=resolve;});
+    const publishGate=new Promise<void>(resolve=>{releasePublish=resolve;});
+    const publish=vi.spyOn(writer.traceManager,'publishPending').mockReturnValue(publishGate);
+    const pending=writer.performEvidenceTool(runId,{toolCallId:'late-evidence',toolName:'get_video_transcript',operation:'transcript',semanticKey:'late',input:{},execute:async()=>{
+      await toolGate;
+      return {packetId:'deleted-packet',kind:'youtube_transcript',sources:[],excerpts:[],artifacts:[],warnings:[],usage:[]};
+    }});
+    const generation=writer.sessionStore.generation();
+    const deletion=instance.deleteSessionAssets(conversationId,userId);
+    try {
+      expect(writer.sessionStore.generation()).toBe(generation+1);
+      releaseTool();
+      await expect(pending).rejects.toThrow('Evidence was deleted during execution');
+      expect(instance.sql`SELECT * FROM agent_evidence_packets`).toHaveLength(0);
+    } finally {releaseTool();releasePublish();await deletion;publish.mockRestore();}
+  });
+});
+
+test('traced finalization and evidence replay return saved results after completion',async()=>{
+  const {runtime,runId}=await seed('trace-terminal-replay','running');
+  await runInDurableObject(runtime,async instance=>{
+    const writer=instance as unknown as {
+      finalizeRun(runId:string,id:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>;
+      traceToolCall: <T>(runId:string,call:import('../src/agents/runtime/tool-call-trace').TraceExecution<T>)=>Promise<T>;
+      executeEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;
+    };
+    const packet:EvidencePacket={packetId:'cached-packet',kind:'youtube_transcript',sources:[],excerpts:[],artifacts:[],warnings:[],usage:[]};
+    instance.sql`UPDATE agent_tool_calls SET result_json=${JSON.stringify(packet)} WHERE run_id=${runId} AND tool_call_id='tool'`;
+    instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'finalize',responseIntent:'clarification',reason:'Missing subject'})},0)`;
+    const input:FinalizeAnswerInput={intent:'clarification',answer:'Which video?',confidence:'low',citations:[],artifacts:[],warnings:[]};
+    const saved=await writer.finalizeRun(runId,'final',input);
+    const replay=await writer.traceToolCall(runId,{toolCallId:'final-again',name:'finalize_answer',operation:'finalize',source:'model',input,
+      execute:()=>writer.finalizeRun(runId,'final-again',input)});
+    expect(replay).toEqual(saved);
+    const execute=vi.fn(async()=>packet);
+    expect(await writer.executeEvidenceTool(runId,{toolCallId:'tool',toolName:'get_video',operation:'video',semanticKey:'meaning',input:{},execute})).toEqual(packet);
+    await expect(writer.executeEvidenceTool(runId,{toolCallId:'new',toolName:'get_video',operation:'video',semanticKey:'new',input:{},execute})).rejects.toThrow('no longer active');
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+test('failed trace batches rotate so later healthy payloads publish and recovery cancels the alarm',async()=>{
+  const {runtime,runId}=await seed('trace-fair-retry','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const put=env.RESEARCH.put.bind(env.RESEARCH);
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const storage=vi.spyOn(env.RESEARCH,'put').mockRejectedValue(new Error('Unavailable'));
+    try {
+      await Promise.all(Array.from({length:40},(_,i)=>manager.track(runId,{toolCallId:`fair-${i}`,name:'context_read',operation:'context',input:{i},execute:async()=>({i})})));
+      await manager.publishPending();
+      const rows=instance.sql<{trace_id:string;tool_call_id:string}>`SELECT trace_id,tool_call_id FROM agent_call_traces`;
+      const poison=new Set(rows.filter(row=>Number(row.tool_call_id.slice(5))<32).map(row=>row.trace_id));
+      storage.mockImplementation((...args)=>{
+        if ([...poison].some(id=>String(args[0]).includes(id))) return Promise.reject(new Error('Permanent payload failure'));
+        return put(...args);
+      });
+      for (let i=0;i<3;i++) await manager.publishPending();
+      const pending=instance.sql<{trace_id:string}>`SELECT DISTINCT trace_id FROM agent_trace_payload_chunks`;
+      expect(pending).toHaveLength(32);
+      expect(pending.every(row=>poison.has(row.trace_id))).toBe(true);
+      expect(instance.getSchedules().some(s=>s.callback==='retryTraceIndex')).toBe(true);
+    } finally {storage.mockRestore();log.mockRestore();}
+    await manager.publishPending();
+    expect(manager.hasPending).toBe(false);
+    expect(instance.getSchedules().filter(s=>s.callback==='retryTraceIndex')).toHaveLength(0);
+    const summary=await env.DB.prepare('SELECT call_count,status FROM agent_trace_runs WHERE run_id=?').bind(runId).first();
+    expect(summary).toMatchObject({call_count:40,status:'running'});
+  });
+});
+
+test('export projections read each payload once and reject changes to the pinned revision',async()=>{
+  const {runtime,runId}=await seed('trace-export-revision','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    await manager.track(runId,{toolCallId:'export',name:'context_read',operation:'context',input:{private:'input'},execute:async()=>({private:'output'})});
+    await manager.publishPending();
+    const row=(await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=?').bind(runId).first<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>())!;
+    const get=vi.spyOn(env.RESEARCH,'get');
+    try {
+      expect(await readAdminToolTrace(env,runId,row.trace_id,{snapshot:row,event:'tool/call'})).toMatchObject({input:{private:'input'},payloadState:'complete'});
+      expect(await readAdminToolTrace(env,runId,row.trace_id,{snapshot:row,event:'tool/result'})).toMatchObject({output:{private:'output'},payloadState:'complete'});
+      expect(get.mock.calls.map(call=>call[0])).toEqual([row.input_key,row.output_key]);
+      await env.DB.prepare('UPDATE agent_tool_traces SET index_version=index_version+1 WHERE trace_id=?').bind(row.trace_id).run();
+      const changed=await readAdminToolTrace(env,runId,row.trace_id,{snapshot:row,event:'tool/result'});
+      expect(changed).toMatchObject({input:null,payloadState:'unavailable'});
+      expect(changed?.output).toBeUndefined();
+      await env.DB.prepare('UPDATE agent_tool_traces SET deleted=1,index_version=index_version+1 WHERE trace_id=?').bind(row.trace_id).run();
+      expect(await readAdminToolTrace(env,runId,row.trace_id,{snapshot:row,event:'tool/result'})).toMatchObject({input:null,payloadState:'deleted'});
+    } finally {get.mockRestore();}
+  });
+});
+
+test('run summaries retry independently and settled history is skipped during recovery',async()=>{
+  const {runtime,runId}=await seed('trace-summary-retry','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const prepare=env.DB.prepare.bind(env.DB);
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const db=vi.spyOn(env.DB,'prepare').mockImplementation(sql=>{
+      if (sql.startsWith('INSERT INTO agent_trace_runs')) throw new Error('Summary index unavailable');
+      return prepare(sql);
+    });
+    try {
+      await manager.track(runId,{toolCallId:'summary',name:'context_read',operation:'context',input:{},execute:async()=>({ok:true})});
+      await manager.publishPending();
+      expect(instance.sql`SELECT index_pending FROM agent_trace_run_index`).toEqual([{index_pending:1}]);
+      expect(await prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first()).not.toBeNull();
+    } finally {db.mockRestore();log.mockRestore();}
+    instance.sql`UPDATE agent_runs SET status='completed' WHERE id=${runId}`;
+    manager.syncRun(runId);
+    await manager.publishPending();
+    expect(await env.DB.prepare('SELECT status,call_count FROM agent_trace_runs WHERE run_id=?').bind(runId).first()).toMatchObject({status:'completed',call_count:1});
+    expect(manager.hasPending).toBe(false);
+    const metadata=vi.spyOn(manager as unknown as {metadata:unknown},'metadata','get');
+    try {await manager.publishPending();expect(metadata).not.toHaveBeenCalled();}
+    finally {metadata.mockRestore();}
   });
 });

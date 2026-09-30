@@ -99,6 +99,8 @@ test('diagnostic traces require live admin sessions and export complete ordered 
     (trace_id,run_id,tool_call_id,user_id,session_id,tool_name,operation,source,run_status,status,started_at,finished_at,input_key,output_key,index_version,attempt,call_sequence,result_sequence)
     VALUES (?,?,?,?,?,'search_context','context','model','completed','completed',100,200,?,?,1,1,1,2)`)
     .bind(traceId,runId,'call-1',user.user.id,sessionId,inputKey,outputKey).run();
+  await env.DB.prepare(`INSERT INTO agent_trace_runs VALUES (?,?,?,'completed',100,200,1,0,0,1)`)
+    .bind(runId,user.user.id,sessionId).run();
   const paths=[`/v1/admin/agent-traces`,`/v1/admin/agent-traces/${runId}`,`/v1/admin/agent-traces/${runId}/calls/${traceId}`,`/v1/admin/agent-traces/${runId}/export`];
   for (const path of paths) {
     expect((await request(path)).status).toBe(401);
@@ -121,4 +123,41 @@ test('diagnostic traces require live admin sessions and export complete ordered 
   expect(await (await request(paths[2]!,{headers:{cookie:admin.cookie}})).json()).toMatchObject({input:null,payloadState:'deleted'});
   await env.DB.prepare('DELETE FROM user WHERE id=?').bind(user.user.id).run();
   expect(await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE trace_id=?').bind(traceId).first()).toBeNull();
+});
+
+test('run status filters retain complete counts when call rows have mixed publication states',async()=>{
+  const admin=await session('trace-summary-admin@example.test');
+  await env.DB.prepare("UPDATE user SET role='admin' WHERE id=?").bind(admin.user.id).run();
+  const runId=crypto.randomUUID(),sessionId=crypto.randomUUID();
+  for (const [index,runStatus] of ['completed','running'].entries()) {
+    await env.DB.prepare(`INSERT INTO agent_tool_traces
+      (trace_id,run_id,tool_call_id,user_id,session_id,tool_name,operation,source,run_status,status,started_at,index_version,attempt,call_sequence)
+      VALUES (?,?,?,?,?,'context_read','context','model',?,'running',100,1,1,?)`)
+      .bind(crypto.randomUUID(),runId,`call-${index}`,admin.user.id,sessionId,runStatus,index+1).run();
+  }
+  await env.DB.prepare("INSERT INTO agent_trace_runs VALUES (?,?,?,'completed',100,200,2,0,0,1)").bind(runId,admin.user.id,sessionId).run();
+  for (const q of [runId,sessionId,admin.user.id]) {
+    const response=await request(`/v1/admin/agent-traces?q=${q}&status=completed`,{headers:{cookie:admin.cookie}});
+    expect(await response.json()).toMatchObject({runs:[{runId,status:'completed',callCount:2}]});
+  }
+  const running=await request(`/v1/admin/agent-traces?q=${runId}&status=running`,{headers:{cookie:admin.cookie}});
+  expect(await running.json()).toMatchObject({runs:[]});
+  const detail=await request(`/v1/admin/agent-traces/${runId}`,{headers:{cookie:admin.cookie}});
+  expect(await detail.json()).toMatchObject({status:'completed',calls:[{status:'interrupted'},{status:'interrupted'}]});
+});
+
+test('oversized exports fail before streaming or reading payloads',async()=>{
+  const admin=await session('trace-export-budget@example.test');
+  await env.DB.prepare("UPDATE user SET role='admin' WHERE id=?").bind(admin.user.id).run();
+  const runId=crypto.randomUUID(),sessionId=crypto.randomUUID();
+  await env.DB.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<201)
+    INSERT INTO agent_tool_traces
+    (trace_id,run_id,tool_call_id,user_id,session_id,tool_name,operation,source,run_status,status,started_at,
+      input_key,output_key,index_version,attempt,call_sequence,result_sequence)
+    SELECT lower(hex(randomblob(16))),?,CAST(i AS TEXT),?,?,'context_read','context','model','completed','completed',
+      100,'input.json','output.json',1,1,i*2,i*2+1 FROM n`).bind(runId,admin.user.id,sessionId).run();
+  const response=await request(`/v1/admin/agent-traces/${runId}/export`,{headers:{cookie:admin.cookie}});
+  expect(response.status).toBe(422);
+  expect(response.headers.get('Content-Disposition')).toBeNull();
+  expect(await response.json()).toMatchObject({error:{code:'TRACE_EXPORT_TOO_LARGE'}});
 });

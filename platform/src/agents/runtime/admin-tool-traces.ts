@@ -20,10 +20,12 @@ export function adminTraceSummary(row: AdminTraceRow) {
 }
 
 // Administrative only. HTTP callers must pass requireAdminSession first.
-export async function readAdminToolTrace(env: Pick<Env, 'DB' | 'RESEARCH'>, runId: string, traceId: string): Promise<ToolCallDetail | null> {
-  const query = () => env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? AND trace_id=?')
-    .bind(runId,traceId).first<AdminTraceRow>();
-  const row = await query();
+export async function readAdminToolTrace(env: Pick<Env, 'DB' | 'RESEARCH'>, runId: string, traceId: string, selection?: {snapshot:AdminTraceRow;event:'tool/call'|'tool/result'}): Promise<ToolCallDetail | null> {
+  const query = () => env.DB.prepare(`SELECT t.*,r.status AS summary_status FROM agent_tool_traces t
+      LEFT JOIN agent_trace_runs r ON r.run_id=t.run_id WHERE t.run_id=? AND t.trace_id=?`)
+    .bind(runId,traceId).first<AdminTraceRow & {summary_status:string|null}>()
+    .then(row=>row ? {...row,run_status:row.summary_status ?? row.run_status} : null);
+  const row = selection?.snapshot ?? await query();
   if (!row) return null;
   const summary = adminTraceSummary(row);
   if (row.deleted) return toolCallDetailSchema.parse({ ...summary, input:null });
@@ -32,7 +34,15 @@ export async function readAdminToolTrace(env: Pick<Env, 'DB' | 'RESEARCH'>, runI
     const object = await env.RESEARCH.get(key);
     return object ? object.json() : undefined;
   };
-  const [input,output,error] = await Promise.all([read(row.input_key),read(row.output_key),read(row.error_key)]);
+  const inputSelected = selection?.event !== 'tool/result';
+  const resultSelected = selection?.event !== 'tool/call';
+  // Exports read each payload once and pin both events to the initial revision.
+  // Recheck D1 after the read to preserve deletion revocation without caching payloads.
+  const [input,output,error] = await Promise.all([
+    inputSelected ? read(row.input_key) : undefined,
+    resultSelected ? read(row.output_key) : undefined,
+    resultSelected ? read(row.error_key) : undefined,
+  ]);
   // Deletion or a concurrent settlement must not return an older payload view.
   const latest = await query();
   if (!latest) return null;
@@ -43,6 +53,6 @@ export async function readAdminToolTrace(env: Pick<Env, 'DB' | 'RESEARCH'>, runI
     ...(output !== undefined ? {output} : {}), ...(error !== undefined ? {error} : {}),
     ...(summary.status === 'interrupted' && error === undefined
       ? {error:{name:'Interrupted',code:'TOOL_INTERRUPTED',message:'The run ended before a tool result was recorded.'}} : {}),
-    payloadState:input === undefined || (row.status === 'completed' && output === undefined)
-      || (row.status === 'failed' && error === undefined) ? 'unavailable' : 'complete' });
+    payloadState:(inputSelected && input === undefined) || (resultSelected && row.status === 'completed' && output === undefined)
+      || (resultSelected && row.status === 'failed' && error === undefined) ? 'unavailable' : 'complete' });
 }
