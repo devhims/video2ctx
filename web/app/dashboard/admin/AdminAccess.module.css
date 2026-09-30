@@ -39,3 +39,6 @@
 }
 
 .identity :global(.skeleton-email) { width: min(240px, 40vw); }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 28px; }
+.tabs button[aria-pressed='true'] { background: var(--color-dashboard-ink); color: var(--color-dashboard-paper); }

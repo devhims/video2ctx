@@ -1,3 +1,4 @@
+import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -656,7 +657,7 @@ test('session assets enforce ownership and deletion removes run copies, citation
     version=raw.assetVersions![0]!;
     sharedReference=JSON.parse(state.storage.sql.exec<{reference_json:string}>('SELECT reference_json FROM session_asset_catalog_refs WHERE version=?',version).one().reference_json).asset;
     const writer=instance as unknown as {performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>};
-    const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
+    const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',input:{videoId:'abcdefghijk'},execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
     instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'finalize',responseIntent:'context_answer',reason:'Stored evidence'})},0)`;
     await writer.finalizeRun(runId,'finish',{intent:'context_answer',answer:`A caption [cite:${packet.excerpts[0]!.id}]`,confidence:'high',citations:[],artifacts:[],warnings:[],
       memoryUpdates:[{kind:'finding',topic:'caption',text:'A finding',evidenceIds:[packet.excerpts[0]!.id]}]});
@@ -750,7 +751,7 @@ test('persists retrieval and analysis with separate bounded quotas and settles o
     };
     const execute=(n:number,analysis:boolean)=>writer.performEvidenceTool(runId,{
       toolCallId:`${analysis?'analysis':'retrieval'}-${n}`,toolName:analysis?'analyze_video_transcript':'get_video_transcript',
-      semanticKey:`${analysis?'analysis':'retrieval'}:${n}`,operation:'transcript',
+      semanticKey:`${analysis?'analysis':'retrieval'}:${n}`,operation:'transcript',input:{videoId:'abcdefghijk'},
       execute:async()=>({packetId:`packet:${runId}:${analysis?'analysis':'retrieval'}-${n}`,kind:'youtube_transcript',
         sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],
         excerpts:analysis?[{id:`finding-${n}`,sourceId:'source',text:'A supported finding.'}]:[],artifacts:[],warnings:[],
@@ -788,4 +789,267 @@ test('operator asset migration RPC enforces session ownership and verifies dorma
   expect((await runtime.migrateSessionAssets(conversationId, userId, { mode: 'verify' }))?.results)
     .toEqual([{ version, status: 'shared_verified', migrated: false }]);
   expect(await runtime.getSessionAsset(conversationId, userId, version)).toMatchObject({ text: 'Saved captions' });
+});
+
+test('inspects complete persisted tool inputs and outputs after RPC restoration', async () => {
+  const { runtime, runId, userId } = await seed('complete-tool-trace', 'running');
+  const input = { videoId: 'abcdefghijk', focus: 'x'.repeat(1500), options: { offsets: Array.from({ length: 30 }, (_, i) => i) } };
+  const packet: EvidencePacket = { packetId: 'full-trace-packet', kind: 'youtube_transcript',
+    sources: [{ id: 'source', provider: 'youtube', kind: 'transcript', videoId: input.videoId }],
+    excerpts: Array.from({ length: 200 }, (_, i) => ({ id: `excerpt-${i}`, sourceId: 'source', text: 'complete output '.repeat(100) })),
+    artifacts: [], warnings: [], usage: [] };
+  const returned=await runInDurableObject(runtime, async instance => {
+    const methods = instance as unknown as {
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution & { input: unknown }): Promise<EvidencePacket>;
+    };
+    return methods.executeEvidenceTool(runId, { toolCallId: 'full-call', toolName: 'get_video_transcript',
+      operation: 'transcript', semanticKey: `transcript:${JSON.stringify({ videoId: input.videoId })}`, input,
+      execute: async () => packet });
+  });
+  await runtime.retryTraceIndex();
+  const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?')
+    .bind(runId,'full-call').first<{trace_id:string}>();
+  expect(row).not.toBeNull();
+  const trace=await readAdminToolTrace(env,runId,row!.trace_id);
+  expect(trace).toMatchObject({toolCallId:'full-call',input,status:'completed',payloadState:'complete'});
+  expect(JSON.stringify(trace?.output)===JSON.stringify(returned)).toBe(true);
+  expect(JSON.stringify(await runtime.getRunProgress(runId))).not.toContain(input.focus);
+});
+
+test('trace history retains repeated attempts, exact model results and parallel event ordering', async () => {
+  const {runtime,runId}=await seed('trace-attempt-history','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const input={query:'complete argument',nested:{ids:Array.from({length:40},(_,i)=>i)}};
+    const first=await manager.track(runId,{toolCallId:'same-id',name:'research_video_transcripts',operation:'research',source:'model',input,
+      execute:async()=>manager.track(runId,{toolCallId:'same-id',name:'internal',operation:'transcript',input:{different:true},execute:async()=>({answer:'exact model result',nested:[{all:true}]})})});
+    expect(first.answer).toBe('exact model result');
+    await manager.track(runId,{toolCallId:'same-id',name:'research_video_transcripts',operation:'research',source:'model',input:{retry:true},execute:async()=>({answer:'second result'})});
+    const error=Object.assign(new Error('The provider failed.'),{code:'PROVIDER_UNAVAILABLE',headers:{authorization:'SECRET'}});
+    await expect(manager.track(runId,{toolCallId:'failed-id',name:'read_session_evidence',operation:'context',input:{version:'v1'},execute:async()=>{throw error;}})).rejects.toBe(error);
+    await Promise.all(['parallel-a','parallel-b'].map(toolCallId=>manager.track(runId,{toolCallId,name:'context_read',operation:'context',input:{toolCallId},execute:async()=>({toolCallId})})));
+    await manager.publishPending();
+    const rows=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence').bind(runId).all<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
+    expect(rows.results).toHaveLength(5);
+    const attempts=rows.results.filter(row=>row.tool_call_id==='same-id');
+    expect(attempts.map(row=>row.attempt)).toEqual([1,2]);
+    const detail=await readAdminToolTrace(env,runId,attempts[0]!.trace_id);
+    expect(detail?.input).toEqual(input);
+    expect(detail?.output).toEqual(first);
+    const failed=await readAdminToolTrace(env,runId,rows.results.find(row=>row.tool_call_id==='failed-id')!.trace_id);
+    expect(failed?.error).toEqual({name:'Error',message:error.message,code:error.code});
+    expect(JSON.stringify(failed)).not.toContain('SECRET');
+    const sequences=rows.results.flatMap(row=>[row.call_sequence,row.result_sequence!]).sort((a,b)=>a-b);
+    expect(sequences).toEqual(Array.from({length:10},(_,i)=>i+1));
+  });
+});
+
+test('diagnostic storage failures preserve tool behavior and pending D1 writes retry', async () => {
+  const {runtime,runId}=await seed('trace-storage-failure','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const prepare=env.DB.prepare.bind(env.DB);
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const db=vi.spyOn(env.DB,'prepare').mockImplementation(sql=>{
+      if (sql.startsWith('INSERT INTO agent_tool_traces')) throw new Error('D1 unavailable');
+      return prepare(sql);
+    });
+    try {
+      expect(await manager.track(runId,{toolCallId:'retry-index',name:'read_session_history',operation:'context',input:{offset:0},execute:async()=>({messages:['saved history']})})).toEqual({messages:['saved history']});
+      await manager.publishPending();
+      expect(instance.sql`SELECT index_pending FROM agent_call_traces`[0]!.index_pending).toBe(1);
+    } finally {db.mockRestore();}
+    await manager.publishPending();
+    const indexed=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=?').bind(runId).first<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
+    expect(indexed?.status).toBe('completed');
+    const storage=vi.spyOn(env.RESEARCH,'put').mockRejectedValue(new Error('R2 unavailable'));
+    try {
+      expect(await manager.track(runId,{toolCallId:'missing-blob',name:'search_context',operation:'context',input:{query:'secret context'},execute:async()=>({matches:['secret result']})})).toEqual({matches:['secret result']});
+      await manager.publishPending();
+      expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBeGreaterThan(0);
+    } finally {storage.mockRestore();}
+    const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?').bind(runId,'missing-blob').first<{trace_id:string}>();
+    expect(await readAdminToolTrace(env,runId,row!.trace_id)).toMatchObject({status:'completed',payloadState:'unavailable',captureError:'OUTPUT_STORAGE_FAILED'});
+    await manager.publishPending();
+    expect(await readAdminToolTrace(env,runId,row!.trace_id)).toMatchObject({status:'completed',payloadState:'complete',input:{query:'secret context'},output:{matches:['secret result']}});
+    expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBe(0);
+    log.mockRestore();
+  });
+});
+
+test('deletion revokes diagnostic payloads and a late completion cannot recreate them', async () => {
+  const {runtime,runId,conversationId,userId}=await seed('trace-deletion-race','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    let release!:()=>void;
+    let entered!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const pending=manager.track(runId,{toolCallId:'late',name:'read_session_evidence',operation:'context',input:{private:'input'},execute:async()=>{entered();await waiting;return {private:'output'};}});
+    await started;
+    await manager.publishPending();
+    const before=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=?').bind(runId).first<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
+    await instance.deleteSessionAssets(conversationId,userId);
+    release();
+    await pending;
+    expect(await readAdminToolTrace(env,runId,before!.trace_id)).toMatchObject({payloadState:'deleted',input:null});
+    expect(await env.RESEARCH.get(before!.input_key!)).toBeNull();
+    const objects=await env.RESEARCH.list({prefix:'agent-traces/'});
+    expect(objects.objects.filter(object=>object.key.includes(runId))).toHaveLength(0);
+  });
+});
+
+test('watchdog reconciliation exposes unmatched tool calls as interrupted', async () => {
+  const {runtime,runId}=await seed('trace-watchdog-interruption','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const pending=manager.track(runId,{toolCallId:'interrupted',name:'search_context',operation:'context',input:{query:'saved data'},execute:async()=>{
+      entered();await waiting;throw new Error('Aborted after run deadline.');
+    }});
+    // Attach the rejection handler before releasing the synthetic aborted call.
+    const rejected=expect(pending).rejects.toThrow('Aborted after run deadline.');
+    await started;
+    await instance.reconcileRun(runId);
+    await manager.publishPending();
+    const row=await env.DB.prepare('SELECT trace_id,run_status FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{trace_id:string;run_status:string}>();
+    expect(row?.run_status).toBe('failed');
+    expect(await readAdminToolTrace(env,runId,row!.trace_id)).toMatchObject({status:'interrupted',error:{code:'TOOL_INTERRUPTED'}});
+    release();await rejected;
+  });
+});
+
+
+test.each(['R2','D1'] as const)('slow %s uploads do not delay tool execution or the next call', async service => {
+  const {runtime,runId}=await seed(`trace-background-${service}`,'running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const put=env.RESEARCH.put.bind(env.RESEARCH);
+    const prepare=env.DB.prepare.bind(env.DB);
+    const storage=service==='R2' ? vi.spyOn(env.RESEARCH,'put').mockImplementation(async (...args)=>{
+      entered();await waiting;return put(...args);
+    }) : null;
+    const db=service==='D1' ? vi.spyOn(env.DB,'prepare').mockImplementation(sql=>{
+      const statement=prepare(sql);
+      if (sql.startsWith('INSERT INTO agent_tool_traces')) {
+        const bind=statement.bind.bind(statement);
+        vi.spyOn(statement,'bind').mockImplementation((...values)=>{
+          const bound=bind(...values);
+          const run=bound.run.bind(bound);
+          vi.spyOn(bound,'run').mockImplementation(async()=>{entered();await waiting;return run();});
+          return bound;
+        });
+      }
+      return statement;
+    }) : null;
+    try {
+      let executed=false;
+      const first=manager.track(runId,{toolCallId:'first',name:'context_read',operation:'context',input:{id:1},execute:async()=>{
+        executed=true;return {full:'first output'};
+      }});
+      expect(executed).toBe(true);
+      await started;
+      expect(await first).toEqual({full:'first output'});
+      expect(await manager.track(runId,{toolCallId:'second',name:'context_read',operation:'context',input:{id:2},execute:async()=>({full:'second output'})}))
+        .toEqual({full:'second output'});
+      expect(instance.sql`SELECT status FROM agent_call_traces`).toEqual([{status:'completed'},{status:'completed'}]);
+    } finally {
+      release();await manager.publishPending();storage?.mockRestore();db?.mockRestore();
+    }
+    const rows=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence').bind(runId).all<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
+    expect(rows.results).toHaveLength(2);
+    expect((await readAdminToolTrace(env,runId,rows.results[1]!.trace_id))?.output).toEqual({full:'second output'});
+  });
+});
+
+test('a fresh trace manager recovers large immutable UTF-8 snapshots from the durable buffer', async()=>{
+  const {runtime,runId,userId,conversationId}=await seed('trace-buffer-recovery','running');
+  await runInDurableObject(runtime,async (instance,state)=>{
+    const {ToolCallTraceManager}=await import('../src/agents/runtime/tool-call-trace');
+    const manager=(instance as unknown as {traceManager:InstanceType<typeof ToolCallTraceManager>}).traceManager;
+    const text='漢🙂'.repeat(400_000); // Larger than SQLite's 2 MB row limit.
+    const input={text,nested:{original:true}};
+    const output={text,tail:'last complete output'};
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const storage=vi.spyOn(env.RESEARCH,'put').mockRejectedValue(new Error('Temporary R2 outage'));
+    try {
+      const result=await manager.track(runId,{toolCallId:'recover',name:'context_read',operation:'context',input,execute:async()=>{
+        input.nested.original=false;return output;
+      }});
+      expect(result).toBe(output);
+      output.tail='mutated after return';
+      await manager.publishPending();
+      expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBeGreaterThan(20);
+      expect(instance.getSchedules().some(schedule=>schedule.callback==='retryTraceIndex')).toBe(true);
+    } finally {storage.mockRestore();log.mockRestore();}
+    const key=instance.sql<{input_key:string}>`SELECT input_key FROM agent_call_traces`[0]!.input_key;
+    const prefix=key.slice(0,key.indexOf(runId));
+    const recovered=new ToolCallTraceManager(state.storage.sql,work=>state.storage.transactionSync(work),env.RESEARCH,prefix,
+      ()=>{},async()=>{},env.DB,()=>({userId,sessionId:conversationId,status:'running'}));
+    await recovered.publishPending();
+    const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{trace_id:string}>();
+    const detail=await readAdminToolTrace(env,runId,row!.trace_id);
+    expect(detail).toMatchObject({payloadState:'complete',input:{text,nested:{original:true}},output:{text,tail:'last complete output'}});
+    expect(detail?.captureError).toBeUndefined();
+    expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBe(0);
+  });
+});
+
+test('deletion removes buffered snapshots and cleans up an R2 upload finishing after revocation', async()=>{
+  const {runtime,runId,conversationId,userId}=await seed('trace-upload-deletion','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const put=env.RESEARCH.put.bind(env.RESEARCH);
+    const storage=vi.spyOn(env.RESEARCH,'put').mockImplementation(async(...args)=>{entered();await waiting;return put(...args);});
+    try {
+      await manager.track(runId,{toolCallId:'private',name:'context_read',operation:'context',input:{private:'input'},execute:async()=>({private:'output'})});
+      await started;
+      const deletion=instance.deleteSessionAssets(conversationId,userId);
+      expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBe(0);
+      release();await deletion;
+      await manager.publishPending();
+      const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{trace_id:string}>();
+      expect(await readAdminToolTrace(env,runId,row!.trace_id)).toMatchObject({payloadState:'deleted',input:null});
+      const objects=await env.RESEARCH.list({prefix:'agent-traces/'});
+      expect(objects.objects.filter(object=>object.key.includes(runId))).toHaveLength(0);
+    } finally {release();await manager.publishPending();storage.mockRestore();}
+  });
+});
+
+
+test('alarm retries rearm through an outage and drain more than one trace batch', async()=>{
+  const {runtime,runId}=await seed('trace-alarm-outage','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const storage=vi.spyOn(env.RESEARCH,'put').mockRejectedValue(new Error('R2 outage'));
+    try {
+      await Promise.all(Array.from({length:40},(_,i)=>manager.track(runId,{toolCallId:`batch-${i}`,name:'context_read',operation:'context',input:{i},execute:async()=>({complete:i})})));
+      await manager.publishPending();
+      const before=instance.getSchedules().filter(schedule=>schedule.callback==='retryTraceIndex');
+      expect(before).toHaveLength(1);
+      instance.sql`UPDATE cf_agents_schedules SET time=0 WHERE callback='retryTraceIndex'`;
+      await instance.alarm();
+      const after=instance.getSchedules().filter(schedule=>schedule.callback==='retryTraceIndex');
+      expect(after).toHaveLength(1);
+      expect(after[0]!.id).not.toBe(before[0]!.id);
+      expect(after[0]!.time).toBeGreaterThan(Math.floor(Date.now()/1000));
+      expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBe(80);
+    } finally {storage.mockRestore();log.mockRestore();}
+    instance.sql`UPDATE cf_agents_schedules SET time=0 WHERE callback='retryTraceIndex'`;
+    await instance.alarm();
+    expect(instance.sql`SELECT COUNT(*) AS count FROM agent_trace_payload_chunks`[0]!.count).toBe(0);
+    expect(instance.sql`SELECT COUNT(*) AS count FROM agent_call_traces WHERE index_pending=1`[0]!.count).toBe(0);
+    const rows=await env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence').bind(runId).all<import('../src/agents/runtime/admin-tool-traces').AdminTraceRow>();
+    expect(rows.results).toHaveLength(40);
+    expect((await readAdminToolTrace(env,runId,rows.results[39]!.trace_id))?.output).toEqual({complete:39});
+  });
 });

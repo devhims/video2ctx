@@ -1,3 +1,4 @@
+import type { TraceToolCall } from '../runtime/tool-call-trace';
 import { z } from 'zod';
 import { ApiError } from '../../lib/http';
 import { fireworksModelPricing } from '../fireworks-finalizer';
@@ -71,6 +72,7 @@ export interface ClassificationDiagnostic {
 }
 
 export interface CapabilityClassifierInput {
+  traceToolCall?: TraceToolCall;
   onDiagnostic?: (event: ClassificationDiagnostic) => void;
   message: string;
   conversationHistory?: ConversationTurn[];
@@ -182,6 +184,10 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
     }));
     if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
     if (parsed.success && feedback.length === 0) feedback = searchQueryNumberIssues(parsed.data, input);
+    for (const call of result.toolCalls) {
+      await input.traceToolCall?.({toolCallId:call.toolCallId,name:call.toolName,operation:'classification',source:'model',
+        input:call.input,execute:async()=>({accepted:feedback.length===0,decision:parsed.success ? parsed.data : null,issues:feedback})});
+    }
     input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
       elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });

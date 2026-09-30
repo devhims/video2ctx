@@ -59,6 +59,23 @@ createServer(async (req, res) => {
   if (url.pathname.startsWith('/v1/admin/')) {
     if (!signedIn || !admin) return reply(signedIn ? 403 : 401, { error: { code: 'ADMIN_REQUIRED', message: 'Admin access required.' } });
     if (url.pathname === '/v1/admin/access') return reply(200, { enabled: true });
+    if (url.pathname.startsWith('/v1/admin/agent-traces')) {
+      const traceId='bced9eaa-09f3-41a4-b61d-810bda127ef7';
+      const call={traceId,toolCallId:'research-1',name:'research_video_transcripts',operation:'research',source:'model',attempt:1,
+        callSequence:1,resultSequence:2,status:'completed',startedAt:stamp,finishedAt:stamp+500,payloadState:'complete'};
+      const detail={...call,input:{videoIds:['P7bxbDSnZRM'],options:{focus:'Complete nested tool input'}},
+        output:{findings:[{text:'full output '.repeat(150)+'COMPLETE_OUTPUT_TAIL'}]}};
+      if (url.pathname.endsWith('/export')) {
+        res.writeHead(200,{'Content-Type':'application/x-ndjson','Content-Disposition':'attachment; filename="agent-trace.jsonl"'});
+        res.end([JSON.stringify({type:'trace/header',version:1,runId:sessionId}),JSON.stringify({type:'tool/call',seq:1,arguments:detail.input}),JSON.stringify({type:'tool/result',seq:2,result:detail.output})].join('\n')+'\n');
+        return;
+      }
+      if (url.pathname.includes('/calls/')) return reply(200,detail);
+      if (url.pathname===`/v1/admin/agent-traces/${sessionId}`) return reply(200,{runId:sessionId,userId:'fixture-user',sessionId,status:'completed',calls:[call]});
+      const query=url.searchParams.get('q');
+      return reply(200,{runs:query && query!==sessionId ? [] : [{runId:sessionId,userId:'fixture-user',sessionId,status:'completed',startedAt:stamp,updatedAt:stamp+500,callCount:1,failedCalls:0,captureFailures:0}],nextOffset:null});
+    }
+
     if (url.pathname === '/v1/admin/agent-access') {
       if (req.method === 'GET') {
         const q = url.searchParams.get('q') ?? '', limit = Number(url.searchParams.get('limit') ?? 50), offset = Number(url.searchParams.get('offset') ?? 0);

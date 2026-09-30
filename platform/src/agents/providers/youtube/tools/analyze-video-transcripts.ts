@@ -70,6 +70,7 @@ export async function executeAnalyzeVideoTranscript(
     throw new Error('Transcript analysis budget reached. Finalize with existing evidence.');
   try {
     return await context.executeEvidenceTool({
+    input: parsed,
       toolCallId,
       toolName: 'analyze_video_transcript',
       operation: 'transcript',

@@ -7097,6 +7097,100 @@
           }
         }
       },
+      "AdminToolTrace": {
+        "type": "object",
+        "properties": {
+          "traceId": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "callSequence": {
+            "type": "number"
+          },
+          "resultSequence": {
+            "type": "number"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "model",
+              "execution"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "startedAt": {
+            "type": "number"
+          },
+          "finishedAt": {
+            "type": "number"
+          },
+          "input": {},
+          "output": {},
+          "error": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          "captureError": {
+            "type": "string"
+          },
+          "payloadState": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "legacy",
+              "deleted",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "traceId",
+          "attempt",
+          "callSequence",
+          "toolCallId",
+          "name",
+          "operation",
+          "status",
+          "startedAt",
+          "input",
+          "payloadState"
+        ],
+        "additionalProperties": false
+      },
       "AgentRunProgress": {
         "type": "object",
         "properties": {

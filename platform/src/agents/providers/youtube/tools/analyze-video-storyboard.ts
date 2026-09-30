@@ -23,6 +23,7 @@ export function executeAnalyzeVideoStoryboard(
   const parsed = storedVisualInputSchema.parse(input);
   const versions = [...parsed.assetVersions].sort();
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId,
     toolName: 'analyze_video_storyboard',
     operation: 'storyboard',

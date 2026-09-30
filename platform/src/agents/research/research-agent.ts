@@ -1,3 +1,4 @@
+import { traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
@@ -112,6 +113,7 @@ export async function executeResearchRun(options: {
   onCapabilityLoaded: (capability: ExecutableRoute['route'], researchDeadlineAt: number) => void | Promise<void>;
   onFinalizing: (deadlineAt: number) => void | Promise<void>;
   onDraft?: (draft: AgentDraft) => void;
+  traceToolCall?: TraceToolCall;
   executeEvidenceTool: (execution: EvidenceToolExecution) => Promise<EvidencePacket>;
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
   saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
@@ -136,6 +138,7 @@ export async function executeResearchRun(options: {
       modelBudget: options.modelBudget,
       modelCallId: `${options.modelCallPrefix}:classifier`,
       onDiagnostic: options.onClassificationDiagnostic,
+      traceToolCall: options.traceToolCall,
     }), 'Classification phase timeout.'),
     persist: options.persistRoute,
   });
@@ -150,7 +153,7 @@ export async function executeResearchRun(options: {
         model: createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision,
-        context: { session: options.session, runId: options.runId, signal, finalize: (id, input) => persist(() => options.finalize(id, input)) },
+        context: { traceToolCall: options.traceToolCall, session: options.session, runId: options.runId, signal, finalize: (id, input) => persist(() => options.finalize(id, input)) },
         evidence: conversationEvidence(options.recoveredEvidence, options.conversationHistory), toolFailures: options.recoveredToolFailures,
         modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix, onDraft: options.onDraft,
       }), 'Finalization phase timeout.');
@@ -184,6 +187,7 @@ export async function executeResearchRun(options: {
     options.onTranscriptDiagnostic,
   );
   const context: AgentToolContext = {
+    traceToolCall: options.traceToolCall,
     session: options.session,
     runId: options.runId,
     provider,
@@ -503,7 +507,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
           ].join('\n'),
-          tools: {...createCapabilityToolSet(phaseContext, toolNames),...sessionTools},
+          tools: traceToolSet({...createCapabilityToolSet(phaseContext, toolNames),...sessionTools}, phaseContext.traceToolCall),
           activeTools: [...toolNames,...Object.keys(sessionTools)],
           unavailableTools: () => [
             ...(searchUsed || !!options.decision.comparisonVideoIds?.length || (options.decision.route === 'topic_research' && !!options.decision.channelId) ? ['search_youtube'] : []),
@@ -645,7 +649,7 @@ async function runUnifiedFinalizer(options: {
   model: LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
-  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'session'>;
+  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'session' | 'traceToolCall'>;
   evidence: EvidencePacket[];
   toolFailures: EvidenceToolFailure[];
   modelBudget?: AgentModelCostBudget;
@@ -746,7 +750,7 @@ async function runUnifiedFinalizer(options: {
           prompt: JSON.stringify({request:options.message,route:options.decision,
             conversationHistory:conversationHistoryForModel(options.conversationHistory),historyPage,
             session:sessionBriefForModel(options.context.session!.brief()),evidence:prepared.evidence}),
-          tools: contextTools,
+          tools: traceToolSet(contextTools, options.context.traceToolCall),
           stopWhen: stepCountIs(4),
           prepareStep: ({stepNumber}) => {
             assertModelCostAvailable(options.modelBudget);

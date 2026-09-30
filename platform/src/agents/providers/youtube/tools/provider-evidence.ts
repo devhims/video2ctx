@@ -35,6 +35,7 @@ export function executeProviderEvidence<T>(
 ): Promise<EvidencePacket> {
   const semanticKey = `${execution.operation}:${JSON.stringify(execution.semanticInput)}`;
   return execution.context.executeEvidenceTool({
+    input: execution.semanticInput,
     toolCallId: execution.toolCallId,
     toolName: execution.toolName,
     semanticKey,

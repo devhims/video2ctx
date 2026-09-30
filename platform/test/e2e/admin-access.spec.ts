@@ -53,3 +53,35 @@ test('revoking admin access hides controls and mutation errors remain visible', 
   await expect(page.getByRole('heading', { name: 'Admin access required' })).toBeVisible();
   await expect(page.getByLabel('Email address', { exact: true })).toHaveCount(0);
 });
+
+test('admin diagnoses a run using complete nested payloads and downloads its timeline', async ({page,context},testInfo)=>{
+  await context.addCookies([
+    {name:'agent-ui',value:'allowed',url:'http://127.0.0.1:3021'},
+    {name:'admin-ui',value:'allowed',url:'http://127.0.0.1:3021'},
+  ]);
+  await page.goto('/dashboard/admin');
+  await page.getByRole('button',{name:'Tool call traces',exact:true}).click();
+  const runId='a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
+  await expect(page.getByRole('heading',{name:'Agent tool traces',exact:true})).toBeVisible();
+  await page.getByLabel('Run, session or user ID').fill(runId);
+  await page.getByRole('button',{name:'Search traces',exact:true}).click();
+  await page.getByRole('button').filter({hasText:runId}).click();
+  await page.getByRole('button').filter({hasText:'1. research_video_transcripts'}).click();
+  await expect(page.getByRole('heading',{name:'Input',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Output',exact:true})).toBeVisible();
+  await expect(page.locator('pre').first()).toContainText('Complete nested tool input');
+  await expect(page.locator('pre').last()).toContainText('COMPLETE_OUTPUT_TAIL');
+  await page.screenshot({path:testInfo.outputPath('admin-tool-trace-desktop.png'),fullPage:true});
+  const downloading=page.waitForEvent('download');
+  await page.getByRole('link',{name:'Download timeline JSONL'}).click();
+  const downloaded=await downloading;
+  expect(downloaded.suggestedFilename()).toBe('agent-trace.jsonl');
+  await downloaded.saveAs(testInfo.outputPath('agent-trace.jsonl'));
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate('document.documentElement.scrollWidth<=innerWidth')).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('admin-tool-trace-mobile.png'),fullPage:true});
+  await page.getByRole('button',{name:'All trace runs'}).click();
+  await page.getByLabel('Run, session or user ID').fill('not-a-run');
+  await page.getByRole('button',{name:'Search traces',exact:true}).click();
+  await expect(page.getByText(/No traces found/)).toBeVisible();
+});
