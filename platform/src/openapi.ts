@@ -1,3 +1,4 @@
+import { toolCallDetailSchema } from './agents/runtime/tool-call-trace';
 import { storedExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
@@ -1593,6 +1594,38 @@ export const openApiDocument = {
         responses: { '200': jsonResponse('Agent access removed.', { type: 'object', properties: { email: { type: 'string' }, enabled: { const: false } }, required: ['email', 'enabled'] }), ...standardErrors },
       },
     },
+    '/v1/admin/agent-traces': {
+      get: { tags:['Administration'],operationId:'listAdminAgentTraces',summary:'Find diagnostic agent runs',
+        description:'Admin-only diagnostic index. Requires a live verified browser admin session. Search an exact run, session or user ID. Complete payloads remain in private R2 and are loaded separately. Normal agent users and API keys cannot access traces.',
+        security:browserSessionSecurity,
+        parameters:[queryParameter('q','Exact run, session or user ID.',{type:'string',maxLength:200}),
+          queryParameter('status','Filter by run status.',{type:'string',enum:['pending','running','completed','failed','cancelled']}),
+          queryParameter('limit','Runs per page.',{type:'integer',minimum:1,maximum:100,default:30}),
+          queryParameter('offset','Pagination offset.',{type:'integer',minimum:0,maximum:1000000,default:0})],
+        responses:{'200':jsonResponse('Diagnostic runs and nextOffset.',{type:'object',properties:{runs:{type:'array',items:{type:'object'}},nextOffset:{type:['integer','null']}}}),...standardErrors},
+      },
+    },
+    '/v1/admin/agent-traces/{runId}': {
+      get:{tags:['Administration'],operationId:'getAdminAgentTraceRun',summary:'List a run’s diagnostic tool attempts',
+        description:'Returns ordered tool-attempt metadata, sequence numbers and payload availability for one run. Admin browser session required. Preserves earlier attempts. Runs with more than 500 attempts require querying the D1 index.',
+        security:browserSessionSecurity,parameters:[pathParameter('runId','Agent run UUID.')],
+        responses:{'200':jsonResponse('Run identity and ordered calls.',{type:'object'}),...standardErrors,'404':responseRef('NotFound')},
+      },
+    },
+    '/v1/admin/agent-traces/{runId}/calls/{traceId}': {
+      get:{tags:['Administration'],operationId:'getAdminAgentToolTrace',summary:'Inspect complete tool arguments and result',
+        description:'Loads complete saved tool-boundary inputs, outputs or error identity from private R2. Requires an admin browser session. Deleted or missing payloads are explicitly marked. Never executes tools.',
+        security:browserSessionSecurity,parameters:[pathParameter('runId','Agent run UUID.'),pathParameter('traceId','Diagnostic attempt UUID from the run index.')],
+        responses:{'200':jsonResponse('Complete diagnostic tool attempt.',schemaRef('AdminToolTrace')),...standardErrors,'404':responseRef('NotFound')},
+      },
+    },
+    '/v1/admin/agent-traces/{runId}/export': {
+      get:{tags:['Administration'],operationId:'exportAdminAgentTrace',summary:'Export an ordered diagnostic timeline',
+        description:'Streams a versioned JSON Lines header followed by ordered tool/call and tool/result records. Arguments and results are complete saved tool-boundary JSON. An unmatched call indicates interrupted or unfinished execution. Admin browser session required. This is offline diagnostic data, not a tool re-execution endpoint.',
+        security:browserSessionSecurity,parameters:[pathParameter('runId','Agent run UUID.')],
+        responses:{'200':{description:'JSON Lines diagnostic export.',content:{'application/x-ndjson':{schema:{type:'string'}}}},...standardErrors,'404':responseRef('NotFound')},
+      },
+    },
     '/v1/admin/jobs': {
       get: {
         tags: ['Administration'],
@@ -2208,6 +2241,7 @@ export const openApiDocument = {
           parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
         },
       },
+      AdminToolTrace:z.toJSONSchema(toolCallDetailSchema,{target:'openapi-3.0'}),
       AgentRunProgress: z.toJSONSchema(agentRunProgressSchema, { target: 'openapi-3.0' }),
       RecentSource: { type: 'object', required: ['id', 'input', 'title', 'kind', 'updatedAt'], properties: {
         id: { type: 'string', format: 'uuid' }, input: { type: 'string' }, title: { type: 'string' },

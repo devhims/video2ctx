@@ -1,3 +1,4 @@
+import { ToolCallTraceManager } from './runtime/tool-call-trace';
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { videoCatalog } from '../lib/video-catalog';
 import { sessionCatalog } from './runtime/session-catalog';
@@ -138,6 +139,19 @@ export interface AgentRunRejection {
 }
 
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
+  #traceManager?: ToolCallTraceManager;
+  private get traceManager() {
+    return (this.#traceManager ??= new ToolCallTraceManager({
+      sql:this.ctx.storage.sql, transaction:work=>this.ctx.storage.transactionSync(work),
+      bucket:this.env.RESEARCH, prefix:`agent-traces/${this.ctx.id.toString()}/`,
+      queueCleanup:keys=>this.sessionStore.queueCleanup(keys), cleanup:()=>this.sessionStore.cleanup(),
+      db:this.env.DB, metadata:runId=>{
+        const run=this.readRun(runId);
+        return run ? {userId:run.user_id,sessionId:run.conversation_id,status:run.status} : undefined;
+      }, retryIndex:()=>this.scheduleTraceRetry(), background:work=>this.ctx.waitUntil(work),
+      cancelRetry:()=>this.cancelTraceRetry(),
+    }));
+  }
   #sessionStore?: SessionEvidenceStore;
   private get sessionStore() {
     return (this.#sessionStore ??= new SessionEvidenceStore(
@@ -214,6 +228,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!this.hasSessionOwner(conversationId,userId)) return null;
     if (version) z.string().regex(/^[a-f0-9]{64}$/).parse(version);
     // Remove SQL copies synchronously before the first await, including tool traces.
+    this.traceManager.revokePayloads();
     const removed = new Set(version ? [version] : this.sessionStore.brief().assets.map(asset=>asset.version));
     const deletedIds = new Set<string>();
     const affectedRuns = new Set<string>();
@@ -249,6 +264,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     this.sessionStore.queueCleanup(previews);
     await this.sessionStore.delete(version);
+    await this.traceManager.publishPending();
     return {deleted:true};
   }
   initialState: AgentRuntimeState = { version: 1 };
@@ -256,10 +272,30 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   readonly #activeRuns = new Set<Promise<void>>();
   readonly #inFlightEvidence = new Map<string, Promise<EvidencePacket>>();
 
+  private scheduleTraceRetry() {
+    return this.schedule(new Date(Date.now()+15_000), 'retryTraceIndex', {}, {idempotent:true});
+  }
+
+  private async cancelTraceRetry() {
+    for (const schedule of this.getSchedules()) if (schedule.callback === 'retryTraceIndex') await this.cancelSchedule(schedule.id);
+  }
+
+  async retryTraceIndex() {
+    // Remove the consumed schedule before rearming, so idempotent scheduling
+    // cannot deduplicate a retry onto the alarm row being processed.
+    for (const schedule of this.getSchedules()) if (schedule.callback === 'retryTraceIndex') await this.cancelSchedule(schedule.id);
+    // onStart may already be uploading and have armed the consumed row.
+    // Persist its replacement before joining any in-flight publisher.
+    if (this.traceManager.hasPending) await this.scheduleTraceRetry();
+    await this.traceManager.publishPending();
+    await this.sessionStore.cleanup();
+  }
+
   async onStart(): Promise<void> {
     this.#deleted = (await this.ctx.storage.get<boolean>('account-deleted')) ?? false;
     this.ensureAgentRuntimeSchema();
     await this.sessionStore.cleanup();
+    this.ctx.waitUntil(this.traceManager.publishPending());
     if (!this.#deleted) {
       for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
         await this.scheduleRunReconciliation(run);
@@ -445,6 +481,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE id = ${runId} AND status NOT IN ('completed', 'failed', 'cancelled')
     `;
     await this.cancelFiber(runId, 'Cancelled by caller.');
+    this.traceManager.syncRun(runId);
     await this.settleRun(runId);
     this.recordEvent(runId, 'run.failed', { code: 'RUN_CANCELLED', message: 'Run cancelled by caller.' });
     return true;
@@ -509,6 +546,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.syncSessionHistory();
       this.sessionStore.beginRun(runId);
       await executeResearchRun({
+        traceToolCall: call => this.traceToolCall(runId, call),
         session: this.sessionStore,
         classificationDeadlineAt: row.classification_deadline_at ?? undefined,
         onClassifying: deadlineAt => this.updatePhase(runId, 'routing', deadlineAt),
@@ -584,10 +622,26 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       }
       await this.settleRun(runId);
       throw normalizedError;
+    } finally {
+      if (!this.#deleted) this.traceManager.syncRun(runId);
     }
   }
 
+  private traceToolCall<T>(runId: string, call: import('./runtime/tool-call-trace').TraceExecution<T>): Promise<T> {
+    if (this.#deleted) throw new Error('Agent account was deleted.');
+    // Execution owns lifecycle checks, including returning already saved results.
+    return this.traceManager.track(runId, call);
+  }
+
   private executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
+    if (this.#deleted) throw new Error('Agent account was deleted.');
+    return this.traceManager.track(runId, {
+      toolCallId: execution.toolCallId, name: execution.toolName, operation: execution.operation,
+      input: execution.input, execute: () => this.executeStoredEvidenceTool(runId, execution),
+    });
+  }
+
+  private executeStoredEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     const completedByCall = this.sql<ToolCallRow>`
       SELECT * FROM agent_tool_calls
       WHERE run_id = ${runId} AND tool_call_id = ${execution.toolCallId} AND status = 'completed'
@@ -614,6 +668,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     this.assertRunActive(runId);
+    const generation = this.sessionStore.clearGeneration();
     // Separate analysis records must not consume the provider credit reservation twice.
     // Both classes remain bounded, including failed attempts and resumed runs.
     const counts = this.sql<{ provider_count: number; analysis_count: number }>`
@@ -647,6 +702,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
     try {
       const packet = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
+      if (generation !== this.sessionStore.clearGeneration()) throw new Error('Evidence was deleted during execution. Retry the request.');
       if (packet.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
       this.assertRunActive(runId);
       const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
@@ -688,7 +744,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
   }
 
-  private async finalizeRun(
+  private finalizeRun(runId: string, toolCallId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult> {
+    return this.traceManager.track(runId, { toolCallId, name: 'finalize_answer', operation: 'finalize', input,
+      execute: () => this.performFinalizeRun(runId, toolCallId, input) });
+  }
+
+  private async performFinalizeRun(
     runId: string,
     toolCallId: string,
     input: FinalizeAnswerInput,
@@ -823,6 +884,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         await this.cancelFiber(runId, 'Agent deadline reached.');
       }
       await this.settleRun(runId);
+      this.traceManager.syncRun(runId);
     } catch {
       await this.schedule(60, 'reconcileRun', runId);
     }
@@ -842,10 +904,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // Abort propagates to provider and model calls. Drain tool promises before
     // removing evidence so a late completion cannot recreate private data.
     await Promise.allSettled([...this.#inFlightEvidence.values()]);
+    this.traceManager.revokePayloads();
+    await this.traceManager.publishPending();
     await this.sessionStore.delete();
     this.sessionStore.search.clearHistory();
-    for (const table of ['agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations']) {
+    for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
+      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations', 'agent_trace_run_index', 'agent_trace_publish_order']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
     // SDK snapshots contain run identifiers only, but clear those too.
@@ -1284,6 +1348,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         WHERE phase = 'finalizing' AND status IN ('pending', 'running')`;
     }
     this.ensureTurnOrdinalColumn();
+    this.traceManager.initialize();
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_tool_calls (
         run_id TEXT NOT NULL,

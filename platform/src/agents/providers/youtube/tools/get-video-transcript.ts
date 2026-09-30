@@ -40,6 +40,7 @@ export function executeGetVideoTranscript(
   const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language })}`;
 
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId,
     toolName: 'get_video_transcript',
     semanticKey,

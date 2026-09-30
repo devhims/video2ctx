@@ -1,0 +1,28 @@
+.inspector { margin-top: 28px; color: var(--color-dashboard-ink); }
+.header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.header h2, .header h3 { margin: 0; }
+.header p, .metadata { color: var(--color-dashboard-ink-soft); font-size: 12px; overflow-wrap: anywhere; }
+.filters { display: flex; align-items: end; gap: 12px; margin: 24px 0; flex-wrap: wrap; }
+.filters label { display: grid; gap: 8px; font-size: 12px; }
+.filters label:first-child { flex: 1; min-width: 220px; }
+.filters select { padding: 11px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-sm); color: var(--color-dashboard-ink); background: var(--color-dashboard-paper); }
+.runs { display: grid; border-top: 1px solid var(--color-dashboard-rule-strong); }
+.runs .run { display: flex; justify-content: space-between; gap: 16px; text-align: left; padding: 18px 0; border: 0; border-bottom: 1px solid var(--color-dashboard-rule-strong); border-radius: 0; background: transparent; }
+.run span { display: grid; gap: 6px; min-width: 0; }
+.run strong, .identifier { overflow-wrap: anywhere; font-family: monospace; font-size: 12px; }
+.run small, .run time { font-weight: 400; font-size: 11px; color: var(--color-dashboard-ink-soft); }
+.actions { display: flex; align-items: center; gap: 16px; margin: 20px 0; }
+.actions a { font-size: 12px; text-decoration: underline; }
+.layout { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 2fr); gap: 20px; margin-top: 20px; }
+.calls { list-style: none; padding: 0; margin: 0; }
+.calls button { display: grid; width: 100%; justify-content: start; text-align: left; margin-bottom: 8px; }
+.calls span, .calls small { font-size: 11px; color: var(--color-dashboard-ink-soft); font-weight: 400; }
+.calls .selected { border-color: var(--color-dashboard-ink); background: var(--color-dashboard-paper); }
+.payload { min-width: 0; border-left: 1px solid var(--color-dashboard-rule-strong); padding-left: 20px; font-size: 13px; }
+.payload h4 { margin: 20px 0 8px; }
+.payload pre { margin: 0; padding: 14px; max-height: 500px; overflow: auto; background: var(--color-dashboard-paper); border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-sm); font-size: 11px; line-height: 1.6; }
+@media (max-width:700px) {
+  .header, .runs .run { flex-direction: column; }
+  .layout { grid-template-columns: minmax(0,1fr); }
+  .payload { border-left: 0; border-top: 1px solid var(--color-dashboard-rule-strong); padding: 20px 0 0; }
+}

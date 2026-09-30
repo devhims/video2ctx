@@ -25,6 +25,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
     semanticKey: `frames:${JSON.stringify(request)}`,
     execute: async () => {

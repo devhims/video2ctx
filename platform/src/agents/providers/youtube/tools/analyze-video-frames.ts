@@ -26,6 +26,7 @@ export function executeAnalyzeVideoFrames(
   const parsed = analyzeVideoFramesInputSchema.parse(input);
   const versions = [...parsed.assetVersions].sort();
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId,
     toolName: 'analyze_video_frames',
     operation: 'frames',

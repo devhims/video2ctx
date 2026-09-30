@@ -27,6 +27,7 @@
       "migrations_dir": "../../migrations"
     }
   ],
+  "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-trace-auth-test"}],
   "queues": {
     "producers": [
       { "binding": "EMAIL_TASKS", "queue": "video2ctx-auth-test-email" }

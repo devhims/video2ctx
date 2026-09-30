@@ -33,6 +33,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
   const parsed = getVideoStoryboardInputSchema.parse(input);
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
     execute: async () => {

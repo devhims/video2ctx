@@ -1,3 +1,4 @@
+import { traceToolCallRepair, type TraceToolCall } from './runtime/tool-call-trace';
 import { fireworksModelPricing } from './fireworks-finalizer';
 import {
   NoSuchToolError,
@@ -44,6 +45,7 @@ export interface AgentCoreRunContext {
 
 export async function runAgentCoreWithModel(options: {
   model: LanguageModel;
+  traceToolCall?: TraceToolCall;
   finalizationModel?: LanguageModel;
   definition: AgentCoreDefinition;
   messages: ModelMessage[];
@@ -70,7 +72,7 @@ export async function runAgentCoreWithModel(options: {
     activeTools: [...options.definition.activeTools],
     toolOrder: [...options.definition.activeTools],
     toolChoice: 'required',
-    repairToolCall: async ({ toolCall, tools: availableTools, error, messages }) => {
+    repairToolCall: traceToolCallRepair(options.traceToolCall, async ({ toolCall, tools: availableTools, error, messages }) => {
       if (NoSuchToolError.isInstance(error)) return null;
       if (toolCall.toolName === finalizationToolName) options.onFinalizationRequested?.();
       const selectedTool = availableTools[toolCall.toolName as keyof typeof availableTools];
@@ -101,7 +103,7 @@ export async function runAgentCoreWithModel(options: {
         pricing: fireworksModelPricing(result.response.modelId),
       });
       return { ...toolCall, input: JSON.stringify(result.output) };
-    },
+    }),
     stopWhen: [
       isStepCount(MAX_MODEL_STEPS + FINALIZATION_RETRY_STEPS),
       hasExecutedToolResult(finalizationToolName),

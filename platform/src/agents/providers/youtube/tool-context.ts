@@ -19,10 +19,12 @@ export interface EvidenceToolExecution {
   toolName: YouTubeEvidenceToolName;
   semanticKey: string;
   operation: EvidenceOperation;
+  input: unknown;
   execute: () => Promise<EvidencePacket>;
 }
 
 export interface AgentToolContext {
+  traceToolCall?: import('../../runtime/tool-call-trace').TraceToolCall;
   pinnedVideoId?: string;
   transcriptSelection?: {
     allowReplacement: boolean;

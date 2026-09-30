@@ -59,6 +59,7 @@ export function executeSearchYouTube(
   const semanticKey = `search:${JSON.stringify(parsed)}`;
 
   return context.executeEvidenceTool({
+    input: parsed,
     toolCallId,
     toolName: 'search_youtube',
     semanticKey,
