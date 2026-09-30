@@ -125,6 +125,8 @@ export class SessionEvidenceStore implements SessionAccess {
       `CREATE TABLE IF NOT EXISTS session_evidence_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)`,
     );
     sql.exec(`INSERT OR IGNORE INTO session_evidence_state VALUES (1, 0)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS session_evidence_clear_state (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)`);
+    sql.exec(`INSERT OR IGNORE INTO session_evidence_clear_state VALUES (1, 0)`);
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_run_generations (run_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)`,
     );
@@ -621,7 +623,11 @@ export class SessionEvidenceStore implements SessionAccess {
     this.sql.exec('UPDATE session_evidence_state SET generation=generation+1 WHERE id=1');
     this.sql.exec('DELETE FROM session_memories WHERE id=?', id);
   }
+  clearGeneration() {
+    return this.sql.exec<{generation:number}>('SELECT generation FROM session_evidence_clear_state WHERE id=1').one().generation;
+  }
   async delete(version?: string) {
+    if (!version) this.sql.exec('UPDATE session_evidence_clear_state SET generation=generation+1 WHERE id=1');
     // Fence pending writes before any R2 I/O. Never resurrect deleted evidence.
     this.sql.exec('UPDATE session_evidence_state SET generation=generation+1 WHERE id=1');
     const rows = version

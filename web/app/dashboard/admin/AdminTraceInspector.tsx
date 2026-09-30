@@ -6,6 +6,7 @@ import {
   type AdminTraceList,type AdminTraceRun,type AdminTraceDetail,
 } from '../../../lib/admin-tool-traces';
 import styles from './AdminTraceInspector.module.css';
+import { platformFetch, platformResponseError } from '../../../lib/platform-request';
 
 export default function AdminTraceInspector() {
   const [query,setQuery]=useState('');
@@ -40,11 +41,8 @@ export default function AdminTraceInspector() {
   async function downloadTrace() {
     setExporting(true);setError('');
     try {
-      const response=await fetch(`/api/platform/v1/admin/agent-traces/${runId}/export`,{cache:'no-store'});
-      if (!response.ok) {
-        const body=await response.json().catch(()=>null);
-        throw new Error(body?.error?.message ?? 'Could not export this trace. Please try again.');
-      }
+      const response=await platformFetch(`/v1/admin/agent-traces/${runId}/export`,{cache:'no-store'});
+      if (!response.ok) throw await platformResponseError(response,'Could not export this trace. Please try again.');
       const url=URL.createObjectURL(await response.blob());
       const link=document.createElement('a');
       link.href=url;link.download=`agent-trace-${runId}.jsonl`;

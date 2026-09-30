@@ -1182,3 +1182,57 @@ test('run summaries retry independently and settled history is skipped during re
     finally {metadata.mockRestore();}
   });
 });
+
+test.each(['memory','other-version','same-version'] as const)('in-flight analysis handles %s deletion without a global invalidation',async deletion=>{
+  const {runtime,runId,conversationId,userId}=await seed(`trace-scoped-delete-${deletion}`,'running');
+  await runInDurableObject(runtime,async instance=>{
+    const writer=instance as unknown as {
+      sessionStore:import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+      performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;
+    };
+    const store=writer.sessionStore;
+    const asset=async(id:string)=>store.retrieve(`transcript:${id}:default`,'transcript',id,false,
+      async()=>({value:{videoId:id,text:'Saved caption',segments:[]},cacheStatus:'miss'}),()=>({complete:true}));
+    const kept=await asset('abcdefghijk'),other=await asset('lmnopqrstuv');
+    let release!:()=>void;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const pending=writer.performEvidenceTool(runId,{toolCallId:'analysis',toolName:'analyze_video_transcript',operation:'transcript',semanticKey:'analysis',input:{},execute:async()=>{
+      await gate;
+      return {packetId:'analysis-result',kind:'youtube_transcript',assetVersions:kept.assetVersions,sources:[],excerpts:[],artifacts:[],warnings:[],usage:[]};
+    }});
+    const generation=store.clearGeneration();
+    if (deletion==='memory') store.deleteMemory('unrelated-memory');
+    else await instance.deleteSessionAssets(conversationId,userId,(deletion==='other-version' ? other : kept).assetVersions![0]);
+    expect(store.clearGeneration()).toBe(generation);
+    release();
+    if (deletion==='same-version') await expect(pending).rejects.toThrow('Evidence was deleted during analysis');
+    else expect(await pending).toMatchObject({assetVersions:kept.assetVersions});
+  });
+});
+
+test('publication requested during alarm cancellation completes in the joined promise',async()=>{
+  const {runtime,runId}=await seed('trace-publish-finally-race','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const options=(manager as unknown as {options:{cancelRetry:()=>Promise<void>}}).options;
+    const cancel=options.cancelRetry;
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const waiting=new Promise<void>(resolve=>{release=resolve;});
+    const cancellation=vi.spyOn(options,'cancelRetry').mockImplementationOnce(async()=>{entered();await waiting;await cancel();});
+    try {
+      await manager.track(runId,{toolCallId:'first',name:'context_read',operation:'context',input:{secret:'input'},execute:async()=>({secret:'output'})});
+      await started;
+      manager.revokePayloads();
+      const deletionPublication=manager.publishPending();
+      await manager.track(runId,{toolCallId:'second',name:'context_read',operation:'context',input:{new:true},execute:async()=>({new:true})});
+      release();
+      await deletionPublication;
+      expect(manager.hasPending).toBe(false);
+      const rows=await env.DB.prepare('SELECT tool_call_id,deleted,status FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence').bind(runId).all();
+      expect(rows.results).toEqual([{tool_call_id:'first',deleted:1,status:'completed'},{tool_call_id:'second',deleted:0,status:'completed'}]);
+      expect(instance.sql`SELECT * FROM agent_trace_publish_order`).toHaveLength(0);
+      expect(instance.getSchedules().filter(s=>s.callback==='retryTraceIndex')).toHaveLength(0);
+    } finally {release();await manager.publishPending();cancellation.mockRestore();}
+  });
+});

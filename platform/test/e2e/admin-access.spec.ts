@@ -127,7 +127,10 @@ test('export HTTP errors remain visible instead of downloading error JSON',async
   await page.goto('/dashboard/admin');
   await page.getByRole('button',{name:'Tool call traces',exact:true}).click();
   await page.getByRole('button').filter({hasText:runId}).click();
-  await page.route(`**/api/platform/v1/admin/agent-traces/${runId}/export`,route=>route.fulfill({status:422,json:{error:{message:'This run is too large to export.'}}}));
+  await page.route(`**/api/platform/v1/admin/agent-traces/${runId}/export`,async route=>{
+    expect(route.request().headers()['x-demo-user']).toBe('local-beta');
+    await route.fulfill({status:422,json:{error:{message:'This run is too large to export.'}}});
+  });
   await page.getByRole('button',{name:'Download timeline JSONL'}).click();
   await expect(page.getByRole('alert').filter({hasText:'This run is too large to export.'})).toBeVisible();
   await expect(page.getByRole('button',{name:'Download timeline JSONL'})).toBeEnabled();

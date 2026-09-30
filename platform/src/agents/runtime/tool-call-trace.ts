@@ -170,45 +170,54 @@ export class ToolCallTraceManager {
     this.flushRequested = true;
     if (this.publishing) return this.publishing;
     this.publishing = Promise.resolve().then(async () => {
-      try {
-        while (this.flushRequested) {
-          this.flushRequested = false;
-          const rows = this.sql.exec<TraceRow>(`SELECT t.* FROM agent_call_traces t
-            LEFT JOIN agent_trace_publish_order o ON o.trace_id=t.trace_id
-            WHERE t.index_pending=1 OR EXISTS (
-              SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=t.trace_id)
-            ORDER BY COALESCE(o.attempted_at,0),t.call_sequence,t.trace_id LIMIT ?`,FLUSH_BATCH_SIZE).toArray();
-          if (!rows.length && !this.hasPending) break;
-          // Arm durable recovery before the first remote write, including when
-          // a reset interrupts an upload rather than rejecting its promise.
-          try { await this.retryIndex?.(); } catch {
-            console.error({event:'agent_trace_retry_schedule_failed'});
-          }
-          let failed = false;
-          for (const row of rows) {
-            // Persist rotation before I/O so a failing batch cannot monopolize retries.
-            this.sql.exec('INSERT OR REPLACE INTO agent_trace_publish_order VALUES (?,?)',row.trace_id,Date.now());
-            if (!await this.uploadPayloads(row.trace_id)) failed = true;
-            // Always load the newest revision after R2 awaits. A tool may have
-            // settled, or deletion may have revoked it while upload was running.
-            const latest = this.byId(row.trace_id);
-            if (latest?.index_pending && !await this.publishRow(latest)) failed = true;
-          }
-          if (!await this.publishRunSummaries()) failed = true;
-          if (failed) break; // The 15-second retry backs off failures, with fair selection.
-          if (rows.length === FLUSH_BATCH_SIZE) this.flushRequested = true;
-        }
-      } catch {
-        console.error({event:'agent_trace_background_failed'});
-        try { await this.retryIndex?.(); } catch { /* Restart also recovers the durable outbox. */ }
-      } finally {
+      let retryArmed = false;
+      do {
         try {
-          if (!this.hasPending) await this.cancelRetry?.();
-          // New calls can arrive while cancellation awaits the SDK.
-          if (this.hasPending) await this.retryIndex?.();
-        } catch { console.error({event:'agent_trace_retry_schedule_failed'}); }
-        this.publishing = undefined;
-      }
+          while (this.flushRequested) {
+            this.flushRequested = false;
+            const rows = this.sql.exec<TraceRow>(`SELECT t.* FROM agent_call_traces t
+              LEFT JOIN agent_trace_publish_order o ON o.trace_id=t.trace_id
+              WHERE t.index_pending=1 OR EXISTS (
+                SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=t.trace_id)
+              ORDER BY COALESCE(o.attempted_at,0),t.call_sequence,t.trace_id LIMIT ?`,FLUSH_BATCH_SIZE).toArray();
+            if (!rows.length && !this.hasPending) break;
+            // Arm durable recovery before the first remote write, including when
+            // a reset interrupts an upload rather than rejecting its promise.
+            try {
+              if (!retryArmed) { await this.retryIndex?.(); retryArmed = true; }
+            } catch {
+              console.error({event:'agent_trace_retry_schedule_failed'});
+            }
+            let failed = false;
+            for (const row of rows) {
+              // Persist rotation before I/O so a failing batch cannot monopolize retries.
+              this.sql.exec('INSERT OR REPLACE INTO agent_trace_publish_order VALUES (?,?)',row.trace_id,Date.now());
+              if (!await this.uploadPayloads(row.trace_id)) failed = true;
+              // Always load the newest revision after R2 awaits. A tool may have
+              // settled, or deletion may have revoked it while upload was running.
+              const latest = this.byId(row.trace_id);
+              if (latest?.index_pending && !await this.publishRow(latest)) failed = true;
+            }
+            if (!await this.publishRunSummaries()) failed = true;
+            if (failed) break; // The 15-second retry backs off failures, with fair selection.
+            if (rows.length === FLUSH_BATCH_SIZE) this.flushRequested = true;
+          }
+          // Already attempted failures belong to the durable retry.
+          this.flushRequested = false;
+        } catch {
+          this.flushRequested = false;
+          console.error({event:'agent_trace_background_failed'});
+          try { await this.retryIndex?.(); } catch { /* Restart also recovers the durable outbox. */ }
+        } finally {
+          // Requests arriving during alarm maintenance must join another pass of
+          // this same promise, including callers awaiting deletion publication.
+          try {
+            if (!this.hasPending) { retryArmed = false; await this.cancelRetry?.(); }
+            if (this.hasPending && !retryArmed) { await this.retryIndex?.(); retryArmed = true; }
+          } catch { console.error({event:'agent_trace_retry_schedule_failed'}); }
+        }
+      } while (this.flushRequested);
+      this.publishing = undefined;
     });
     return this.publishing;
   }
@@ -293,6 +302,9 @@ export class ToolCallTraceManager {
         .bind(row.trace_id,row.call_sequence,row.result_sequence,row.revision,row.run_id,row.tool_call_id,run.userId,run.sessionId,row.name,row.operation,row.source,row.local_run_status ?? run.status,row.status,
           row.started_at,row.finished_at,row.input_key,row.output_key,row.error_key,row.capture_error,row.deleted,row.index_version).run();
       this.sql.exec('UPDATE agent_call_traces SET index_pending=0 WHERE trace_id=? AND index_version=?',row.trace_id,row.index_version);
+      this.sql.exec(`DELETE FROM agent_trace_publish_order WHERE trace_id=?
+        AND NOT EXISTS (SELECT 1 FROM agent_trace_payload_chunks WHERE trace_id=?)
+        AND EXISTS (SELECT 1 FROM agent_call_traces WHERE trace_id=? AND index_pending=0)`,row.trace_id,row.trace_id,row.trace_id);
       return true;
     } catch {
       console.error({event:'agent_trace_index_failed',runId:row.run_id,toolCallId:row.tool_call_id});

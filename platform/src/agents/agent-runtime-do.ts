@@ -668,7 +668,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     this.assertRunActive(runId);
-    const generation = this.sessionStore.generation();
+    const generation = this.sessionStore.clearGeneration();
     // Separate analysis records must not consume the provider credit reservation twice.
     // Both classes remain bounded, including failed attempts and resumed runs.
     const counts = this.sql<{ provider_count: number; analysis_count: number }>`
@@ -702,7 +702,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
     try {
       const packet = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
-      if (generation !== this.sessionStore.generation()) throw new Error('Evidence was deleted during execution. Retry the request.');
+      if (generation !== this.sessionStore.clearGeneration()) throw new Error('Evidence was deleted during execution. Retry the request.');
       if (packet.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
       this.assertRunActive(runId);
       const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
