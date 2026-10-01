@@ -502,7 +502,11 @@ export class SessionEvidenceStore implements SessionAccess {
     load: () => Promise<CachedResult<T>>,
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean = () => true,
+    signal?: AbortSignal,
   ): Promise<CachedResult<T>> {
+    // Cancellation belongs to this waiter. The shared provider still coalesces
+    // extraction; a canceled waiter must never publish session references.
+    if (signal) return this.resolve(key, kind, videoId, fresh, load, describe, accept, signal);
     const pendingKey = `${this.generation()}:${key}:${fresh}`;
     const existing = this.pending.get(pendingKey);
     if (existing) return existing.then((result) => ({ ...result, sessionReused: true })) as Promise<CachedResult<T>>;
@@ -522,16 +526,21 @@ export class SessionEvidenceStore implements SessionAccess {
     load: () => Promise<CachedResult<T>>,
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean,
+    signal?: AbortSignal,
   ): Promise<CachedResult<T>> {
+    signal?.throwIfAborted();
     const generation = this.generation();
     if (!fresh) {
       const hit = await this.lookup<T>(key);
+      signal?.throwIfAborted();
       if (hit) return hit;
     }
     const result = await load();
+    signal?.throwIfAborted();
     if (!accept(result.value)) return result;
     const payload = JSON.stringify(result.value);
     const version = await sha256(`${kind}:${videoId}:${payload}`);
+    signal?.throwIfAborted();
     if (generation !== this.generation())
       throw new Error('Session assets changed during retrieval. Retry the request.');
     if (this.has(version)) {
@@ -547,6 +556,7 @@ export class SessionEvidenceStore implements SessionAccess {
         Date.now(),
         result.catalogVersions,
       );
+      signal?.throwIfAborted();
       if (generation !== this.generation())
         throw new Error('Session assets changed during retrieval. Retry the request.');
       this.atomic!(() => {
@@ -570,8 +580,9 @@ export class SessionEvidenceStore implements SessionAccess {
     // A crash between the R2 write and SQLite commit must not leave an orphan.
     this.queueCleanup([blobKey]);
     await this.bucket.put(blobKey, payload, { httpMetadata: { contentType: 'application/json' } });
-    if (generation !== this.generation()) {
+    if (generation !== this.generation() || signal?.aborted) {
       await this.bucket.delete(blobKey);
+      signal?.throwIfAborted();
       throw new Error('Session assets changed during retrieval. Retry the request.');
     }
     this.sql.exec(

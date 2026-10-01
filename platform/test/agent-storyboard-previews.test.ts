@@ -70,3 +70,51 @@ test('old or invalid previews remain readable and metadata never reports inspect
   packet.artifacts[0]!.data.selection = { mode: 'metadata' };
   expect(packetStoryboardPreviews(packet)).toEqual({ mode: 'metadata', sheets: [] });
 });
+
+test.each(['failure', 'cancel'])('drains concurrent preview uploads before rollback on %s', async mode => {
+  const storage = bucket();
+  const controller = new AbortController();
+  const large = { ...storyboard, frameCount: 108, sheets: Array.from({ length: 9 }, (_, i) => ({
+    ...storyboard.sheets[0]!, firstFrameIndex: i * 12,
+  })) };
+  const releases: (() => void)[] = [];
+  storage.put.mockImplementation(() => new Promise<void>(resolve => { releases.push(resolve); }));
+  const request = saveStoryboardPreviews(storage.value, 'owner', large, controller.signal);
+  const rejected = expect(request).rejects.toThrow();
+  await vi.waitFor(() => expect(storage.put).toHaveBeenCalledTimes(4));
+  if (mode === 'cancel') controller.abort();
+  else storage.put.mockRejectedValue(new Error('write failed'));
+  releases[0]!();
+  await Promise.resolve();
+  expect(storage.remove).not.toHaveBeenCalled();
+  for (const release of releases.slice(1)) release();
+  await rejected;
+  expect(storage.put.mock.calls.length).toBe(mode === 'cancel' ? 4 : 8);
+  expect(storage.remove).toHaveBeenCalledTimes(1);
+  expect(new Set(storage.remove.mock.calls[0]![0])).toEqual(new Set(storage.put.mock.calls.map(call => call[0])));
+});
+
+test('preserves sheet order when concurrent preview uploads finish out of order', async () => {
+  const storage = bucket();
+  const releases: (() => void)[] = [];
+  storage.put.mockImplementation(() => new Promise<void>(resolve => { releases.push(resolve); }));
+  const request = saveStoryboardPreviews(storage.value, 'owner', storyboard, new AbortController().signal);
+  await vi.waitFor(() => expect(releases).toHaveLength(2));
+  releases[1]!();
+  releases[0]!();
+  expect((await request).map(preview => preview.timestampMs)).toEqual([0, 60000]);
+});
+
+test('a failed upload cannot trigger rollback before another upload finishes', async () => {
+  const storage = bucket();
+  let release!: () => void;
+  storage.put.mockRejectedValueOnce(new Error('first upload failed'))
+    .mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+  const request = saveStoryboardPreviews(storage.value, 'owner', storyboard, new AbortController().signal);
+  const rejected = expect(request).rejects.toThrow('first upload failed');
+  await vi.waitFor(() => expect(storage.put).toHaveBeenCalledTimes(2));
+  expect(storage.remove).not.toHaveBeenCalled();
+  release();
+  await rejected;
+  expect(storage.remove).toHaveBeenCalledWith(storage.put.mock.calls.map(call => call[0]));
+});

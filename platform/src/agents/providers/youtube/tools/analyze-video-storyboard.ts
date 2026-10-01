@@ -1,3 +1,4 @@
+import { canAnalyzeStoryboard } from '../../../runtime/storyboard-budget';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
@@ -29,6 +30,9 @@ export function executeAnalyzeVideoStoryboard(
     operation: 'storyboard',
     semanticKey: `storyboard-analysis:${JSON.stringify({ assetVersions: versions, focus: parsed.focus })}`,
     execute: async () => {
+      context.signal.throwIfAborted();
+      if (!canAnalyzeStoryboard(context.researchDeadlineAt))
+        throw new Error('Not enough research time to analyze storyboards. Finish with the evidence available and report missing visual evidence.');
       if (!context.analyzeStoryboard) throw new Error('Storyboard analysis is unavailable.');
       const assets = await readAnalysisAssets(context, versions, 'storyboard_sheet');
       const values = assets.map(({ asset, value }) => {
@@ -58,6 +62,9 @@ export function executeAnalyzeVideoStoryboard(
       });
       if (storyboard.sheets.reduce((sum, sheet) => sum + sheet.imageBase64.length, 0) > 11_184_816)
         throw new Error('Saved storyboard selection exceeds the image budget.');
+      context.signal.throwIfAborted();
+      if (!canAnalyzeStoryboard(context.researchDeadlineAt))
+        throw new Error('Loading saved images left too little research time for storyboard analysis.');
       const analysis = await context.analyzeStoryboard({
         storyboard,
         focus: parsed.focus,

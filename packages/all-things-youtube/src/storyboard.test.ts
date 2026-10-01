@@ -228,3 +228,44 @@ describe('storyboard contact sheets', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+test('downloads four sheets at a time and preserves selection order despite out-of-order responses', async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-parallel-'));
+  directories.push(outputDir);
+  const raw = rawSpec();
+  raw.storyboards.playerStoryboardSpecRenderer.spec = raw.storyboards.playerStoryboardSpecRenderer.spec.replace('160#90#30', '160#90#225');
+  const releases: (() => void)[] = [];
+  const fetch = vi.fn(() => new Promise<Response>(resolve => releases.push(() => resolve(new Response(
+    Uint8Array.from([255, 216, 255, 217]), { headers: { 'content-type': 'image/jpeg' } },
+  )))));
+  const result = downloadStoryboard(raw, { videoId: 'abcdefghijk', outputDir, maxSheets: 9 }, fetch);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+  releases[3]!(); releases[2]!(); releases[1]!();
+  await Promise.resolve();
+  expect(fetch).toHaveBeenCalledTimes(4);
+  releases[0]!();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(8));
+  releases.slice(4).reverse().forEach(release => release());
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(9));
+  releases[8]!();
+  expect((await result).sheets.map(sheet => sheet.firstFrameIndex)).toEqual([0, 25, 50, 75, 100, 125, 150, 175, 200]);
+});
+
+test('waits for active downloads before rejecting and does not start another batch after failure', async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-failure-'));
+  directories.push(outputDir);
+  const raw = rawSpec();
+  raw.storyboards.playerStoryboardSpecRenderer.spec = raw.storyboards.playerStoryboardSpecRenderer.spec.replace('160#90#30', '160#90#225');
+  const releases: (() => void)[] = [];
+  const fetch = vi.fn().mockRejectedValueOnce(new Error('upstream failure')).mockImplementation(() => new Promise<Response>(resolve =>
+    releases.push(() => resolve(new Response(Uint8Array.from([255, 216, 255, 217]), { headers: { 'content-type': 'image/jpeg' } })))));
+  let finished = false;
+  const rejected = expect(downloadStoryboard(raw, { videoId: 'abcdefghijk', outputDir, maxSheets: 9 }, fetch)
+    .finally(() => { finished = true; })).rejects.toThrow('upstream failure');
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+  expect(finished).toBe(false);
+  releases.forEach(release => release());
+  await rejected;
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(await readdir(join(outputDir, 'storyboards'))).toHaveLength(3);
+});

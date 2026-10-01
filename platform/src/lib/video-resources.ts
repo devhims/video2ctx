@@ -1,3 +1,5 @@
+import { timeStoryboardStage } from './storyboard-timing';
+import { mapInBatches } from './map-in-batches';
 import { storyboardSchema, type Storyboard } from '../agents/providers/youtube/storyboard';
 import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-frames-contract';
 import { getVideoFrames } from './youtube-frames';
@@ -226,11 +228,12 @@ export async function saveVideoResource(
       if (!op.metadataOnly) {
         // Metadata was loaded separately; saving images must not renew its freshness.
         const expected = sheetIndexes(board, op);
-        for (const sheet of board.sheets) {
-          const index = sheet.firstFrameIndex / board.manifest.framesPerSheet;
+        const framesPerSheet = board.manifest.framesPerSheet;
+        const sheetReferences = await timeStoryboardStage(op.id, 'catalog_write', () => mapInBatches(board.sheets, async (sheet) => {
+          const index = sheet.firstFrameIndex / framesPerSheet;
           if (!Number.isInteger(index) || !expected.includes(index))
             throw new Error('Unexpected storyboard sheet.');
-          await save(
+          return store.save(
             await sheetKey(board, index),
             {
               ...board,
@@ -247,7 +250,8 @@ export async function saveVideoResource(
               frameCount: sheet.frameCount,
             },
           );
-        }
+        }));
+        references.push(...sheetReferences);
       } else
         await save(metadataKey(op.id), board, fetchedAt, maxAgeMs, resourceComplete(op, board), {
           ...board.manifest,
@@ -336,12 +340,13 @@ export async function loadVideoResource(
       meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
     });
   }
-  if (op.kind !== 'storyboard' || !store || op.metadataOnly) return runYouTubeOperation(env, op, diagnostic);
+  if (op.kind !== 'storyboard') return runYouTubeOperation(env, op, diagnostic);
+  if (!store || op.metadataOnly) return storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
   let metadata = !refresh ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
   if (!metadata || !metadata.complete) {
     const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
     const fetchedAt = Date.now();
-    const value = await runYouTubeOperation(env, metadataOp, diagnostic);
+    const value = storyboardSchema.parse(await runYouTubeOperation(env, metadataOp, diagnostic));
     const catalogVersions = await saveVideoResource(
       env,
       metadataOp,

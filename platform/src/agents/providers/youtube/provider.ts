@@ -71,9 +71,15 @@ export function createYouTubeAgentProvider(
         timestampsMs:request.timestampsMs,maxWidth:request.maxWidth??1920,extractionTimeoutMs:limits?.extractionTimeoutMs??45_000},
       limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}),signal);
     },
-    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => videoCatalog(env)
-      ? getVideoResource(env,{kind:'storyboard',id:videoId,timestampsMs,...options},options.refresh,onDiagnostic)
-      : ({ value: storyboardSchema.parse(await runYouTubeOperation(env, { kind: 'storyboard', id: videoId, timestampsMs, ...options }, onDiagnostic)), cacheStatus: 'miss' }),
+    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => {
+      const { signal, ...selection } = options;
+      signal?.throwIfAborted();
+      const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
+      return abortable(videoCatalog(env)
+        ? getVideoResource(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection}, selection.refresh, diagnostic)
+        : runYouTubeOperation(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection}, diagnostic)
+          .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
+    },
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),
     trends: async (query, limit, includeAiInsights) => ({

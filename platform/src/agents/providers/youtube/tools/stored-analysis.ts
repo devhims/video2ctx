@@ -1,3 +1,4 @@
+import { mapInBatches } from '../../../../lib/map-in-batches';
 import { z } from 'zod';
 import type { AgentToolContext } from '../tool-context';
 import type { SessionAssetKind } from '../../../runtime/session-evidence';
@@ -20,8 +21,9 @@ export async function readAnalysisAssets(
 ) {
   context.signal.throwIfAborted();
   if (!context.session?.readAsset) throw new Error('Saved session asset access is unavailable.');
-  const assets = [];
-  for (const version of versions) {
+  const readAsset = context.session.readAsset.bind(context.session);
+  return mapInBatches(versions, async (version) => {
+    context.signal.throwIfAborted();
     if (
       context.refreshEvidence &&
       !(context.getEvidence?.() ?? []).some(
@@ -40,14 +42,13 @@ export async function readAnalysisAssets(
       throw new Error(
         'Fresh evidence was requested. Retrieve this asset in the current run before analysis.',
       );
-    const stored = await context.session.readAsset(version);
+    const stored = await readAsset(version);
     context.signal.throwIfAborted();
     if (!stored)
       throw new Error('Saved asset is unavailable or deleted. Retrieve it explicitly before analysis.');
     if (stored.asset.kind !== kind) throw new Error(`Analysis requires saved ${kind} assets.`);
     if (context.pinnedVideoId && stored.asset.videoId !== context.pinnedVideoId)
       throw new Error(`inspect_video is pinned to video ${context.pinnedVideoId}.`);
-    assets.push(stored);
-  }
-  return assets;
+    return stored;
+  });
 }

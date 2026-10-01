@@ -19262,7 +19262,7 @@ async function readBoundedBytes(response, maxBytes) {
 }
 function isWebP(bytes) {
   if (bytes.length < 20) return false;
-  const fourCC = (offset2) => String.fromCharCode(...bytes.subarray(offset2, offset2 + 4));
+  const fourCC = (offset2) => String.fromCharCode(...bytes.subarray(offset2, offset2 + STORYBOARD_DOWNLOAD_CONCURRENCY));
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (fourCC(0) !== "RIFF" || fourCC(8) !== "WEBP" || view.getUint32(4, true) !== bytes.length - 8 || !["VP8 ", "VP8L", "VP8X"].includes(fourCC(12))) return false;
   let hasImage = false;
@@ -19270,7 +19270,7 @@ function isWebP(bytes) {
   while (offset < bytes.length) {
     if (offset + 8 > bytes.length) return false;
     const kind = fourCC(offset);
-    const size = view.getUint32(offset + 4, true);
+    const size = view.getUint32(offset + STORYBOARD_DOWNLOAD_CONCURRENCY, true);
     const start = offset + 8;
     const end = start + size;
     const paddedEnd = end + size % 2;
@@ -19371,6 +19371,7 @@ function metadata(warnings) {
     warnings
   };
 }
+var STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
 async function downloadStoryboard(raw, options, fetchImpl) {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
@@ -19389,22 +19390,28 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   const directory = resolve(options.outputDir, "storyboards");
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets = [];
-  for (const sheet of selectedSheets) {
-    const response = await fetchImpl(sheetUrl(spec, level, sheet));
-    const { bytes, extension } = await imageResponse(response);
-    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
-    await writeFile(path, bytes);
-    const firstFrameIndex = sheet * capacity;
-    sheets.push({
-      path,
-      tileWidth: level.tileWidth,
-      tileHeight: level.tileHeight,
-      columns: level.columns,
-      rows: level.rows,
-      firstFrameIndex,
-      frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
-      intervalMs: level.intervalMs
-    });
+  for (let offset = 0; offset < selectedSheets.length; offset += STORYBOARD_DOWNLOAD_CONCURRENCY) {
+    const batch = await Promise.allSettled(selectedSheets.slice(offset, offset + STORYBOARD_DOWNLOAD_CONCURRENCY).map(async (sheet) => {
+      const response = await fetchImpl(sheetUrl(spec, level, sheet));
+      const { bytes, extension } = await imageResponse(response);
+      const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
+      await writeFile(path, bytes);
+      const firstFrameIndex = sheet * capacity;
+      return {
+        path,
+        tileWidth: level.tileWidth,
+        tileHeight: level.tileHeight,
+        columns: level.columns,
+        rows: level.rows,
+        firstFrameIndex,
+        frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
+        intervalMs: level.intervalMs
+      };
+    }));
+    for (const result of batch) {
+      if (result.status === "rejected") throw result.reason;
+      sheets.push(result.value);
+    }
   }
   const warnings = !options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : [];
   return {

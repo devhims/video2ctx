@@ -1,3 +1,5 @@
+import { timeStoryboardStage } from '../../lib/storyboard-timing';
+import { mapInBatches } from '../../lib/map-in-batches';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
@@ -82,6 +84,7 @@ export function sessionProvider(
     storyboard: provider.storyboard
       ? (id, timestamps, options = {}, diagnostic) =>
           serial(async () => {
+            options.signal?.throwIfAborted();
             const generation = store.generation();
             const manifestKey = `storyboard:${id}:manifest`;
             const fresh = (refresh && !refreshed.has(manifestKey)) || !!options.refresh;
@@ -90,7 +93,7 @@ export function sessionProvider(
               'storyboard_manifest',
               id,
               fresh,
-              () => provider.storyboard!(id, undefined, { metadataOnly: true, ...(fresh ? {refresh:true} : {}) }, diagnostic),
+              () => provider.storyboard!(id, undefined, { metadataOnly: true, ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic),
               (value) => ({
                 totalSheets: value.manifest?.totalSheets,
                 totalFrames: value.frameCount,
@@ -98,8 +101,10 @@ export function sessionProvider(
                 lastSampleMs: value.manifest?.lastSampleMs,
               }),
               (value) => !!value.manifest,
+              options.signal,
             );
             if (metadata.assetVersions?.length) refreshed.add(manifestKey);
+            options.signal?.throwIfAborted();
             if (options.metadataOnly) return metadata;
             const manifest = metadata.value.manifest;
             if (!manifest) throw new Error('Storyboard manifest unavailable.');
@@ -128,22 +133,30 @@ export function sessionProvider(
             const manifestVersion = metadata.assetVersions![0]!;
             const results: CachedResult<Storyboard>[] = [];
             const missing: number[] = [];
-            for (const index of indexes) {
+            const cached = await timeStoryboardStage(id, 'session_lookup', () => mapInBatches(indexes, async (index) => {
+              options.signal?.throwIfAborted();
+              if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const key = `storyboard:${id}:${manifestVersion}:${index}`;
               const hit =
                 !(refresh && !refreshed.has(key)) && !options.refresh && (await store.lookup<Storyboard>(key));
+              return { index, hit };
+            }));
+            for (const { index, hit } of cached) {
               if (hit) results.push(hit);
               else missing.push(index);
             }
+            options.signal?.throwIfAborted();
             if (missing.length) {
               const fetched = await provider.storyboard!(
                 id,
                 undefined,
-                { sheetIndexes: missing, maxSheets: missing.length, ...((refresh || options.refresh) ? {refresh:true} : {}) },
+                { sheetIndexes: missing, maxSheets: missing.length, ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
               );
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
-              for (const sheet of fetched.value.sheets) {
+              const saved = await timeStoryboardStage(id, 'session_pin', () => mapInBatches(fetched.value.sheets, async (sheet) => {
+                options.signal?.throwIfAborted();
+                if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
                 const index = sheet.firstFrameIndex / manifest.framesPerSheet;
                 if (!Number.isInteger(index) || !missing.includes(index))
                   throw new Error('Provider returned an unexpected storyboard sheet.');
@@ -153,30 +166,34 @@ export function sessionProvider(
                   sheets: [sheet],
                   selection: { mode: 'indexes' as const, requestedSheetIndexes: [index] },
                 };
-                results.push(
-                  await store.retrieve(
-                    key,
-                    'storyboard_sheet',
-                    id,
-                    true,
-                    async () => ({
-                      ...fetched,
-                      value,
-                      catalogVersions: fetched.catalogVersions?.filter(
-                        (asset) => asset.kind === 'storyboard_sheet' && asset.variant.endsWith(`:${index}`),
-                      ),
-                    }),
-                    () => ({
-                      sheetIndex: index,
-                      manifestVersion,
-                      startMs: sheet.firstFrameIndex * sheet.intervalMs,
-                      endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
-                    }),
-                  ),
+                const result = await store.retrieve(
+                  key,
+                  'storyboard_sheet',
+                  id,
+                  true,
+                  async () => ({
+                    ...fetched,
+                    value,
+                    catalogVersions: fetched.catalogVersions?.filter(
+                      (asset) => asset.kind === 'storyboard_sheet' && asset.variant.endsWith(`:${index}`),
+                    ),
+                  }),
+                  () => ({
+                    sheetIndex: index,
+                    manifestVersion,
+                    startMs: sheet.firstFrameIndex * sheet.intervalMs,
+                    endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
+                  }),
+                  undefined,
+                  options.signal,
                 );
                 refreshed.add(key);
-              }
+                return result;
+              }));
+              results.push(...saved);
             }
+            if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
+            options.signal?.throwIfAborted();
             const partial = results.length < indexes.length || results.some((r) => r.value.meta.partial);
             return {
               value: storyboardSchema.parse({

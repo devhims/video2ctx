@@ -1,3 +1,4 @@
+import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
@@ -466,9 +467,14 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && !!options.context.provider.frames && !!options.context.analyzeFrames
       && !failed.has('get_video_frames') && !failed.has('analyze_video_frames')
       && (savedFrames || frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS);
+    const savedStoryboards = [...evidence.values()].some(packet => packet.kind === 'youtube_storyboard'
+      && packet.artifacts.some(artifact => artifact.type === 'youtube_storyboard_retrieval' && Number(artifact.data.sampledFrames) > 0))
+      || options.context.session?.brief().assets.some(asset => asset.kind === 'storyboard_sheet') === true;
     const storyboardPossible = toolNames.includes('get_video_storyboard') && toolNames.includes('analyze_video_storyboard')
       && !!options.context.provider.storyboard && !!options.context.analyzeStoryboard
-      && !failed.has('get_video_storyboard') && !failed.has('analyze_video_storyboard');
+      && !failed.has('analyze_video_storyboard') && canAnalyzeStoryboard(options.researchDeadlineAt)
+      && (savedStoryboards || (!failed.has('get_video_storyboard')
+        && storyboardRetrievalBudget(options.researchDeadlineAt) >= STORYBOARD_RETRIEVAL_MIN_MS));
     return framesPossible || storyboardPossible;
   };
   let completedModelSteps = 0;
@@ -541,6 +547,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           unavailableTools: () => [
             ...(searchUsed || !!options.decision.comparisonVideoIds?.length || (options.decision.route === 'topic_research' && !!options.decision.channelId) ? ['search_youtube'] : []),
             ...(frameExtractionBudget(options.researchDeadlineAt) < FRAME_EXTRACTION_MIN_MS ? ['get_video_frames'] : []),
+            ...(storyboardRetrievalBudget(options.researchDeadlineAt) < STORYBOARD_RETRIEVAL_MIN_MS ? ['get_video_storyboard'] : []),
+            ...(!canAnalyzeStoryboard(options.researchDeadlineAt) ? ['analyze_video_storyboard'] : []),
             ...(needsVisualWork() ? [FINALIZE_ANSWER_TOOL_NAME] : []),
           ],
           finalizationToolName: FINALIZE_ANSWER_TOOL_NAME,

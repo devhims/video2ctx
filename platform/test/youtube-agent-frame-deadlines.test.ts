@@ -217,3 +217,26 @@ test('names the required visual facts when finalizing without visual observation
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
     expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE', message: expect.stringContaining('player names on shirts') })]) }));
 });
+
+test.each([15_000, 30_000])('withholds storyboard tools that cannot fit and permits finalization with %i ms left', async remainingMs => {
+  const { options, context } = setup(0);
+  context.provider.frames = undefined;
+  context.provider.storyboard = vi.fn();
+  context.analyzeStoryboard = vi.fn();
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    const names = call.tools?.map(tool => tool.name) ?? [];
+    expect(names).not.toContain('get_video_storyboard');
+    expect(names.includes('analyze_video_storyboard')).toBe(remainingMs >= 25_000);
+    expect(names).toContain('finalize_answer');
+    return { content: [{ type: 'text', text: 'No time remains to collect visual evidence.' }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+    toolNames: ['get_video_storyboard', 'analyze_video_storyboard', 'finalize_answer'],
+    decision: { ...options.decision, visualEvidence: 'required', visualRequirements: ['Clothing'] },
+    researchDeadlineAt: Date.now() + remainingMs,
+  });
+  expect(model.doGenerateCalls.length).toBeGreaterThan(0);
+  expect(context.provider.storyboard).not.toHaveBeenCalled();
+  expect(context.analyzeStoryboard).not.toHaveBeenCalled();
+});
