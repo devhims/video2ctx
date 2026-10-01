@@ -1,4 +1,3 @@
-import { retrieveVideoStoryboard } from './get-video-storyboard';
 import type { AgentVideo } from '../provider';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -6,6 +5,7 @@ import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 import {
   bounded,
+  executeProviderEvidence,
   meteredCredits,
   providerWarnings,
   safeIdPart,
@@ -17,7 +17,7 @@ export type GetVideoInput = z.infer<typeof getVideoInputSchema>;
 
 export function createGetVideoTool(context: AgentToolContext) {
   return tool({
-    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. Also returns storyboard availability, sheet counts and timing when accessible, without downloading images. Use this metadata to select storyboard sheets or frame timestamps when the question needs visual evidence. This does not fetch transcripts, comments, tracks, or endscreen elements.',
+    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. This does not fetch transcripts, comments, tracks, or endscreen elements.',
     inputSchema: getVideoInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideo(input, context, toolCallId),
@@ -26,34 +26,15 @@ export function createGetVideoTool(context: AgentToolContext) {
 
 export function executeGetVideo(input: GetVideoInput, context: AgentToolContext, toolCallId: string) {
   const parsed = getVideoInputSchema.parse(input);
-  return context.executeEvidenceTool({
-    input: parsed, toolCallId, toolName: 'get_video', operation: 'video',
-    semanticKey: `video:${JSON.stringify(parsed)}`,
-    execute: async () => {
-      context.signal.throwIfAborted();
-      const response = await context.provider.video(parsed.videoId);
-      context.signal.throwIfAborted();
-      const packet = evidencePacketSchema.parse({
-        packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
-        ...singleVideoPacket(response.value, toolCallId),
-        assetVersions: response.assetVersions,
-        usage: [{ operation: 'video', credits: response.sessionReused ? 0 : meteredCredits('video')(response.cacheStatus), cacheStatus: response.cacheStatus }],
-      });
-      if (context.provider.storyboard) {
-        try {
-          const metadata = await retrieveVideoStoryboard({ videoId: parsed.videoId }, context, toolCallId);
-          packet.artifacts.push(...metadata.artifacts);
-          packet.assetVersions = [...new Set([...(packet.assetVersions ?? []), ...(metadata.assetVersions ?? [])])];
-          packet.usage.push(...metadata.usage);
-          packet.warnings.push(...metadata.warnings);
-        } catch {
-          context.signal.throwIfAborted();
-          packet.warnings.push({ code: 'STORYBOARD_METADATA_UNAVAILABLE',
-            message: 'Storyboard metadata could not be retrieved. Video details are available; this does not prove visual evidence is unavailable.' });
-        }
-      }
-      return evidencePacketSchema.parse(packet);
-    },
+  return executeProviderEvidence({
+    context,
+    toolCallId,
+    toolName: 'get_video',
+    operation: 'video',
+    semanticInput: parsed,
+    load: () => context.provider.video(parsed.videoId),
+    credits: meteredCredits('video'),
+    packet: (video) => singleVideoPacket(video, toolCallId),
   });
 }
 

@@ -61,7 +61,56 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     if (decision.route === 'topic_research') {
       for (const term of terms) expect(decision.searchQuery?.toLowerCase()).toContain(term);
       expect(decision.useStoryboard).toBe(false);
+      expect(decision.visualEvidence).toBe('none');
       if (terms.length === 2) expect(decision.researchBreadth).toBe('comparative');
     }
   }, 30_000);
+
+  // Labeled visual-evidence set. "required" gates finalization on analyzed images,
+  // so false positives cost forced visual work and false negatives lose the answer.
+  const video = 'https://youtu.be/abcdefghijk';
+  const required = ['required'] as const, notGated = ['none', 'helpful'] as const;
+  it.each([
+    { message: 'Who presented at the OpenAI DevDay 2026 keynote and what were they wearing?', accept: required },
+    { message: `What color is the car at the start of ${video}?`, accept: required },
+    { message: `What does the pricing slide say in ${video}?`, accept: required },
+    { message: `Read the code shown on screen around the five minute mark in ${video}`, accept: required },
+    { message: `Check the frames to confirm who is holding the microphone in ${video}`, accept: required },
+    { message: 'Describe the stage design at the latest Apple WWDC keynote', accept: required },
+    { message: `Which brand of guitar is the performer playing in ${video}?`, accept: required },
+    { message: 'What values are shown on the benchmark chart in the Gemini 3 launch video?', accept: required },
+    { message: `How many people are on stage during the finale of ${video}?`, accept: required },
+    { message: `What logo is on the speaker's shirt in ${video}?`, accept: required },
+    { message: 'What does the new ChatGPT desktop app interface look like in its launch video?', accept: required },
+    { message: 'Who spoke at the Tesla shareholder meeting and how did they look?', accept: required },
+    { message: `Summarize ${video}`, accept: ['none'] },
+    { message: `What are the main arguments in ${video}?`, accept: ['none'] },
+    { message: 'Explain event sourcing versus CQRS', accept: ['none'] },
+    { message: 'Help me understand reservoir computing', accept: ['none'] },
+    { message: `What did the speaker say about pricing in ${video}?`, accept: ['none'] },
+    { message: 'Best YouTube tutorials for learning Rust in 2026', accept: ['none'] },
+    { message: `Extract the transcript of ${video}`, accept: ['none'] },
+    { message: 'What sizing advice do tailors give for jackets?', accept: notGated },
+    { message: 'What color theory tips do painting channels recommend for beginners?', accept: notGated },
+    { message: `Which frameworks does ${video} recommend?`, accept: notGated },
+    { message: `Summarize the product demo in ${video}`, accept: notGated },
+    { message: `Walk me through the steps in this cooking tutorial ${video}`, accept: notGated },
+    { message: `Summarize the slides in ${video}`, accept: ['helpful', 'required'] },
+  ] as const)('classifies visual evidence need: $message', async ({ message, accept }) => {
+    const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
+    if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
+    const attempts: { attempt: number; outcome: string; issues: { code: string }[] }[] = [];
+    const decision = await classifyCapabilityWithModel({ message, conversationHistory: [],
+      model: createAgentModel({ AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: apiKey,
+        AI_GATEWAY_ID: '' } as unknown as Env, `router-visual:${crypto.randomUUID()}`, 'low', { model_role: 'classifier' }),
+      signal: AbortSignal.timeout(25_000), onDiagnostic: event => attempts.push(event),
+    });
+    const level = decision.route === 'topic_research' || decision.route === 'inspect_video' ? decision.visualEvidence : undefined;
+    console.info(JSON.stringify({ message, route: decision.route, level,
+      requirements: 'visualRequirements' in decision ? decision.visualRequirements : undefined,
+      attempts: attempts.map(event => ({ outcome: event.outcome, issues: event.issues.map(issue => issue.code) })) }));
+    expect(['topic_research', 'inspect_video']).toContain(decision.route);
+    expect(accept).toContain(level);
+    if (level === 'required') expect('visualRequirements' in decision && decision.visualRequirements?.length).toBeTruthy();
+  }, 60_000);
 });

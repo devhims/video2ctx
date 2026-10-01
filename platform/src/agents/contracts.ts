@@ -8,6 +8,9 @@ export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_vid
 export const researchVideoCountSchema = z.number().int().min(1).max(8);
 export const researchCoverageSchema = z.object({ targetVideos: z.number().int().positive(), reviewedVideos: z.number().int().nonnegative(), requiredVideos: z.number().int().positive().optional() });
 export const numberedItemCountSchema = z.number().int().min(1).max(100).optional();
+export const visualEvidenceSchema = z.enum(['none', 'helpful', 'required']);
+export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
+export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(8);
 
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
@@ -18,6 +21,8 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     searchQuery: z.string().trim().min(1).max(500).optional(),
     channelId: z.string().trim().min(1).max(200).regex(/^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$/).optional(),
     useStoryboard: z.boolean().optional(),
+    visualEvidence: visualEvidenceSchema.optional(),
+    visualRequirements: visualRequirementsSchema.optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
@@ -29,6 +34,8 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     researchVideoCount: z.literal(1).optional(),
     videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
     useStoryboard: z.boolean().optional(),
+    visualEvidence: visualEvidenceSchema.optional(),
+    visualRequirements: visualRequirementsSchema.optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
@@ -54,6 +61,11 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     numberedItemCount: numberedItemCountSchema,
   }),
 ]);
+
+/** Legacy routes only recorded tool access, so they never make visual evidence mandatory. */
+export function visualEvidenceLevel(decision: { useStoryboard?: boolean; visualEvidence?: VisualEvidence }): VisualEvidence {
+  return decision.visualEvidence ?? (decision.useStoryboard === false ? 'none' : 'helpful');
+}
 
 export const agentWarningSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional().describe('Video to which this source-specific caveat applies.'),

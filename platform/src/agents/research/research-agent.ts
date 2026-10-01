@@ -29,6 +29,7 @@ import {
   type EvidenceOperation,
   type EvidencePacket,
   type FinalizeAnswerInput,
+  visualEvidenceLevel,
 } from '../contracts';
 import { createVisualAnalyst } from '../providers/youtube/visual-analyst';
 import { createAgentModel } from '../model';
@@ -377,9 +378,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
       const warnings = input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL');
-      if (options.decision.useStoryboard === true && !hasVisualObservations()) {
+      if (visualRequired && !hasVisualObservations()) {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
-          message: 'The request required visual evidence, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.' });
+          message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
       }
       if (requiredVideos !== undefined && reviewedVideos.size < requiredVideos) {
         warnings.push({ code: 'PARTIAL_EVIDENCE',
@@ -450,13 +451,15 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
     },
   };
+  const visualRequired = visualEvidenceLevel(options.decision) === 'required';
+  const visualRequirements = options.decision.visualRequirements ?? [];
   const hasVisualObservations = () => [...evidence.values()].some(packet =>
     packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
       ['youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)));
   // Transcript breadth is not completion when the requested facts need images.
   // Keep the existing time, total-call, step and cost ceilings authoritative.
   const needsVisualWork = () => {
-    if (options.decision.useStoryboard !== true || hasVisualObservations()) return false;
+    if (!visualRequired || hasVisualObservations()) return false;
     const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
     const savedFrames = [...evidence.values()].some(packet => packet.kind === 'youtube_frames' && packet.assetVersions?.length);
     const framesPossible = toolNames.includes('get_video_frames') && toolNames.includes('analyze_video_frames')
@@ -529,6 +532,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(options.decision.route === 'inspect_video'
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
+            ...(visualRequired
+              ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. finalize_answer stays unavailable until analyzed images provide observations or no visual retrieval path remains.`]
+              : visualEvidenceLevel(options.decision) === 'helpful' ? ['Visual tools are optional for this request. Use them only when images add needed detail.'] : []),
           ].join('\n'),
           tools: traceToolSet({...createCapabilityToolSet(phaseContext, toolNames),...sessionTools}, phaseContext.traceToolCall),
           activeTools: [...toolNames,...Object.keys(sessionTools)],
@@ -538,7 +544,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(needsVisualWork() ? [FINALIZE_ANSWER_TOOL_NAME] : []),
           ],
           finalizationToolName: FINALIZE_ANSWER_TOOL_NAME,
-          isToolBudgetExhausted: () => transcriptBudget?.isExhausted() === true && options.decision.useStoryboard !== true,
+          isToolBudgetExhausted: () => transcriptBudget?.isExhausted() === true && !visualRequired,
         },
         messages: conversationModelMessages(
           options.conversationHistory ?? [],
@@ -859,7 +865,7 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. Limit memory updates to at most two useful entries and omit them during repair. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
-          'For visual questions, check each requested subject and attribute against analyzed image evidence. Presenter names may come from introductions or on-screen labels; clothing requires visual observations. Identify missing subjects or attributes, add ANSWER_SCOPE_SHORTFALL for unanswered parts, and explain the actual failure or budget limit. Transcript silence does not establish that visual facts are unknowable. Never invent clothing details or imply images were inspected when only metadata was retrieved.',
+          'For visual questions, check each requested subject and attribute against analyzed image evidence, including every item in route.visualRequirements. Presenter names may come from introductions or on-screen labels; clothing requires visual observations. Identify missing subjects or attributes, add ANSWER_SCOPE_SHORTFALL for unanswered parts, and explain the actual failure or budget limit. Transcript silence does not establish that visual facts are unknowable. Never invent clothing details or imply images were inspected when only metadata was retrieved.',
           'If validationFeedback is present, repair the previousCandidate using its errors. Preserve valid content and return complete corrected JSON.',
         ].join('\n'),
         messages: [{role:'user',content:JSON.stringify({

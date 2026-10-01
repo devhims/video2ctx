@@ -115,7 +115,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
   // One visual finding can have three frame citations. Keep each distinct
   // finding before adding duplicate observations at other timestamps.
   const ordered = (packet.kind === 'youtube_storyboard' || packet.kind === 'youtube_frames') ? distinctVisualFindingsFirst(packet.excerpts) : packet.excerpts;
-  const coverage = (packet.kind === 'youtube_storyboard' || packet.kind === 'youtube_video')
+  const coverage = packet.kind === 'youtube_storyboard'
     ? visualCoverageSchema.safeParse(packet.artifacts.find(artifact => ['youtube_storyboard_analysis','youtube_storyboard_retrieval'].includes(artifact.type))?.data)
     : undefined;
   const frameCoverage = packet.kind === 'youtube_frames'

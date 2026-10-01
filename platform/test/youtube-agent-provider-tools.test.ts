@@ -9,44 +9,11 @@ import { executeGetChannel } from '../src/agents/providers/youtube/tools/get-cha
 import { executeGetPlaylist } from '../src/agents/providers/youtube/tools/get-playlist';
 import { executeGetVideoComments } from '../src/agents/providers/youtube/tools/get-video-comments';
 import { executeGetVideoTracks } from '../src/agents/providers/youtube/tools/get-video-tracks';
-import { executeGetVideoStoryboard } from '../src/agents/providers/youtube/tools/get-video-storyboard';
 import { executeGetVideo } from '../src/agents/providers/youtube/tools/get-video';
 import { discoverInitialEvidence } from '../src/agents/research/initial-discovery';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
 
 describe('YouTube agent provider-operation tools', () => {
-  it('exposes storyboard metadata to the model without images and reuses it to validate selections', async () => {
-    const provider: YouTubeAgentProvider = providerFixture();
-    provider.storyboard = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
-      videoId: 'abcdefghijk', frameCount: 12, intervalMs: 5000, sheets: [],
-      selection: { mode: 'metadata' as const },
-      manifest: { totalSheets: 6, framesPerSheet: 2, tileWidth: 100, tileHeight: 100, columns: 2, rows: 1, lastSampleMs: 55000 },
-      meta: { partial: false, warnings: [] },
-    } }));
-    const ctx = toolContext(provider);
-    const packet = await executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'video');
-    expect(provider.storyboard).toHaveBeenCalledOnce();
-    expect(provider.storyboard).toHaveBeenCalledWith('abcdefghijk', undefined, expect.objectContaining({ metadataOnly: true }), expect.any(Function));
-    expect(evidencePacketForModel(packet).visualCoverage).toMatchObject({ manifest: { totalSheets: 6 }, sampledFrames: 0, intervalMs: 5000 });
-    expect(packet.usage.map(item => item.operation)).toEqual(['video', 'storyboard']);
-    ctx.getEvidence = () => [packet];
-    await expect(executeGetVideoStoryboard({ videoId: 'abcdefghijk', sheetIndexes: [6] }, ctx, 'invalid')).rejects.toThrow('Invalid storyboard selection');
-    expect(provider.storyboard).toHaveBeenCalledOnce();
-  });
-
-  it('keeps video details when optional storyboard metadata fails, without swallowing cancellation', async () => {
-    const provider: YouTubeAgentProvider = providerFixture();
-    provider.storyboard = vi.fn(async () => { throw new Error('upstream unavailable'); });
-    const ctx = toolContext(provider);
-    const packet = await executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'video');
-    expect(packet.kind).toBe('youtube_video');
-    expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'STORYBOARD_METADATA_UNAVAILABLE' }));
-    const controller = new AbortController();
-    ctx.signal = controller.signal;
-    provider.storyboard = async () => { controller.abort(new Error('run canceled')); throw new Error('upstream unavailable'); };
-    await expect(executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'canceled')).rejects.toThrow('run canceled');
-  });
-
   it('labels saved metadata and includes fresh counts with their own timestamp', async () => {
     const provider: YouTubeAgentProvider = providerFixture();
     const original = await provider.video('abcdefghijk');

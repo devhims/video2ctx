@@ -31,7 +31,7 @@ describe('YouTube agent capability router', () => {
     let calls = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => ({
       content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
-        route: 'topic_research', researchVideoCount: 2, answerDetail: 'standard', useStoryboard: false,
+        route: 'topic_research', researchVideoCount: 2, answerDetail: 'standard', visualEvidence: 'none',
         researchBreadth: 'focused', searchQuery: calls++ ? 'Opus 5.5 prompting guide' : 'Claude Opus 4.5 prompting guide',
       }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [],
@@ -79,7 +79,7 @@ describe('YouTube agent capability router', () => {
 
   it('retains the dynamic refresh decision and rejects finalizing from old statistics', async () => {
     const decision = { route: 'inspect_video', videoId: 'abcdefghijk', refreshDynamicData: true,
-      useStoryboard: false, researchVideoCount: 1, answerDetail: 'standard' };
+      visualEvidence: 'none', researchVideoCount: 1, answerDetail: 'standard' };
     expect(await classifyCapabilityWithModel({ message: 'How many likes does https://youtu.be/abcdefghijk have now?',
       model: classifierModel(decision), signal: new AbortController().signal })).toMatchObject(decision);
     await expect(classifyCapabilityWithModel({ message: 'How many likes now?',
@@ -93,7 +93,7 @@ describe('YouTube agent capability router', () => {
     let calls = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => ({
       content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
-        route: 'inspect_video', videoId: current, researchVideoCount: 1, answerDetail: 'standard', useStoryboard: false,
+        route: 'inspect_video', videoId: current, researchVideoCount: 1, answerDetail: 'standard', visualEvidence: 'none',
         ...(calls++ ? { comparisonVideoIds: [previous, current] } : {}),
       }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [],
@@ -111,7 +111,7 @@ describe('YouTube agent capability router', () => {
 
   it('repairs the captured incomplete classifier response without forcing tool selection', async () => {
     const valid = { route: 'topic_research', answerDetail: 'standard', researchVideoCount: 3,
-      researchBreadth: 'comparative', searchQuery: 'model comparison', useStoryboard: false };
+      researchBreadth: 'comparative', searchQuery: 'model comparison', visualEvidence: 'none' };
     let calls = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => ({
       content: [{ type: 'tool-call', toolCallId: `classification-${++calls}`, toolName: 'classify_request',
@@ -131,7 +131,7 @@ describe('YouTube agent capability router', () => {
     };
     expect(await classifyCapabilityWithModel({ traceToolCall, message: 'Compare models', model, signal: new AbortController().signal,
       modelCallId: 'classifier-test', modelBudget: { limitMicros: 10000, currentCostMicros: () => 0, recordUsage },
-      onDiagnostic: diagnostics })).toEqual(valid);
+      onDiagnostic: diagnostics })).toEqual({ ...valid, useStoryboard: false });
     expect(traces).toHaveLength(2);
     expect(traces[0]).toMatchObject({id:'classification-1',input:{researchBreadth:'comparative'},error:{name:'AI_InvalidToolInputError'}});
     expect(traces[1]).toMatchObject({id:'classification-2',input:valid,output:{accepted:true}});
@@ -288,7 +288,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
   });
 
   it('routes discovery and comparison requests into topic_research', async () => {
@@ -299,7 +299,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', researchVideoCount: 3, useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', researchVideoCount: 3, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
     expect(model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema).toMatchObject({ type: 'object', properties: expect.objectContaining({ route: expect.any(Object), searchQuery: expect.any(Object) }) });
   });
 
@@ -309,7 +309,7 @@ describe('YouTube agent capability router', () => {
       model: classifierModel({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', researchVideoCount: 3, useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', researchVideoCount: 3, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
@@ -328,20 +328,79 @@ describe('YouTube agent capability router', () => {
     })).rejects.toThrow();
   });
 
-  it.each(['topic_research', 'inspect_video'] as const)('requires an explicit storyboard choice for new %s routes', async route => {
+  it.each(['topic_research', 'inspect_video'] as const)('requires an explicit visual evidence choice for new %s routes', async route => {
     await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
-      model: classifierModel({ route, videoId: 'abcdefghijk', researchBreadth: 'focused', searchQuery: 'YouTube', useStoryboard: undefined }),
+      model: classifierModel({ route, videoId: 'abcdefghijk', researchBreadth: 'focused', searchQuery: 'YouTube', visualEvidence: undefined }),
       signal: new AbortController().signal,
-    })).rejects.toThrow(/useStoryboard/);
+    })).rejects.toThrow(/visualEvidence/);
   });
 
-  it.each([true, false])('persists the classifier storyboard choice %s', async useStoryboard => {
+  it.each([
+    ['none', undefined, false], ['helpful', undefined, true], ['required', ['presenter clothing'], true],
+  ] as const)('persists visual evidence %s with derived tool access', async (visualEvidence, visualRequirements, useStoryboard) => {
     const decision = await classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
-      model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard }),
+      model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence, visualRequirements }),
       signal: new AbortController().signal,
     });
     const recovered = await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() });
-    expect(recovered).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard, answerDetail: 'standard' });
+    expect(recovered).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard, visualEvidence,
+      ...(visualRequirements ? { visualRequirements } : {}), answerDetail: 'standard' });
+  });
+
+  it('requires visual requirements when visual evidence is required, and drops them otherwise', async () => {
+    const missing = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'required' });
+    await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk', model: missing,
+      signal: new AbortController().signal })).rejects.toThrow(/visualRequirements/);
+    const helpful = await classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
+      model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'helpful', visualRequirements: ['demo screens'] }),
+      signal: new AbortController().signal });
+    expect(helpful).not.toHaveProperty('visualRequirements');
+  });
+
+  it('asks once to reconsider visual cues, then accepts the reconsidered decision', async () => {
+    const outputs = [
+      { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'OpenAI DevDay keynote presenters', visualEvidence: 'none' },
+      { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'OpenAI DevDay keynote presenters', visualEvidence: 'required', visualRequirements: ['presenter clothing'] },
+    ];
+    const model = sequenceClassifier(outputs);
+    const decision = await classifyCapabilityWithModel({ message: 'Who presented at the DevDay keynote and what were they wearing?',
+      model, signal: new AbortController().signal });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    const repair = JSON.stringify(model.doGenerateCalls[1]!.prompt);
+    expect(repair).toContain('possible_visual_requirement');
+    expect(repair).toContain('Reconsider the previous classification');
+    expect(repair).toMatch(/The request mentions \W+wearing\W+\. If any requested fact depends on what is visible/);
+    expect(decision).toMatchObject({ visualEvidence: 'required', visualRequirements: ['presenter clothing'], useStoryboard: true });
+  });
+
+  it('keeps the classifier choice when it declines a visual cue, without a third call', async () => {
+    const output = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'jacket sizing advice', visualEvidence: 'none' };
+    const model = sequenceClassifier([output, output]);
+    const decision = await classifyCapabilityWithModel({ message: 'What sizing advice do tailors give for jackets?',
+      model, signal: new AbortController().signal });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(decision).toMatchObject({ visualEvidence: 'none', useStoryboard: false });
+  });
+
+  it('keeps a valid first decision when the visual reconsideration is malformed', async () => {
+    const model = sequenceClassifier([
+      { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' },
+      { route: 'topic_research' },
+    ]);
+    const decision = await classifyCapabilityWithModel({ message: 'Summarize the slide design tips in popular talks',
+      model, signal: new AbortController().signal });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(decision).toMatchObject({ route: 'topic_research', searchQuery: 'slide design tips', visualEvidence: 'helpful', useStoryboard: true });
+  });
+
+  it('does not ask for reconsideration without visual cues or when visuals are already required', async () => {
+    const plain = sequenceClassifier([{ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'reservoir computing', visualEvidence: 'none' }]);
+    await classifyCapabilityWithModel({ message: 'Help me understand reservoir computing', model: plain, signal: new AbortController().signal });
+    expect(plain.doGenerateCalls).toHaveLength(1);
+    const required = sequenceClassifier([{ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'keynote outfits',
+      visualEvidence: 'required', visualRequirements: ['presenter clothing'] }]);
+    await classifyCapabilityWithModel({ message: 'What were the keynote presenters wearing?', model: required, signal: new AbortController().signal });
+    expect(required.doGenerateCalls).toHaveLength(1);
   });
 
   it('accepts a rejection with a reason and disallows executable answers for it', async () => {
@@ -409,7 +468,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
     const prompt = JSON.stringify(model.doGenerateCalls[0]?.prompt);
     expect(prompt).toContain('Find a useful example.');
     expect(prompt).toContain('Inspect that one in more detail.');
@@ -512,10 +571,26 @@ describe('YouTube agent capability router', () => {
   });
 });
 
+function sequenceClassifier(outputs: Record<string, unknown>[]): MockLanguageModelV4 {
+  let call = 0;
+  return new MockLanguageModelV4({
+    doGenerate: async () => {
+      const output = outputs[Math.min(call++, outputs.length - 1)]!;
+      return {
+        content: [{ type: 'tool-call', toolCallId: `classify-${call}`, toolName: 'classify_request', input: JSON.stringify({
+          researchVideoCount: output.route === 'inspect_video' ? 1 : output.route === 'topic_research' ? 1 : 0, answerDetail: 'standard', ...output }) }],
+        finishReason: { unified: 'tool-calls', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+        warnings: [],
+      };
+    },
+  });
+}
+
 function classifierModel(output: Record<string, unknown>): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doGenerate: async () => ({
-      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify({ researchVideoCount: output.route === 'inspect_video' ? 1 : output.route === 'topic_research' ? 3 : 0, useStoryboard: false, answerDetail: 'standard', ...output }) }],
+      content: [{ type: 'tool-call', toolCallId: 'classify-1', toolName: 'classify_request', input: JSON.stringify({ researchVideoCount: output.route === 'inspect_video' ? 1 : output.route === 'topic_research' ? 3 : 0, visualEvidence: 'none', answerDetail: 'standard', ...output }) }],
       finishReason: { unified: 'tool-calls', raw: undefined },
       usage: {
         inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },

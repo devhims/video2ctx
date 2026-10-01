@@ -47,7 +47,7 @@ function setup(delayMs: number) {
     confidence: 'low', warnings: [], blocks: [{ text: 'The available evidence is limited.', evidenceIds: ['ref_1'] }],
   }) }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
   const options = { model, finalizationModel: finalizer, context, message: 'Look at frames to confirm player names.',
-    decision: { route: 'inspect_video' as const, videoId, useStoryboard: true },
+    decision: { route: 'inspect_video' as const, videoId, useStoryboard: true, visualEvidence: 'required' as const, visualRequirements: ['player names on shirts'] },
     toolNames: ['get_video_frames', 'analyze_video_frames', 'finalize_answer'] as const };
   return { options, context, analyzed, finalizer };
 }
@@ -123,7 +123,7 @@ test('continues after the transcript target and a failed storyboard to retrieve 
   } });
   const run = runResearchAgentWithModel({ ...options, model,
     message: 'What were the names of the presenters and what were they wearing on stage?',
-    decision: { route: 'topic_research', useStoryboard: true, researchVideoCount: 1 },
+    decision: { route: 'topic_research', useStoryboard: true, visualEvidence: 'required', visualRequirements: ['presenter clothing'], researchVideoCount: 1 },
     recoveredSearchUsed: true, recoveredEvidence: [transcript],
     toolNames: ['get_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'finalize_answer'] });
   await vi.advanceTimersByTimeAsync(0);
@@ -157,4 +157,63 @@ test('allows partial finalization after both visual retrieval paths fail', async
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
     expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
   expect(JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt)).toContain('check each requested subject and attribute');
+});
+
+
+test('keeps research open when the model calls a withheld finalize_answer before required visual work', async () => {
+  const { options, context, analyzed } = setup(0);
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    const names = call.tools?.map(tool => tool.name) ?? [];
+    if (step === 0) expect(names).not.toContain('finalize_answer');
+    const calls = [
+      // Models can still emit a call to a tool that is not offered this step.
+      { name: 'finalize_answer', input: { intent: 'inspect_video', confidence: 'high', artifacts: [], warnings: [],
+        blocks: [{ text: 'Names from metadata only.', evidenceIds: ['ref_1'] }] } },
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [28000] } },
+      { name: 'analyze_video_frames', input: { assetVersions: ['1'.padStart(64, '0')], focus: 'Read names printed on shirts.' } },
+      { name: 'finalize_answer', input: { intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+        blocks: [{ text: 'The shirt reads SMRITI.', evidenceIds: ['ref_1'] }] } },
+    ];
+    const selected = calls[Math.min(step++, 3)]!;
+    if (step === 2) expect(JSON.stringify(call.prompt)).toContain("unavailable tool 'finalize_answer'");
+    return { content: [{ type: 'tool-call', toolCallId: `gate-${step}`, toolName: selected.name, input: JSON.stringify(selected.input) }],
+      finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
+  } });
+  const run = runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata] });
+  await vi.advanceTimersByTimeAsync(0);
+  await run;
+  expect(model.doGenerateCalls).toHaveLength(4);
+  expect(context.provider.frames).toHaveBeenCalledOnce();
+  expect(analyzed).toHaveBeenCalledOnce();
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
+    expect.not.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
+});
+
+test('does not withhold finalization when visual evidence is only helpful', async () => {
+  const { options, context } = setup(0);
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    expect(call.tools?.map(tool => tool.name)).toContain('finalize_answer');
+    return { content: [{ type: 'tool-call', toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [], blocks: [{ text: 'Cricket match metadata only.', evidenceIds: ['ref_1'] }],
+    }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
+  } });
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+    decision: { route: 'inspect_video', videoId, useStoryboard: true, visualEvidence: 'helpful' } });
+  expect(model.doGenerateCalls).toHaveLength(1);
+  expect(context.provider.frames).not.toHaveBeenCalled();
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
+    expect.not.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
+});
+
+test('names the required visual facts when finalizing without visual observations', async () => {
+  const { options, context } = setup(0);
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'tool-call', toolCallId: 'finish', toolName: 'finalize_answer',
+    input: JSON.stringify({ intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [], blocks: [{ text: 'Unverified.', evidenceIds: ['ref_1'] }] }) }],
+  finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }) });
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+    recoveredToolFailures: [{ toolCallId: 'frames', toolName: 'get_video_frames', operation: 'frames', message: 'Frame extraction failed' }] });
+  expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Required visual evidence: player names on shirts');
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
+    expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE', message: expect.stringContaining('player names on shirts') })]) }));
 });

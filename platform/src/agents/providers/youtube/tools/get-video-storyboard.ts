@@ -39,8 +39,8 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
   });
 }
 
-/** Shared retrieval stays inside the calling tool's execution, metering and trace. */
-export async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
+/** Missing metadata is fetched inside the same tool call, so it shares its metering and trace. */
+async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
   let metadata: EvidencePacket | undefined;
   context.signal.throwIfAborted();

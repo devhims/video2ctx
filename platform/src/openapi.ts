@@ -2317,6 +2317,8 @@ export const openApiDocument = {
               researchBreadth: { type: 'string', enum: ['focused', 'comparative'] },
               searchQuery: { type: 'string' },
               useStoryboard: { type: 'boolean', description: 'Classifier selection of visual evidence access. Absent on legacy routes.' },
+              visualEvidence: { type: 'string', enum: ['none', 'helpful', 'required'], description: 'Whether the answer needs images. Required visual evidence withholds normal finalization until images are analyzed or no visual path remains. Absent on legacy routes.' },
+              visualRequirements: { type: 'array', items: { type: 'string' }, description: 'Requested facts that need images when visualEvidence is required.' },
               answerDetail: { type: 'string', enum: ['standard', 'detailed'], description: 'Classifier selection of the output budget. Legacy routes default to standard.' },
             },
           },
@@ -2324,6 +2326,8 @@ export const openApiDocument = {
             type: 'object', required: ['route', 'videoId'], properties: {
               route: { const: 'inspect_video' }, videoId: { type: 'string' },
               useStoryboard: { type: 'boolean', description: 'Classifier selection of visual evidence access. Absent on legacy routes.' },
+              visualEvidence: { type: 'string', enum: ['none', 'helpful', 'required'], description: 'Whether the answer needs images. Required visual evidence withholds normal finalization until images are analyzed or no visual path remains. Absent on legacy routes.' },
+              visualRequirements: { type: 'array', items: { type: 'string' }, description: 'Requested facts that need images when visualEvidence is required.' },
               answerDetail: { type: 'string', enum: ['standard', 'detailed'], description: 'Classifier selection of the output budget. Legacy routes default to standard.' },
             },
           },
