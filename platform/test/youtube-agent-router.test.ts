@@ -131,12 +131,12 @@ describe('YouTube agent capability router', () => {
     };
     expect(await classifyCapabilityWithModel({ traceToolCall, message: 'Compare models', model, signal: new AbortController().signal,
       modelCallId: 'classifier-test', modelBudget: { limitMicros: 10000, currentCostMicros: () => 0, recordUsage },
-      onDiagnostic: diagnostics })).toEqual({ ...valid, useStoryboard: false });
+      onDiagnostic: diagnostics })).toEqual({ ...valid, researchVideoCount: 4, useStoryboard: false });
     expect(traces).toHaveLength(2);
     expect(traces[0]).toMatchObject({id:'classification-1',input:{researchBreadth:'comparative'},error:{name:'AI_InvalidToolInputError'}});
-    expect(traces[1]).toMatchObject({id:'classification-2',input:valid,output:{accepted:true}});
+    expect(traces[1]).toMatchObject({id:'classification-2',input:{route:'topic_research'},output:{accepted:true}});
     expect(model.doGenerateCalls.map(call => call.toolChoice)).toEqual([{ type: 'auto' }, { type: 'auto' }]);
-    expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('researchVideoCount');
+    expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('searchQuery');
     expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['classifier-test', 'classifier-test:repair']);
     expect(diagnostics.mock.calls[0]?.[0]).toMatchObject({ attempt: 1, outcome: 'invalid',
       issues: expect.arrayContaining([{ path: 'route', code: 'invalid_value' }]) });
@@ -208,21 +208,48 @@ describe('YouTube agent capability router', () => {
   });
 
   it.each([1, 3, 6, 8])('persists an explicit research count of %s independently of breadth', async researchVideoCount => {
-    const decision = await classifyCapabilityWithModel({ message: 'Compare model coding workflows',
-      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'coding workflows', researchVideoCount }),
+    const decision = await classifyCapabilityWithModel({ message: `Compare findings from ${researchVideoCount} videos`,
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'coding workflows', explicitSourceCount: researchVideoCount }),
       signal: new AbortController().signal });
     const { researchVideoTarget } = await import('../src/agents/research/research-plan');
     expect(researchVideoTarget(decision)).toBe(researchVideoCount);
     expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
   });
-  it('requires a count for newly classified executable routes', async () => {
-    await expect(classifyCapabilityWithModel({ message: 'Compare models',
+  it.each([0, 1])('accepts the captured DevDay classification despite obsolete conflicting count fields (%s)', async requiredVideoCount => {
+    const model = classifierModel({ answerDetail: 'standard', researchBreadth: 'focused', researchVideoCount: 3,
+      requiredVideoCount, route: 'topic_research', searchQuery: 'OpenAI DevDay 2026 presenters on stage keynote',
+      visualEvidence: 'required', visualRequirements: ['presenter clothing'] });
+    const decision = await classifyCapabilityWithModel({ message: 'What were the names of presenters from OpenAI DevDay 2026 and what were they wearing?', model, signal: new AbortController().signal });
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(decision).toMatchObject({ route: 'topic_research', researchVideoCount: 2, visualEvidence: 'required' });
+    expect(decision).not.toHaveProperty('requiredVideoCount');
+    const schema = model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema;
+    expect(schema).not.toHaveProperty('properties.researchVideoCount');
+    expect(schema).not.toHaveProperty('properties.requiredVideoCount');
+    expect(schema).toHaveProperty('properties.explicitSourceCount');
+  });
+
+  it.each(['https://youtu.be/abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk', 'https://youtube.com/shorts/abcdefghijk'])('pins a classifier research decision to the supplied video: %s', async url => {
+    const model = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'keynote presenters',
+      visualEvidence: 'required', visualRequirements: ['presenter clothing'] });
+    const decision = await classifyCapabilityWithModel({ message: `Research who presented and what they wore: ${url}`, model,
+      conversationHistory: [{ userMessageId: 'previous-user', agentMessageId: 'previous-agent', user: 'An earlier video', assistant: 'Prior research', resourceIds: ['lmnopqrstuv'] }],
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1, visualEvidence: 'required' });
+    expect(decision).not.toHaveProperty('searchQuery');
+    expect(decision).not.toHaveProperty('requiredVideoCount');
+  });
+
+  it('derives a research target when no explicit source count was requested', async () => {
+    const decision = await classifyCapabilityWithModel({ message: 'Compare models',
       model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'models', researchVideoCount: undefined }),
-      signal: new AbortController().signal })).rejects.toThrow('researchVideoCount');
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ researchVideoCount: 4 });
+    expect(decision).not.toHaveProperty('requiredVideoCount');
   });
   it('preserves an explicit source requirement above capacity separately from the research target', async () => {
     const decision = await classifyCapabilityWithModel({ message: 'Compare findings from ten videos',
-      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'models', researchVideoCount: 8, requiredVideoCount: 10 }),
+      model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'models', explicitSourceCount: 10 }),
       signal: new AbortController().signal });
     expect(decision).toMatchObject({ researchVideoCount: 8, requiredVideoCount: 10 });
   });
@@ -269,7 +296,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal });
     expect(decision).toMatchObject({ answerDetail });
     expect(model.doGenerateCalls[0]?.tools?.find(t => t.type === 'function')?.inputSchema).toMatchObject({
-      required: expect.arrayContaining(['answerDetail', 'researchVideoCount']),
+      required: expect.arrayContaining(['answerDetail']),
       properties: { answerDetail: { enum: ['standard', 'detailed'] } },
     });
     expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
@@ -299,7 +326,7 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', researchVideoCount: 3, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'audience retention comparison', researchVideoCount: 4, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
     expect(model.doGenerateCalls[0]?.tools?.find(tool => tool.type === 'function')?.inputSchema).toMatchObject({ type: 'object', properties: expect.objectContaining({ route: expect.any(Object), searchQuery: expect.any(Object) }) });
   });
 
@@ -309,7 +336,7 @@ describe('YouTube agent capability router', () => {
       model: classifierModel({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills' }),
       signal: new AbortController().signal,
     });
-    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', researchVideoCount: 3, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
+    expect(decision).toEqual({ route: 'topic_research', researchBreadth, searchQuery: 'frontend design skills', researchVideoCount: researchBreadth === 'comparative' ? 4 : 2, useStoryboard: false, visualEvidence: 'none', answerDetail: 'standard' });
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
