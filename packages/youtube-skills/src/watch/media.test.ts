@@ -9,7 +9,7 @@ describe('frame source selection', () => {
   test('retains local seekability preference by default', () => {
     expect(selectCandidates(raw, 1920)[0]?.height).toBe(360);
   });
-  test('hosted extraction tries higher resolution first with a lower-resolution fallback', () => {
+  test('explicit resolution preference retains a lower-resolution fallback', () => {
     expect(selectCandidates(raw, 1920, true).map(candidate => candidate.height)).toEqual([1080, 360]);
     expect(selectCandidates(raw, 1280, true).map(candidate => candidate.height)).toEqual([360]);
   });
@@ -36,4 +36,13 @@ test('retains the player rejection before skipping a client', async () => {
     expect.objectContaining({ stage: 'player_response', profile: 'ios', playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' }),
     expect.objectContaining({ stage: 'player', error: expect.objectContaining({ code: 'AUTH_REQUIRED' }) }),
   ]);
+});
+
+test('prefers itag 18 over larger progressive and adaptive streams by default', () => {
+  const raw = { streamingData: { formats: [
+    { itag: 22, url: 'https://example.com/720', mimeType: 'video/mp4', width: 1280 },
+    { itag: 18, url: 'https://example.com/360', mimeType: 'video/mp4', width: 640 },
+  ] } };
+  expect(selectCandidates(raw, 1920)[0]?.formatId).toBe(18);
+  expect(selectCandidates(raw, 1920, true)[0]?.formatId).toBe(22);
 });

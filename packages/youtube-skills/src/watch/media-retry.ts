@@ -33,6 +33,7 @@ export async function fetchMediaWithRetry(
       response = await fetchImpl(url, init);
     } catch (error) {
       init.signal.throwIfAborted();
+      if ((error as { code?: string })?.code === 'PROXY_TUNNEL_FAILED') throw error;
       failure = error;
     }
     if (response && !RETRY_STATUSES.has(response.status)) return response;

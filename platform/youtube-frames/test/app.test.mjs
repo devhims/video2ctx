@@ -99,3 +99,14 @@ test('preserves structured job causes and process exits without private text', a
   assert.equal(body.diagnostics.events.at(-1).causeCode, 'ECONNRESET');
   assert.ok(!JSON.stringify(body).includes('PRIVATE'));
 });
+
+test('captures the proxy tunnel status and category without provider text', async () => {
+  const app = createFrameApp(async (_input, { onDiagnostic }) => {
+    onDiagnostic({ stage: 'proxy', proxySlot: 1, attempt: 1,
+      error: { code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', status: 522, message: 'PRIVATE' } });
+    return { frames: [] };
+  }, { log: () => {} });
+  const body = await (await post(app)).json();
+  assert.deepEqual(body.diagnostics.events[0], { stage: 'proxy', proxySlot: 1, attempt: 1,
+    code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', status: 522 });
+});

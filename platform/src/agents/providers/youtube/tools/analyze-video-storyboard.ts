@@ -3,6 +3,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
 import { storyboardSchema } from '../storyboard';
+import { analyzeStoryboardBatches } from '../storyboard-analysis-batches';
 import type { AgentToolContext } from '../tool-context';
 import { readAnalysisAssets, storedVisualInputSchema } from './stored-analysis';
 import { safeIdPart, youtubeVideoUrl } from './provider-evidence';
@@ -65,12 +66,12 @@ export function executeAnalyzeVideoStoryboard(
       context.signal.throwIfAborted();
       if (!canAnalyzeStoryboard(context.researchDeadlineAt))
         throw new Error('Loading saved images left too little research time for storyboard analysis.');
-      const analysis = await context.analyzeStoryboard({
+      const analysis = await analyzeStoryboardBatches(context.analyzeStoryboard, {
         storyboard,
         focus: parsed.focus,
         signal: context.signal,
         modelCallId: `visual-analyst:${context.runId}:${toolCallId}`,
-      });
+      }, context.researchDeadlineAt);
       context.signal.throwIfAborted();
       await readAnalysisAssets(context, versions, 'storyboard_sheet');
       const videoId = storyboard.videoId;
@@ -109,12 +110,15 @@ export function executeAnalyzeVideoStoryboard(
               sessionReused: true,
               selection: storyboard.selection,
               manifest: storyboard.manifest,
-              sampledRanges: storyboard.sheets.map((sheet) => ({
+              analysisBatchCount: analysis.batchCount,
+              requestedSheetCount: storyboard.sheets.length,
+              analyzedSheetCount: analysis.analyzedSheets.length,
+              sampledRanges: analysis.analyzedSheets.map((sheet) => ({
                 startMs: sheet.firstFrameIndex * sheet.intervalMs,
                 endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
               })),
               totalFrames: storyboard.frameCount,
-              sampledFrames: storyboard.sheets.reduce((sum, sheet) => sum + sheet.frameCount, 0),
+              sampledFrames: analysis.analyzedSheets.reduce((sum, sheet) => sum + sheet.frameCount, 0),
               intervalMs: storyboard.intervalMs,
             },
           },
@@ -135,7 +139,7 @@ export function executeAnalyzeVideoStoryboard(
               code: 'SUPERSEDED_SESSION_EVIDENCE',
               message: 'Analysis uses an older stored storyboard version.',
             })),
-        ],
+        ].filter((warning, index, all) => all.findIndex(other => other.code === warning.code && other.message === warning.message) === index).slice(0, 50),
         assetVersions: versions,
         usage: [],
       });

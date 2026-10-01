@@ -90,6 +90,16 @@ describe('youtube-ctx visual workflow', () => {
     });
   });
 
+  test('prefers the Android progressive path and stops formats on a tunnel failure', async () => {
+    const error = Object.assign(new Error('Outbound proxy tunnel failed.'), { code: 'PROXY_TUNNEL_FAILED' });
+    mocks.startMediaRangeProxy.mockResolvedValue({ url: 'http://127.0.0.1:1234/token', failure: error, close: mocks.proxyClose });
+    mocks.extractJpeg.mockRejectedValue(new Error('relay returned 502'));
+    await expect(extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test' })).rejects.toBe(error);
+    expect(mocks.loadMediaCandidateGroup.mock.calls[0]?.[0]).toBe(1);
+    expect(mocks.extractJpeg).toHaveBeenCalledTimes(1);
+    expect(mocks.proxyClose).toHaveBeenCalledTimes(1);
+  });
+
   test('extracts frames from an ended broadcast even with legacy isLive metadata', async () => {
     mocks.getDetails.mockResolvedValue({ ...video, isLive: true });
     mocks.extractJpeg.mockResolvedValue({ timestampMs: 1000, path: '/tmp/frame.jpg', mimeType: 'image/jpeg', width: 640, height: 360 });
@@ -189,7 +199,7 @@ describe('youtube-ctx visual workflow', () => {
       expect(result.frames.map(frame => frame.timestampMs)).toEqual([1_000]);
       expect(result.failures).toEqual([expect.objectContaining({ timestampMs: 2_000 })]);
       expect(result.meta.partial).toBe(true);
-      expect(mocks.loadMediaCandidateGroup).toHaveBeenCalledTimes(1);
+      expect(mocks.loadMediaCandidateGroup).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
   });
 

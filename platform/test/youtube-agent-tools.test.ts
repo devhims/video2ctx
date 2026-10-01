@@ -609,3 +609,37 @@ function admission() {
     creditsRemaining: 100,
   };
 }
+
+describe('long transcript retrieval', () => {
+  function longTranscript(): Transcript {
+    const segments = Array.from({ length: 6001 }, (_, i) => ({ startMs: i * 3000,
+      endMs: (i + 1) * 3000, durationMs: 3000, text: `Caption ${i}.` }));
+    return { videoId: 'abcdefghijk', track: { id: 'en', name: 'English', languageCode: 'en',
+      kind: 'manual', isTranslatable: true, isDefault: true }, segments,
+      text: segments.map(segment => segment.text).join(' '),
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } };
+  }
+  it('returns bounded inspect evidence and preserves every saved segment', async () => {
+    const original = longTranscript();
+    const ctx = toolContext({ transcript: async () => ({ value: original, cacheStatus: 'hit' }) }, { mode: 'complete_transcript' });
+    attachTestAssetStore(ctx);
+    const packet = await executeGetVideoTranscript({ videoId: original.videoId }, ctx, 'long-inspect');
+    expect(packet.excerpts).toHaveLength(5000);
+    expect(packet.artifacts[0]?.data).toMatchObject({ allReturnedSegmentsIncluded: false,
+      segmentCount: 6001, excerptCount: 6001, returnedExcerptCount: 5000, nextOffset: 5000, endMs: 18003000 });
+    expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED' }));
+    const stored = await ctx.session!.readAsset!(packet.assetVersions![0]!);
+    expect((stored!.value as Transcript).segments).toEqual(original.segments);
+  });
+  it('passes all segments, including the final one, to research analysis', async () => {
+    const original = longTranscript();
+    const analyze = vi.fn(async () => ({ summary: 'Late caption found.', findings: [], excerpts: [], warnings: [],
+      coverage: { completeTranscriptRead: true as const, segmentCount: 6001, startMs: 0, endMs: 18003000 } }));
+    const ctx = toolContext({ transcript: async () => ({ value: original, cacheStatus: 'hit' }), analyzeTranscript: analyze });
+    attachTestAssetStore(ctx);
+    const packet = await executeGetVideoTranscriptForModel({ videoId: original.videoId }, ctx, 'long-research');
+    expect(packet.excerpts).toEqual([]);
+    await executeAnalyzeVideoTranscript({ assetVersion: packet.assetVersions![0]!, focus: 'Last caption' }, ctx, 'long-analysis');
+    expect(analyze).toHaveBeenCalledWith(expect.objectContaining({ segments: original.segments }));
+  });
+});

@@ -743,3 +743,23 @@ test('current comments bypass session reuse while saved transcripts and old comm
       ...savedComments.assetVersions!, ...updated.assetVersions!, ...savedTranscript.assetVersions!,
     ]));
   }));
+
+test('long transcript pages remain readable after reopening without provider refetch', async () =>
+  within('long-transcript-pages', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({length:6001}, (_,i)=>({text:`Caption ${i}`,startMs:i*1000,endMs:(i+1)*1000,durationMs:1000}));
+    value.text = value.segments.map(segment=>segment.text).join(' ');
+    const fetch = vi.fn(async()=>({value,cacheStatus:'miss' as const}));
+    const p = provider(fetch);
+    const first = await executeGetVideoTranscript({videoId:id},context(store,sessionProvider(p,store)),'first-page');
+    expect(first.excerpts).toHaveLength(5000);
+    const resumed = reopen();
+    const last = await executeGetVideoTranscript({videoId:id,offset:5000},context(resumed,sessionProvider(p,resumed)),'last-page');
+    expect(last.excerpts).toHaveLength(1001);
+    expect(last.excerpts.at(-1)).toMatchObject({text:'Caption 6000',startMs:6000000});
+    expect(last.continuation).toBeUndefined();
+    expect(last.assetVersions).toEqual(first.assetVersions);
+    expect(fetch).toHaveBeenCalledOnce();
+    const page = await resumed.readEvidence(first.assetVersions![0]!,5000);
+    expect(page.packets[0]!.excerpts[0]!.text).toBe('Caption 5000');
+  }));

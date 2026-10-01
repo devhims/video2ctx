@@ -60,6 +60,7 @@ async function write(res: ServerResponse, bytes: Uint8Array): Promise<boolean> {
 
 export interface MediaRangeProxy {
   url: string;
+  readonly failure?: unknown;
   close(): Promise<void>;
 }
 
@@ -72,6 +73,7 @@ export async function startMediaRangeProxy(
   deadlineAt = Infinity,
 ): Promise<MediaRangeProxy> {
   const token = randomBytes(18).toString('hex');
+  let failure: unknown;
   let prefix = Buffer.alloc(0);
   let contentType = candidate.mimeType.split(';')[0] ?? 'application/octet-stream';
   let totalLength = candidate.contentLength;
@@ -119,6 +121,7 @@ export async function startMediaRangeProxy(
       }
       if (!res.destroyed && !res.writableEnded) res.end();
     } catch (error) {
+      if ((error as { code?: string })?.code === 'PROXY_TUNNEL_FAILED') failure = error;
       if (!controller.signal.aborted) diagnose(onDiagnostic, { stage: 'media_transfer', error });
       if (error instanceof Error && error.message === 'MEDIA_TRANSFER_LIMIT') {
         res.destroy();
@@ -173,6 +176,7 @@ export async function startMediaRangeProxy(
   }
   return {
     url: `http://${LOOPBACK_HOST}:${address.port}/${token}`,
+    get failure() { return failure; },
     close: async () => {
       for (const controller of controllers) controller.abort();
       server.closeAllConnections?.();
