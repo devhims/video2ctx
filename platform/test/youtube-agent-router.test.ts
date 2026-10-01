@@ -421,6 +421,15 @@ describe('YouTube agent capability router', () => {
       expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
     });
 
+    it('keeps the first decision when the provider ignores the reconsideration abort', async () => {
+      const classifier = model(() => new Promise<never>(() => {}));
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      const outcome = run.then(decision => decision, (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(await outcome).toMatchObject({ searchQuery: 'slide design tips', visualEvidence: 'helpful' });
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+    });
+
     it('skips reconsideration when too little classification time remains', async () => {
       const classifier = model(async () => { throw new Error('must not be called'); }, 18_000);
       const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });

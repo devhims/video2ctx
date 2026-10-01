@@ -188,9 +188,14 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       if (budgetMs < RECONSIDERATION_MIN_MS) return finishClassification(advisoryFallback, videoIds, channelIds);
       const reconsideration = new AbortController();
       const timer = setTimeout(() => reconsideration.abort(new Error('Classification reconsideration timeout.')), budgetMs);
+      // Stop waiting at the sub-deadline even if the provider ignores the abort.
+      const timedOut = new Promise<never>((_, reject) => reconsideration.signal.addEventListener('abort',
+        () => reject(reconsideration.signal.reason), { once: true }));
       try {
         assertModelCostAvailable(input.modelBudget);
-        result = await request(AbortSignal.any([input.signal, reconsideration.signal]));
+        const pending = request(AbortSignal.any([input.signal, reconsideration.signal]));
+        pending.catch(() => {}); // An abandoned call can settle after the fallback.
+        result = await Promise.race([pending, timedOut]);
       } catch (error) {
         if (input.signal.aborted) throw error;
         console.warn(JSON.stringify({ event: 'agent_classification_reconsideration_failed', modelCallId: callId,
