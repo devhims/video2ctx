@@ -71,11 +71,12 @@ export interface WatchPlayerResponse {
   raw: JsonObject;
 }
 
-export async function callWatchPlayer(
+async function requestWatchPlayer(
   videoId: string,
   profile: WatchProfile,
   options: YouTubeClientOptions,
   onDiagnostic?: DiagnosticSink,
+  requirePlayable = true,
 ): Promise<WatchPlayerResponse> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
@@ -133,7 +134,7 @@ export async function callWatchPlayer(
   diagnose(onDiagnostic, { stage: 'player_response', profile: profile.name, status: response.status,
     playabilityStatus: playability, reason: typeof object(normalized.playabilityStatus).reason === 'string'
       ? String(object(normalized.playabilityStatus).reason) : undefined });
-  if (playability !== 'OK') {
+  if (requirePlayable && playability !== 'OK') {
     const reason = object(normalized.playabilityStatus).reason;
     throw new YouTubeClientError(
       playability === 'LOGIN_REQUIRED' ? 'AUTH_REQUIRED' : 'UNAVAILABLE',
@@ -149,4 +150,27 @@ export function callIosWatchPlayer(
   options: YouTubeClientOptions,
 ): Promise<WatchPlayerResponse> {
   return callWatchPlayer(videoId, IOS_PROFILE, options);
+}
+
+export function callWatchPlayer(
+  videoId: string, profile: WatchProfile, options: YouTubeClientOptions, onDiagnostic?: DiagnosticSink,
+): Promise<WatchPlayerResponse> {
+  return requestWatchPlayer(videoId, profile, options, onDiagnostic);
+}
+
+/** Published metadata's isLive flag also includes archived broadcasts. Verify
+ * an explicit broadcast end before allowing that legacy flag through the guard.
+ * MWEB exposes broadcast dates even when that client cannot play the media;
+ * actual media playability is checked separately by the extraction fallback.
+ */
+export async function verifyCompletedBroadcast(videoId: string, options: YouTubeClientOptions): Promise<void> {
+  const { raw } = await requestWatchPlayer(videoId, WATCH_MEDIA_PROFILES[3]!, options, undefined, false);
+  const details = object(raw.videoDetails);
+  const broadcast = object(object(object(raw.microformat).playerMicroformatRenderer).liveBroadcastDetails);
+  const endedAt = typeof broadcast.endTimestamp === 'string' ? Date.parse(broadcast.endTimestamp) : NaN;
+  if (details.videoId !== videoId || details.isLive === true || details.isUpcoming === true
+    || broadcast.isLiveNow !== false || !Number.isFinite(endedAt) || endedAt > Date.now()) {
+    throw Object.assign(new YouTubeClientError('UNAVAILABLE', 'Live or unconfirmed broadcasts are not supported by watch extraction.'),
+      { failureReason: 'live_or_unconfirmed_broadcast' });
+  }
 }

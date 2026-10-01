@@ -1,20 +1,22 @@
 import { diagnosticDetails, errorDetails } from './diagnostics.mjs';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import { createFrameTransport } from './egress.mjs';
 import { extractFrames } from './dist/extractor.mjs';
 import { MAX_IMAGE_BYTES, parseFrameRequest } from './contract.mjs';
 
 const directory = process.argv[2];
-const proxyUrl = process.env.OUTBOUND_PROXY_URL?.trim();
-const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+let transport;
 try {
+  transport = createFrameTransport(process.env);
+  console.error(JSON.stringify({ event: 'frame_diagnostic', stage: 'proxy',
+    egress: transport.proxyConfigured ? 'proxy' : 'direct', proxySlot: transport.slot }));
   const request = parseFrameRequest(JSON.parse(await readFile(join(directory, 'request.json'), 'utf8')));
   const result = await extractFrames({
     onDiagnostic: event => console.error(JSON.stringify({ event: 'frame_diagnostic', ...diagnosticDetails(event) })),
     ...request, outputDir: directory, preferResolution: true,
     timeBudgetMs: request.extractionTimeoutMs ?? 45_000, frameTimeoutMs: 10_000,
-    fetch: dispatcher ? (input, init) => undiciFetch(input, { ...init, dispatcher }) : globalThis.fetch,
+    fetch: transport.fetch,
     retry: { policy: { maxAttempts: 2, attemptTimeoutMs: 8_000 } },
   });
   const frames = [];
@@ -44,5 +46,5 @@ try {
   await writeFile(join(directory, 'result.json'), JSON.stringify({ error: { code, message,
     retryable: code !== 'INVALID_INPUT' && code !== 'NOT_FOUND' && code !== 'DEPENDENCY_MISSING' } }));
 } finally {
-  await dispatcher?.close();
+  await transport?.close();
 }

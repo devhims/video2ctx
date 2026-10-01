@@ -90,6 +90,69 @@ describe('youtube-ctx visual workflow', () => {
     });
   });
 
+  test('extracts frames from an ended broadcast even with legacy isLive metadata', async () => {
+    mocks.getDetails.mockResolvedValue({ ...video, isLive: true });
+    mocks.extractJpeg.mockResolvedValue({ timestampMs: 1000, path: '/tmp/frame.jpg', mimeType: 'image/jpeg', width: 640, height: 360 });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      videoDetails: { videoId: video.id, isLiveContent: true, lengthSeconds: '60' },
+      // Metadata remains useful even when this profile cannot play the media.
+      playabilityStatus: { status: 'UNPLAYABLE', reason: 'The page needs to be reloaded.' },
+      microformat: { playerMicroformatRenderer: { liveBroadcastDetails: {
+        isLiveNow: false, endTimestamp: '2026-01-01T00:00:00Z',
+      } } },
+    })));
+    const result = await extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test', fetch });
+    expect(result.frames).toHaveLength(1);
+    expect(mocks.extractJpeg).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    { isLiveNow: true },
+    { isLiveNow: true, endTimestamp: '2026-01-01T00:00:00Z' },
+    {},
+    { isLiveNow: false },
+    { isLiveNow: false, endTimestamp: 'invalid' },
+    { isLiveNow: false, endTimestamp: '2999-01-01T00:00:00Z' },
+  ])('rejects active or unconfirmed broadcasts before FFmpeg: %j', async (liveBroadcastDetails) => {
+    mocks.getDetails.mockResolvedValue({ ...video, isLive: true });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      videoDetails: { videoId: video.id, isLiveContent: true },
+      microformat: { playerMicroformatRenderer: { liveBroadcastDetails } },
+    })));
+    await expect(extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test', fetch }))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+    expect(mocks.resolveFfmpegExecutable).not.toHaveBeenCalled();
+  });
+
+  test('allows an archived broadcast through storyboard indexing without mutating provider metadata', async () => {
+    const legacy = { ...video, isLive: true, availability: { ...video.availability, isLive: true } };
+    mocks.getDetails.mockResolvedValue(legacy);
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      videoDetails: { videoId: video.id },
+      microformat: { playerMicroformatRenderer: { liveBroadcastDetails: {
+        isLiveNow: false, endTimestamp: '2026-01-01T00:00:00Z',
+      } } },
+    })));
+    const result = await getWatchIndex({ videoId: video.id, outputDir: '/tmp/watch-test', fetch });
+    expect(result.video.isLive).toBe(false);
+    expect(legacy.isLive).toBe(true);
+    expect(legacy.availability.isLive).toBe(true);
+  });
+
+  test.each([{ videoId: 'other_video' }, { videoId: video.id, isUpcoming: true }, { videoId: video.id, isLive: true }])(
+    'does not trust ended metadata for a different video or conflicting live state: %j', async (videoDetails) => {
+      mocks.getDetails.mockResolvedValue({ ...video, isLive: true });
+      const fetch = vi.fn(async () => new Response(JSON.stringify({ videoDetails,
+        microformat: { playerMicroformatRenderer: { liveBroadcastDetails: {
+          isLiveNow: false, endTimestamp: '2026-01-01T00:00:00Z',
+        } } },
+      })));
+      await expect(extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test', fetch }))
+        .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+      expect(mocks.extractJpeg).not.toHaveBeenCalled();
+    });
+
   test('preserves the exact FFmpeg failure before replacing it with aggregate media unavailability', async () => {
     const original = Object.assign(new YouTubeClientError('MEDIA_UNAVAILABLE', 'Range rejected'), {
       stderr: 'HTTP error 403 Forbidden', exitCode: 1,

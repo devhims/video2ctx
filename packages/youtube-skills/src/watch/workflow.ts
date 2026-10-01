@@ -1,3 +1,4 @@
+import { verifyCompletedBroadcast } from './innertube';
 import { diagnose } from './diagnostics';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -29,6 +30,13 @@ const MAX_STORYBOARD_SHEETS = 20;
 const DEFAULT_MAX_WIDTH = 1_280;
 const MAX_WIDTH = 1_920;
 const MAX_TIMESTAMPS = 30;
+
+async function getRecordedVideo(videoId: string, options: YouTubeClientOptions) {
+  const video = await getDetails({ videoId, ...options });
+  if (!video.isLive) return video;
+  await verifyCompletedBroadcast(videoId, options);
+  return { ...video, isLive: false, availability: { ...video.availability, isLive: false } };
+}
 
 function optionsFrom(options: YouTubeClientOptions): YouTubeClientOptions {
   return {
@@ -78,7 +86,7 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
   const clientOptions = optionsFrom(options);
   const outputDir = resolve(options.outputDir);
   const [video, transcriptResult, storyboardResult] = await Promise.all([
-    getDetails({ videoId: options.videoId, ...clientOptions }),
+    getRecordedVideo(options.videoId, clientOptions),
     getTranscript({
       videoId: options.videoId,
       lang: options.lang,
@@ -94,9 +102,6 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
       .then((value) => ({ value }))
       .catch((error: unknown) => ({ error })),
   ]);
-  if (video.isLive) {
-    throw new YouTubeClientError('UNAVAILABLE', 'Live videos are not supported by watch extraction.');
-  }
 
   const warnings: string[] = [];
   const transcript = 'value' in transcriptResult ? transcriptResult.value : undefined;
@@ -208,10 +213,7 @@ export async function extractFrames(options: ExtractFramesRequest): Promise<Fram
 async function extractFramesWithinBudget(options: ExtractFramesRequest, deadlineAt: number): Promise<FrameExtractionResult> {
   const { timestamps, maxWidth } = validateFrameRequest(options);
   const clientOptions = optionsFrom(options);
-  const video = await getDetails({ videoId: options.videoId, ...clientOptions });
-  if (video.isLive) {
-    throw new YouTubeClientError('UNAVAILABLE', 'Live videos are not supported by watch extraction.');
-  }
+  const video = await getRecordedVideo(options.videoId, clientOptions);
   if (video.durationSeconds !== undefined) {
     const durationMs = video.durationSeconds * 1_000;
     const invalidTimestamp = timestamps.find((timestamp) => timestamp >= durationMs);

@@ -7,7 +7,7 @@ An agent uses storyboards to find relevant moments, then asks for individual vid
 The skill is `youtube-ctx`. Its visual entry point is `watch.mjs`, generated from `packages/youtube-skills/src/watch/`. The published instructions are in `.agents/skills/youtube-ctx/references/visual.md`.
 
 1. `index` retrieves metadata, a timed transcript, and storyboard contact sheets. The agent must open the images to inspect them. A tile maps to `(firstFrameIndex + row * columns + column) * intervalMs`.
-2. `frames` accepts selected timestamps. The workflow validates the video ID, bounds the selection to 30 timestamps, rejects live videos, and checks timestamps against known duration.
+2. `frames` accepts selected timestamps. The workflow validates the video ID, bounds the selection to 30 timestamps, rejects active or unconfirmed broadcasts, and checks timestamps against known duration.
 3. The extractor requests playable media through iOS, Android, Android VR, and mobile-web client profiles. It considers direct video URLs. It does not decipher signature-cipher formats.
 4. A token-protected HTTP server on loopback forwards FFmpeg byte-range requests to YouTube using the configured fetch transport. It caches up to 4 MiB of the stream prefix and shares a 256 MiB transfer allowance across the extraction request.
 5. FFmpeg seeks before decoding, extracts one JPEG with quality setting 2, and scales down without upscaling. Each FFmpeg process has a 30-second timeout. The first timestamp probes a format; the remaining timestamps use at most two parallel extractors.
@@ -72,12 +72,13 @@ The price remains 2 credits per successful retrieval batch of 1 to 6 frames, inc
 
 ## Resource bounds and deployment
 
-- Dedicated binding `YOUTUBE_FRAMES`, two fixed routing slots, at most two `lite` instances, five-minute idle sleep.
+- Dedicated binding `YOUTUBE_FRAMES`, two fixed routing slots, at most two `basic` instances, five-minute idle sleep.
 - One active extraction job per container. Saturation returns `503 PROCESSOR_BUSY` and the private response includes `Retry-After: 1`.
 - A 4 KiB request limit, 4 MiB per JPEG, 8 MiB total JPEG limit, and 12 MiB serialized response limit.
 - A cooperative extraction budget of 5 to 45 seconds, supplied by the Worker. Each hosted FFmpeg probe or seek gets at most 10 seconds and never more than the remaining extraction budget. Completed frames are returned with explicit failures for missing timestamps when the budget expires. A separate process group lets the parent kill the job and FFmpeg descendants if they exceed the cooperative budget by 3 seconds, or on cancellation. The parent removes the temporary directory after the process exits.
 - The Worker transport deadline is the extraction budget plus 5 seconds, at most 50 seconds, additionally bounded by agent cancellation. An explicit deadline race stops waiting even if a binding does not acknowledge cancellation. A busy response can try the other slot because no extraction started. Expensive extraction is not replayed after transport or extraction failures.
-- Optional `OUTBOUND_PROXY_URL` is passed as a runtime secret and used for both metadata and media requests. Upstream exception text is excluded from public extraction errors.
+- `OUTBOUND_PROXY_URLS` is passed as a runtime secret, using the same JSON array of one to four distinct HTTP(S) proxy URLs as the Worker and storyboard processor. Each extraction job randomly selects one entry and uses its dispatcher for metadata, player requests, and media reads. The proxy provider controls whether that entry retains a stable exit IP. Legacy `OUTBOUND_PROXY_URL` remains a fallback when the pool is absent. Invalid pools fail without bypassing the proxy; direct access is used only when neither setting is configured. Logs redact credentials from every pool entry. Upstream exception text is excluded from public extraction errors.
+- The `basic` size and proxy forwarding require a Worker deployment and rebuilt frames container image. More CPU can help decoding, but does not resolve upstream HTTP 403 responses or guarantee an extraction latency target.
 
 The Docker build context is the repository root, restricted by `platform/youtube-frames/Dockerfile.dockerignore`. It copies the shared watch TypeScript source and bundles it against the exact published extraction-library version in the container lockfile. It does not compile the library from repository source. The final image runs as `node` and includes FFmpeg. Tini reaps orphaned descendants after process-group termination.
 
@@ -254,3 +255,49 @@ for capture states and truncation fields. There is no dashboard panel in this ch
 Deploy the Worker and both container images together. Older containers remain
 compatible but report missing capture. Container crashes or response loss may leave
 only a Worker summary; historical diagnostics cannot be recovered.
+
+
+## Completed livestream recordings
+
+The pinned metadata library reports `isLiveContent` as `isLive`, including recordings
+of finished livestreams. The shared watch workflow verifies that flag using MWEB
+player metadata before rejecting frame extraction or storyboard indexing. It requires
+the requested video ID, `isLiveNow: false`, and a valid end timestamp in the past.
+An explicit active or upcoming flag overrides the end timestamp. Missing or conflicting
+metadata remains unavailable. Ordinary videos need no additional request.
+
+This verification does not require that MWEB can play the video. That profile can
+return broadcast dates alongside `UNPLAYABLE`. The separate media-client fallback
+still checks playability and signed media access before FFmpeg reads anything.
+The frame extraction deadline also bounds this verification request.
+
+The change is bundled from shared watch source when the frames image builds, so it
+does not depend on publishing a new metadata-library version. Deploy the rebuilt
+frames image to enable it in production. The regenerated local watch skill uses the
+same check.
+
+Validation on October 1, 2026 reproduced the old `UNAVAILABLE` rejection for
+`Fls_onRviPM` in 1.69 seconds through the locally configured proxy. With the fix, its
+metadata confirmed an ended broadcast and extraction reached FFmpeg. The media
+requests then received HTTP 403, ending with `MEDIA_UNAVAILABLE` after 24.77 seconds.
+A control request for `dQw4w9WgXcQ` at 30 seconds returned a 1280×720 JPEG in 37.28
+seconds through the same proxy and extractor. These were local tests of the frames
+container bundle with the pinned dependency and real FFmpeg, not production-container
+replays. The guard regression is resolved; successful keynote media extraction is
+not yet established. No raw media URLs or proxy credentials were retained.
+
+## Stored container failure details
+
+The frames job's `job` diagnostic stage is accepted by the Worker. Structured
+failure reasons distinguish live/unconfirmed broadcasts and invalid proxy pools.
+Request failures retain recognized network cause codes, process exit codes, and
+termination signals. A `proxy` event records routing mode and pool slot. No raw
+error messages, stderr, proxy URLs, or credentials enter these stored fields.
+
+On a tool failure, the trace manager snapshots matching run diagnostics recorded
+during that call into its R2 error payload under `extractionDiagnostics`. Admin trace
+reads and JSONL exports preserve this field. Existing run diagnostic storage caps,
+trace deletion, and access controls apply. This requires the Worker and rebuilt
+frames image. It cannot recover historical causes or process events lost when the
+whole container terminates before responding; those attempts retain the Worker
+transport summary. A SIGKILL record alone must not be labeled as an OOM diagnosis.

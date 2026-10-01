@@ -26,3 +26,16 @@ test('distinguishes old containers from invalid and excessive diagnostic envelop
 test('a throwing sink cannot change extraction or trigger retries', () => {
   expect(() => emitExtractionDiagnostic(() => { throw new Error('private failure'); }, extractionFixture)).not.toThrow();
 });
+
+
+test('retains container job reasons, proxy route and process failure details', () => {
+  const events = [
+    { stage: 'proxy', egress: 'proxy', proxySlot: 1 },
+    { stage: 'job', code: 'UNAVAILABLE', failureReason: 'live_or_unconfirmed_broadcast' },
+    { stage: 'job', code: 'FRAME_EXTRACTION_FAILED', failureReason: 'invalid_proxy_configuration' },
+    { stage: 'request', code: 'FRAME_TIMEOUT', exitCode: 7, signal: 'SIGKILL', causeCode: 'ECONNRESET' },
+  ];
+  expect(extractionCapture({ diagnostics: { version: 1, droppedEvents: 0,
+    events: events.map(event => ({ ...event, message: 'PRIVATE', stderr: 'PRIVATE', error: { message: 'PRIVATE' } })),
+  } })).toEqual({ capture: 'available', droppedEvents: 0, events });
+});

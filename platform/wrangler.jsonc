@@ -55,7 +55,7 @@
       "class_name": "YouTubeFramesContainer",
       "image": "./youtube-frames/Dockerfile",
       "image_build_context": "..",
-      "instance_type": "lite",
+      "instance_type": "basic",
       "max_instances": 2,
     },
     {

@@ -21338,6 +21338,253 @@ function diagnose(sink, event) {
   }
 }
 
+// src/transport.ts
+var DEFAULT_POLICY2 = {
+  maxAttempts: 5,
+  attemptTimeoutMs: 1e4,
+  baseDelayMs: 200,
+  maxDelayMs: 2e3,
+  retryStatuses: [408, 425, 429, 500, 502, 503, 504]
+};
+function requestSignal2(request) {
+  if (request.init?.signal) return request.init.signal;
+  return typeof Request !== "undefined" && request.input instanceof Request ? request.input.signal : void 0;
+}
+function attemptSignal2(request, timeoutMs) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const existing = requestSignal2(request);
+  if (!existing) return deadline;
+  const combined = new AbortController();
+  const forwardAbort = (signal) => {
+    if (signal.aborted) combined.abort(signal.reason);
+    else signal.addEventListener("abort", () => combined.abort(signal.reason), { once: true });
+  };
+  forwardAbort(existing);
+  if (!combined.signal.aborted) forwardAbort(deadline);
+  return combined.signal;
+}
+async function runtimeWait2(delayMs) {
+  await new Promise((resolve5) => setTimeout(resolve5, delayMs));
+}
+function retryAfterMs2(response, now) {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) return void 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1e3);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : void 0;
+}
+function retryDelay2(response, attempt, policy, random, now) {
+  const requestedDelay = response ? retryAfterMs2(response, now()) : void 0;
+  if (requestedDelay !== void 0) return Math.min(policy.maxDelayMs, requestedDelay);
+  const ceiling = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1));
+  return Math.max(0, Math.round(ceiling * Math.min(1, Math.max(0, random()))));
+}
+function createSkillTransport(options) {
+  const wait = options.wait ?? runtimeWait2;
+  const random = options.random ?? Math.random;
+  const now = options.now ?? Date.now;
+  const policy = {
+    ...DEFAULT_POLICY2,
+    ...options.policy,
+    retryStatuses: options.policy?.retryStatuses ?? DEFAULT_POLICY2.retryStatuses
+  };
+  if (!Number.isSafeInteger(policy.attemptTimeoutMs) || policy.attemptTimeoutMs < 1) {
+    throw new YouTubeClientError(
+      "INVALID_INPUT",
+      "retry.policy.attemptTimeoutMs must be a positive integer."
+    );
+  }
+  return {
+    async fetch(operation, requestFactory) {
+      const retryStatuses = new Set(policy.retryStatuses);
+      let lastNetworkError;
+      for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+        const request = await requestFactory(attempt);
+        let response;
+        try {
+          response = await options.fetch(request.input, {
+            ...request.init,
+            signal: attemptSignal2(request, policy.attemptTimeoutMs)
+          });
+        } catch (error) {
+          lastNetworkError = error;
+          if (attempt === policy.maxAttempts) {
+            throw new YouTubeClientError(
+              "UPSTREAM_ERROR",
+              `YouTube ${operation} network request failed after ${policy.maxAttempts} attempts.`,
+              { retryable: true, cause: error }
+            );
+          }
+        }
+        if (response && (!retryStatuses.has(response.status) || attempt === policy.maxAttempts)) {
+          return response;
+        }
+        const delayMs = retryDelay2(response, attempt, policy, random, now);
+        options.onRetry?.({
+          operation,
+          attempt,
+          maxAttempts: policy.maxAttempts,
+          status: response?.status,
+          delayMs,
+          reason: response ? "response" : "network"
+        });
+        if (response?.body) await response.body.cancel().catch(() => void 0);
+        await wait(delayMs);
+      }
+      throw new YouTubeClientError(
+        "UPSTREAM_ERROR",
+        `YouTube ${operation} retry loop exhausted.`,
+        { retryable: true, cause: lastNetworkError }
+      );
+    }
+  };
+}
+
+// src/watch/innertube.ts
+var IOS_PROFILE = {
+  name: "ios",
+  clientName: "IOS",
+  clientVersion: "20.10.4",
+  clientNameHeader: "5",
+  userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+  context: {
+    deviceMake: "Apple",
+    deviceModel: "iPhone16,2",
+    platform: "MOBILE",
+    osName: "iOS",
+    osVersion: "18.3.2.22D82"
+  }
+};
+var WATCH_MEDIA_PROFILES = [
+  IOS_PROFILE,
+  {
+    name: "android",
+    clientName: "ANDROID",
+    clientVersion: "20.10.38",
+    clientNameHeader: "3",
+    userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip",
+    context: { platform: "MOBILE", osName: "Android", osVersion: "14", androidSdkVersion: 34 }
+  },
+  {
+    name: "android_vr",
+    clientName: "ANDROID_VR",
+    clientVersion: "1.62.20",
+    clientNameHeader: "28",
+    userAgent: "com.google.android.apps.youtube.vr.oculus/1.62.20 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+    context: {
+      deviceMake: "Oculus",
+      deviceModel: "Quest 3",
+      platform: "MOBILE",
+      osName: "Android",
+      osVersion: "12L",
+      androidSdkVersion: 32
+    }
+  },
+  {
+    name: "mweb",
+    clientName: "MWEB",
+    clientVersion: "2.20251209.01.00",
+    clientNameHeader: "2",
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    context: { platform: "MOBILE", osName: "iOS", osVersion: "17.5.1" }
+  }
+];
+var API_ROOT2 = "https://youtubei.googleapis.com/youtubei/v1";
+function isObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function object5(value) {
+  return isObject2(value) ? value : {};
+}
+async function requestWatchPlayer(videoId, profile, options, onDiagnostic, requirePlayable = true) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
+  }
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  if (!fetchImpl) throw new YouTubeClientError("INVALID_INPUT", "A fetch implementation is required.");
+  const transport = createSkillTransport({ fetch: fetchImpl, ...options.retry });
+  const response = await transport.fetch(`youtube:watch-player:${profile.name}`, () => ({
+    input: `${API_ROOT2}/player?prettyPrint=false`,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "*/*",
+        "User-Agent": profile.userAgent,
+        "X-YouTube-Client-Name": profile.clientNameHeader,
+        "X-YouTube-Client-Version": profile.clientVersion,
+        Origin: "https://www.youtube.com"
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: profile.clientName,
+            clientVersion: profile.clientVersion,
+            hl: options.language ?? "en",
+            gl: options.region ?? "US",
+            ...profile.context
+          },
+          user: { lockedSafetyMode: false },
+          request: { useSsl: true }
+        },
+        videoId,
+        contentCheckOk: true,
+        racyCheckOk: true
+      })
+    }
+  }));
+  if (!response.ok) {
+    throw new YouTubeClientError(
+      response.status === 429 ? "RATE_LIMITED" : "UPSTREAM_ERROR",
+      `YouTube player request failed with status ${response.status}.`,
+      { status: response.status, retryable: response.status === 429 || response.status >= 500 }
+    );
+  }
+  let raw;
+  try {
+    raw = await response.json();
+  } catch (cause) {
+    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned invalid player JSON.", {
+      cause,
+      retryable: true
+    });
+  }
+  const normalized = object5(raw);
+  const playability = String(object5(normalized.playabilityStatus).status ?? "UNKNOWN");
+  diagnose(onDiagnostic, {
+    stage: "player_response",
+    profile: profile.name,
+    status: response.status,
+    playabilityStatus: playability,
+    reason: typeof object5(normalized.playabilityStatus).reason === "string" ? String(object5(normalized.playabilityStatus).reason) : void 0
+  });
+  if (requirePlayable && playability !== "OK") {
+    const reason = object5(normalized.playabilityStatus).reason;
+    throw new YouTubeClientError(
+      playability === "LOGIN_REQUIRED" ? "AUTH_REQUIRED" : "UNAVAILABLE",
+      typeof reason === "string" ? reason : `Video is not playable through ${profile.name}.`,
+      { retryable: playability === "LOGIN_REQUIRED" }
+    );
+  }
+  return { profile: profile.name, raw: normalized };
+}
+function callWatchPlayer(videoId, profile, options, onDiagnostic) {
+  return requestWatchPlayer(videoId, profile, options, onDiagnostic);
+}
+async function verifyCompletedBroadcast(videoId, options) {
+  const { raw } = await requestWatchPlayer(videoId, WATCH_MEDIA_PROFILES[3], options, void 0, false);
+  const details = object5(raw.videoDetails);
+  const broadcast = object5(object5(object5(raw.microformat).playerMicroformatRenderer).liveBroadcastDetails);
+  const endedAt = typeof broadcast.endTimestamp === "string" ? Date.parse(broadcast.endTimestamp) : NaN;
+  if (details.videoId !== videoId || details.isLive === true || details.isUpcoming === true || broadcast.isLiveNow !== false || !Number.isFinite(endedAt) || endedAt > Date.now()) {
+    throw Object.assign(
+      new YouTubeClientError("UNAVAILABLE", "Live or unconfirmed broadcasts are not supported by watch extraction."),
+      { failureReason: "live_or_unconfirmed_broadcast" }
+    );
+  }
+}
+
 // src/watch/workflow.ts
 import { mkdir as mkdir3 } from "node:fs/promises";
 import { resolve as resolve3 } from "node:path";
@@ -21514,238 +21761,6 @@ async function extractJpeg(ffmpegPath, inputUrl, outputDir, videoId, timestampMs
     await rm(path, { force: true }).catch(() => void 0);
     throw error;
   }
-}
-
-// src/transport.ts
-var DEFAULT_POLICY2 = {
-  maxAttempts: 5,
-  attemptTimeoutMs: 1e4,
-  baseDelayMs: 200,
-  maxDelayMs: 2e3,
-  retryStatuses: [408, 425, 429, 500, 502, 503, 504]
-};
-function requestSignal2(request) {
-  if (request.init?.signal) return request.init.signal;
-  return typeof Request !== "undefined" && request.input instanceof Request ? request.input.signal : void 0;
-}
-function attemptSignal2(request, timeoutMs) {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  const existing = requestSignal2(request);
-  if (!existing) return deadline;
-  const combined = new AbortController();
-  const forwardAbort = (signal) => {
-    if (signal.aborted) combined.abort(signal.reason);
-    else signal.addEventListener("abort", () => combined.abort(signal.reason), { once: true });
-  };
-  forwardAbort(existing);
-  if (!combined.signal.aborted) forwardAbort(deadline);
-  return combined.signal;
-}
-async function runtimeWait2(delayMs) {
-  await new Promise((resolve5) => setTimeout(resolve5, delayMs));
-}
-function retryAfterMs2(response, now) {
-  const value = response.headers.get("retry-after")?.trim();
-  if (!value) return void 0;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1e3);
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : void 0;
-}
-function retryDelay2(response, attempt, policy, random, now) {
-  const requestedDelay = response ? retryAfterMs2(response, now()) : void 0;
-  if (requestedDelay !== void 0) return Math.min(policy.maxDelayMs, requestedDelay);
-  const ceiling = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1));
-  return Math.max(0, Math.round(ceiling * Math.min(1, Math.max(0, random()))));
-}
-function createSkillTransport(options) {
-  const wait = options.wait ?? runtimeWait2;
-  const random = options.random ?? Math.random;
-  const now = options.now ?? Date.now;
-  const policy = {
-    ...DEFAULT_POLICY2,
-    ...options.policy,
-    retryStatuses: options.policy?.retryStatuses ?? DEFAULT_POLICY2.retryStatuses
-  };
-  if (!Number.isSafeInteger(policy.attemptTimeoutMs) || policy.attemptTimeoutMs < 1) {
-    throw new YouTubeClientError(
-      "INVALID_INPUT",
-      "retry.policy.attemptTimeoutMs must be a positive integer."
-    );
-  }
-  return {
-    async fetch(operation, requestFactory) {
-      const retryStatuses = new Set(policy.retryStatuses);
-      let lastNetworkError;
-      for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
-        const request = await requestFactory(attempt);
-        let response;
-        try {
-          response = await options.fetch(request.input, {
-            ...request.init,
-            signal: attemptSignal2(request, policy.attemptTimeoutMs)
-          });
-        } catch (error) {
-          lastNetworkError = error;
-          if (attempt === policy.maxAttempts) {
-            throw new YouTubeClientError(
-              "UPSTREAM_ERROR",
-              `YouTube ${operation} network request failed after ${policy.maxAttempts} attempts.`,
-              { retryable: true, cause: error }
-            );
-          }
-        }
-        if (response && (!retryStatuses.has(response.status) || attempt === policy.maxAttempts)) {
-          return response;
-        }
-        const delayMs = retryDelay2(response, attempt, policy, random, now);
-        options.onRetry?.({
-          operation,
-          attempt,
-          maxAttempts: policy.maxAttempts,
-          status: response?.status,
-          delayMs,
-          reason: response ? "response" : "network"
-        });
-        if (response?.body) await response.body.cancel().catch(() => void 0);
-        await wait(delayMs);
-      }
-      throw new YouTubeClientError(
-        "UPSTREAM_ERROR",
-        `YouTube ${operation} retry loop exhausted.`,
-        { retryable: true, cause: lastNetworkError }
-      );
-    }
-  };
-}
-
-// src/watch/innertube.ts
-var IOS_PROFILE = {
-  name: "ios",
-  clientName: "IOS",
-  clientVersion: "20.10.4",
-  clientNameHeader: "5",
-  userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
-  context: {
-    deviceMake: "Apple",
-    deviceModel: "iPhone16,2",
-    platform: "MOBILE",
-    osName: "iOS",
-    osVersion: "18.3.2.22D82"
-  }
-};
-var WATCH_MEDIA_PROFILES = [
-  IOS_PROFILE,
-  {
-    name: "android",
-    clientName: "ANDROID",
-    clientVersion: "20.10.38",
-    clientNameHeader: "3",
-    userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip",
-    context: { platform: "MOBILE", osName: "Android", osVersion: "14", androidSdkVersion: 34 }
-  },
-  {
-    name: "android_vr",
-    clientName: "ANDROID_VR",
-    clientVersion: "1.62.20",
-    clientNameHeader: "28",
-    userAgent: "com.google.android.apps.youtube.vr.oculus/1.62.20 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-    context: {
-      deviceMake: "Oculus",
-      deviceModel: "Quest 3",
-      platform: "MOBILE",
-      osName: "Android",
-      osVersion: "12L",
-      androidSdkVersion: 32
-    }
-  },
-  {
-    name: "mweb",
-    clientName: "MWEB",
-    clientVersion: "2.20251209.01.00",
-    clientNameHeader: "2",
-    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-    context: { platform: "MOBILE", osName: "iOS", osVersion: "17.5.1" }
-  }
-];
-var API_ROOT2 = "https://youtubei.googleapis.com/youtubei/v1";
-function isObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function object5(value) {
-  return isObject2(value) ? value : {};
-}
-async function callWatchPlayer(videoId, profile, options, onDiagnostic) {
-  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
-    throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
-  }
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  if (!fetchImpl) throw new YouTubeClientError("INVALID_INPUT", "A fetch implementation is required.");
-  const transport = createSkillTransport({ fetch: fetchImpl, ...options.retry });
-  const response = await transport.fetch(`youtube:watch-player:${profile.name}`, () => ({
-    input: `${API_ROOT2}/player?prettyPrint=false`,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "*/*",
-        "User-Agent": profile.userAgent,
-        "X-YouTube-Client-Name": profile.clientNameHeader,
-        "X-YouTube-Client-Version": profile.clientVersion,
-        Origin: "https://www.youtube.com"
-      },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: profile.clientName,
-            clientVersion: profile.clientVersion,
-            hl: options.language ?? "en",
-            gl: options.region ?? "US",
-            ...profile.context
-          },
-          user: { lockedSafetyMode: false },
-          request: { useSsl: true }
-        },
-        videoId,
-        contentCheckOk: true,
-        racyCheckOk: true
-      })
-    }
-  }));
-  if (!response.ok) {
-    throw new YouTubeClientError(
-      response.status === 429 ? "RATE_LIMITED" : "UPSTREAM_ERROR",
-      `YouTube player request failed with status ${response.status}.`,
-      { status: response.status, retryable: response.status === 429 || response.status >= 500 }
-    );
-  }
-  let raw;
-  try {
-    raw = await response.json();
-  } catch (cause) {
-    throw new YouTubeClientError("INVALID_RESPONSE", "YouTube returned invalid player JSON.", {
-      cause,
-      retryable: true
-    });
-  }
-  const normalized = object5(raw);
-  const playability = String(object5(normalized.playabilityStatus).status ?? "UNKNOWN");
-  diagnose(onDiagnostic, {
-    stage: "player_response",
-    profile: profile.name,
-    status: response.status,
-    playabilityStatus: playability,
-    reason: typeof object5(normalized.playabilityStatus).reason === "string" ? String(object5(normalized.playabilityStatus).reason) : void 0
-  });
-  if (playability !== "OK") {
-    const reason = object5(normalized.playabilityStatus).reason;
-    throw new YouTubeClientError(
-      playability === "LOGIN_REQUIRED" ? "AUTH_REQUIRED" : "UNAVAILABLE",
-      typeof reason === "string" ? reason : `Video is not playable through ${profile.name}.`,
-      { retryable: playability === "LOGIN_REQUIRED" }
-    );
-  }
-  return { profile: profile.name, raw: normalized };
 }
 
 // src/watch/media.ts
@@ -22033,6 +22048,12 @@ var MAX_STORYBOARD_SHEETS = 20;
 var DEFAULT_MAX_WIDTH = 1280;
 var MAX_WIDTH = 1920;
 var MAX_TIMESTAMPS = 30;
+async function getRecordedVideo(videoId, options) {
+  const video = await getDetails({ videoId, ...options });
+  if (!video.isLive) return video;
+  await verifyCompletedBroadcast(videoId, options);
+  return { ...video, isLive: false, availability: { ...video.availability, isLive: false } };
+}
 function optionsFrom2(options) {
   return {
     fetch: options.fetch,
@@ -22077,7 +22098,7 @@ async function getWatchIndex(options) {
   const clientOptions = optionsFrom2(options);
   const outputDir = resolve3(options.outputDir);
   const [video, transcriptResult, storyboardResult] = await Promise.all([
-    getDetails({ videoId: options.videoId, ...clientOptions }),
+    getRecordedVideo(options.videoId, clientOptions),
     getTranscript({
       videoId: options.videoId,
       lang: options.lang,
@@ -22091,9 +22112,6 @@ async function getWatchIndex(options) {
       ...clientOptions
     }).then((value) => ({ value })).catch((error) => ({ error }))
   ]);
-  if (video.isLive) {
-    throw new YouTubeClientError("UNAVAILABLE", "Live videos are not supported by watch extraction.");
-  }
   const warnings = [];
   const transcript = "value" in transcriptResult ? transcriptResult.value : void 0;
   if ("error" in transcriptResult) {
@@ -22190,10 +22208,7 @@ async function extractFrames(options) {
 async function extractFramesWithinBudget(options, deadlineAt) {
   const { timestamps: timestamps2, maxWidth } = validateFrameRequest(options);
   const clientOptions = optionsFrom2(options);
-  const video = await getDetails({ videoId: options.videoId, ...clientOptions });
-  if (video.isLive) {
-    throw new YouTubeClientError("UNAVAILABLE", "Live videos are not supported by watch extraction.");
-  }
+  const video = await getRecordedVideo(options.videoId, clientOptions);
   if (video.durationSeconds !== void 0) {
     const durationMs = video.durationSeconds * 1e3;
     const invalidTimestamp = timestamps2.find((timestamp) => timestamp >= durationMs);

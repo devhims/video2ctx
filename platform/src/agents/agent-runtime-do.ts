@@ -150,6 +150,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         return run ? {userId:run.user_id,sessionId:run.conversation_id,status:run.status} : undefined;
       }, retryIndex:()=>this.scheduleTraceRetry(), background:work=>this.ctx.waitUntil(work),
       cancelRetry:()=>this.cancelTraceRetry(),
+      failureDiagnostics:(runId, toolCallId, startedAt)=>this.sql<{payload_json:string}>`
+        SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'extraction.diagnostic'
+        ORDER BY id LIMIT 64
+      `.map(row=>storedExtractionDiagnosticSchema.parse(JSON.parse(row.payload_json)))
+        .filter(event=>event.toolCallId === toolCallId && event.recordedAt >= startedAt),
     }));
   }
   #sessionStore?: SessionEvidenceStore;

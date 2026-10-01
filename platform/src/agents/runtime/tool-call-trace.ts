@@ -1,5 +1,6 @@
 import type { ToolSet, ToolCallRepairFunction } from 'ai';
 import { z } from 'zod';
+import { storedExtractionDiagnosticSchema } from '../../lib/extraction-diagnostics';
 
 export const toolCallDetailSchema = z.object({
   traceId: z.string(), attempt: z.number(), callSequence: z.number(), resultSequence: z.number().optional(),
@@ -8,7 +9,8 @@ export const toolCallDetailSchema = z.object({
   status: z.enum(['running', 'completed', 'failed', 'interrupted']),
   startedAt: z.number(), finishedAt: z.number().optional(),
   input: z.unknown(), output: z.unknown().optional(),
-  error: z.object({ name: z.string(), message: z.string(), code: z.string().optional() }).optional(),
+  error: z.object({ name: z.string(), message: z.string(), code: z.string().optional(),
+    extractionDiagnostics: z.array(storedExtractionDiagnosticSchema).max(64).optional() }).optional(),
   captureError: z.string().optional(),
   payloadState: z.enum(['complete', 'legacy', 'deleted', 'unavailable']),
 });
@@ -44,6 +46,7 @@ interface ToolCallTraceOptions {
   retryIndex?: () => Promise<unknown>;
   background?: (work: Promise<void>) => void;
   cancelRetry?: () => Promise<void>;
+  failureDiagnostics?: (runId: string, toolCallId: string, startedAt: number) => unknown;
 }
 
 // Tool execution only snapshots into local durable storage. A single background
@@ -96,10 +99,11 @@ export class ToolCallTraceManager {
     if (source === 'execution' && row?.source === 'model' && row.status === 'running') return call.execute();
     const revision = (row?.revision ?? 0) + 1;
     const traceId = crypto.randomUUID();
+    const startedAt = Date.now();
     this.sql.exec(`INSERT INTO agent_call_traces
       (trace_id,call_sequence,run_id,tool_call_id,name,operation,status,source,started_at,revision)
       VALUES (?,?,?,?,?,?,'running',?,?,?)`,
-      traceId,this.nextSequence(runId),runId,call.toolCallId,call.name,call.operation,source,Date.now(),revision);
+      traceId,this.nextSequence(runId),runId,call.toolCallId,call.name,call.operation,source,startedAt,revision);
     this.snapshot(traceId, 'input', call.input);
     this.requestPublish(runId);
     try {
@@ -109,11 +113,18 @@ export class ToolCallTraceManager {
       this.requestPublish(runId);
       return result;
     } catch (error) {
+      let extractionDiagnostics;
+      try {
+        const parsed = z.array(storedExtractionDiagnosticSchema).max(64).safeParse(
+          this.options.failureDiagnostics?.(runId, call.toolCallId, startedAt));
+        if (parsed.success && parsed.data.length) extractionDiagnostics = parsed.data;
+      } catch { /* Diagnostics must not replace the original tool failure. */ }
       // SDK headers, execution context and raw response bodies are excluded.
       this.snapshot(traceId, 'error', {
         name: error instanceof Error ? error.name : 'Error',
         message: error instanceof Error ? error.message : 'Tool execution failed.',
         ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? { code: error.code } : {}),
+        ...(extractionDiagnostics ? { extractionDiagnostics } : {}),
       });
       this.finish(traceId, runId, 'failed');
       this.requestPublish(runId);
