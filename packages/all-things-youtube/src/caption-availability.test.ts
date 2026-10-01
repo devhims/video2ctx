@@ -100,3 +100,38 @@ test('generic unplayable videos are not mislabeled as country restrictions', asy
   await expect(fixture({ playabilityStatus: { status: 'UNPLAYABLE', reason: 'Video unavailable' } }).client.getTranscript({ videoId: 'AR1Gi3RHanE' }))
     .rejects.toMatchObject({ code: 'UNAVAILABLE' });
 });
+
+test('overlaps desktop and alternate caption checks while retaining first-playable metadata', async () => {
+  let release!: () => void;
+  const desktopStarted = new Promise<void>(resolve => { release = resolve; });
+  let players = 0;
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('/watch?')) {
+      release();
+      return new Response(`var ytInitialPlayerResponse = ${JSON.stringify(playable)};`);
+    }
+    if (++players === 1) return Response.json({ ...playable, videoDetails: { ...playable.videoDetails, title: 'Original title' },
+      playabilityStatus: { status: 'OK', playableInEmbed: true } });
+    await desktopStarted;
+    return Response.json({ ...playable, videoDetails: { ...playable.videoDetails, title: 'Alternate title' },
+      captions: { playerCaptionsTracklistRenderer: { captionTracks: [
+        { baseUrl: 'https://www.youtube.com/api/timedtext?v=AR1Gi3RHanE', languageCode: 'en' },
+      ] } } });
+  });
+  const video = await createYouTubeClient({ fetch }).getVideo('AR1Gi3RHanE');
+  expect(video.title).toBe('Original title');
+  expect(video.availability.embeddable).toBe(true);
+  expect(video.captionAvailability?.status).toBe('available');
+  expect(players).toBe(2);
+});
+
+test('exposes structured confirmed restrictions without guessing from a locale country allowlist', async () => {
+  const confirmed = { playabilityStatus: { status: 'UNPLAYABLE', reason: 'The uploader has not made this video available in your country' } };
+  expect((await fixture(confirmed).client.getVideo('AR1Gi3RHanE')).availability.restriction).toBe('region');
+  const localized = { playabilityStatus: { status: 'UNPLAYABLE', reason: 'Dieses Video ist nicht verfügbar.' },
+    microformat: { playerMicroformatRenderer: { availableCountries: ['US'] } } };
+  // Configured locale need not match the proxy exit country. Never infer a block from it.
+  const fetch = vi.fn(async () => Response.json(localized));
+  const client = createYouTubeClient({ fetch, language: 'de', region: 'DE' });
+  expect((await client.getVideo('AR1Gi3RHanE')).availability.restriction).toBeUndefined();
+});

@@ -1232,7 +1232,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     }
   };
 
-  const player = async (videoId: string, requireCaptionTrack = true): Promise<JsonObject> => {
+  const player = async (videoId: string, requireCaptionTrack = true, onPlayable?: (raw: JsonObject) => void): Promise<JsonObject> => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
@@ -1248,7 +1248,10 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         );
         firstResponse ??= response;
         const status = string(object(response.playabilityStatus).status);
-        if (status === 'OK') playableResponse ??= response;
+        if (status === 'OK') {
+          if (!playableResponse) onPlayable?.(response);
+          playableResponse ??= response;
+        }
         const tracks = parseCaptionTracks(response).internal;
         if (status === 'OK' && (!requireCaptionTrack || tracks.some(track => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? 'UNKNOWN'}`);
@@ -1550,15 +1553,23 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     },
 
     async getVideo(videoId) {
-      const raw = await player(videoId, true);
-      let catalog = parseCaptionTracks(raw);
+      let metadata: JsonObject | undefined;
+      let desktopLookup: ReturnType<typeof desktopPlayer> | undefined;
+      const captionRaw = await player(videoId, true, firstPlayable => {
+        metadata = firstPlayable;
+        if (!parseCaptionTracks(firstPlayable).internal.some(track => captionUrl(track.baseUrl)))
+          desktopLookup = desktopPlayer(videoId);
+      });
+      // Keep metadata from the first playable profile, even when another supplies tracks.
+      const raw = metadata ?? captionRaw;
+      let catalog = parseCaptionTracks(captionRaw);
       let captionStatus: 'available' | 'unavailable' | 'unknown' = 'unknown';
       if (catalog.internal.some(track => captionUrl(track.baseUrl))) {
         captionStatus = 'available';
       } else if (!captionAvailabilityError(raw)) {
         // Only playable primary AND desktop catalogs can confirm absence.
         // Reuse the player response; never download caption bodies here.
-        const desktop = await desktopPlayer(videoId);
+        const desktop = await (desktopLookup ?? desktopPlayer(videoId));
         if (desktop.value) {
           catalog = mergeCaptionCatalog(catalog, parseCaptionTracks(desktop.value.raw));
           if (catalog.internal.some(track => captionUrl(track.baseUrl))) captionStatus = 'available';
@@ -1602,6 +1613,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         ),
         availability: {
           status: playability,
+          ...(captionAvailabilityError(raw)?.code === 'REGION_RESTRICTED' ? { restriction: 'region' as const } : {}),
           reason: string(status.reason),
           playable: playability === 'OK',
           embeddable: status.playableInEmbed === true,

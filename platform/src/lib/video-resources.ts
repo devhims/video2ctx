@@ -307,7 +307,7 @@ export async function loadVideoResource(
       maxWidth: op.maxWidth,
     });
     const lookupStarted = Date.now();
-    const attempts: ExtractionAttempt[] = [];
+    let lastAttempt: ExtractionAttempt | undefined;
     const saved =
       store && !refresh
         ? await Promise.all(request.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))))
@@ -320,6 +320,7 @@ export async function loadVideoResource(
     const missing = request.timestampsMs.filter((time) => !times.has(time));
     const fetchedAt = Date.now();
     let catalogWriteMs: number | undefined;
+    let catalogSucceeded = false;
     try {
       const fetched = missing.length
         ? await getVideoFrames(
@@ -327,7 +328,10 @@ export async function loadVideoResource(
             { ...request, timestampsMs: missing },
             undefined,
             { extractionTimeoutMs: op.extractionTimeoutMs },
-            diagnostic ? event => attempts.push(event) : undefined,
+            diagnostic ? event => {
+              lastAttempt = event;
+              emitExtractionDiagnostic(diagnostic, event);
+            } : undefined,
           )
         : undefined;
       const writeStarted = Date.now();
@@ -335,6 +339,7 @@ export async function loadVideoResource(
       if (fetched) {
         try {
           versions = await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames);
+          catalogSucceeded = true;
         } finally {
           catalogWriteMs = Date.now() - writeStarted;
         }
@@ -349,12 +354,13 @@ export async function loadVideoResource(
         meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
       });
     } finally {
-      for (const [index, attempt] of attempts.entries()) {
-        const events = index === attempts.length - 1 ? [...attempt.events,
-          { stage: 'catalog_lookup' as const, elapsedMs: lookupMs },
-          ...(catalogWriteMs === undefined ? [] : [{ stage: 'catalog_write' as const, elapsedMs: catalogWriteMs }])] : attempt.events;
-        emitExtractionDiagnostic(diagnostic, { ...attempt, events: events.slice(-64),
-          droppedEvents: attempt.droppedEvents + Math.max(0, events.length - 64) });
+      if (lastAttempt && catalogWriteMs !== undefined) {
+        // Keep extraction attempts immediate. Storage is a separate diagnostic phase.
+        emitExtractionDiagnostic(diagnostic, { ...lastAttempt, phase: 'catalog',
+          recordedAt: Date.now(), elapsedMs: lookupMs + catalogWriteMs,
+          outcome: catalogSucceeded ? 'success' : 'failed', status: undefined, failureKind: undefined,
+          events: [{ stage: 'catalog_lookup', elapsedMs: lookupMs },
+            { stage: 'catalog_write', elapsedMs: catalogWriteMs }], droppedEvents: 0 });
       }
     }
   }

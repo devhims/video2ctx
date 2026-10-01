@@ -50,6 +50,8 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       const selection = context.transcriptSelection;
       if (selection?.regionRestricted?.has(parsed.videoId)) {
+        if (context.transcriptPolicy.mode !== 'complete_transcript')
+          throw new TranscriptToolStageError('REGION_RESTRICTED', 'YouTube confirmed a country restriction on the current retrieval route. Select another search result unless this video was explicitly requested.');
         return evidencePacketSchema.parse({
           packetId: `packet:${context.runId}:${toolCallId}`, kind: 'youtube_transcript',
           sources: [], excerpts: [], artifacts: [], assetVersions: [], usage: [],

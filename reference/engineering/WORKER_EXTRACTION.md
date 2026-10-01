@@ -72,7 +72,8 @@ Worker path.
 The metadata player lookup tries the supported caption clients. Usable caption
 tracks establish availability without downloading caption text. If primary
 metadata is playable but no usable tracks are present, the desktop player is
-checked too. Only playable empty catalogs confirm absence. Restrictions,
+checked too, overlapping the remaining alternate player checks. Metadata retains
+the first playable profile even when another profile supplies captions. Only playable empty catalogs confirm absence. Restrictions,
 malformed track URLs, and failed desktop checks remain unknown. These additional
 metadata requests can increase get_video latency for videos without captions.
 
@@ -92,13 +93,20 @@ Worker preserves the safe message and code in tool errors and diagnostics and
 does not repeat the operation across its proxy retry loop. Unrecognized or
 generic unavailability keeps the existing retry policy.
 
-Fresh video metadata with the same explicit country-block reason premarks the
+Fresh video metadata with `availability.restriction: "region"` premarks the
 video as restricted for the current run. A restriction discovered by transcript
 retrieval is reported once and remembered for that run. Subsequent transcript
 requests return a skipped warning with no provider request or transcript charge,
-even if their language differs. Metadata older than five minutes cannot establish
+even if their language differs. Topic research replaces restricted candidates when
+replacement is allowed, and preserves the restriction code for explicit videos.
+Replacement selection excludes videos already marked captionless or restricted.
+Metadata older than five minutes cannot establish
 this guard. The restriction describes the current retrieval route, not worldwide
-availability or proof that captions are absent. No proxy secrets are changed.
+availability or proof that captions are absent. The library currently recognizes
+explicit English reasons; unrecognized localized reasons remain generic
+unavailability. Configured language/country is not proof of the proxy exit
+country, so country allowlists alone do not establish a block. The platform no
+longer parses reason strings. No proxy secrets are changed.
 
 ### Frame persistence and timings
 
@@ -112,7 +120,10 @@ shared catalog writes remain reusable if another frame write fails.
 Successful frame tool traces retain `timingsMs` for session lookup, provider
 retrieval, session pinning, previews, and total tool work. Extraction diagnostics
 also include `catalog_lookup` and `catalog_write` stages for container retrievals.
-Catalog write timings are emitted even when persistence throws. The provider
+Extraction attempts are forwarded immediately, before catalog persistence.
+Catalog timings arrive as a separate `phase: "catalog"` diagnostic, with its own
+storage outcome, including failed writes. The cache coordinator still returns
+diagnostics with its response; this does not introduce streaming across that boundary. The provider
 measurement includes extraction and catalog storage; these nested durations must
 not be added together. Immediate model output and recovery summaries omit these
 debugging fields. The corresponding log event is `frame_stage_timing`.

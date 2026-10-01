@@ -694,7 +694,7 @@ test.each([0, 600_000])('only recent country-restricted metadata suppresses a tr
   const { executeGetVideo } = await import('../src/agents/providers/youtube/tools/get-video');
   const ctx = toolContext({ video: async () => ({ cacheStatus: 'hit', value: {
     ...video('abcdefghijk', 0), keywords: [],
-    availability: { status: 'UNPLAYABLE', reason: 'The uploader has not made this video available in your country', playable: false, embeddable: false, isPrivate: false, isLive: false },
+    availability: { status: 'UNPLAYABLE', restriction: 'region' as const, reason: 'The uploader has not made this video available in your country', playable: false, embeddable: false, isPrivate: false, isLive: false },
     meta: { source: 'allthingsyoutube', fetchedAt: new Date(Date.now() - age).toISOString(), partial: true, warnings: [] },
   } }) }, { mode: 'complete_transcript' });
   ctx.transcriptSelection = { allowReplacement: false, attempted: new Set(), unavailable: new Set() };

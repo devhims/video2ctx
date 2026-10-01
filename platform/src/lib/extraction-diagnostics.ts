@@ -26,6 +26,7 @@ export const extractionEventSchema = z.object({
 });
 
 export const extractionAttemptSchema = z.object({
+  phase: z.enum(['extraction', 'catalog']).optional(),
   version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(5), slot: z.number().int().min(0).max(3),
   backend: z.enum(['worker', 'container']).optional(), egress: z.enum(['direct', 'proxy']).optional(),

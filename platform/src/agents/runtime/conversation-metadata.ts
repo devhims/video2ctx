@@ -11,7 +11,7 @@ const metadataSchema = z.object({
   viewCount: z.number().int().nonnegative().optional(),
   durationSeconds: z.number().nonnegative().optional(),
   isLive: z.boolean().optional(), hasCaptions: z.boolean().optional(),
-  captionAvailability: z.object({ status: z.enum(['available', 'unavailable', 'unknown']), languages: z.array(text(30)).max(100), checkedAt: z.string().optional() }).optional(),
+  captionAvailability: z.object({ status: z.enum(['available', 'unavailable', 'unknown']), languages: z.array(text(30)).transform(values => values.slice(0, 100)), checkedAt: z.string().optional() }).optional(),
   keywords: z.array(text(80)).transform(values => values.slice(0, 20)).optional(),
   availability: z.object({ status: text(100), reason: text(300).optional(),
     playable: z.boolean().optional(), isPrivate: z.boolean().optional() }).optional(),

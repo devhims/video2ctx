@@ -7192,6 +7192,13 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "phase": {
+                      "type": "string",
+                      "enum": [
+                        "extraction",
+                        "catalog"
+                      ]
+                    },
                     "version": {
                       "type": "number",
                       "enum": [
@@ -8383,6 +8390,13 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "phase": {
+                          "type": "string",
+                          "enum": [
+                            "extraction",
+                            "catalog"
+                          ]
+                        },
                         "version": {
                           "type": "number",
                           "enum": [
@@ -9885,6 +9899,13 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "phase": {
+                      "type": "string",
+                      "enum": [
+                        "extraction",
+                        "catalog"
+                      ]
+                    },
                     "version": {
                       "type": "number",
                       "enum": [
@@ -10799,6 +10820,13 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "phase": {
+                      "type": "string",
+                      "enum": [
+                        "extraction",
+                        "catalog"
+                      ]
+                    },
                     "version": {
                       "type": "number",
                       "enum": [

@@ -1,6 +1,6 @@
-import type { ExtractionAttempt } from '../../../../lib/extraction-diagnostics';
 import { tool } from 'ai';
 import { z } from 'zod';
+import type { ExtractionAttempt } from '../../../../lib/extraction-diagnostics';
 import { frameRequestSchema, validateFrameResponse } from '../../../../lib/youtube-frames';
 import { evidencePacketSchema } from '../../../contracts';
 import { framePreviewSchema } from '../../../runtime/frame-previews';

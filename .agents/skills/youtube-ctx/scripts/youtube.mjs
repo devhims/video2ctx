@@ -20661,7 +20661,7 @@ function createYouTubeClient(options = {}) {
       });
     }
   };
-  const player = async (videoId, requireCaptionTrack = true) => {
+  const player = async (videoId, requireCaptionTrack = true, onPlayable) => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError("INVALID_INPUT", "videoId must be 11 characters.");
     }
@@ -20677,7 +20677,10 @@ function createYouTubeClient(options = {}) {
         );
         firstResponse ??= response;
         const status = string(object4(response.playabilityStatus).status);
-        if (status === "OK") playableResponse ??= response;
+        if (status === "OK") {
+          if (!playableResponse) onPlayable?.(response);
+          playableResponse ??= response;
+        }
         const tracks = parseCaptionTracks(response).internal;
         if (status === "OK" && (!requireCaptionTrack || tracks.some((track) => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? "UNKNOWN"}`);
@@ -20949,13 +20952,20 @@ function createYouTubeClient(options = {}) {
       };
     },
     async getVideo(videoId) {
-      const raw = await player(videoId, true);
-      let catalog = parseCaptionTracks(raw);
+      let metadata2;
+      let desktopLookup;
+      const captionRaw = await player(videoId, true, (firstPlayable) => {
+        metadata2 = firstPlayable;
+        if (!parseCaptionTracks(firstPlayable).internal.some((track) => captionUrl(track.baseUrl)))
+          desktopLookup = desktopPlayer(videoId);
+      });
+      const raw = metadata2 ?? captionRaw;
+      let catalog = parseCaptionTracks(captionRaw);
       let captionStatus = "unknown";
       if (catalog.internal.some((track) => captionUrl(track.baseUrl))) {
         captionStatus = "available";
       } else if (!captionAvailabilityError(raw)) {
-        const desktop = await desktopPlayer(videoId);
+        const desktop = await (desktopLookup ?? desktopPlayer(videoId));
         if (desktop.value) {
           catalog = mergeCaptionCatalog(catalog, parseCaptionTracks(desktop.value.raw));
           if (catalog.internal.some((track) => captionUrl(track.baseUrl))) captionStatus = "available";
@@ -21000,6 +21010,7 @@ function createYouTubeClient(options = {}) {
         ),
         availability: {
           status: playability,
+          ...captionAvailabilityError(raw)?.code === "REGION_RESTRICTED" ? { restriction: "region" } : {},
           reason: string(status.reason),
           playable: playability === "OK",
           embeddable: status.playableInEmbed === true,

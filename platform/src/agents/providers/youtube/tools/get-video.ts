@@ -15,9 +15,15 @@ import {
 export const getVideoInputSchema = z.object({ videoId: videoIdSchema });
 export type GetVideoInput = z.infer<typeof getVideoInputSchema>;
 
+const CAPTION_OBSERVATION_MAX_AGE_MS = 300_000;
+const isRecent = (time: string) => {
+  const age = Date.now() - Date.parse(time);
+  return age >= 0 && age < CAPTION_OBSERVATION_MAX_AGE_MS;
+};
+
 export function createGetVideoTool(context: AgentToolContext) {
   return tool({
-    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. Includes observed caption availability and languages without downloading transcript text. Unknown means caption checks were inconclusive. This does not fetch comments or endscreen elements.',
+    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. Includes observed caption availability and languages without downloading transcript text. Unknown means caption checks were inconclusive. Skip transcript retrieval only when unavailable is confirmed and recent. This does not fetch comments or endscreen elements.',
     inputSchema: getVideoInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideo(input, context, toolCallId),
@@ -38,25 +44,20 @@ export async function executeGetVideo(input: GetVideoInput, context: AgentToolCo
   });
   const data = packet.artifacts.find(item => item.type === 'youtube_video_metadata')?.data;
   const captions = z.object({ status: z.literal('unavailable'), checkedAt: z.string().datetime() }).safeParse(data?.captionAvailability);
-  if (captions.success && Date.now() - Date.parse(captions.data.checkedAt) >= 0
-    && Date.now() - Date.parse(captions.data.checkedAt) < 300_000) context.transcriptSelection?.unavailable.add(parsed.videoId);
+  if (captions.success && isRecent(captions.data.checkedAt)) context.transcriptSelection?.unavailable.add(parsed.videoId);
   const region = z.object({
-    availability: z.object({ status: z.literal('UNPLAYABLE'), reason: z.string() }),
+    availability: z.object({ restriction: z.literal('region') }),
     metadataFetchedAt: z.string().datetime(),
   }).safeParse(data);
-  if (region.success && /(?:not made (?:this |the )?video available in your country|not available in your country|blocked .*in your country)/i.test(region.data.availability.reason)) {
-    const age = Date.now() - Date.parse(region.data.metadataFetchedAt);
-    if (age >= 0 && age < 300_000 && context.transcriptSelection)
-      (context.transcriptSelection.regionRestricted ??= new Set()).add(parsed.videoId);
-  }
+  if (region.success && isRecent(region.data.metadataFetchedAt) && context.transcriptSelection)
+    (context.transcriptSelection.regionRestricted ??= new Set()).add(parsed.videoId);
   return packet;
 }
 
 function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
   const sourceId = `youtube:video:${safeIdPart(video.id)}`;
   const observedCaptions = video.captionAvailability;
-  const age = observedCaptions ? Date.now() - Date.parse(observedCaptions.checkedAt) : Infinity;
-  const captionAvailability = observedCaptions && age >= 0 && age < 300_000
+  const captionAvailability = observedCaptions && isRecent(observedCaptions.checkedAt)
     ? observedCaptions : { status: 'unknown' as const, languages: [] as string[], ...(observedCaptions ? { checkedAt: observedCaptions.checkedAt } : {}) };
 
   const freshness = z.object({
@@ -99,7 +100,7 @@ function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<Evidence
         video.publishedTimeText ? `Published: ${video.publishedTimeText}` : undefined,
         video.durationText ? `Duration: ${video.durationText}` : undefined,
         `Availability: ${video.availability.status}`,
-        `Caption availability: ${captionAvailability.status}. Languages: ${captionAvailability.languages.join(', ') || 'none observed'}. Checked at: ${captionAvailability.checkedAt ?? 'not checked'}. Skip transcript retrieval only when unavailable is confirmed and recent.`,
+        `Caption availability: ${captionAvailability.status}. Languages: ${captionAvailability.languages.join(', ') || 'none observed'}. Checked at: ${captionAvailability.checkedAt ?? 'not checked'}.`,
         video.description,
         video.keywords.length ? `Keywords: ${video.keywords.slice(0, 20).join(', ')}` : undefined,
       ].filter(Boolean).join('\n')),

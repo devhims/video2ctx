@@ -671,3 +671,28 @@ test('attaches catalog timings to extraction diagnostics even when persistence f
     ]) }));
   } finally { save.mockRestore(); }
 });
+
+test('forwards extraction diagnostics before a stalled catalog write', async () => {
+  const { extractionFixture } = await import('./fixtures/extraction-diagnostic');
+  const f = fixture();
+  const diagnostic = vi.fn();
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _options, sink) => {
+    sink?.({ ...extractionFixture, kind: 'frames' });
+    return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = VideoCatalog.prototype.save;
+  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic.mock.calls[0]![0]).toMatchObject({ events: extractionFixture.events });
+    release();
+    return original.apply(this, args);
+  });
+  try {
+    const pending = loadVideoResource(f.env, { kind: 'frames', id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 }, diagnostic);
+    await gate;
+    await pending;
+    expect(diagnostic).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'catalog', outcome: 'success' }));
+  } finally { save.mockRestore(); }
+});

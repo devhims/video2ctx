@@ -21,6 +21,7 @@ export interface ContinuationPage {
 }
 
 export interface Availability {
+  restriction?: 'region';
   status: string;
   reason?: string;
   playable: boolean;

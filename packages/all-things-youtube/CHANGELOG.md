@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add optional `captionAvailability` to `getVideo` and `getDetails` metadata without downloading transcript bodies. Caption checks can add player and watch-page requests. Desktop discovery overlaps alternate player checks, and metadata retains the first playable profile.
+- Return terminal `REGION_RESTRICTED` instead of `UNAVAILABLE` for confirmed country blocks in transcript retrieval. This adds a `YouTubeErrorCode` member; consumers with exhaustive switches must handle it.
+- Expose `availability.restriction: 'region'` for confirmed blocks. The library currently recognizes explicit English block reasons. Unrecognized localized reasons remain generic `UNAVAILABLE`; configured locale does not establish the proxy exit country.
+
 ## 0.6.3
 
 - Return non-retryable `CAPTIONS_UNAVAILABLE` when playable metadata confirms that no caption tracks exist. Missing requested languages still return `NOT_FOUND`. Upstream failures remain distinct.

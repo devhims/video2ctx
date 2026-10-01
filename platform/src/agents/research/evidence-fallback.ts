@@ -19,6 +19,9 @@ export function evidenceFallback(
   intent: 'topic_research' | 'inspect_video',
   failureMessage?: string,
 ): FinalizeAnswerInput | null {
+  const accessWarnings = [...new Map(packets.flatMap(packet => packet.warnings)
+    .filter(warning => ['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(warning.code))
+    .map(warning => [JSON.stringify(warning), warning])).values()];
   const blocks: string[] = [];
   const seen = new Set<string>();
   const add = (key: string, text: string) => { if (!seen.has(key)) { seen.add(key); blocks.push(text); } };
@@ -32,6 +35,7 @@ export function evidenceFallback(
       intent, confidence: 'low', citations: [], artifacts: [],
       answer: `I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.\n\nSources to explore, not verified recommendations:\n${links.join('\n')}`,
       warnings: [
+      ...accessWarnings,
         { code: 'PARTIAL_EVIDENCE', message: 'Video content analysis did not complete; the requested answer is unavailable.' },
         { code: 'NO_CONTENT_EVIDENCE', message: 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.' },
       ],
@@ -66,6 +70,7 @@ export function evidenceFallback(
     intent, confidence: 'low', citations: [], artifacts: [],
     answer: `Partial evidence summary\n\n${failureMessage ?? 'Final synthesis could not be completed.'} These are individually supported findings, not a completed comparison or recommendation.\n\n${blocks.slice(0, 8).join('\n\n')}`,
     warnings: [
+      ...accessWarnings,
       { code: 'PARTIAL_EVIDENCE', message: 'Returning supported findings because final synthesis did not complete. This is not a completed comparison or recommendation.' },
       { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: failureMessage ?? 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
     ],
