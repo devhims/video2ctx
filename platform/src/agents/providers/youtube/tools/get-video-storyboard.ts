@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { evidencePacketSchema } from '../../../contracts';
+import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 import { storyboardManifestSchema, storyboardSchema } from '../storyboard';
 import { storyboardPreviewsSchema } from '../../../runtime/storyboard-previews';
@@ -23,7 +23,7 @@ function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementC
 export const getVideoStoryboardInputSchema = retrievalInput.superRefine(validateInput);
 export function createGetVideoStoryboardTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve storyboard assets without analysis. Call with videoId only for metadata, then select maxSheets, sheetIndexes or timestampsMs using that manifest. Returns saved assetVersions and sampled coverage, without image bytes. Pass storyboard_sheet versions to analyze_video_storyboard with a question, or analyze versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
+    description: 'Retrieve storyboard assets without analysis. Call with videoId only for metadata, or request maxSheets, sheetIndexes or timestampsMs directly; missing metadata is retrieved automatically. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Pass storyboard_sheet versions to analyze_video_storyboard with a question, or analyze versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
     inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideoStoryboard(input, context, toolCallId),
@@ -31,68 +31,84 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
 }
 export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string) {
   const parsed = getVideoStoryboardInputSchema.parse(input);
-  const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
   return context.executeEvidenceTool({
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
-    execute: async () => {
-      context.signal.throwIfAborted();
-      if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
-      if (!metadataOnly) validateStoryboardSelection(parsed, context);
-      const response = await context.provider.storyboard(parsed.videoId, parsed.timestampsMs, {
-        maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
-      }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
-      context.signal.throwIfAborted();
-      const storyboard = storyboardSchema.parse(response.value);
-      if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
-      if (metadataOnly !== (storyboard.selection?.mode === 'metadata')) throw new Error('Storyboard response does not match the requested operation.');
-      const sourceId = `youtube:${parsed.videoId}:storyboard`;
-      const packet = evidencePacketSchema.parse({
-        packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
-        sources: [{ id: sourceId, provider: 'youtube', kind: 'storyboard', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
-        excerpts: [],
-        artifacts: [{ type: 'youtube_storyboard_retrieval', title: `${metadataOnly ? 'Storyboard metadata' : 'Sampled visual evidence'} for ${parsed.videoId}`,
-          data: { analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
-            videoId: parsed.videoId, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
-            sampledRanges: storyboard.sheets.map(sheet => ({ startMs: sheet.firstFrameIndex * sheet.intervalMs,
-              endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs })), totalFrames: storyboard.frameCount,
-            sampledFrames: storyboard.sheets.reduce((sum, sheet) => sum + sheet.frameCount, 0), intervalMs: storyboard.intervalMs } }],
-        warnings: [
-          ...(metadataOnly
-            ? []
-            : [{ code: 'SAMPLED_VISUAL_EVIDENCE', message: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.' }]),
-          ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
-        ],
-        assetVersions: response.assetVersions,
-        usage: [{ operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
-      });
-      if (!metadataOnly && context.saveStoryboardPreviews) {
-        try {
-          packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
-            await context.saveStoryboardPreviews(storyboard, context.signal),
-          );
-        } catch {
-          context.signal.throwIfAborted();
-          packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
-            message: 'The storyboard was retrieved, but its image previews could not be saved.' });
-        }
-      }
-      context.signal.throwIfAborted();
-      return packet;
-    },
+    execute: () => retrieveVideoStoryboard(parsed, context, toolCallId),
   });
 }
 
+/** Missing metadata is fetched inside the same tool call, so it shares its metering and trace. */
+async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
+  const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
+  let metadata: EvidencePacket | undefined;
+  context.signal.throwIfAborted();
+  if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
+  if (!metadataOnly) {
+    let evidence = context.getEvidence?.() ?? [];
+    if (!findStoryboardMetadata(parsed.videoId, evidence)) {
+      metadata = await retrieveVideoStoryboard({ videoId: parsed.videoId }, context, toolCallId);
+      evidence = [...evidence, metadata];
+    }
+    validateStoryboardSelection(parsed, evidence);
+  }
+  const response = await context.provider.storyboard(parsed.videoId, parsed.timestampsMs, {
+    maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
+  }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
+  context.signal.throwIfAborted();
+  const storyboard = storyboardSchema.parse(response.value);
+  if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
+  if (metadataOnly !== (storyboard.selection?.mode === 'metadata')) throw new Error('Storyboard response does not match the requested operation.');
+  const sourceId = `youtube:${parsed.videoId}:storyboard`;
+  const packet = evidencePacketSchema.parse({
+    packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
+    sources: [{ id: sourceId, provider: 'youtube', kind: 'storyboard', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
+    excerpts: [],
+    artifacts: [{ type: 'youtube_storyboard_retrieval', title: `${metadataOnly ? 'Storyboard metadata' : 'Sampled visual evidence'} for ${parsed.videoId}`,
+      data: { analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
+        videoId: parsed.videoId, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
+        sampledRanges: storyboard.sheets.map(sheet => ({ startMs: sheet.firstFrameIndex * sheet.intervalMs,
+          endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs })), totalFrames: storyboard.frameCount,
+        sampledFrames: storyboard.sheets.reduce((sum, sheet) => sum + sheet.frameCount, 0), intervalMs: storyboard.intervalMs } }],
+    warnings: [
+      ...(metadataOnly
+        ? []
+        : [{ code: 'SAMPLED_VISUAL_EVIDENCE', message: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.' }]),
+      ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
+    ],
+    assetVersions: [...new Set([...(metadata?.assetVersions ?? []), ...(response.assetVersions ?? [])])],
+    usage: [...(metadata?.usage ?? []), { operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+  });
+  if (!metadataOnly && context.saveStoryboardPreviews) {
+    try {
+      packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
+        await context.saveStoryboardPreviews(storyboard, context.signal),
+      );
+    } catch {
+      context.signal.throwIfAborted();
+      packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
+        message: 'The storyboard was retrieved, but its image previews could not be saved.' });
+    }
+  }
+  context.signal.throwIfAborted();
+  return packet;
+}
+
 /** Validate against persisted metadata before waking the image provider or vision model. */
-function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext) {
-  const artifacts = (context.getEvidence?.() ?? []).flatMap(packet => packet.artifacts);
-  const artifact = artifacts.reverse().find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type) && artifact.data.videoId === input.videoId && artifact.data.manifest);
+function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePacket[]) {
+  const artifacts = evidence.flatMap(packet => packet.artifacts);
+  const artifact = artifacts.reverse().find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type) && artifact.data.videoId === videoId && artifact.data.manifest);
   const result = storyboardManifestSchema.safeParse(artifact?.data.manifest);
-  if (!result.success) throw new Error('Retrieve storyboard metadata first: call get_video_storyboard with videoId only, then select from its available sheets.');
-  const manifest = result.data;
-  const intervalMs = artifact!.data.intervalMs;
-  if (typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) throw new Error('Retrieve storyboard metadata again: sampling interval is unavailable.');
+  const intervalMs = artifact?.data.intervalMs;
+  if (!result.success || typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) return;
+  return { manifest: result.data, intervalMs };
+}
+
+function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
+  const metadata = findStoryboardMetadata(input.videoId, evidence);
+  if (!metadata) throw new Error('Storyboard metadata is unavailable.');
+  const { manifest, intervalMs } = metadata;
   const endMs = manifest.lastSampleMs + intervalMs;
   const guidance = `Available sheet indexes are 0 through ${manifest.totalSheets - 1}; timestamps must be below ${endMs} ms. Choose only available sheets or timestamps.`;
   if (input.sheetIndexes?.some(index => index >= manifest.totalSheets)) throw new Error(`Invalid storyboard selection. ${guidance}`);

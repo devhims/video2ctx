@@ -4,6 +4,7 @@ import { analyzeVideoTranscriptsInputSchema } from '../src/agents/providers/yout
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { ApiError } from '../src/lib/http';
 import { MockLanguageModelV4 } from 'ai/test';
+import { NoSuchToolError } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import {
@@ -666,6 +667,14 @@ describe('YouTube AgentCore loop control', () => {
     });
     expect(hasTerminalToolCallWithoutResult(steps)).toBe(false);
     expect(hasExecutedToolResult(FINALIZE_ANSWER_TOOL_NAME)({ steps })).toBe(true);
+  });
+
+  it('treats a call to a withheld finalizer as rejected, but retries one with invalid input', () => {
+    const withheld = new NoSuchToolError({ toolName: FINALIZE_ANSWER_TOOL_NAME, availableTools: ['get_video_frames'] });
+    expect(hasTerminalToolCallWithoutResult([{ toolCalls: [{ toolCallId: 'f', toolName: FINALIZE_ANSWER_TOOL_NAME,
+      invalid: true, error: withheld }], toolResults: [] }])).toBe(false);
+    expect(hasTerminalToolCallWithoutResult([{ toolCalls: [{ toolCallId: 'f', toolName: FINALIZE_ANSWER_TOOL_NAME,
+      invalid: true, error: new Error('Invalid input') }], toolResults: [] }])).toBe(true);
   });
 
   it('reserves the eighth step for an executed final answer', async () => {

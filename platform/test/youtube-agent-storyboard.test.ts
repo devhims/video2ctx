@@ -60,13 +60,27 @@ describe('storyboard agent tool', () => {
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
   });
-  it.each([false, true])('requires metadata from the same video before image retrieval (unrelated metadata: %s)', async unrelated => {
+  it.each([false, true])('fetches missing metadata before selecting images (unrelated metadata: %s)', async unrelated => {
     const ctx = context();
     const packets = ctx.getEvidence!();
+    const manifest = packets[0]!.artifacts[0]!.data.manifest;
     ctx.getEvidence = () => unrelated ? packets.map(packet => ({ ...packet, artifacts: packet.artifacts.map(artifact => ({ ...artifact, data: { ...artifact.data, videoId: 'abcdefghijk' } })) })) : [];
-    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Locations', maxSheets: 2 }, ctx, 'missing'))
-      .rejects.toThrow('Retrieve storyboard metadata first');
-    expect(ctx.provider.storyboard).not.toHaveBeenCalled();
+    const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>()
+      .mockResolvedValueOnce({ value: storyboardSchema.parse({ ...storyboard, manifest, sheets: [], selection: { mode: 'metadata' } }), cacheStatus: 'miss' })
+      .mockResolvedValueOnce({ value: storyboard, cacheStatus: 'miss' });
+    ctx.provider.storyboard = provider;
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2 }, ctx, 'missing');
+    expect(provider).toHaveBeenNthCalledWith(1, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: true }), expect.any(Function));
+    expect(provider).toHaveBeenNthCalledWith(2, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: false, maxSheets: 2 }), expect.any(Function));
+    expect(packet.usage).toHaveLength(2);
+  });
+  it('validates timestamps against automatically fetched metadata before downloading images', async () => {
+    const ctx = context();
+    const manifest = ctx.getEvidence!()[0]!.artifacts[0]!.data.manifest;
+    ctx.getEvidence = () => [];
+    ctx.provider.storyboard = vi.fn(async () => ({ value: storyboardSchema.parse({ ...storyboard, manifest, sheets: [], selection: { mode: 'metadata' } }), cacheStatus: 'miss' as const }));
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [60000] }, ctx, 'invalid')).rejects.toThrow('Invalid storyboard timestamp');
+    expect(ctx.provider.storyboard).toHaveBeenCalledOnce();
   });
   it('rejects duplicate indexes and selections exceeding their explicit budget', () => {
     for (const selection of [{ sheetIndexes: [0, 0] }, { sheetIndexes: [0, 1], maxSheets: 1 }]) {

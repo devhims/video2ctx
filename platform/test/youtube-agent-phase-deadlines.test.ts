@@ -11,7 +11,7 @@ vi.mock('../src/agents/model', async importOriginal => ({
 beforeEach(() => { vi.useFakeTimers(); models.select.mockReset(); });
 afterEach(() => { vi.useRealTimers(); });
 
-function setup(classificationMs: number, decision = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false, answerDetail: 'standard' } as Record<string, unknown>) {
+function setup(classificationMs: number, decision = { route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'none', answerDetail: 'standard' } as Record<string, unknown>) {
   const classifier = new MockLanguageModelV4({ doGenerate: async ({ abortSignal }) => {
     await new Promise<void>((resolve, reject) => {
       setTimeout(resolve, classificationMs);
@@ -67,7 +67,7 @@ it('starts a full research window after slow classification, then a full finaliz
 });
 
 it('gives visual research time for extraction and analysis, while preserving its saved deadline', async () => {
-  const { options, finalizer } = setup(0, { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: true });
+  const { options, finalizer } = setup(0, { route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'helpful' });
   const start = Date.now();
   const run = executeResearchRun(options).then(() => 'completed', error => error.message);
   await vi.advanceTimersByTimeAsync(119_999);

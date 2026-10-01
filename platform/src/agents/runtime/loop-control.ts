@@ -1,3 +1,5 @@
+import { NoSuchToolError } from 'ai';
+
 export const FINALIZE_ANSWER_TOOL_NAME = 'finalize_answer';
 export const FINALIZATION_RETRY_STEPS = 2;
 export const FINALIZE_REMAINING_BUDGET_MS = 12_000;
@@ -6,7 +8,7 @@ export const NON_TERMINAL_TOOL_CALL_LIMIT = 11;
 export type FinalizationReason = 'last_step' | 'time_budget' | 'tool_budget' | 'cost_budget';
 
 export type StepWithToolActivity = {
-  toolCalls?: Array<{ toolCallId?: string; toolName?: string }>;
+  toolCalls?: Array<{ toolCallId?: string; toolName?: string; invalid?: boolean; error?: unknown }>;
   toolResults?: Array<{ toolCallId?: string; toolName?: string }>;
 };
 
@@ -79,6 +81,9 @@ export function hasTerminalToolCallWithoutResult(
     return (step.toolCalls ?? []).some((call) =>
       typeof call.toolName === 'string'
       && call.toolName === terminalToolName
+      // A call to a withheld terminal tool is a rejected attempt, not an
+      // interrupted finalization. Treating it as one would bypass the gate.
+      && !(call.invalid && NoSuchToolError.isInstance(call.error))
       && (typeof call.toolCallId !== 'string' || !resultIds.has(call.toolCallId)),
     );
   });
