@@ -87,3 +87,10 @@ test('does not retry body failures after the response has been handed to the con
   await expect(result.text()).rejects.toThrow('stream reset');
   expect(fetch).toHaveBeenCalledOnce();
 });
+
+test('does not retry a failed proxy tunnel on the same signed URL', async () => {
+  const error = Object.assign(new Error('Outbound proxy tunnel failed.'), { code: 'PROXY_TUNNEL_FAILED' });
+  const fetch = vi.fn().mockRejectedValue(error);
+  await expect(fetchMediaWithRetry(fetch, url, init())).rejects.toBe(error);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});

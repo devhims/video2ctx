@@ -21806,6 +21806,7 @@ function selectCandidates(raw, maxWidth, preferResolution = false) {
   const bounded = all.filter((candidate) => candidate.width === void 0 || candidate.width <= maxWidth);
   const pool = bounded.length ? bounded : [...all].sort((a, b) => (a.width ?? Number.MAX_SAFE_INTEGER) - (b.width ?? Number.MAX_SAFE_INTEGER));
   const ranked = pool.sort((a, b) => {
+    if (!preferResolution && a.formatId === 18 !== (b.formatId === 18)) return a.formatId === 18 ? -1 : 1;
     const width = (b.width ?? 0) - (a.width ?? 0);
     if (preferResolution && width) return width;
     if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
@@ -21829,6 +21830,7 @@ async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options,
     diagnose(onDiagnostic, { stage: "media_candidates", profile: profile.name, candidateCount: candidates.length });
     return candidates.length ? { profile: response.profile, candidates } : void 0;
   } catch (error) {
+    if (error?.code === "PROXY_TUNNEL_FAILED") throw error;
     diagnose(onDiagnostic, { stage: "player", profile: profile.name, error });
     return void 0;
   }
@@ -21859,6 +21861,7 @@ async function fetchMediaWithRetry(fetchImpl, url, init, deadlineAt = Infinity, 
       response = await fetchImpl(url, init);
     } catch (error) {
       init.signal.throwIfAborted();
+      if (error?.code === "PROXY_TUNNEL_FAILED") throw error;
       failure2 = error;
     }
     if (response && !RETRY_STATUSES.has(response.status)) return response;
@@ -21941,6 +21944,7 @@ async function write(res, bytes) {
 }
 async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic, deadlineAt = Infinity) {
   const token = randomBytes(18).toString("hex");
+  let failure2;
   let prefix = Buffer.alloc(0);
   let contentType = candidate.mimeType.split(";")[0] ?? "application/octet-stream";
   let totalLength = candidate.contentLength;
@@ -21982,6 +21986,7 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
       }
       if (!res.destroyed && !res.writableEnded) res.end();
     } catch (error) {
+      if (error?.code === "PROXY_TUNNEL_FAILED") failure2 = error;
       if (!controller.signal.aborted) diagnose(onDiagnostic, { stage: "media_transfer", error });
       if (error instanceof Error && error.message === "MEDIA_TRANSFER_LIMIT") {
         res.destroy();
@@ -22034,6 +22039,9 @@ async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = 
   }
   return {
     url: `http://${LOOPBACK_HOST}:${address.port}/${token}`,
+    get failure() {
+      return failure2;
+    },
     close: async () => {
       for (const controller of controllers) controller.abort();
       server.closeAllConnections?.();
@@ -22229,7 +22237,7 @@ async function extractFramesWithinBudget(options, deadlineAt) {
   const lastErrors = /* @__PURE__ */ new Map();
   for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps2.length && Date.now() < deadlineAt; profileIndex += 1) {
     const group = await loadMediaCandidateGroup(
-      profileIndex,
+      options.preferResolution ? profileIndex : [1, 0, 2, 3][profileIndex],
       options.videoId,
       maxWidth,
       clientOptions,
@@ -22288,6 +22296,7 @@ async function extractFramesWithinBudget(options, deadlineAt) {
         try {
           frames.set(firstTimestamp, await run(firstTimestamp));
         } catch (error) {
+          if (proxy.failure) throw proxy.failure;
           lastErrors.set(firstTimestamp, error);
           continue;
         }
@@ -22296,6 +22305,7 @@ async function extractFramesWithinBudget(options, deadlineAt) {
           if (result.frame) frames.set(result.timestampMs, result.frame);
           else lastErrors.set(result.timestampMs, result.error);
         }
+        if (proxy.failure) throw proxy.failure;
       } finally {
         await proxy.close();
       }

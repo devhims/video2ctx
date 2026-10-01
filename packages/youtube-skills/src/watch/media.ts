@@ -69,6 +69,8 @@ export function selectCandidates(raw: JsonObject, maxWidth: number, preferResolu
     : [...all].sort((a, b) => (a.width ?? Number.MAX_SAFE_INTEGER) - (b.width ?? Number.MAX_SAFE_INTEGER));
   const ranked = pool
     .sort((a, b) => {
+      // Android's progressive MP4 (itag 18) avoids adaptive range-read failures.
+      if (!preferResolution && (a.formatId === 18) !== (b.formatId === 18)) return a.formatId === 18 ? -1 : 1;
       const width = (b.width ?? 0) - (a.width ?? 0);
       if (preferResolution && width) return width;
       if (a.progressive !== b.progressive) return a.progressive ? -1 : 1;
@@ -103,6 +105,7 @@ export async function loadMediaCandidateGroup(
     diagnose(onDiagnostic, { stage: 'media_candidates', profile: profile.name, candidateCount: candidates.length });
     return candidates.length ? { profile: response.profile, candidates } : undefined;
   } catch (error) {
+    if ((error as { code?: string })?.code === 'PROXY_TUNNEL_FAILED') throw error;
     diagnose(onDiagnostic, { stage: 'player', profile: profile.name, error });
     return undefined;
   }

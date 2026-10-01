@@ -57,7 +57,8 @@ export function diagnosticDetails(event) {
 // Finite categories cross the storage boundary; arbitrary error text never does.
 export function structuredFailure(error) {
   const result = {};
-  if (['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration'].includes(error?.failureReason)) result.failureReason = error.failureReason;
+  if (error?.failureReason === 'proxy_tunnel_failed' && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) result.status = error.status;
+  if (['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed'].includes(error?.failureReason)) result.failureReason = error.failureReason;
   if (['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL'].includes(error?.signal)) result.signal = error.signal;
   if (Number.isInteger(error?.exitCode) && error.exitCode >= -255 && error.exitCode <= 255) result.exitCode = error.exitCode;
   const causeCode = error?.causeCode ?? error?.cause?.code;

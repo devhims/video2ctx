@@ -12,13 +12,14 @@ export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   focus: z.string().trim().min(1).max(500).optional(),
   language: z.string().trim().min(2).max(20).optional(),
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 export type GetVideoTranscriptInput = z.infer<typeof getVideoTranscriptInputSchema>;
 
 export function createGetVideoTranscriptTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns all timed captions for you to read. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
+    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns timed captions, with paging instructions for long transcripts. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
     inputSchema: getVideoTranscriptInputSchema.omit({ focus: true }),
     execute: (input, { toolCallId }) => executeGetVideoTranscriptForModel(input, context, toolCallId),
   });
@@ -37,7 +38,7 @@ export function executeGetVideoTranscript(
   toolCallId: string,
 ): Promise<EvidencePacket> {
   const parsed = getVideoTranscriptInputSchema.parse(input);
-  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language })}`;
+  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
 
   return context.executeEvidenceTool({
     input: parsed,
@@ -66,6 +67,10 @@ export function executeGetVideoTranscript(
       context.signal.throwIfAborted();
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
+      const offset = parsed.offset ?? 0;
+      const excerpts = evidence.excerpts.slice(offset, offset + 5_000);
+      const nextOffset = offset + excerpts.length < evidence.excerpts.length ? offset + excerpts.length : undefined;
+      const paged = offset > 0 || nextOffset !== undefined;
       context.signal.throwIfAborted();
 
       return evidencePacketSchema.parse({
@@ -78,7 +83,7 @@ export function executeGetVideoTranscript(
           videoId: parsed.videoId,
           url: `https://www.youtube.com/watch?v=${parsed.videoId}`,
         }],
-        excerpts: evidence.excerpts,
+        excerpts,
         artifacts: [{
           type: evidence.artifactType,
           title: evidence.artifactTitle,
@@ -88,11 +93,18 @@ export function executeGetVideoTranscript(
             track: response.value.track,
             translatedTo: response.value.translatedTo,
             ...evidence.artifactData,
+            allReturnedSegmentsIncluded: !paged,
+            returnedExcerptCount: excerpts.length,
+            offset,
+            ...(nextOffset !== undefined ? { nextOffset } : {}),
           },
         }],
         warnings: [
           ...response.value.meta.warnings.map((message) => ({ code: 'YOUTUBE_PROVIDER_WARNING', message })),
           ...evidence.warnings,
+          ...(paged ? [{ code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message: response.assetVersions?.length
+            ? `This packet contains excerpts ${offset} through ${offset + excerpts.length - 1}. The complete transcript is saved for analysis.${nextOffset !== undefined ? ` For later passages call get_video_transcript with the same video and language and offset ${nextOffset}.` : ' This is the final page.'}`
+            : `This is a partial evidence page.${nextOffset !== undefined ? ` Continue with get_video_transcript using offset ${nextOffset}.` : ' This is the final page.'} No saved asset is available for reuse.` }] : []),
           ...(response.value.meta.partial
             ? [{ code: 'PARTIAL_TRANSCRIPT', message: 'YouTube returned a partial transcript.' }]
             : []),
@@ -101,6 +113,7 @@ export function executeGetVideoTranscript(
             : []),
         ].map(warning => ({ ...warning, videoId: parsed.videoId })),
         assetVersions: response.assetVersions,
+        continuation: nextOffset !== undefined ? JSON.stringify({ videoId: parsed.videoId, language: parsed.language, offset: nextOffset }) : undefined,
         usage: [{
           operation: 'transcript',
           credits: response.sessionReused ? 0 : dataOperationCost('transcript', response.cacheStatus),

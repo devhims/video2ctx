@@ -395,3 +395,23 @@ it('keeps timings in the stored result but excludes them from immediate model ou
   expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
   expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
 });
+
+it('splits a twelve-sheet tool selection and reports only successfully analyzed coverage', async () => {
+  const ctx = context();
+  ctx.provider.storyboard = async () => ({ cacheStatus: 'hit', value: {
+    ...storyboard, frameCount: 300, sheets: Array.from({ length: 12 }, (_, i) => ({
+      ...storyboard.sheets[0]!, firstFrameIndex: i * 25, frameCount: 25, columns: 5, rows: 5,
+    })),
+  } });
+  ctx.analyzeStoryboard = vi.fn(async input => {
+    expect(input.storyboard.sheets).toHaveLength(6);
+    if (input.storyboard.sheets[0]!.firstFrameIndex === 0) throw new Error('Visual analysis deadline');
+    return { findings: [{ observation: 'Late presenter wears green.', frameIndexes: [150] }], warnings: [] };
+  });
+  const result = await retrieveAndAnalyze({videoId:storyboard.videoId,maxSheets:12,focus:'Clothing'},ctx,'batch-tool');
+  expect(ctx.analyzeStoryboard).toHaveBeenCalledTimes(2);
+  expect(result.excerpts[0]).toMatchObject({startMs:750000});
+  expect(result.artifacts[0]!.data).toMatchObject({requestedSheetCount:12,analyzedSheetCount:6,sampledFrames:150});
+  expect((result.artifacts[0]!.data.sampledRanges as Array<{startMs:number}>)[0]!.startMs).toBe(750000);
+  expect(result.warnings.some(w=>w.message.includes('batch 1 failed'))).toBe(true);
+});

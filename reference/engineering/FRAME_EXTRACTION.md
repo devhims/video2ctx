@@ -301,3 +301,45 @@ trace deletion, and access controls apply. This requires the Worker and rebuilt
 frames image. It cannot recover historical causes or process events lost when the
 whole container terminates before responding; those attempts retain the Worker
 transport summary. A SIGKILL record alone must not be labeled as an OOM diagnosis.
+
+## Bounded storyboard analysis
+
+Saved storyboard selections are analyzed in groups of at most six sheets, with two
+model calls running concurrently. Each call retains its 20-second deadline and has
+its own usage ID. Before another pair starts, the tool checks that at least 25 seconds
+remain in research. Original sheet and frame indexes are retained in model inputs.
+Successful findings survive a sibling batch failure, with an explicit warning.
+Coverage ranges and sampled-frame counts include only successfully analyzed sheets.
+Cancellation still fails the call, and all-batch failure remains a tool failure.
+These bounds reduce per-request image load; production latency still depends on the
+model provider. This change needs only a Worker deployment.
+
+Long transcript retrieval now caps each evidence packet at 5,000 excerpts while
+keeping the complete raw transcript in session storage. A continuation carries the
+same video/language and next excerpt offset for `get_video_transcript`. Inspection
+can page through later captions; research analysis reads the full stored transcript.
+Page metadata explicitly distinguishes returned excerpts from total transcript
+coverage. A page limit is not a provider-fetch failure or missing captions.
+
+### Preferred progressive frames and bounded proxy recovery
+
+Frame extraction now starts with the Android player and prefers progressive MP4
+itag 18 when available. Other formats and clients remain fallbacks. Explicit
+`preferResolution: true` retains the older resolution-first behavior, but the
+container uses the progressive preference. For the tested video this returns
+640x360 images; `maxWidth` is a ceiling, not a guaranteed source resolution.
+
+The container recognizes nested Undici CONNECT rejection statuses, marks the
+route as failed, and stops reusing its media URLs. It can restart extraction once
+on another configured proxy, including fresh metadata and player URLs. Both
+attempts share the original extraction deadline. No alternate is attempted with
+less than five seconds left or with a single configured proxy. It never falls
+back to direct access. Ordinary YouTube 403 responses still use format fallback.
+Stored diagnostics include `proxy_tunnel_failed`, the tunnel status, and pool slot.
+
+Local validation on `tZvy0jfAu38` at 16, 54, and 160 seconds returned all three
+itag-18 frames directly in 2.686 seconds, compared with 6.061 seconds before the
+preference change. A proxied wrapper test encountered a tunnel 502 and stopped
+in 544 ms. Local configuration had no second proxy, so alternate-route success
+is covered by automated tests, not a live production result. Deploy the Worker
+schema change and rebuilt frames image together, then verify a fresh agent run.

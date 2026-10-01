@@ -7285,7 +7285,8 @@
                             "type": "string",
                             "enum": [
                               "live_or_unconfirmed_broadcast",
-                              "invalid_proxy_configuration"
+                              "invalid_proxy_configuration",
+                              "proxy_tunnel_failed"
                             ]
                           },
                           "egress": {
@@ -7380,6 +7381,7 @@
                               "UPSTREAM_ERROR",
                               "AUTH_REQUIRED",
                               "RATE_LIMITED",
+                              "PROXY_TUNNEL_FAILED",
                               "FRAME_EXTRACTION_FAILED",
                               "FRAME_TIMEOUT",
                               "FRAME_CANCELLED",
@@ -8471,7 +8473,8 @@
                                 "type": "string",
                                 "enum": [
                                   "live_or_unconfirmed_broadcast",
-                                  "invalid_proxy_configuration"
+                                  "invalid_proxy_configuration",
+                                  "proxy_tunnel_failed"
                                 ]
                               },
                               "egress": {
@@ -8566,6 +8569,7 @@
                                   "UPSTREAM_ERROR",
                                   "AUTH_REQUIRED",
                                   "RATE_LIMITED",
+                                  "PROXY_TUNNEL_FAILED",
                                   "FRAME_EXTRACTION_FAILED",
                                   "FRAME_TIMEOUT",
                                   "FRAME_CANCELLED",
@@ -9968,7 +9972,8 @@
                             "type": "string",
                             "enum": [
                               "live_or_unconfirmed_broadcast",
-                              "invalid_proxy_configuration"
+                              "invalid_proxy_configuration",
+                              "proxy_tunnel_failed"
                             ]
                           },
                           "egress": {
@@ -10063,6 +10068,7 @@
                               "UPSTREAM_ERROR",
                               "AUTH_REQUIRED",
                               "RATE_LIMITED",
+                              "PROXY_TUNNEL_FAILED",
                               "FRAME_EXTRACTION_FAILED",
                               "FRAME_TIMEOUT",
                               "FRAME_CANCELLED",
@@ -10877,7 +10883,8 @@
                             "type": "string",
                             "enum": [
                               "live_or_unconfirmed_broadcast",
-                              "invalid_proxy_configuration"
+                              "invalid_proxy_configuration",
+                              "proxy_tunnel_failed"
                             ]
                           },
                           "egress": {
@@ -10972,6 +10979,7 @@
                               "UPSTREAM_ERROR",
                               "AUTH_REQUIRED",
                               "RATE_LIMITED",
+                              "PROXY_TUNNEL_FAILED",
                               "FRAME_EXTRACTION_FAILED",
                               "FRAME_TIMEOUT",
                               "FRAME_CANCELLED",

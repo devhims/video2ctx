@@ -39,3 +39,9 @@ test('retains container job reasons, proxy route and process failure details', (
     events: events.map(event => ({ ...event, message: 'PRIVATE', stderr: 'PRIVATE', error: { message: 'PRIVATE' } })),
   } })).toEqual({ capture: 'available', droppedEvents: 0, events });
 });
+
+test('retains sanitized tunnel failures for session traces', () => {
+  const event = { stage: 'proxy', proxySlot: 1, attempt: 1, code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', status: 522 };
+  expect(extractionCapture({ diagnostics: { version: 1, droppedEvents: 0, events: [event] } }))
+    .toEqual({ capture: 'available', droppedEvents: 0, events: [event] });
+});

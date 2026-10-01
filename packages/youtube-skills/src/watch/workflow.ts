@@ -236,7 +236,7 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
 
   for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps.length && Date.now() < deadlineAt; profileIndex += 1) {
     const group = await loadMediaCandidateGroup(
-      profileIndex,
+      options.preferResolution ? profileIndex : [1, 0, 2, 3][profileIndex]!,
       options.videoId,
       maxWidth,
       clientOptions,
@@ -283,6 +283,7 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
         try {
           frames.set(firstTimestamp, await run(firstTimestamp));
         } catch (error) {
+          if (proxy.failure) throw proxy.failure;
           lastErrors.set(firstTimestamp, error);
           continue;
         }
@@ -291,6 +292,7 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
           if (result.frame) frames.set(result.timestampMs, result.frame);
           else lastErrors.set(result.timestampMs, result.error);
         }
+        if (proxy.failure) throw proxy.failure;
       } finally {
         await proxy.close();
       }
