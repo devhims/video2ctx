@@ -93,11 +93,18 @@ export interface CapabilityClassifierInput {
 export async function classifyCapabilityWithModel(
   input: CapabilityClassifierInput,
 ): Promise<CapabilityRouteDecision> {
-  return withRunDeadline(Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS, input.signal,
-    signal => classifyWithinDeadline({ ...input, signal }), 'Classification phase timeout.');
+  const deadlineAt = Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS;
+  return withRunDeadline(deadlineAt, input.signal,
+    signal => classifyWithinDeadline({ ...input, signal }, deadlineAt), 'Classification phase timeout.');
 }
 
-async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise<CapabilityRouteDecision> {
+// An advisory reconsideration must finish before the phase deadline, so its
+// failure can still fall back to the valid first decision.
+const RECONSIDERATION_TIMEOUT_MS = 8_000;
+const RECONSIDERATION_DEADLINE_MARGIN_MS = 1_000;
+const RECONSIDERATION_MIN_MS = 1_500;
+
+async function classifyWithinDeadline(input: CapabilityClassifierInput, deadlineAt: number): Promise<CapabilityRouteDecision> {
   assertModelCostAvailable(input.modelBudget);
   const conversationHistory = input.conversationHistory ?? [];
   const videoIds = [...new Set([
@@ -111,9 +118,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
   let advisoryFallback: z.infer<typeof classifierDecisionSchema> | undefined;
   for (let attempt = 1; attempt <= 2; attempt++) {
     input.signal.throwIfAborted();
-    assertModelCostAvailable(input.modelBudget);
     const startedAt = Date.now();
-    const result = await generateText({
+    const request = (abortSignal: AbortSignal) => generateText({
       repairToolCall: traceToolCallRepair(input.traceToolCall, undefined, 'classification'),
       model: input.model,
       instructions: [
@@ -172,8 +178,31 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput): Promise
       temperature: 0,
       maxOutputTokens: 1_000,
       maxRetries: 2,
-      abortSignal: input.signal,
+      abortSignal,
     });
+    let result: Awaited<ReturnType<typeof request>>;
+    if (advisoryFallback) {
+      // Best effort: provider failures, budget limits and this sub-deadline keep the first
+      // decision. Cancellation and the phase deadline abort input.signal and still propagate.
+      const budgetMs = Math.min(RECONSIDERATION_TIMEOUT_MS, deadlineAt - Date.now() - RECONSIDERATION_DEADLINE_MARGIN_MS);
+      if (budgetMs < RECONSIDERATION_MIN_MS) return finishClassification(advisoryFallback, videoIds, channelIds);
+      const reconsideration = new AbortController();
+      const timer = setTimeout(() => reconsideration.abort(new Error('Classification reconsideration timeout.')), budgetMs);
+      try {
+        assertModelCostAvailable(input.modelBudget);
+        result = await request(AbortSignal.any([input.signal, reconsideration.signal]));
+      } catch (error) {
+        if (input.signal.aborted) throw error;
+        console.warn(JSON.stringify({ event: 'agent_classification_reconsideration_failed', modelCallId: callId,
+          reason: reconsideration.signal.aborted ? 'timeout' : 'error' }));
+        return finishClassification(advisoryFallback, videoIds, channelIds);
+      } finally {
+        clearTimeout(timer);
+      }
+    } else {
+      assertModelCostAvailable(input.modelBudget);
+      result = await request(input.signal);
+    }
 
     input.modelBudget?.recordUsage({
       callId: attempt === 1 ? callId : `${callId}:repair`,

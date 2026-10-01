@@ -1,6 +1,6 @@
 import { MockLanguageModelV4 } from 'ai/test';
 import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentCoreReasoningEffort,
   runResearchAgentWithModel,
@@ -380,6 +380,64 @@ describe('YouTube agent capability router', () => {
       model, signal: new AbortController().signal });
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(decision).toMatchObject({ visualEvidence: 'none', useStoryboard: false });
+  });
+
+  describe('best-effort visual reconsideration', () => {
+    const message = 'Summarize the slide design tips in popular talks';
+    const first = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' };
+    const route = (toolCallId: string) => ({ content: [{ type: 'tool-call' as const, toolCallId, toolName: 'classify_request',
+      input: JSON.stringify({ researchVideoCount: 1, answerDetail: 'standard', ...first }) }],
+      finishReason: { unified: 'tool-calls' as const, raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+      warnings: [] });
+    // First call answers after firstMs; the reconsideration runs `second`.
+    const model = (second: (signal?: AbortSignal) => Promise<never>, firstMs = 0) => {
+      let call = 0;
+      return new MockLanguageModelV4({ doGenerate: async ({ abortSignal }) => {
+        if (call++ === 0) { await new Promise(resolve => setTimeout(resolve, firstMs)); return route('first'); }
+        return second(abortSignal);
+      } });
+    };
+    const untilAborted = (signal?: AbortSignal) => new Promise<never>((_, reject) =>
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    beforeEach(() => { vi.useFakeTimers(); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+    afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+    it('keeps the first decision when the reconsideration call throws', async () => {
+      const classifier = model(async () => { throw new Error('provider unavailable'); });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(0);
+      const decision = await run;
+      expect(classifier.doGenerateCalls).toHaveLength(2);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"error"'));
+      expect(decision).toMatchObject({ searchQuery: 'slide design tips', visualEvidence: 'helpful', useStoryboard: true });
+    });
+
+    it('keeps the first decision when the reconsideration exceeds its own deadline', async () => {
+      const classifier = model(untilAborted);
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(run).resolves.toMatchObject({ searchQuery: 'slide design tips', visualEvidence: 'helpful' });
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+    });
+
+    it('skips reconsideration when too little classification time remains', async () => {
+      const classifier = model(async () => { throw new Error('must not be called'); }, 18_000);
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(18_000);
+      await expect(run).resolves.toMatchObject({ visualEvidence: 'helpful' });
+      expect(classifier.doGenerateCalls).toHaveLength(1);
+    });
+
+    it('propagates user cancellation during reconsideration', async () => {
+      const controller = new AbortController();
+      const classifier = model(signal => { queueMicrotask(() => controller.abort(new Error('Cancelled by caller.'))); return untilAborted(signal); });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: controller.signal });
+      const outcome = run.then(() => 'resolved', (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await outcome).toBe('Cancelled by caller.');
+      expect(classifier.doGenerateCalls).toHaveLength(2);
+    });
   });
 
   it('keeps a valid first decision when the visual reconsideration is malformed', async () => {
