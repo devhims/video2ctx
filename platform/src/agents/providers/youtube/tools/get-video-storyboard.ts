@@ -1,3 +1,5 @@
+import { withRunDeadline } from '../../../runtime/deadline';
+import { storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../../../runtime/storyboard-budget';
 import { timeStoryboardStage } from '../../../../lib/storyboard-timing';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -27,6 +29,12 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
     description: 'Retrieve storyboard assets without analysis. Call with videoId only for metadata, or request maxSheets, sheetIndexes or timestampsMs directly; missing metadata is retrieved automatically. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Pass storyboard_sheet versions to analyze_video_storyboard with a question, or analyze versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
     inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
+    toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
+      ...output, artifacts: output.artifacts.map(artifact => {
+        const { timingsMs: _timings, ...data } = artifact.data;
+        return { ...artifact, data };
+      }),
+    }) }),
     execute: (input, { toolCallId }) => executeGetVideoStoryboard(input, context, toolCallId),
   });
 }
@@ -36,7 +44,15 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
-    execute: () => retrieveVideoStoryboard(parsed, context, toolCallId),
+    execute: async () => {
+      context.signal.throwIfAborted();
+      const budget = storyboardRetrievalBudget(context.researchDeadlineAt);
+      if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
+        throw new Error('Not enough research time to retrieve storyboards and leave time for analysis. Analyze saved images or finish with the evidence available.');
+      return withRunDeadline(Date.now() + budget, context.signal,
+        signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId),
+        'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
+    },
   });
 }
 
@@ -56,7 +72,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     validateStoryboardSelection(parsed, evidence);
   }
   const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
-    maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
+    maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);

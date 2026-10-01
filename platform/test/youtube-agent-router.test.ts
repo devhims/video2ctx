@@ -622,7 +622,7 @@ describe('YouTube agent capability router', () => {
     const loop = await runResearchAgentWithModel({
       model,
       message: 'Summarize https://youtu.be/abcdefghijk',
-      decision: { route: 'inspect_video', videoId: 'abcdefghijk' },
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: true },
       context,
       conversationHistory: [conversationTurn({
         user: 'Start with this video.',

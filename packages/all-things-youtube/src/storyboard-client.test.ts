@@ -66,3 +66,24 @@ test('public API recovers from missing mobile storyboards and downloads desktop 
   expect(await readFile(result.sheets[0]!.path)).toEqual(bytes);
   expect(result.sheets[0]).toMatchObject({ firstFrameIndex: 0, intervalMs: 10000 });
 });
+
+test('records a sheet 429 in diagnostics when a later player recovers', async () => {
+  const { getStoryboardWithFallback } = await import('./storyboard-client');
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-429-'));
+  dirs.push(outputDir);
+  const events: unknown[] = [];
+  let images = 0;
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('/sb/')) {
+      if (++images === 1) return new Response('limited', { status: 429 });
+      return new Response(Uint8Array.from([255, 216, 255, 217]), { headers: { 'content-type': 'image/jpeg' } });
+    }
+    return Response.json(withSpec);
+  });
+  const result = await getStoryboardWithFallback({ videoId: 'abcdefghijk', outputDir, maxSheets: 1,
+    fetch, onDiagnostic: event => events.push(event) });
+  expect(result.sheets).toHaveLength(1);
+  expect(events).toContainEqual(expect.objectContaining({ stage: 'download', outcome: 'error', status: 429 }));
+  expect(events).toContainEqual(expect.objectContaining({ stage: 'complete', outcome: 'success' }));
+  expect(JSON.stringify(events)).not.toContain('secret');
+});

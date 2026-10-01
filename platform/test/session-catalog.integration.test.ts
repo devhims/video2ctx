@@ -585,7 +585,7 @@ test('temporary operator helper authenticates requests before enumerating privat
   expect(await allowed.json()).toEqual({ ready: true });
 });
 
-test('deletion during concurrent storyboard pinning drains the batch without restoring session assets', async () => {
+test.each(['delete', 'cancel'])('%s during concurrent storyboard pinning drains the batch without late references', async mode => {
   const id = videoId();
   const board = { videoId: id, frameCount: 18, intervalMs: 10000,
     manifest: { totalSheets: 9, framesPerSheet: 2, tileWidth: 120, tileHeight: 90, columns: 2, rows: 1, lastSampleMs: 170000 },
@@ -595,7 +595,7 @@ test('deletion during concurrent storyboard pinning drains the batch without res
   })) };
   const manifestRefs = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, board, Date.now(), 60000);
   const sheetRefs = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 9 }, sheets, Date.now(), 60000);
-  await within('parallel-storyboard-delete', async ({ store, backend, sql }) => {
+  await within(`parallel-storyboard-${mode}`, async ({ store, backend, sql }) => {
     const originalPin = backend.pin.bind(backend);
     let started = 0;
     let release!: () => void;
@@ -613,15 +613,17 @@ test('deletion during concurrent storyboard pinning drains the batch without res
       value: options.metadataOnly ? board : sheets, cacheStatus: 'hit' as const,
       catalogVersions: options.metadataOnly ? manifestRefs : sheetRefs,
     }) } as unknown as YouTubeAgentProvider;
-    const request = sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 9 });
-    const rejected = expect(request).rejects.toThrow('Session assets changed');
+    const controller = new AbortController();
+    const request = sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 9, signal: controller.signal });
+    const rejected = expect(request).rejects.toThrow(mode === 'delete' ? 'Session assets changed' : 'retrieval budget elapsed');
     await entered;
-    await store.delete();
+    if (mode === 'delete') await store.delete();
+    else controller.abort(new Error('retrieval budget elapsed'));
     release();
     await rejected;
     expect(started).toBe(4);
-    expect(store.brief().assets).toEqual([]);
-    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toEqual([]);
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toHaveLength(mode === 'delete' ? 0 : 1);
     expect(await catalog().readVersion(sheetRefs[0]!)).not.toBeNull();
   });
 });

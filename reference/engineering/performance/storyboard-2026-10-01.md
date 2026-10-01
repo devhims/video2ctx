@@ -43,6 +43,38 @@ sequenceDiagram
 
 Concurrency changes how independent work is scheduled; no storage component is removed.
 
+## Deadline and model-output safeguards
+
+Storyboard retrieval has one budget for automatic metadata, image retrieval, session
+attachment and previews: at most 45 seconds, ending at least 35 seconds before the
+research deadline. It is unavailable with less than five seconds of retrieval time.
+A timeout aborts this waiter and prevents late session commits. Shared coordinator
+extraction may finish for other waiters and populate the public source cache, as it
+does for canceled frame requests. It does not gain access to the canceled session.
+
+Storyboard analysis requires at least 25 seconds remaining both before loading saved
+images and before invoking the 20-second analyst. Saved-image reads use the same
+bounded storage concurrency. The research loop withholds tools that cannot fit and
+allows finalization when no viable visual path remains. Explicit sheet selections
+are preserved; this change does not silently discard requested images. The reserve
+is a safety policy, not a guarantee that a provider will supply visual evidence.
+
+`timingsMs` stays in persisted results and traces but is removed from the immediate
+model tool output. Recovery and finalization already use a projection that omits it.
+
+`STORYBOARD_DOWNLOAD_CONCURRENCY` is defined once in the extraction library; the
+processor and two skill copies are generated and verified against that source.
+`EVIDENCE_IO_CONCURRENCY` separately controls storage. Both currently equal four,
+but proxy fan-out and storage throughput can be tuned independently. Provider
+`download` diagnostics retain HTTP 429 even when another player later succeeds;
+a regression test verifies this. Watch these events and attempt counts after rollout.
+This is not a global concurrency cap across containers or simultaneous users.
+
+Classification repair has its own phase. The 120-second visual research deadline is
+created after classification, so a classification retry increases end-to-end latency
+but does not consume a newly started visual research window. Classification behavior
+is unchanged here.
+
 ## Measurements and limits
 
 Video `Fls_onRviPM`, twelve sheets with 548,280 JPEG bytes:

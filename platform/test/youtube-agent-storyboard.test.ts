@@ -5,7 +5,7 @@ import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it, vi } from 'vitest';
 import { createVisualAnalyst } from '../src/agents/providers/youtube/visual-analyst';
-import { executeGetVideoStoryboard, getVideoStoryboardInputSchema } from '../src/agents/providers/youtube/tools/get-video-storyboard';
+import { executeGetVideoStoryboard, getVideoStoryboardInputSchema, createGetVideoStoryboardTool } from '../src/agents/providers/youtube/tools/get-video-storyboard';
 import { storyboardSchema, type Storyboard } from '../src/agents/providers/youtube/storyboard';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
@@ -106,7 +106,8 @@ describe('storyboard agent tool', () => {
     const saveStoryboardPreviews = vi.fn(async () => [preview]);
     const ctx = Object.assign(context(), { saveStoryboardPreviews });
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'preview');
-    expect(saveStoryboardPreviews).toHaveBeenCalledWith(storyboard, ctx.signal);
+    expect(saveStoryboardPreviews).toHaveBeenCalledWith(storyboard, expect.any(AbortSignal));
+    expect(ctx.signal.aborted).toBe(false);
     expect(packet.artifacts[0]!.data.previews).toEqual([preview]);
     const { toolTrace } = await import('../src/agents/runtime/run-progress');
     const trace = toolTrace({ tool_call_id: 'preview', tool_name: 'get_video_storyboard', operation: 'storyboard',
@@ -144,7 +145,7 @@ describe('storyboard agent tool', () => {
     ctx.saveStoryboardPreviews = vi.fn();
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata');
     expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined }, expect.any(Function));
+      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined, signal: expect.any(AbortSignal) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
     expect(packet.excerpts).toEqual([]);
@@ -169,7 +170,7 @@ describe('storyboard agent tool', () => {
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Charts',
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false }, expect.any(Function));
+      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, signal: expect.any(AbortSignal) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
@@ -188,7 +189,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [50000] }, ctx, 'first');
     const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [55000] }, ctx, 'second');
-    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false }, expect.any(Function));
+    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, signal: expect.any(AbortSignal) }, expect.any(Function));
     expect(keys[0]).not.toBe(keys[1]);
     expect(result.artifacts[0]!.data).toMatchObject({ sampledRanges: [{ startMs: 50000, endMs: 55000 }] });
   });
@@ -308,4 +309,89 @@ describe('visual evidence presented to synthesis', () => {
     const reduced = finalizationEvidenceForModel([packet], JSON.stringify([projected]).length - 1);
     expect(reduced.evidence[0]!.excerpts!.some(e => e.text.includes('Final screen'))).toBe(true);
   });
+});
+
+it('declines storyboard retrieval when it cannot reserve analysis time', async () => {
+  const ctx = context();
+  ctx.researchDeadlineAt = Date.now() + 39_000;
+  await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'late'))
+    .rejects.toThrow('Not enough research time');
+  expect(ctx.provider.storyboard).not.toHaveBeenCalled();
+});
+
+it('bounds a hanging provider and leaves 35 seconds without aborting the research signal', async () => {
+  vi.useFakeTimers();
+  try {
+    const ctx = context();
+    ctx.researchDeadlineAt = Date.now() + 60_000;
+    let signal: AbortSignal | undefined;
+    ctx.provider.storyboard = vi.fn(async (_id, _times, options) => {
+      signal = options?.signal;
+      return new Promise<never>(() => {});
+    });
+    const request = executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'slow');
+    const rejected = expect(request).rejects.toThrow('Storyboard retrieval exceeded its budget');
+    await vi.advanceTimersByTimeAsync(25_000);
+    await rejected;
+    expect(ctx.researchDeadlineAt - Date.now()).toBe(35_000);
+    expect(ctx.signal.aborted).toBe(false);
+    expect(signal?.aborted).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it('preserves user cancellation during storyboard retrieval', async () => {
+  const ctx = context();
+  const controller = new AbortController();
+  ctx.signal = controller.signal;
+  ctx.provider.storyboard = vi.fn(() => new Promise<never>(() => {}));
+  const request = executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'cancel');
+  const rejected = expect(request).rejects.toThrow('user cancelled');
+  controller.abort(new Error('user cancelled'));
+  await rejected;
+});
+
+it('does not read images or call the analyst with only 15 seconds remaining', async () => {
+  const ctx = context();
+  ctx.researchDeadlineAt = Date.now() + 15_000;
+  const readAsset = vi.fn();
+  ctx.session = { ...ctx.session, readAsset } as NonNullable<AgentToolContext['session']>;
+  ctx.analyzeStoryboard = vi.fn();
+  await expect(executeAnalyzeVideoStoryboard({ assetVersions: ['a'.repeat(64)], focus: 'Clothing' }, ctx, 'late-analysis'))
+    .rejects.toThrow('Not enough research time');
+  expect(readAsset).not.toHaveBeenCalled();
+  expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+});
+
+it('rechecks the analysis budget after loading saved images', async () => {
+  vi.useFakeTimers();
+  try {
+    const ctx = context();
+    attachTestAssetStore(ctx);
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1 }, ctx, 'saved');
+    const read = ctx.session!.readAsset!.bind(ctx.session);
+    vi.spyOn(ctx.session!, 'readAsset').mockImplementation(async version => {
+      await new Promise(resolve => setTimeout(resolve, 10_000));
+      return read(version);
+    });
+    ctx.analyzeStoryboard = vi.fn();
+    ctx.researchDeadlineAt = Date.now() + 30_000;
+    const request = executeAnalyzeVideoStoryboard({ assetVersions: packet.assetVersions!, focus: 'Clothing' }, ctx, 'slow-read');
+    const rejected = expect(request).rejects.toThrow('Loading saved images left too little');
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejected;
+    expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it('keeps timings in the stored result but excludes them from immediate model output and recovery', async () => {
+  const ctx = context();
+  const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1 }, ctx, 'timed');
+  expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
+  const tool = createGetVideoStoryboardTool(ctx);
+  const output = await tool.toModelOutput!({ toolCallId: 'timed', input: { videoId: storyboard.videoId, maxSheets: 1 }, output: packet });
+  expect(JSON.stringify(output)).not.toContain('timingsMs');
+  expect(JSON.stringify(output)).toContain('sampledRanges');
+  const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
+  expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
+  expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
 });
