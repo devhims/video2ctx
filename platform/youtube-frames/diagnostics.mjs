@@ -1,7 +1,12 @@
 // Diagnostics stay in operator logs. Never serialize requests, headers, or media URLs.
 export function redact(value) {
   let text = String(value ?? '');
-  for (const secret of [process.env.OUTBOUND_PROXY_URL]) {
+  let pool = [];
+  try {
+    const parsed = JSON.parse(process.env.OUTBOUND_PROXY_URLS || '[]');
+    if (Array.isArray(parsed)) pool = parsed.filter(value => typeof value === 'string');
+  } catch { /* Invalid configuration is rejected before extraction. */ }
+  for (const secret of [process.env.OUTBOUND_PROXY_URL, process.env.OUTBOUND_PROXY_URLS, ...pool]) {
     if (!secret) continue;
     text = text.split(secret).join('[REDACTED]');
     try {

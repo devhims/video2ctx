@@ -6,6 +6,7 @@ export class YouTubeFramesContainer extends Container<Env> {
   enableInternet = true;
   envVars = {
     NODE_ENV: 'production',
+    OUTBOUND_PROXY_URLS: this.env.OUTBOUND_PROXY_URLS?.trim() ?? '',
     OUTBOUND_PROXY_URL: this.env.OUTBOUND_PROXY_URL?.trim() ?? '',
   };
 }
