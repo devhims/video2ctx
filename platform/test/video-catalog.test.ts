@@ -32,8 +32,9 @@ function fixture() {
   );
   sql.exec(readFileSync(new URL('../video-catalog-migrations/0003_historical_asset_versions.sql', import.meta.url), 'utf8'));
   let failCommit = false;
+  const sqlStatements = new WeakMap<D1PreparedStatement, { query: string; params: (string | number | null)[] }>();
   function prepare(query: string, params: (string | number | null)[] = []): D1PreparedStatement {
-    return {
+    const statement = {
       bind: (...values: (string | number | null)[]) => prepare(query, values),
       first: async () => sql.prepare(query).get(...params) ?? null,
       all: async () => ({ success: true, results: sql.prepare(query).all(...params) }),
@@ -42,15 +43,21 @@ function fixture() {
         return { success: true };
       },
     } as D1PreparedStatement;
+    sqlStatements.set(statement, { query, params });
+    return statement;
   }
   const db = {
     prepare,
     batch: async (statements: D1PreparedStatement[]) => {
-      if (failCommit) throw new Error('simulated database outage');
+      if (failCommit && statements.some(statement => sqlStatements.get(statement)!.query.includes("SET state='ready'"))) throw new Error('simulated database outage');
       sql.exec('BEGIN');
       try {
         const results = [];
-        for (const statement of statements) results.push(await statement.run());
+        for (const statement of statements) {
+          const { query, params } = sqlStatements.get(statement)!;
+          sql.prepare(query).run(...params);
+          results.push({ success: true });
+        }
         sql.exec('COMMIT');
         return results;
       } catch (error) {
@@ -592,4 +599,17 @@ test.each([
   expect(await core.getOrLoad({ ...req, refresh: true })).toMatchObject({ cacheStatus: 'miss', value: updated });
   expect(loader).toHaveBeenCalledOnce();
   expect(await f.store.readVersion(reference!)).toMatchObject({ fetchedAt, value });
+});
+
+test('normalizes fresh storyboard metadata before returning and pinning its saved version', async () => {
+  const { env } = fixture();
+  const op = { kind: 'storyboard', id, metadataOnly: true } as const;
+  const raw = { ...storyboard(), level: 2 };
+  vi.mocked(runYouTubeOperation).mockResolvedValueOnce(raw);
+  const result = await loadVideoResource(env, op);
+  expect(result).not.toHaveProperty('level');
+  const refs = await saveVideoResource(env, op, result, Date.now(), 60_000);
+  const { SessionCatalog } = await import('../src/agents/runtime/session-catalog');
+  await expect(new SessionCatalog(env).pin('storyboard_manifest', id, 'manifest', result, Date.now(), refs))
+    .resolves.toMatchObject({ asset: refs[0] });
 });

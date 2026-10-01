@@ -1,3 +1,4 @@
+import { timeStoryboardStage } from '../../../../lib/storyboard-timing';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
@@ -41,6 +42,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
 
 /** Missing metadata is fetched inside the same tool call, so it shares its metering and trace. */
 async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
+  const startedAt = Date.now();
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
   let metadata: EvidencePacket | undefined;
   context.signal.throwIfAborted();
@@ -53,20 +55,21 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     }
     validateStoryboardSelection(parsed, evidence);
   }
-  const response = await context.provider.storyboard(parsed.videoId, parsed.timestampsMs, {
+  const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
     maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly,
-  }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
+  }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);
   if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
   if (metadataOnly !== (storyboard.selection?.mode === 'metadata')) throw new Error('Storyboard response does not match the requested operation.');
+  const timingsMs = { retrieval: Date.now() - startedAt, previews: 0, total: 0 };
   const sourceId = `youtube:${parsed.videoId}:storyboard`;
   const packet = evidencePacketSchema.parse({
     packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
     sources: [{ id: sourceId, provider: 'youtube', kind: 'storyboard', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
     excerpts: [],
     artifacts: [{ type: 'youtube_storyboard_retrieval', title: `${metadataOnly ? 'Storyboard metadata' : 'Sampled visual evidence'} for ${parsed.videoId}`,
-      data: { analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
+      data: { timingsMs, analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
         videoId: parsed.videoId, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
         sampledRanges: storyboard.sheets.map(sheet => ({ startMs: sheet.firstFrameIndex * sheet.intervalMs,
           endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs })), totalFrames: storyboard.frameCount,
@@ -81,17 +84,22 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     usage: [...(metadata?.usage ?? []), { operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
   });
   if (!metadataOnly && context.saveStoryboardPreviews) {
+    const previewStartedAt = Date.now();
     try {
       packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
-        await context.saveStoryboardPreviews(storyboard, context.signal),
+        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal), { runId: context.runId, toolCallId }),
       );
     } catch {
       context.signal.throwIfAborted();
       packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
         message: 'The storyboard was retrieved, but its image previews could not be saved.' });
+    } finally {
+      timingsMs.previews = Date.now() - previewStartedAt;
     }
   }
   context.signal.throwIfAborted();
+  timingsMs.total = Date.now() - startedAt;
+  packet.artifacts[0]!.data.timingsMs = timingsMs;
   return packet;
 }
 

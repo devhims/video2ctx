@@ -44,14 +44,17 @@ export class VideoCatalog {
   ) {}
 
   async requested(videoId: string, at = Date.now()): Promise<void> {
-    await this.db
+    await this.requestStatement(videoId, at).run();
+  }
+
+  private requestStatement(videoId: string, at = Date.now()) {
+    return this.db
       .prepare(
         `INSERT INTO videos VALUES (?, ?, ?)
       ON CONFLICT(video_id) DO UPDATE SET last_requested_at=excluded.last_requested_at
       WHERE videos.last_requested_at < excluded.last_requested_at - ?`,
       )
-      .bind(videoId, at, at, REQUEST_RESOLUTION_MS)
-      .run();
+      .bind(videoId, at, at, REQUEST_RESOLUTION_MS);
   }
 
   async read<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
@@ -145,12 +148,13 @@ export class VideoCatalog {
     const reference = { ...key, contentHash: hash };
     // A backfill must not renew an existing version or change its recovery intent.
     if (!publishCurrent && (await this.readVersion(reference))) return reference;
-    await this.requested(key.videoId);
     // Do not publish partial sources as fresh reusable responses. Preserve them
     // in the inventory, and keep an earlier complete current pointer intact.
     const freshUntil = complete ? fetchedAt + maxAgeMs : fetchedAt;
-    await this.db
-      .prepare(
+    // Journal and parent row are one atomic D1 request before any R2 upload.
+    await this.db.batch([
+      this.requestStatement(key.videoId),
+      this.db.prepare(
         `INSERT INTO video_asset_versions
       (video_id,kind,variant,content_hash,object_key,bytes,fetched_at,fresh_until,complete,coverage_json,state,publish_current)
       VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)
@@ -171,8 +175,8 @@ export class VideoCatalog {
         Number(complete),
         JSON.stringify(coverage),
         Number(publishCurrent),
-      )
-      .run();
+      ),
+    ]);
     // A manifest is written last: reconciliation can only publish fully written media.
     for (const image of images)
       await this.bucket.put(image.key, image.bytes, { httpMetadata: { contentType: 'image/jpeg' } });

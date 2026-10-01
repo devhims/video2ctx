@@ -1,3 +1,4 @@
+import { mapInBatches } from '../../lib/map-in-batches';
 import { z } from 'zod';
 import { videoImageKey } from '../../lib/video-catalog';
 import { sha256 } from '../../lib/http';
@@ -50,9 +51,9 @@ export async function saveImagePreviews<T extends { width: number; height: numbe
   const collectionId = await frameCollectionId(userId);
   const saved: { key: string; preview: T & { assetId: string; collectionId: string } }[] = [];
   try {
-    // Callers validate their bounded image contracts before any writes. Sequential
-    // writes keep cancellation and rollback from racing outstanding uploads.
-    for (const image of images) {
+    // All started writes settle before rollback. Preserve descriptor order even
+    // when individual uploads finish out of order.
+    return await mapInBatches(images, async (image) => {
       signal.throwIfAborted();
       const assetId = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('');
       const key = framePreviewKey(collectionId, assetId);
@@ -70,8 +71,8 @@ export async function saveImagePreviews<T extends { width: number; height: numbe
         await bucket.put(key,bytes,{httpMetadata:{contentType:'image/jpeg',cacheControl:'no-store'}});
       }
       signal.throwIfAborted();
-    }
-    return saved.map(value => value.preview);
+      return preview;
+    });
   } catch (error) {
     if (saved.length) await bucket.delete(saved.map(value => value.key));
     throw error;

@@ -19389,22 +19389,28 @@ async function downloadStoryboard(raw, options, fetchImpl) {
   const directory = resolve(options.outputDir, "storyboards");
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets = [];
-  for (const sheet of selectedSheets) {
-    const response = await fetchImpl(sheetUrl(spec, level, sheet));
-    const { bytes, extension } = await imageResponse(response);
-    const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
-    await writeFile(path, bytes);
-    const firstFrameIndex = sheet * capacity;
-    sheets.push({
-      path,
-      tileWidth: level.tileWidth,
-      tileHeight: level.tileHeight,
-      columns: level.columns,
-      rows: level.rows,
-      firstFrameIndex,
-      frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
-      intervalMs: level.intervalMs
-    });
+  for (let offset = 0; offset < selectedSheets.length; offset += 4) {
+    const batch = await Promise.allSettled(selectedSheets.slice(offset, offset + 4).map(async (sheet) => {
+      const response = await fetchImpl(sheetUrl(spec, level, sheet));
+      const { bytes, extension } = await imageResponse(response);
+      const path = join(directory, `${options.videoId}-level-${level.index}-sheet-${sheet}.${extension}`);
+      await writeFile(path, bytes);
+      const firstFrameIndex = sheet * capacity;
+      return {
+        path,
+        tileWidth: level.tileWidth,
+        tileHeight: level.tileHeight,
+        columns: level.columns,
+        rows: level.rows,
+        firstFrameIndex,
+        frameCount: Math.min(capacity, level.frameCount - firstFrameIndex),
+        intervalMs: level.intervalMs
+      };
+    }));
+    for (const result of batch) {
+      if (result.status === "rejected") throw result.reason;
+      sheets.push(result.value);
+    }
   }
   const warnings = !options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : [];
   return {
