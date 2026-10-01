@@ -1,3 +1,4 @@
+import { createFrameApp } from '../app.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -113,5 +114,21 @@ test('does not expose secret suffixes of oversized subprocess lines', async () =
       assert.ok(!error.stderr.includes('HIDDEN'));
       return true;
     });
+  });
+});
+
+
+test('subprocess failure reaches the response diagnostics after workspace cleanup', async () => {
+  await fixture(`console.error(JSON.stringify({event:'frame_diagnostic',stage:'job',
+    error:{code:'UNAVAILABLE',failureReason:'live_or_unconfirmed_broadcast',message:'PRIVATE'}}));
+    process.exitCode=7;`, async jobPath => {
+    const app = createFrameApp((input, options) => runFrameJob(input, { ...options, jobPath }), { log: () => {} });
+    const response = await app.request('/frames', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [0] }) });
+    const body = await response.json();
+    assert.equal(response.status, 502);
+    assert.ok(body.diagnostics.events.some(event => event.stage === 'job' && event.failureReason === 'live_or_unconfirmed_broadcast'));
+    assert.equal(body.diagnostics.events.at(-1).exitCode, 7);
+    assert.ok(!JSON.stringify(body).includes('PRIVATE'));
   });
 });

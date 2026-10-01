@@ -1236,3 +1236,33 @@ test('publication requested during alarm cancellation completes in the joined pr
     } finally {release();await manager.publishPending();cancellation.mockRestore();}
   });
 });
+
+
+test('failed tool traces publish only matching current extraction diagnostics to R2', async () => {
+  const {runtime,runId}=await seed('trace-container-diagnostics','running');
+  await runInDurableObject(runtime, async instance => {
+    const methods = instance as unknown as {
+      traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager;
+      recordExtractionDiagnostic(runId: string, event: import('../src/lib/extraction-diagnostics').StoredExtractionDiagnostic): void;
+    };
+    const { extractionFixture } = await import('./fixtures/extraction-diagnostic');
+    const diagnostic = { ...extractionFixture, kind: 'frames' as const, toolCallId: 'failed-frames',
+      outcome: 'failed' as const, events: [{ stage: 'job' as const, code: 'UNAVAILABLE' as const,
+        failureReason: 'live_or_unconfirmed_broadcast' as const }] };
+    methods.recordExtractionDiagnostic(runId, { ...diagnostic, recordedAt: 1 });
+    const failure = new Error('Frame extraction failed.');
+    await expect(methods.traceManager.track(runId, { toolCallId: 'failed-frames', name: 'get_video_frames',
+      operation: 'frames', input: { videoId: 'abcdefghijk' }, execute: async () => {
+        methods.recordExtractionDiagnostic(runId, { ...diagnostic, recordedAt: Date.now() });
+        methods.recordExtractionDiagnostic(runId, { ...diagnostic, toolCallId: 'another-call', recordedAt: Date.now() });
+        throw failure;
+      } })).rejects.toBe(failure);
+    await methods.traceManager.publishPending();
+    const row = await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?')
+      .bind(runId, 'failed-frames').first<{trace_id:string}>();
+    const detail = await readAdminToolTrace(env, runId, row!.trace_id);
+    expect(detail?.error?.extractionDiagnostics).toHaveLength(1);
+    expect(detail?.error?.extractionDiagnostics?.[0]).toMatchObject({ toolCallId: 'failed-frames', events: diagnostic.events });
+    expect(detail?.payloadState).toBe('complete');
+  });
+});

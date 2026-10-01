@@ -79,3 +79,23 @@ test('logs the original failure with a correlation ID while keeping the response
   assert.ok(!JSON.stringify(logs).includes('SECRET'));
   assert.ok(!(await response.text()).includes('decoder'));
 });
+
+
+test('preserves structured job causes and process exits without private text', async () => {
+  const app = createFrameApp(async (_input, { onDiagnostic }) => {
+    onDiagnostic({ stage: 'proxy', egress: 'proxy', proxySlot: 1 });
+    onDiagnostic({ stage: 'job', error: { code: 'UNAVAILABLE',
+      failureReason: 'live_or_unconfirmed_broadcast', message: 'PRIVATE', stderr: 'PRIVATE' } });
+    throw Object.assign(new Error('PRIVATE'), { code: 'FRAME_TIMEOUT', exitCode: 7, signal: 'SIGKILL',
+      cause: { code: 'ECONNRESET', message: 'PRIVATE' } });
+  }, { log: () => {} });
+  const body = await (await post(app)).json();
+  assert.deepEqual(body.diagnostics.events.slice(0, 2), [
+    { stage: 'proxy', egress: 'proxy', proxySlot: 1 },
+    { stage: 'job', code: 'UNAVAILABLE', failureReason: 'live_or_unconfirmed_broadcast' },
+  ]);
+  assert.equal(body.diagnostics.events.at(-1).exitCode, 7);
+  assert.equal(body.diagnostics.events.at(-1).signal, 'SIGKILL');
+  assert.equal(body.diagnostics.events.at(-1).causeCode, 'ECONNRESET');
+  assert.ok(!JSON.stringify(body).includes('PRIVATE'));
+});

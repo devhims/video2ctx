@@ -170,6 +170,7 @@ export async function verifyCompletedBroadcast(videoId: string, options: YouTube
   const endedAt = typeof broadcast.endTimestamp === 'string' ? Date.parse(broadcast.endTimestamp) : NaN;
   if (details.videoId !== videoId || details.isLive === true || details.isUpcoming === true
     || broadcast.isLiveNow !== false || !Number.isFinite(endedAt) || endedAt > Date.now()) {
-    throw new YouTubeClientError('UNAVAILABLE', 'Live or unconfirmed broadcasts are not supported by watch extraction.');
+    throw Object.assign(new YouTubeClientError('UNAVAILABLE', 'Live or unconfirmed broadcasts are not supported by watch extraction.'),
+      { failureReason: 'live_or_unconfirmed_broadcast' });
   }
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { diagnosticDetails, errorDetails, logDiagnostic } from './diagnostics.mjs';
+import { diagnosticDetails, errorDetails, logDiagnostic, structuredFailure } from './diagnostics.mjs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { parseFrameRequest } from './contract.mjs';
@@ -26,6 +26,7 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
     const safeLog = event => { try { log(event); } catch { /* Operator logging cannot fail extraction. */ } };
     const capture = event => {
       const { error, reason, message, ...fields } = diagnosticDetails(event);
+      Object.assign(fields, structuredFailure(error));
       const code = error?.code;
       if (typeof code === 'string' && /^[A-Z_]{1,64}$/.test(code)) fields.code = code;
       if (JSON.stringify(fields).length > 1024) { diagnostics.droppedEvents++; return; }

@@ -29,6 +29,7 @@ export function errorDetails(error, depth = 0) {
   return {
     name: redact(error.name ?? 'Error'), code: redact(error.code ?? 'UNKNOWN'),
     message: redact(error.message ?? error),
+    ...structuredFailure(error),
     ...(Number.isInteger(error.status) ? { status: error.status } : {}),
     ...(error.exitCode === null || Number.isInteger(error.exitCode) ? { exitCode: error.exitCode } : {}),
     ...(typeof error.timedOut === 'boolean' ? { timedOut: error.timedOut } : {}),
@@ -40,7 +41,9 @@ export function errorDetails(error, depth = 0) {
 }
 
 export function diagnosticDetails(event) {
-  const safe = {};
+  const safe = { ...structuredFailure(event) };
+  if (['direct', 'proxy'].includes(event.egress)) safe.egress = event.egress;
+  if (Number.isInteger(event.proxySlot) && event.proxySlot >= 0 && event.proxySlot < 4) safe.proxySlot = event.proxySlot;
   for (const key of ['stage', 'profile', 'playabilityStatus', 'reason', 'message']) {
     if (typeof event[key] === 'string') safe[key] = redact(event[key]);
   }
@@ -49,6 +52,17 @@ export function diagnosticDetails(event) {
   }
   if (event.error) safe.error = errorDetails(event.error);
   return safe;
+}
+
+// Finite categories cross the storage boundary; arbitrary error text never does.
+export function structuredFailure(error) {
+  const result = {};
+  if (['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration'].includes(error?.failureReason)) result.failureReason = error.failureReason;
+  if (['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL'].includes(error?.signal)) result.signal = error.signal;
+  if (Number.isInteger(error?.exitCode) && error.exitCode >= -255 && error.exitCode <= 255) result.exitCode = error.exitCode;
+  const causeCode = error?.causeCode ?? error?.cause?.code;
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ENOENT', 'EACCES', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(causeCode)) result.causeCode = causeCode;
+  return result;
 }
 
 export const logDiagnostic = event => console.error(JSON.stringify(event));

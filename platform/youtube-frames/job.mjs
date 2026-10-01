@@ -9,6 +9,8 @@ const directory = process.argv[2];
 let transport;
 try {
   transport = createFrameTransport(process.env);
+  console.error(JSON.stringify({ event: 'frame_diagnostic', stage: 'proxy',
+    egress: transport.proxyConfigured ? 'proxy' : 'direct', proxySlot: transport.slot }));
   const request = parseFrameRequest(JSON.parse(await readFile(join(directory, 'request.json'), 'utf8')));
   const result = await extractFrames({
     onDiagnostic: event => console.error(JSON.stringify({ event: 'frame_diagnostic', ...diagnosticDetails(event) })),

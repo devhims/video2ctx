@@ -285,3 +285,19 @@ seconds through the same proxy and extractor. These were local tests of the fram
 container bundle with the pinned dependency and real FFmpeg, not production-container
 replays. The guard regression is resolved; successful keynote media extraction is
 not yet established. No raw media URLs or proxy credentials were retained.
+
+## Stored container failure details
+
+The frames job's `job` diagnostic stage is accepted by the Worker. Structured
+failure reasons distinguish live/unconfirmed broadcasts and invalid proxy pools.
+Request failures retain recognized network cause codes, process exit codes, and
+termination signals. A `proxy` event records routing mode and pool slot. No raw
+error messages, stderr, proxy URLs, or credentials enter these stored fields.
+
+On a tool failure, the trace manager snapshots matching run diagnostics recorded
+during that call into its R2 error payload under `extractionDiagnostics`. Admin trace
+reads and JSONL exports preserve this field. Existing run diagnostic storage caps,
+trace deletion, and access controls apply. This requires the Worker and rebuilt
+frames image. It cannot recover historical causes or process events lost when the
+whole container terminates before responding; those attempts retain the Worker
+transport summary. A SIGKILL record alone must not be labeled as an OOM diagnosis.

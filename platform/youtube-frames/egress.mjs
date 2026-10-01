@@ -19,7 +19,8 @@ export function proxyConnections(environment) {
     return normalized;
   } catch {
     // Parsing and URL exceptions may contain credentials. Never propagate them.
-    throw new Error('Outbound proxy configuration must contain one to four distinct HTTP(S) proxy URLs.');
+    throw Object.assign(new Error('Outbound proxy configuration must contain one to four distinct HTTP(S) proxy URLs.'),
+      { failureReason: 'invalid_proxy_configuration' });
   }
 }
 

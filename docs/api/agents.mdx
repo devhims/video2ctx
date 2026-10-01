@@ -135,6 +135,16 @@ HTTP status when available, outcome, and safe stage details such as player profi
 media format and resolution, WebP conversion, retries, and FFmpeg exit code.
 Transcript records include caption metadata preparation failures and retry events. These records remain available when extraction or subsequent analysis fails. Cache hits and session reuse do not replay historical attempts as new diagnostics.
 
+Frame diagnostics also retain `job` failures, `failureReason` categories for an
+unconfirmed broadcast or invalid proxy configuration, process exit codes and signals,
+and recognized network cause codes. A `proxy` event records direct/proxy routing and
+the selected pool slot, never the proxy URL or exit IP. A signal alone does not prove
+an out-of-memory failure.
+
+Failed tool trace payloads include the matching attempt records under
+`error.extractionDiagnostics`, available through the admin trace API and JSONL export.
+These are snapshots of diagnostics captured during that call, not raw container logs.
+
 The `capture` field explains how much detail reached the Worker:
 
 - `available`: a valid diagnostic envelope was received. Invalid individual events are dropped.
