@@ -96,3 +96,12 @@ describe('partial evidence fallback', () => {
     expect(input.answer).toContain('[cite:excerpt:1]');
   });
 });
+
+it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('preserves skipped transcript reason %s in metadata-only fallback', code => {
+  const metadata = { ...packet, kind: 'youtube_video' as const };
+  const skipped: EvidencePacket = { ...packet, packetId: 'skipped', sources: [], excerpts: [], artifacts: [],
+    warnings: [{ code, message: 'Transcript access limitation.', videoId: 'abcdefghijk' }], usage: [] };
+  const result = evidenceFallback([metadata, skipped], 'inspect_video')!;
+  expect(result.warnings).toContainEqual(skipped.warnings[0]);
+  expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(true);
+});

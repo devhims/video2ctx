@@ -613,3 +613,86 @@ test('normalizes fresh storyboard metadata before returning and pinning its save
   await expect(new SessionCatalog(env).pin('storyboard_manifest', id, 'manifest', result, Date.now(), refs))
     .resolves.toMatchObject({ asset: refs[0] });
 });
+
+test('persists frames in bounded concurrent batches and returns references in timestamp order', async () => {
+  const f = fixture();
+  const original = VideoCatalog.prototype.save;
+  let active = 0, peak = 0;
+  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    try { return await original.apply(this, args); }
+    finally { active--; }
+  });
+  try {
+    const times = [1000, 2000, 3000, 4000, 5000, 6000];
+    const refs = await saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
+      { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000);
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(refs.map(ref => ref.variant)).toEqual(times.map(time => `v1:640:${time}`));
+  } finally { save.mockRestore(); }
+});
+
+test('settles started frame writes before rejecting and does not start the next batch', async () => {
+  const f = fixture();
+  let settled = 0;
+  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async () => {
+    const index = save.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, index === 1 ? 0 : 10));
+    settled++;
+    throw new Error('storage unavailable');
+  });
+  try {
+    const times = [1000, 2000, 3000, 4000, 5000, 6000];
+    await expect(saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
+      { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000)).rejects.toThrow('storage unavailable');
+    expect(save).toHaveBeenCalledTimes(4);
+    expect(settled).toBe(4);
+  } finally { save.mockRestore(); }
+});
+
+test('attaches catalog timings to extraction diagnostics even when persistence fails', async () => {
+  const { extractionFixture } = await import('./fixtures/extraction-diagnostic');
+  const f = fixture();
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _options, diagnostic) => {
+    diagnostic?.({ ...extractionFixture, kind: 'frames' });
+    return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  });
+  const diagnostic = vi.fn();
+  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockRejectedValue(new Error('storage unavailable'));
+  try {
+    await expect(loadVideoResource(f.env, { kind: 'frames', id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 }, diagnostic))
+      .rejects.toThrow('storage unavailable');
+    expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({ events: expect.arrayContaining([
+      expect.objectContaining({ stage: 'catalog_lookup', elapsedMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'catalog_write', elapsedMs: expect.any(Number) }),
+    ]) }));
+  } finally { save.mockRestore(); }
+});
+
+test('forwards extraction diagnostics before a stalled catalog write', async () => {
+  const { extractionFixture } = await import('./fixtures/extraction-diagnostic');
+  const f = fixture();
+  const diagnostic = vi.fn();
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _options, sink) => {
+    sink?.({ ...extractionFixture, kind: 'frames' });
+    return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = VideoCatalog.prototype.save;
+  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic.mock.calls[0]![0]).toMatchObject({ events: extractionFixture.events });
+    release();
+    return original.apply(this, args);
+  });
+  try {
+    const pending = loadVideoResource(f.env, { kind: 'frames', id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 }, diagnostic);
+    await gate;
+    await pending;
+    expect(diagnostic).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'catalog', outcome: 'success' }));
+  } finally { save.mockRestore(); }
+});

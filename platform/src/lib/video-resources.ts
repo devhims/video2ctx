@@ -4,7 +4,7 @@ import { storyboardSchema, type Storyboard } from '../agents/providers/youtube/s
 import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-frames-contract';
 import { getVideoFrames } from './youtube-frames';
 import { runYouTubeOperation, type YouTubeOperation } from './youtube-processor-client';
-import type { ExtractionDiagnosticSink } from './extraction-diagnostics';
+import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import {
   videoCatalog,
   type VideoAssetKey,
@@ -267,16 +267,14 @@ export async function saveVideoResource(
       frames.frames.some((frame) => !op.timestampsMs.includes(frame.timestampMs))
     )
       throw new Error('Unexpected video frame.');
-    for (const frame of frames.frames)
-      await save(
+    return mapInBatches(frames.frames, frame => store.save(
         frameKey(op, frame.timestampMs),
         { ...frames, frames: [frame], failures: [], meta: { ...frames.meta, partial: false } },
         fetchedAt,
         maxAgeMs,
         true,
         { timestampMs: frame.timestampMs, width: frame.width, height: frame.height, maxWidth: op.maxWidth },
-      );
-    return references;
+      ));
   }
   const data = value as {
     segments?: unknown[];
@@ -308,37 +306,63 @@ export async function loadVideoResource(
       timestampsMs: op.timestampsMs,
       maxWidth: op.maxWidth,
     });
+    const lookupStarted = Date.now();
+    let lastAttempt: ExtractionAttempt | undefined;
     const saved =
       store && !refresh
         ? await Promise.all(request.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))))
         : [];
+    const lookupMs = Date.now() - lookupStarted;
     const hits = saved.filter(
       (asset): asset is StoredVideoAsset<VideoFrames> => !!asset && asset.complete,
     );
     const times = new Set(hits.flatMap((asset) => asset.value.frames.map((frame) => frame.timestampMs)));
     const missing = request.timestampsMs.filter((time) => !times.has(time));
     const fetchedAt = Date.now();
-    const fetched = missing.length
-      ? await getVideoFrames(
-          env,
-          { ...request, timestampsMs: missing },
-          undefined,
-          { extractionTimeoutMs: op.extractionTimeoutMs },
-          diagnostic,
-        )
-      : undefined;
-    const versions = fetched
-      ? await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames)
-      : [];
-    onVersions?.([...hits.flatMap((hit) => hit.catalogVersions ?? []), ...versions]);
-    return framesSchema.parse({
-      videoId: op.id,
-      frames: [...hits.flatMap((asset) => asset.value.frames), ...(fetched?.frames ?? [])].sort(
-        (a, b) => a.timestampMs - b.timestampMs,
-      ),
-      failures: fetched?.failures ?? [],
-      meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
-    });
+    let catalogWriteMs: number | undefined;
+    let catalogSucceeded = false;
+    try {
+      const fetched = missing.length
+        ? await getVideoFrames(
+            env,
+            { ...request, timestampsMs: missing },
+            undefined,
+            { extractionTimeoutMs: op.extractionTimeoutMs },
+            diagnostic ? event => {
+              lastAttempt = event;
+              emitExtractionDiagnostic(diagnostic, event);
+            } : undefined,
+          )
+        : undefined;
+      const writeStarted = Date.now();
+      let versions: VideoAssetReference[] = [];
+      if (fetched) {
+        try {
+          versions = await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames);
+          catalogSucceeded = true;
+        } finally {
+          catalogWriteMs = Date.now() - writeStarted;
+        }
+      }
+      onVersions?.([...hits.flatMap((hit) => hit.catalogVersions ?? []), ...versions]);
+      return framesSchema.parse({
+        videoId: op.id,
+        frames: [...hits.flatMap((asset) => asset.value.frames), ...(fetched?.frames ?? [])].sort(
+          (a, b) => a.timestampMs - b.timestampMs,
+        ),
+        failures: fetched?.failures ?? [],
+        meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
+      });
+    } finally {
+      if (lastAttempt && catalogWriteMs !== undefined) {
+        // Keep extraction attempts immediate. Storage is a separate diagnostic phase.
+        emitExtractionDiagnostic(diagnostic, { ...lastAttempt, phase: 'catalog',
+          recordedAt: Date.now(), elapsedMs: lookupMs + catalogWriteMs,
+          outcome: catalogSucceeded ? 'success' : 'failed', status: undefined, failureKind: undefined,
+          events: [{ stage: 'catalog_lookup', elapsedMs: lookupMs },
+            { stage: 'catalog_write', elapsedMs: catalogWriteMs }], droppedEvents: 0 });
+      }
+    }
   }
   if (op.kind !== 'storyboard') return runYouTubeOperation(env, op, diagnostic);
   if (!store || op.metadataOnly) return storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));

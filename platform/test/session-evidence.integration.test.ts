@@ -763,3 +763,42 @@ test('long transcript pages remain readable after reopening without provider ref
     const page = await resumed.readEvidence(first.assetVersions![0]!,5000);
     expect(page.packets[0]!.excerpts[0]!.text).toBe('Caption 5000');
   }));
+
+test.each([false, true])('frame pins overlap safely, including session deletion=%s', async deleted =>
+  within(`frame-batch-${deleted}`, async (store, reopen) => {
+    const times = [1000, 2000, 3000, 4000, 5000, 6000];
+    const p = { frames: vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
+      videoId: id, frames: times.map(timestampMs => ({ timestampMs, width: 640, height: 360,
+        mimeType: 'image/jpeg' as const, imageBase64: '/9j/2Q==' })), failures: [], meta: { partial: false, warnings: [] },
+    } })) } as unknown as YouTubeAgentProvider;
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const firstBatch = new Promise<void>(resolve => { started = resolve; });
+    let active = 0, peak = 0, calls = 0;
+    const retrieve = store.retrieve.bind(store);
+    const spy = vi.spyOn(store, 'retrieve').mockImplementation((key, kind, videoId, fresh, load, describe, accept, signal) =>
+      retrieve(key, kind, videoId, fresh, async () => {
+        active++; calls++; peak = Math.max(peak, active);
+        if (calls === 4) started();
+        await gate;
+        try { return await load(); } finally { active--; }
+      }, describe, accept, signal));
+    try {
+      const pending = sessionProvider(p, store).frames!({ videoId: id, timestampsMs: times, maxWidth: 640 });
+      const outcome = deleted ? expect(pending).rejects.toThrow('Session assets changed') : pending;
+      await firstBatch;
+      if (deleted) await store.delete();
+      release();
+      await outcome;
+      expect(peak).toBe(4);
+      expect(active).toBe(0);
+      expect(calls).toBe(deleted ? 4 : 6);
+      expect(reopen().brief().assets).toHaveLength(deleted ? 0 : 6);
+      if (!deleted) {
+        const reused = await sessionProvider(p, reopen()).frames!({ videoId: id, timestampsMs: times, maxWidth: 640 });
+        expect(reused.value.frames.map(frame => frame.timestampMs)).toEqual(times);
+        expect(p.frames).toHaveBeenCalledOnce();
+        expect(reused.frameTimingsMs).toMatchObject({ retrieval: 0, sessionPin: 0 });
+      }
+    } finally { release(); spy.mockRestore(); }
+  }));

@@ -1158,6 +1158,9 @@ function captionAvailabilityError(raw: JsonObject): YouTubeClientError | undefin
   if (status === 'LOGIN_REQUIRED' || status === 'AGE_CHECK_REQUIRED' || status === 'CONTENT_CHECK_REQUIRED') {
     return new YouTubeClientError('AUTH_REQUIRED', 'YouTube requires authorization to read this video’s captions.');
   }
+  if (status === 'UNPLAYABLE' && /(?:not made (?:this |the )?video available in your country|not available in your country|blocked .*in your country)/i.test(reason)) {
+    return new YouTubeClientError('REGION_RESTRICTED', 'The uploader has not made this video available in the current request region.', { retryable: false });
+  }
   if (status === 'UNPLAYABLE' || status === 'ERROR' || status === 'LIVE_STREAM_OFFLINE') {
     return new YouTubeClientError('UNAVAILABLE', 'YouTube reports that this video is unavailable.');
   }
@@ -1229,7 +1232,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     }
   };
 
-  const player = async (videoId: string, requireCaptionTrack = true): Promise<JsonObject> => {
+  const player = async (videoId: string, requireCaptionTrack = true, onPlayable?: (raw: JsonObject) => void): Promise<JsonObject> => {
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       throw new YouTubeClientError('INVALID_INPUT', 'videoId must be 11 characters.');
     }
@@ -1245,7 +1248,10 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         );
         firstResponse ??= response;
         const status = string(object(response.playabilityStatus).status);
-        if (status === 'OK') playableResponse ??= response;
+        if (status === 'OK') {
+          if (!playableResponse) onPlayable?.(response);
+          playableResponse ??= response;
+        }
         const tracks = parseCaptionTracks(response).internal;
         if (status === 'OK' && (!requireCaptionTrack || tracks.some(track => captionUrl(track.baseUrl)))) return response;
         attempts.push(`${profile.name}: ${status ?? 'UNKNOWN'}`);
@@ -1547,7 +1553,33 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     },
 
     async getVideo(videoId) {
-      const raw = await player(videoId, false);
+      let metadata: JsonObject | undefined;
+      let desktopLookup: ReturnType<typeof desktopPlayer> | undefined;
+      const captionRaw = await player(videoId, true, firstPlayable => {
+        metadata = firstPlayable;
+        if (!parseCaptionTracks(firstPlayable).internal.some(track => captionUrl(track.baseUrl)))
+          desktopLookup = desktopPlayer(videoId);
+      });
+      // Keep metadata from the first playable profile, even when another supplies tracks.
+      const raw = metadata ?? captionRaw;
+      let catalog = parseCaptionTracks(captionRaw);
+      let captionStatus: 'available' | 'unavailable' | 'unknown' = 'unknown';
+      if (catalog.internal.some(track => captionUrl(track.baseUrl))) {
+        captionStatus = 'available';
+      } else if (!captionAvailabilityError(raw)) {
+        // Only playable primary AND desktop catalogs can confirm absence.
+        // Reuse the player response; never download caption bodies here.
+        const desktop = await (desktopLookup ?? desktopPlayer(videoId));
+        if (desktop.value) {
+          catalog = mergeCaptionCatalog(catalog, parseCaptionTracks(desktop.value.raw));
+          if (catalog.internal.some(track => captionUrl(track.baseUrl))) captionStatus = 'available';
+          else if (!catalog.internal.length && !captionAvailabilityError(desktop.value.raw)) captionStatus = 'unavailable';
+        }
+      }
+      const captionAvailability = { status: captionStatus,
+        languages: [...new Set(catalog.public.filter((_, index) => captionUrl(catalog.internal[index]!.baseUrl)).map(track => track.languageCode))],
+        checkedAt: new Date().toISOString() };
+
       const details = object(raw.videoDetails);
       const status = object(raw.playabilityStatus);
       const author = string(details.author) ?? 'Unknown channel';
@@ -1575,11 +1607,13 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         publishedTimeText: undefined,
         isLive: details.isLiveContent === true,
         url: `https://www.youtube.com/watch?v=${videoId}`,
+        captionAvailability,
         keywords: array(details.keywords).filter(
           (keyword): keyword is string => typeof keyword === 'string'
         ),
         availability: {
           status: playability,
+          ...(captionAvailabilityError(raw)?.code === 'REGION_RESTRICTED' ? { restriction: 'region' as const } : {}),
           reason: string(status.reason),
           playable: playability === 'OK',
           embeddable: status.playableInEmbed === true,

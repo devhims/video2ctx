@@ -47,7 +47,7 @@ test('whole-operation fallback visits each proxy before repeating, including a f
   expect(diagnostics.at(-1)).toMatchObject({ attempt: 4, outcome: 'success', egress: 'proxy' });
 });
 
-test.each(['INVALID_INPUT', 'AUTH_REQUIRED'] as const)('%s is terminal even when marked retryable', async code => {
+test.each(['INVALID_INPUT', 'AUTH_REQUIRED', 'REGION_RESTRICTED'] as const)('%s is terminal even when marked retryable', async code => {
   const { run, proxyTransport } = harness(async () => { throw new YouTubeProcessorError(code, 'private secret', 400, true); });
   await expect(run(env(), operation)).rejects.toMatchObject({ code });
   expect(proxyTransport).toHaveBeenCalledTimes(1);

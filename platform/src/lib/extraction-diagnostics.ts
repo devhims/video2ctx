@@ -4,7 +4,7 @@ const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Deliberately no free-form strings, error messages, URLs, headers, or stderr.
 export const extractionEventSchema = z.object({
-  stage: z.enum(['player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
+  stage: z.enum(['catalog_lookup', 'catalog_write', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy']),
   failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed']).optional(),
   egress: z.enum(['direct', 'proxy']).optional(), proxySlot: z.number().int().min(0).max(3).optional(),
@@ -14,7 +14,7 @@ export const extractionEventSchema = z.object({
   outcome: z.enum(['selected', 'skipped', 'error', 'success']).optional(),
   playabilityStatus: z.enum(['OK', 'LOGIN_REQUIRED', 'UNPLAYABLE', 'ERROR', 'LIVE_STREAM_OFFLINE', 'CONTENT_CHECK_REQUIRED', 'AGE_CHECK_REQUIRED', 'UNKNOWN']).optional(),
   specState: z.enum(['valid', 'missing', 'malformed']).optional(),
-  code: z.enum(['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'AUTH_REQUIRED',
+  code: z.enum(['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'AUTH_REQUIRED',
     'RATE_LIMITED', 'PROXY_TUNNEL_FAILED', 'FRAME_EXTRACTION_FAILED', 'FRAME_TIMEOUT', 'FRAME_CANCELLED', 'MEDIA_UNAVAILABLE', 'DEPENDENCY_MISSING', 'UNKNOWN']).optional(),
   inputFormat: z.enum(['webp', 'jpeg']).optional(), outputFormat: z.enum(['webp', 'jpeg']).optional(),
   status: z.number().int().min(100).max(599).optional(), elapsedMs: metric.optional(),
@@ -26,6 +26,7 @@ export const extractionEventSchema = z.object({
 });
 
 export const extractionAttemptSchema = z.object({
+  phase: z.enum(['extraction', 'catalog']).optional(),
   version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(5), slot: z.number().int().min(0).max(3),
   backend: z.enum(['worker', 'container']).optional(), egress: z.enum(['direct', 'proxy']).optional(),

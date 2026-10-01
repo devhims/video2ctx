@@ -4,7 +4,7 @@ import type { AgentToolContext } from '../tool-context';
 import { evidencePacketForModel } from '../../../runtime/model-evidence';
 import { analyzeVideoTranscriptsInputSchema, executeAnalyzeVideoTranscript } from './analyze-video-transcripts';
 import { executeGetVideoTranscript, getVideoTranscriptInputSchema } from './get-video-transcript';
-import { captionsUnavailable } from './transcript-tool-errors';
+import { captionsUnavailable, regionRestricted } from './transcript-tool-errors';
 import { assetVersionSchema } from './stored-analysis';
 
 export const researchVideoTranscriptsInputSchema = z.object({
@@ -19,7 +19,7 @@ export const researchVideoTranscriptsInputSchema = z.object({
 
 export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
   return tool({
-    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Videos with confirmed unavailable captions are immediately replaced with unused search candidates, preferring completed videos, then unknown live status, then active streams, with captions badges breaking ties, unless the request names specific comparison videos. At most eight replacement candidates are attempted. Completed evidence is retained even if another video fails or the research deadline expires.',
+    description: 'Research selected videos concurrently. Supply videoId for missing or refreshed transcripts, or assetVersion to reuse a saved transcript, plus one focused evidence question. Each transcript is saved and analyzed as soon as it is ready, without waiting for other retrievals. Videos with confirmed unavailable captions or country restrictions are immediately replaced with unused search candidates, preferring completed videos, then unknown live status, then active streams, with captions badges breaking ties, unless the request names specific comparison videos. At most eight replacement candidates are attempted. Completed evidence is retained even if another video fails or the research deadline expires.',
     inputSchema: researchVideoTranscriptsInputSchema,
     execute: async ({ sources, focus }, { toolCallId }) => {
       context.signal.throwIfAborted();
@@ -39,7 +39,7 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
       }
       const candidates = replacementCandidates(context);
       let replacements = 0;
-      const skipped: Array<{ videoId: string; code: 'CAPTIONS_UNAVAILABLE'; replacementVideoId?: string }> = [];
+      const skipped: Array<{ videoId: string; code: 'CAPTIONS_UNAVAILABLE' | 'REGION_RESTRICTED'; replacementVideoId?: string }> = [];
       const outcomes = await Promise.allSettled(sources.map(async (source, index) => {
         let current = source;
         let attempt = 0;
@@ -52,11 +52,11 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
               : (await executeGetVideoTranscript(current, context, `${childId}:retrieve`)).assetVersions?.[0];
           } catch (error) {
             context.signal.throwIfAborted();
-            if (!captionsUnavailable(error) || !('videoId' in current)) throw error;
+            if ((!captionsUnavailable(error) && !regionRestricted(error)) || !('videoId' in current)) throw error;
             const next = selection?.allowReplacement && replacements < 8
               && !budget?.isExhausted()
-              ? candidates.find(id => !selection.attempted.has(id)) : undefined;
-            skipped.push({ videoId: current.videoId, code: 'CAPTIONS_UNAVAILABLE', ...(next ? { replacementVideoId: next } : {}) });
+              ? candidates.find(id => !selection.attempted.has(id) && !selection.unavailable.has(id) && !selection.regionRestricted?.has(id)) : undefined;
+            skipped.push({ videoId: current.videoId, code: regionRestricted(error) ? 'REGION_RESTRICTED' : 'CAPTIONS_UNAVAILABLE', ...(next ? { replacementVideoId: next } : {}) });
             if (!next) throw error;
             selection!.attempted.add(next);
             replacements++;

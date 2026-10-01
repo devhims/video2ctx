@@ -6,7 +6,7 @@ import { dataOperationCost } from '../../../../lib/metering';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 
-import { captionsUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
+import { regionRestricted, captionsUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
 
 export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -49,8 +49,25 @@ export function executeGetVideoTranscript(
     execute: async () => {
       context.signal.throwIfAborted();
       const selection = context.transcriptSelection;
+      if (selection?.regionRestricted?.has(parsed.videoId)) {
+        if (context.transcriptPolicy.mode !== 'complete_transcript')
+          throw new TranscriptToolStageError('REGION_RESTRICTED', 'YouTube confirmed a country restriction on the current retrieval route. Select another search result unless this video was explicitly requested.');
+        return evidencePacketSchema.parse({
+          packetId: `packet:${context.runId}:${toolCallId}`, kind: 'youtube_transcript',
+          sources: [], excerpts: [], artifacts: [], assetVersions: [], usage: [],
+          warnings: [{ code: 'REGION_RESTRICTED', videoId: parsed.videoId,
+            message: 'YouTube confirmed a country restriction for this video on the current retrieval route. Retrieval was skipped. Do not retry this transcript in this run; explain the access limitation.' }],
+        });
+      }
       if (selection?.unavailable.has(parsed.videoId)) {
-        throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', 'No captions were available for this video in this run. Select another search result.');
+        if (context.transcriptPolicy.mode !== 'complete_transcript')
+          throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', 'Caption absence was already confirmed. Select another search result.');
+        return evidencePacketSchema.parse({
+          packetId: `packet:${context.runId}:${toolCallId}`, kind: 'youtube_transcript',
+          sources: [], excerpts: [], artifacts: [], assetVersions: [], usage: [],
+          warnings: [{ code: 'CAPTIONS_UNAVAILABLE', videoId: parsed.videoId,
+            message: 'Caption absence was already confirmed. Retrieval was skipped. Use available visual evidence or report the coverage gap; do not retry this transcript in this run.' }],
+        });
       }
       selection?.attempted.add(parsed.videoId);
       let response;
@@ -58,6 +75,10 @@ export function executeGetVideoTranscript(
         response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })));
       } catch (error) {
         if (context.signal.aborted) throw error;
+        if (regionRestricted(error)) {
+          if (selection) (selection.regionRestricted ??= new Set()).add(parsed.videoId);
+          throw new TranscriptToolStageError('REGION_RESTRICTED', error);
+        }
         if (captionsUnavailable(error)) {
           selection?.unavailable.add(parsed.videoId);
           throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', error);

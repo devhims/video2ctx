@@ -15,18 +15,24 @@ import {
 export const getVideoInputSchema = z.object({ videoId: videoIdSchema });
 export type GetVideoInput = z.infer<typeof getVideoInputSchema>;
 
+const CAPTION_OBSERVATION_MAX_AGE_MS = 300_000;
+const isRecent = (time: string) => {
+  const age = Date.now() - Date.parse(time);
+  return age >= 0 && age < CAPTION_OBSERVATION_MAX_AGE_MS;
+};
+
 export function createGetVideoTool(context: AgentToolContext) {
   return tool({
-    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. This does not fetch transcripts, comments, tracks, or endscreen elements.',
+    description: 'Read metadata for exactly one YouTube video, including views, likes and comment totals when current statistics are requested. Includes observed caption availability and languages without downloading transcript text. Unknown means caption checks were inconclusive. Skip transcript retrieval only when unavailable is confirmed and recent. This does not fetch comments or endscreen elements.',
     inputSchema: getVideoInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideo(input, context, toolCallId),
   });
 }
 
-export function executeGetVideo(input: GetVideoInput, context: AgentToolContext, toolCallId: string) {
+export async function executeGetVideo(input: GetVideoInput, context: AgentToolContext, toolCallId: string) {
   const parsed = getVideoInputSchema.parse(input);
-  return executeProviderEvidence({
+  const packet = await executeProviderEvidence({
     context,
     toolCallId,
     toolName: 'get_video',
@@ -36,10 +42,24 @@ export function executeGetVideo(input: GetVideoInput, context: AgentToolContext,
     credits: meteredCredits('video'),
     packet: (video) => singleVideoPacket(video, toolCallId),
   });
+  const data = packet.artifacts.find(item => item.type === 'youtube_video_metadata')?.data;
+  const captions = z.object({ status: z.literal('unavailable'), checkedAt: z.string().datetime() }).safeParse(data?.captionAvailability);
+  if (captions.success && isRecent(captions.data.checkedAt)) context.transcriptSelection?.unavailable.add(parsed.videoId);
+  const region = z.object({
+    availability: z.object({ restriction: z.literal('region') }),
+    metadataFetchedAt: z.string().datetime(),
+  }).safeParse(data);
+  if (region.success && isRecent(region.data.metadataFetchedAt) && context.transcriptSelection)
+    (context.transcriptSelection.regionRestricted ??= new Set()).add(parsed.videoId);
+  return packet;
 }
 
 function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
   const sourceId = `youtube:video:${safeIdPart(video.id)}`;
+  const observedCaptions = video.captionAvailability;
+  const captionAvailability = observedCaptions && isRecent(observedCaptions.checkedAt)
+    ? observedCaptions : { status: 'unknown' as const, languages: [] as string[], ...(observedCaptions ? { checkedAt: observedCaptions.checkedAt } : {}) };
+
   const freshness = z.object({
     state: z.enum(['fresh', 'stored', 'stale']), fetchedAt: z.number().finite(), reason: z.string().optional(),
   }).optional().safeParse('freshness' in video ? video.freshness : undefined);
@@ -80,6 +100,7 @@ function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<Evidence
         video.publishedTimeText ? `Published: ${video.publishedTimeText}` : undefined,
         video.durationText ? `Duration: ${video.durationText}` : undefined,
         `Availability: ${video.availability.status}`,
+        `Caption availability: ${captionAvailability.status}. Languages: ${captionAvailability.languages.join(', ') || 'none observed'}. Checked at: ${captionAvailability.checkedAt ?? 'not checked'}.`,
         video.description,
         video.keywords.length ? `Keywords: ${video.keywords.slice(0, 20).join(', ')}` : undefined,
       ].filter(Boolean).join('\n')),
@@ -95,8 +116,10 @@ function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<Evidence
         ...(video.signals ? { signals: video.signals } : {}),
         isLive: video.isLive,
         hasCaptions: video.hasCaptions,
+        captionAvailability,
         keywords: video.keywords.slice(0, 40),
         availability: video.availability,
+        metadataFetchedAt: video.meta.fetchedAt,
         ...(observation ? { freshness: observation } : {}),
       },
     }],

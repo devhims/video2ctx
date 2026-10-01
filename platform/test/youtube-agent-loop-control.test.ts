@@ -23,6 +23,8 @@ import { metadataForConversation } from '../src/agents/runtime/conversation-meta
 describe('YouTube AgentCore loop control', () => {
   it.each([
     { code: 'CAPTIONS_UNAVAILABLE', comparison: false, expected: ['video000003', 'video000004'] },
+    { code: 'REGION_RESTRICTED', comparison: false, expected: ['video000003', 'video000004'] },
+    { code: 'REGION_RESTRICTED', comparison: true, expected: [] },
     { code: 'UPSTREAM_ERROR', comparison: false, expected: [] },
     { code: 'CAPTIONS_UNAVAILABLE', comparison: true, expected: [] },
   ])('replaces captionless research sources only when appropriate ($code, comparison=$comparison)', async ({ code, comparison, expected }) => {
@@ -44,7 +46,7 @@ describe('YouTube AgentCore loop control', () => {
       if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
         input: JSON.stringify({ sources: [{ videoId: 'video000001' }, { videoId: 'video000002' }], focus: 'Practical tasks' }) });
       if (expected.length) {
-        expect(JSON.stringify(call.prompt)).toContain('CAPTIONS_UNAVAILABLE');
+        expect(JSON.stringify(call.prompt)).toContain(code);
         expect(JSON.stringify(call.prompt)).toContain('video000003');
       }
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
@@ -1842,3 +1844,62 @@ function providerWithVideo(): YouTubeAgentProvider {
 }
 
 function assetVersion(n: number) { return n.toString(16).padStart(64, '0'); }
+
+it.each([true, false])('preserves known country blocks and skips premarked replacement candidates (replace=%s)', async allowReplacement => {
+  const { createResearchVideoTranscriptsTool } = await import('../src/agents/providers/youtube/tools/research-video-transcripts');
+  const context = await transcriptResearchContext();
+  context.transcriptSelection = { allowReplacement, attempted: new Set(), unavailable: new Set(['video000002']),
+    regionRestricted: new Set(['video000001', 'video000003']) };
+  context.getEvidence = () => [{ packetId: 'candidates', kind: 'youtube_search',
+    sources: [2, 3, 4].map(n => ({ id: `s${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+    excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+      candidates: [2, 3, 4].map(n => ({ type: 'video', id: `video00000${n}` })),
+    } }],
+  }];
+  const tool = createResearchVideoTranscriptsTool(context);
+  const result = await tool.execute!({ sources: [{ videoId: 'video000001' }], focus: 'Research this topic' },
+    { toolCallId: 'known-region', messages: [], context: {} });
+  expect(result).toMatchObject({ skipped: [{ videoId: 'video000001', code: 'REGION_RESTRICTED',
+    ...(allowReplacement ? { replacementVideoId: 'video000004' } : {}) }] });
+  expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(allowReplacement ? ['video000004'] : []);
+  expect(JSON.stringify(result)).not.toContain('Analysis requires a complete');
+  if (allowReplacement) expect(result).toMatchObject({ failures: [] });
+});
+
+it('keeps metadata in conversation memory when caption languages exceed the cap', () => {
+  const packets = metadataForConversation([{ recordedAt: 2000, packet: {
+    packetId: 'large-language-list', kind: 'youtube_video',
+    sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' }], excerpts: [], warnings: [], usage: [],
+    artifacts: [{ type: 'youtube_video_metadata', data: { id: 'abcdefghijk', captionAvailability: {
+      status: 'available', languages: Array.from({ length: 110 }, (_, i) => `lang-${i}`),
+    } } }],
+  } }]);
+  expect(packets).toHaveLength(1);
+  expect((packets[0]!.artifacts[0]!.data.captionAvailability as { languages: string[] }).languages).toHaveLength(100);
+});
+
+it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('retains skipped reason after inspection times out (%s)', async code => {
+  const context = inspectContext();
+  const video = context.provider.video;
+  context.provider.video = async (...args) => {
+    const result = await video(...args);
+    return { ...result, value: { ...result.value, meta: { ...result.value.meta, fetchedAt: new Date().toISOString() },
+      ...(code === 'CAPTIONS_UNAVAILABLE'
+        ? { captionAvailability: { status: 'unavailable' as const, languages: [], checkedAt: new Date().toISOString() } }
+        : { availability: { ...result.value.availability, restriction: 'region' as const, status: 'UNPLAYABLE' } }),
+    } };
+  };
+  context.provider.transcript = vi.fn(async () => { throw new Error('Should skip provider'); });
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => {
+    if (step++ === 0) return modelResult({ toolCallId: 'metadata', toolName: 'get_video', input: JSON.stringify({ videoId: 'abcdefghijk' }) });
+    if (step === 2) return modelResult({ toolCallId: 'transcript', toolName: 'get_video_transcript', input: JSON.stringify({ videoId: 'abcdefghijk' }) });
+    throw new Error('Research phase timeout.');
+  } });
+  await expect(runResearchAgentWithModel({ model, context, message: 'Summarize this video',
+    decision: { route: 'inspect_video', videoId: 'abcdefghijk' } })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+  expect(context.provider.transcript).not.toHaveBeenCalled();
+  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    warnings: expect.arrayContaining([expect.objectContaining({ code })]),
+  }));
+});

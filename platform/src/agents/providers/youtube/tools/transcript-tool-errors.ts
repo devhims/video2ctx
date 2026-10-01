@@ -1,6 +1,7 @@
 type TranscriptToolErrorCode =
   | 'TRANSCRIPT_FETCH_FAILED'
   | 'CAPTIONS_UNAVAILABLE'
+  | 'REGION_RESTRICTED'
   | 'TRANSCRIPT_ANALYSIS_TIMEOUT'
   | 'TRANSCRIPT_ANALYSIS_INVALID_REFERENCE'
   | 'TRANSCRIPT_ANALYSIS_UNGROUNDED'
@@ -24,4 +25,8 @@ function errorMessage(error: unknown): string {
 export function captionsUnavailable(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && error.code === 'CAPTIONS_UNAVAILABLE';
+}
+
+export function regionRestricted(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'REGION_RESTRICTED';
 }

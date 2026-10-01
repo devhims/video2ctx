@@ -368,6 +368,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       attempted: new Set([...evidence.values()].filter(packet => packet.kind === 'youtube_transcript')
         .flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : []))),
       unavailable: new Set(),
+      regionRestricted: new Set(),
     },
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {

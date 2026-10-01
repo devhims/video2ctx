@@ -38,6 +38,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  frameTimingsMs?: { sessionLookup: number; retrieval: number; sessionPin: number };
   catalogVersions?: VideoAssetReference[];
   sessionReused?: boolean;
   assetVersions?: string[];
