@@ -2073,6 +2073,15 @@ export const openApiDocument = {
           properties: {
             keywords: { type: 'array', items: { type: 'string' } },
             availability: { type: 'object', additionalProperties: true },
+            captionAvailability: {
+              type: 'object', required: ['status', 'languages', 'checkedAt'],
+              description: 'Observed caption catalog availability, separate from the search CC badge. Missing or inconclusive observations are unknown; available does not guarantee a later download.',
+              properties: {
+                status: { type: 'string', enum: ['available', 'unavailable', 'unknown'] },
+                languages: { type: 'array', items: { type: 'string' } },
+                checkedAt: { type: 'string', format: 'date-time' },
+              },
+            },
             meta: schemaRef('SourceMetadata'),
           },
         }],

@@ -1,3 +1,4 @@
+import type { ExtractionAttempt } from '../../../../lib/extraction-diagnostics';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { frameRequestSchema, validateFrameResponse } from '../../../../lib/youtube-frames';
@@ -16,6 +17,12 @@ export function createGetVideoFramesTool(context: AgentToolContext) {
     description: 'Retrieve or reuse up to six video frames at millisecond timestamps. This performs no visual analysis. Returns saved assetVersions, dimensions, previews and failures, without image bytes. Use analyze_video_frames with those versions and a question. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
     inputSchema: getVideoFramesInputSchema.omit({ focus: true }),
     outputSchema: evidencePacketSchema,
+    toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
+      ...output, artifacts: output.artifacts.map(artifact => {
+        const { timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
+        return { ...artifact, data };
+      }),
+    }) }),
     execute: (input, { toolCallId }) => executeGetVideoFrames(input, context, toolCallId),
   });
 }
@@ -36,9 +43,11 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         throw new Error('Insufficient time for frame extraction and analysis. Finalize using the available evidence.');
       }
       const startedAt = Date.now();
+      const extractionDiagnostics: ExtractionAttempt[] = [];
       const response = await context.provider.frames(request, context.signal, { extractionTimeoutMs },
-        event => context.onExtractionDiagnostic?.({ ...event, toolCallId }));
+        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); });
       context.signal.throwIfAborted();
+      const providerMs = Date.now() - startedAt;
       const frames = validateFrameResponse(request, response.value);
       console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
         extractionMs: Date.now() - startedAt, extractionTimeoutMs,
@@ -49,7 +58,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         sources: [{ id: sourceId, provider: 'youtube', kind: 'frames', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
         excerpts: [],
         artifacts: [{ type: 'youtube_frame_retrieval', title: `Selected frames for ${parsed.videoId}`,
-          data: { sessionReused: response.sessionReused === true, videoId: parsed.videoId, requestedTimestampsMs: request.timestampsMs,
+          data: { timingsMs: { ...response.frameTimingsMs, provider: providerMs }, extractionDiagnostics, sessionReused: response.sessionReused === true, videoId: parsed.videoId, requestedTimestampsMs: request.timestampsMs,
             frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping), failures: frames.failures } }],
         warnings: [
           { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only. Timestamps identify requested seek positions.' },
@@ -59,6 +68,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         assetVersions: response.assetVersions,
         usage: [{ operation: 'frames', credits: response.sessionReused ? 0 : meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
+      const previewStarted = Date.now();
       if (context.saveFramePreviews) {
         try {
           const previews = z.array(framePreviewSchema).max(6).parse(
@@ -71,6 +81,10 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
             message: 'The frames were retrieved, but their image previews could not be saved.' });
         }
       }
+      const timingsMs = { ...response.frameTimingsMs, provider: providerMs,
+        previews: Date.now() - previewStarted, toolWork: Date.now() - startedAt };
+      packet.artifacts[0]!.data.timingsMs = timingsMs;
+      console.info(JSON.stringify({ event: 'frame_stage_timing', runId: context.runId, toolCallId, videoId: parsed.videoId, timingsMs }));
       context.signal.throwIfAborted();
       return packet;
     },

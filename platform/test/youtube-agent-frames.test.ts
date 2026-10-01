@@ -3,7 +3,7 @@ import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
-import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
+import { createGetVideoFramesTool, executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
@@ -120,4 +120,21 @@ describe('agent frame tool', () => {
     await executeGetVideoFrames(input, ctx, 'b');
     expect(keys[0]).toBe(keys[1]);
   });
+});
+
+test('stores frame timings and diagnostics without sending them to the model', async () => {
+  const ctx = context();
+  ctx.provider.frames = async (_request, _signal, _limits, diagnostic) => {
+    diagnostic?.({ ...extractionFixture, kind: 'frames' });
+    return { value: frames, cacheStatus: 'miss', frameTimingsMs: { sessionLookup: 2, retrieval: 10, sessionPin: 3 } };
+  };
+  const packet = await executeGetVideoFrames(input, ctx, 'timings');
+  expect(packet.artifacts[0]!.data.timingsMs).toMatchObject({ sessionLookup: 2, retrieval: 10, sessionPin: 3 });
+  expect(packet.artifacts[0]!.data.extractionDiagnostics).toHaveLength(1);
+  const output = await createGetVideoFramesTool(ctx).toModelOutput!({ toolCallId: 'timings', input: { ...input, maxWidth: 1920 }, output: packet });
+  expect(JSON.stringify(output)).not.toContain('timingsMs');
+  expect(JSON.stringify(output)).not.toContain('extractionDiagnostics');
+  expect(JSON.stringify(output)).toContain('requestedTimestampsMs');
+  expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
+  expect(packet.artifacts[0]!.data.extractionDiagnostics).toHaveLength(1);
 });

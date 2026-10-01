@@ -30,6 +30,7 @@ export interface AgentToolContext {
     allowReplacement: boolean;
     attempted: Set<string>;
     unavailable: Set<string>;
+    regionRestricted?: Set<string>;
   };
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;

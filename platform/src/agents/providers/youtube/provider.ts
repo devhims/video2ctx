@@ -28,7 +28,7 @@ import type { CachedResult } from '../../../lib/youtube';
 import type { TrendReport } from '../../../lib/trends';
 import { getProvider, type ProviderAdapter } from '../../../providers';
 
-export type AgentVideo = Video & { signals?: VideoSignals & { freshness?: Record<string, unknown> } };
+export type AgentVideo = Video & { captionAvailability?: { status: 'available' | 'unavailable' | 'unknown'; languages: string[]; checkedAt: string }; signals?: VideoSignals & { freshness?: Record<string, unknown> } };
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,

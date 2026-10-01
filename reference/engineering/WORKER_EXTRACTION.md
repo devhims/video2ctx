@@ -59,3 +59,67 @@ Safe attempt logs contain route, slot, outcome, duration, byte count and status,
 Local checks include the full platform and container suites, library packed-package tests, auth integration, documentation generation and Worker startup profiling. See `WORKER_EXTRACTION_RESULTS.md` for the deployed checks.
 
 Deploying the merged configuration enables Worker extraction by default. No additional toggle is required. Existing production proxy secrets are reused; local Worker extraction also requires a proxy setting. Watch success rate, latency, proxy usage and CPU for uncached operations after deployment. Sustained load testing and independent review of the new TLS dependency remain follow-up work. Set the switch back to `container` and deploy to roll back core extraction; retain processor bindings and image configuration throughout this rollout. There is no automatic container fallback in Worker mode.
+
+### Caption availability in video metadata
+
+Video metadata includes an optional `captionAvailability` observation with status
+`available`, `unavailable`, or `unknown`, track languages, and an ISO `checkedAt`.
+The Worker bundles the library source. Existing cached video records and the
+published processor fallback may omit the field; agents treat that as unknown.
+No schema migration or processor package upgrade is required for the default
+Worker path.
+
+The metadata player lookup tries the supported caption clients. Usable caption
+tracks establish availability without downloading caption text. If primary
+metadata is playable but no usable tracks are present, the desktop player is
+checked too. Only playable empty catalogs confirm absence. Restrictions,
+malformed track URLs, and failed desktop checks remain unknown. These additional
+metadata requests can increase get_video latency for videos without captions.
+
+The agent exposes the observation and languages in get_video. Observations older
+than five minutes become unknown in the tool result. Recent confirmed absence
+marks the video unavailable for this run. Single-video inspection then returns a
+non-error skipped result if transcript retrieval is requested anyway, without a
+provider request, transcript charge, or fabricated transcript evidence. Topic
+research retains its captionless-source replacement behavior. A positive status
+means tracks were observed, not that a future caption download is guaranteed.
+
+### Confirmed country restrictions
+
+An UNPLAYABLE caption response with an explicit country-block reason becomes
+`REGION_RESTRICTED`, not generic `UNAVAILABLE` or `CAPTIONS_UNAVAILABLE`. The
+Worker preserves the safe message and code in tool errors and diagnostics and
+does not repeat the operation across its proxy retry loop. Unrecognized or
+generic unavailability keeps the existing retry policy.
+
+Fresh video metadata with the same explicit country-block reason premarks the
+video as restricted for the current run. A restriction discovered by transcript
+retrieval is reported once and remembered for that run. Subsequent transcript
+requests return a skipped warning with no provider request or transcript charge,
+even if their language differs. Metadata older than five minutes cannot establish
+this guard. The restriction describes the current retrieval route, not worldwide
+availability or proof that captions are absent. No proxy secrets are changed.
+
+### Frame persistence and timings
+
+Frame catalog writes, session lookups, and session pins use the shared evidence
+I/O batch size of four. This changes storage concurrency only; it does not add
+YouTube download concurrency. Each batch settles every started operation before
+propagating an error. Generation checks before each pin, inside the evidence
+store, and after the batch prevent deleted evidence from returning. Successful
+shared catalog writes remain reusable if another frame write fails.
+
+Successful frame tool traces retain `timingsMs` for session lookup, provider
+retrieval, session pinning, previews, and total tool work. Extraction diagnostics
+also include `catalog_lookup` and `catalog_write` stages for container retrievals.
+Catalog write timings are emitted even when persistence throws. The provider
+measurement includes extraction and catalog storage; these nested durations must
+not be added together. Immediate model output and recovery summaries omit these
+debugging fields. The corresponding log event is `frame_stage_timing`.
+
+The motivating run `1e23b37e-1790-49c7-bd27-eddab6b64b6e` took 34.403 seconds
+for six frames, while its container diagnostic measured 11.272 seconds. The
+remaining time included catalog persistence and session attachment. Tests verify
+bounded overlap, ordering, failure settling, and deletion during frame pinning.
+A cold production run is still required to measure the speedup. This change does
+not promise a ten-second end-to-end result or alter FFmpeg extraction.

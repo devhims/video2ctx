@@ -222,51 +222,62 @@ export function sessionProvider(
             const times = [...new Set(request.timestampsMs)].sort((a, b) => a - b);
             const hits: CachedResult<VideoFrames>[] = [];
             const missing: number[] = [];
-            for (const time of times) {
+            const lookupStarted = Date.now();
+            const cached = await mapInBatches(times, async time => {
               const key = `frame:${request.videoId}:${maxWidth}:${time}`;
               const hit = !(refresh && !refreshed.has(key)) && (await store.lookup<VideoFrames>(key));
-              if (hit) hits.push(hit);
-              else missing.push(time);
+              return { time, hit };
+            });
+            const frameTimingsMs = { sessionLookup: Date.now() - lookupStarted, retrieval: 0, sessionPin: 0 };
+            for (const { time, hit } of cached) {
+              if (hit) hits.push(hit); else missing.push(time);
             }
             let fetched: CachedResult<VideoFrames> | undefined;
             if (missing.length) {
               // Batch misses once; successful images survive even if other timestamps fail.
+              const retrievalStarted = Date.now();
               fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
                 refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic);
+              frameTimingsMs.retrieval = Date.now() - retrievalStarted;
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
-              for (const frame of fetched.value.frames) {
+              const pinStarted = Date.now();
+              const fetchedResult = fetched;
+              const pinned = await mapInBatches(fetchedResult.value.frames, async frame => {
+                if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
                 const value: VideoFrames = {
-                  ...fetched.value,
+                  ...fetchedResult.value,
                   frames: [frame],
                   failures: [],
-                  meta: { ...fetched.value.meta, partial: false },
+                  meta: { ...fetchedResult.value.meta, partial: false },
                 };
                 refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
-                hits.push(
-                  await store.retrieve(
-                    `frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`,
-                    'frame',
-                    request.videoId,
-                    refresh,
-                    async () => ({
-                      value,
-                      cacheStatus: fetched!.cacheStatus,
-                      catalogVersions: fetched!.catalogVersions?.filter(
-                        (asset) =>
-                          asset.kind === 'frame' && asset.variant === `v1:${maxWidth}:${frame.timestampMs}`,
-                      ),
-                    }),
-                    () => ({
-                      timestampMs: frame.timestampMs,
-                      width: frame.width,
-                      height: frame.height,
-                      maxWidth,
-                    }),
-                  ),
+                return store.retrieve(
+                  `frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`,
+                  'frame',
+                  request.videoId,
+                  refresh,
+                  async () => ({
+                    value,
+                    cacheStatus: fetchedResult.cacheStatus,
+                    catalogVersions: fetchedResult.catalogVersions?.filter(
+                      (asset) =>
+                        asset.kind === 'frame' && asset.variant === `v1:${maxWidth}:${frame.timestampMs}`,
+                    ),
+                  }),
+                  () => ({
+                    timestampMs: frame.timestampMs,
+                    width: frame.width,
+                    height: frame.height,
+                    maxWidth,
+                  }),
                 );
-              }
+              });
+              if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
+              hits.push(...pinned);
+              frameTimingsMs.sessionPin = Date.now() - pinStarted;
             }
             return {
+              frameTimingsMs,
               value: framesSchema.parse({
                 videoId: request.videoId,
                 frames: hits.flatMap((r) => r.value.frames).sort((a, b) => a.timestampMs - b.timestampMs),

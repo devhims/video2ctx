@@ -643,3 +643,65 @@ describe('long transcript retrieval', () => {
     expect(analyze).toHaveBeenCalledWith(expect.objectContaining({ segments: original.segments }));
   });
 });
+
+describe('metadata caption preflight', () => {
+  it.each(['available', 'unknown', 'unavailable'] as const)('exposes %s and skips only confirmed absence', async status => {
+    const { executeGetVideo } = await import('../src/agents/providers/youtube/tools/get-video');
+    const transcriptFetch = vi.fn(async () => { throw new Error('unexpected provider call'); });
+    const ctx = toolContext({ video: async () => ({ cacheStatus: 'miss', value: {
+      ...video('abcdefghijk', 0), keywords: [], availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      captionAvailability: { status, languages: status === 'available' ? ['en'] : [], checkedAt: new Date().toISOString() },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }), transcript: transcriptFetch }, { mode: 'complete_transcript' });
+    ctx.transcriptSelection = { allowReplacement: false, attempted: new Set(), unavailable: new Set() };
+    const packet = await executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'metadata');
+    expect(JSON.stringify(evidencePacketForModel(packet))).toContain(`Caption availability: ${status}`);
+    expect(ctx.transcriptSelection.unavailable.has('abcdefghijk')).toBe(status === 'unavailable');
+    if (status === 'unavailable') {
+      const skipped = await executeGetVideoTranscript({ videoId: 'abcdefghijk' }, ctx, 'captions');
+      expect(skipped.warnings[0]?.code).toBe('CAPTIONS_UNAVAILABLE');
+      expect(skipped.excerpts).toEqual([]);
+      expect(skipped.usage).toEqual([]);
+      expect(transcriptFetch).not.toHaveBeenCalled();
+    }
+  });
+  it('does not suppress captions based on old cached absence', async () => {
+    const { executeGetVideo } = await import('../src/agents/providers/youtube/tools/get-video');
+    const ctx = toolContext({ video: async () => ({ cacheStatus: 'hit', value: {
+      ...video('abcdefghijk', 0), keywords: [], availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      captionAvailability: { status: 'unavailable', languages: [], checkedAt: new Date(Date.now() - 600_000).toISOString() },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }) });
+    ctx.transcriptSelection = { allowReplacement: false, attempted: new Set(), unavailable: new Set() };
+    await executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'metadata');
+    expect(ctx.transcriptSelection.unavailable.size).toBe(0);
+  });
+});
+
+test('preserves a region restriction and suppresses later transcript provider calls', async () => {
+  const transcript = vi.fn(async () => { throw Object.assign(new Error('Country restriction'), { code: 'REGION_RESTRICTED' }); });
+  const ctx = toolContext({ transcript }, { mode: 'complete_transcript' });
+  ctx.transcriptSelection = { allowReplacement: false, attempted: new Set(), unavailable: new Set() };
+  await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, ctx, 'first')).rejects.toMatchObject({ code: 'REGION_RESTRICTED' });
+  const skipped = await executeGetVideoTranscript({ videoId: 'abcdefghijk', language: 'en' }, ctx, 'retry');
+  expect(skipped.warnings[0]?.code).toBe('REGION_RESTRICTED');
+  expect(skipped.usage).toEqual([]);
+  expect(transcript).toHaveBeenCalledTimes(1);
+  expect(ctx.transcriptSelection.unavailable.size).toBe(0);
+});
+
+test.each([0, 600_000])('only recent country-restricted metadata suppresses a transcript (%i ms old)', async age => {
+  const { executeGetVideo } = await import('../src/agents/providers/youtube/tools/get-video');
+  const ctx = toolContext({ video: async () => ({ cacheStatus: 'hit', value: {
+    ...video('abcdefghijk', 0), keywords: [],
+    availability: { status: 'UNPLAYABLE', reason: 'The uploader has not made this video available in your country', playable: false, embeddable: false, isPrivate: false, isLive: false },
+    meta: { source: 'allthingsyoutube', fetchedAt: new Date(Date.now() - age).toISOString(), partial: true, warnings: [] },
+  } }) }, { mode: 'complete_transcript' });
+  ctx.transcriptSelection = { allowReplacement: false, attempted: new Set(), unavailable: new Set() };
+  await executeGetVideo({ videoId: 'abcdefghijk' }, ctx, 'metadata-region');
+  expect(ctx.transcriptSelection.regionRestricted?.has('abcdefghijk') ?? false).toBe(age === 0);
+  if (age === 0) {
+    const skipped = await executeGetVideoTranscript({ videoId: 'abcdefghijk' }, ctx, 'skip-region');
+    expect(skipped.warnings[0]?.code).toBe('REGION_RESTRICTED');
+  }
+});

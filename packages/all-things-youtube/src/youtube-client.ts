@@ -1158,6 +1158,9 @@ function captionAvailabilityError(raw: JsonObject): YouTubeClientError | undefin
   if (status === 'LOGIN_REQUIRED' || status === 'AGE_CHECK_REQUIRED' || status === 'CONTENT_CHECK_REQUIRED') {
     return new YouTubeClientError('AUTH_REQUIRED', 'YouTube requires authorization to read this video’s captions.');
   }
+  if (status === 'UNPLAYABLE' && /(?:not made (?:this |the )?video available in your country|not available in your country|blocked .*in your country)/i.test(reason)) {
+    return new YouTubeClientError('REGION_RESTRICTED', 'The uploader has not made this video available in the current request region.', { retryable: false });
+  }
   if (status === 'UNPLAYABLE' || status === 'ERROR' || status === 'LIVE_STREAM_OFFLINE') {
     return new YouTubeClientError('UNAVAILABLE', 'YouTube reports that this video is unavailable.');
   }
@@ -1547,7 +1550,25 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
     },
 
     async getVideo(videoId) {
-      const raw = await player(videoId, false);
+      const raw = await player(videoId, true);
+      let catalog = parseCaptionTracks(raw);
+      let captionStatus: 'available' | 'unavailable' | 'unknown' = 'unknown';
+      if (catalog.internal.some(track => captionUrl(track.baseUrl))) {
+        captionStatus = 'available';
+      } else if (!captionAvailabilityError(raw)) {
+        // Only playable primary AND desktop catalogs can confirm absence.
+        // Reuse the player response; never download caption bodies here.
+        const desktop = await desktopPlayer(videoId);
+        if (desktop.value) {
+          catalog = mergeCaptionCatalog(catalog, parseCaptionTracks(desktop.value.raw));
+          if (catalog.internal.some(track => captionUrl(track.baseUrl))) captionStatus = 'available';
+          else if (!catalog.internal.length && !captionAvailabilityError(desktop.value.raw)) captionStatus = 'unavailable';
+        }
+      }
+      const captionAvailability = { status: captionStatus,
+        languages: [...new Set(catalog.public.filter((_, index) => captionUrl(catalog.internal[index]!.baseUrl)).map(track => track.languageCode))],
+        checkedAt: new Date().toISOString() };
+
       const details = object(raw.videoDetails);
       const status = object(raw.playabilityStatus);
       const author = string(details.author) ?? 'Unknown channel';
@@ -1575,6 +1596,7 @@ export function createYouTubeClient(options: YouTubeClientOptions = {}): YouTube
         publishedTimeText: undefined,
         isLive: details.isLiveContent === true,
         url: `https://www.youtube.com/watch?v=${videoId}`,
+        captionAvailability,
         keywords: array(details.keywords).filter(
           (keyword): keyword is string => typeof keyword === 'string'
         ),

@@ -244,6 +244,11 @@ export interface EndscreenElement {
 }
 
 export interface Video extends VideoSummary {
+  captionAvailability?: {
+    status: 'available' | 'unavailable' | 'unknown';
+    languages: string[];
+    checkedAt: string;
+  };
   keywords: string[];
   availability: Availability;
   meta: SourceMetadata;
@@ -368,6 +373,7 @@ export type YouTubeErrorCode =
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
   | 'CAPTIONS_UNAVAILABLE'
+  | 'REGION_RESTRICTED'
   | 'UNAVAILABLE'
   | 'AUTH_REQUIRED'
   | 'RATE_LIMITED'
