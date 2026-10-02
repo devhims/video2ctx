@@ -294,6 +294,14 @@ export class SessionEvidenceStore implements SessionAccess {
       'SELECT kind, video_id, details_json FROM session_assets WHERE version=?', version).toArray()[0];
     return row ? this.overLimit({ kind: row.kind, videoId: row.video_id, details: JSON.parse(row.details_json) }) : undefined;
   }
+  /** Saved transcripts over the limit, from stored metadata only. Empty when no limit is set. */
+  overLimitTranscriptVersions(): string[] {
+    if (this.maxVideoSeconds === undefined) return [];
+    return this.sql.exec<{ version: string; video_id: string; details_json: string }>(
+      `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'`).toArray()
+      .filter((row) => this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
+      .map((row) => row.version);
+  }
   /** The same check for whatever version a reuse key currently points to. */
   transcriptOverLimitForKey(key: string): VideoTooLongError | undefined {
     const row = this.sql.exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key).toArray()[0];

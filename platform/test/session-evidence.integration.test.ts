@@ -868,3 +868,30 @@ test('evidence search skips a long transcript indexed before the limit and keeps
     expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).toEqual(expect.arrayContaining([shortId]));
     expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).not.toContain(longId);
   }));
+
+test('long transcript matches cannot crowd short-video matches out of the top 20', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-crowding'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-crowding/';
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const longId = 'longvideo02';
+    const shortId = 'shortvideo2';
+    // 100 short, separate passages across six hours: each becomes its own matching index row.
+    const long: Transcript = { ...transcript('Gold medal.'), videoId: longId,
+      segments: Array.from({ length: 100 }, (_, i) => ({ startMs: i * 215_000, endMs: i * 215_000 + 4_000, durationMs: 4_000, text: 'Gold medal.' })) };
+    const short = { ...transcript('Gold medal ceremony recap and team highlights.'), videoId: shortId };
+    const fetch = vi.fn(async (videoId: string) => ({ value: videoId === longId ? long : short, cacheStatus: 'miss' as const }));
+    await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
+    await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
+    await unlimited.ensureSearchIndexed();
+    const videos = (packets: EvidencePacket[]) => packets.flatMap(packet => packet.sources.map(source => source.videoId));
+
+    // Precondition: without the limit, the long transcript fills every one of the 20 slots.
+    const crowded = await unlimited.search.searchEvidence(unlimited, 'gold medal');
+    expect(crowded.packets).toHaveLength(20);
+    expect(videos(crowded.packets)).not.toContain(shortId);
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    expect(videos(found.packets)).toContain(shortId);
+    expect(videos(found.packets)).not.toContain(longId);
+  }));
