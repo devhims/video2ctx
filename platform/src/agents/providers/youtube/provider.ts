@@ -2,7 +2,7 @@ import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnosti
 import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
-import { getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
+import { ALL_COMMENTS_MAX_PAGES, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
 import { videoCatalog } from '../../../lib/video-catalog';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
@@ -105,10 +105,10 @@ export function createYouTubeAgentProvider(
       ? {value: await runYouTubeOperation(env, {kind:'transcript',id:videoId,lang:language,granularity:'word'}, onDiagnostic),cacheStatus:'miss'}
       : provider.getTranscript(env, videoId, language, onDiagnostic),
     comments: async (videoId, options = {}) => options.refresh && videoCatalog(env)
-      ? getVideoResource(env,options.all ? {kind:'all-comments',id:videoId,maxPages:100}
+      ? getVideoResource(env,options.all ? {kind:'all-comments',id:videoId,maxPages:ALL_COMMENTS_MAX_PAGES}
         : {kind:'comments',id:videoId,continuation:options.continuation},true)
       : options.refresh
-      ? {value: options.all ? await runYouTubeOperation(env, {kind:'all-comments',id:videoId,maxPages:100}) : await runYouTubeOperation(env, {kind:'comments',id:videoId,continuation:options.continuation}),cacheStatus:'miss'}
+      ? {value: options.all ? await runYouTubeOperation(env, {kind:'all-comments',id:videoId,maxPages:ALL_COMMENTS_MAX_PAGES}) : await runYouTubeOperation(env, {kind:'comments',id:videoId,continuation:options.continuation}),cacheStatus:'miss'}
       : options.all
       ? provider.getAllComments(env, videoId)
       : provider.getComments(env, videoId, options.continuation),

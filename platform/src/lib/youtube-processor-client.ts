@@ -125,6 +125,18 @@ export function processorSlotOrder(count: number, primary: number): number[] {
   return Array.from({ length: normalizedCount }, (_, offset) => (normalizedPrimary + offset) % normalizedCount);
 }
 
+/** Size of the configured proxy pool, or undefined when it cannot be read from this Worker. */
+function proxyPoolSize(env: Env): number | undefined {
+  const pool = env.OUTBOUND_PROXY_URLS?.trim();
+  if (!pool) return env.OUTBOUND_PROXY_URL?.trim() ? 1 : undefined;
+  try {
+    const parsed: unknown = JSON.parse(pool);
+    return Array.isArray(parsed) && parsed.length >= 1 && parsed.length <= MAX_INSTANCE_COUNT ? parsed.length : undefined;
+  } catch {
+    return undefined; // The processor rejects an invalid pool itself. Never expose its contents.
+  }
+}
+
 function maxAttempts(env: Env): number {
   return boundedInteger(env.YOUTUBE_PROCESSOR_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS, 1, MAX_INSTANCE_COUNT);
 }
@@ -248,12 +260,18 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   // Stable sort preserves random order among equally healthy processors.
   order.sort((a, b) => Number((health.get(a) ?? 0) > operationStartedAt) - Number((health.get(b) ?? 0) > operationStartedAt));
   const attempts = maxAttempts(env);
+  // Proxy choice is independent of the container instance, so retries walk the whole pool
+  // even when there are fewer processors than proxies. Without a readable pool, keep the
+  // historical pairing of egress slot and container slot.
+  const poolSize = proxyPoolSize(env);
+  const egressOrder = poolSize ? processorSlotOrder(poolSize, randomProcessorSlot(poolSize)) : undefined;
   const deadline = AbortSignal.timeout(processorTimeoutMs(env));
   let lastFailure: unknown;
   let upstreamFailure: YouTubeProcessorError | undefined;
   for (let index = 0; index < attempts; index += 1) {
     // Visit every configured slot before starting the next pass.
     const slot = order[index % order.length]!;
+    const egressSlot = egressOrder ? egressOrder[index % egressOrder.length]! : slot;
     const startedAt = Date.now();
     let outcome: ExtractionAttempt['outcome'] = 'transport_error';
     let capture: Pick<ExtractionAttempt, 'capture' | 'events' | 'droppedEvents'> = { capture: 'unavailable', events: [], droppedEvents: 0 };
@@ -265,7 +283,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     try {
       deadline.throwIfAborted();
       const response = await abortableContainerFetch(deadline, () => processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId, 'x-processor-egress-slot': String(slot) }, body, signal: deadline,
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId, 'x-processor-egress-slot': String(egressSlot) }, body, signal: deadline,
       })));
       status = response.status;
       outcome = 'failed';

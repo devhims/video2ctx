@@ -18,14 +18,13 @@ import {
 export const getVideoCommentsInputSchema = z.object({
   videoId: videoIdSchema,
   continuation: continuationSchema,
-  all: z.boolean().default(false),
 });
 
 export type GetVideoCommentsInput = z.infer<typeof getVideoCommentsInputSchema>;
 
 export function createGetVideoCommentsTool(context: AgentToolContext) {
   return tool({
-    description: 'Read comments for exactly one YouTube video. Use all=false for one page or all=true for the bounded newest-first collection.',
+    description: 'Read one page of comments for exactly one YouTube video, in YouTube\'s default ranking. Pass the returned continuation to read the next page only when the question needs more comments.',
     inputSchema: getVideoCommentsInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeGetVideoComments(input, context, toolCallId),
@@ -46,7 +45,6 @@ export function executeGetVideoComments(
     semanticInput: parsed,
     load: () => context.provider.comments(parsed.videoId, {
       continuation: parsed.continuation,
-      all: parsed.all,
     }),
     credits: meteredCredits('comments'),
     packet: (value) => {

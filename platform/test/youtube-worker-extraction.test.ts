@@ -1,4 +1,4 @@
-import { createWorkerExtractionRunner, workerProxyUrls, type WorkerExtractionDependencies } from '../src/lib/youtube-worker-extraction';
+import { createWorkerExtractionRunner, ROUTE_FIRST_RESPONSE_TIMEOUT_MS, workerProxyUrls, type WorkerExtractionDependencies } from '../src/lib/youtube-worker-extraction';
 import { executeWorkerYouTubeOperation, type WorkerYouTubeResult } from '../src/lib/youtube-worker-runtime';
 import { YouTubeProcessorError, runYouTubeOperation } from '../src/lib/youtube-processor-client';
 import type { Transcript, CaptionTrackList } from 'all-things-youtube';
@@ -215,4 +215,54 @@ test('a stalled transport close cannot hold the operation indefinitely', async (
   const pending = run(env(), operation);
   await vi.advanceTimersByTimeAsync(1001);
   await expect(pending).resolves.toBe(transcript);
+});
+
+test('a route that never answers moves to the next proxy after the first-response deadline', async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const execute = vi.fn<WorkerExtractionDependencies['execute']>(async (_op, fetchImpl) => {
+    // A library retry on the stalled route must fail at once, not wait again.
+    try { await fetchImpl('https://www.youtube.com/youtubei/v1/player'); }
+    catch { await fetchImpl('https://www.youtube.com/youtubei/v1/player'); }
+    return transcript;
+  });
+  const { run, proxyFetch, proxyTransport } = harness(execute);
+  proxyFetch.mockImplementation(async () => { calls++; return calls === 1 ? new Promise<Response>(() => {}) : Response.json({}); });
+  const diagnostics: ExtractionAttempt[] = [];
+  const pending = run(env(), operation, event => diagnostics.push(event));
+  await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS + 50);
+  await expect(pending).resolves.toBe(transcript);
+  expect(proxyTransport).toHaveBeenCalledTimes(2);
+  expect(proxyTransport.mock.calls[0]![0]).not.toEqual(proxyTransport.mock.calls[1]![0]);
+  expect(calls).toBe(2);
+  expect(diagnostics[0]).toMatchObject({ attempt: 1, outcome: 'fallback', failureKind: 'timeout' });
+});
+
+test('the first-response deadline ends once the route answers and is off on the last route', async () => {
+  vi.useFakeTimers();
+  const slowSecond = vi.fn<WorkerExtractionDependencies['execute']>(async (_op, fetchImpl) => {
+    await fetchImpl('https://www.youtube.com/a');
+    await fetchImpl('https://www.youtube.com/b');
+    return transcript;
+  });
+  const first = harness(slowSecond);
+  let call = 0;
+  first.proxyFetch.mockImplementation(async () => {
+    call++;
+    if (call === 2) await new Promise(resolve => setTimeout(resolve, ROUTE_FIRST_RESPONSE_TIMEOUT_MS * 2));
+    return Response.json({});
+  });
+  const answered = first.run(env(), operation);
+  await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS * 2 + 50);
+  await expect(answered).resolves.toBe(transcript);
+  expect(first.proxyTransport).toHaveBeenCalledTimes(1);
+
+  const only = harness(async (_op, fetchImpl) => { await fetchImpl('https://www.youtube.com/a'); return transcript; });
+  only.proxyFetch.mockImplementation(async () => {
+    await new Promise(resolve => setTimeout(resolve, ROUTE_FIRST_RESPONSE_TIMEOUT_MS * 2));
+    return Response.json({});
+  });
+  const last = only.run(env({ YOUTUBE_PROXY_MAX_ATTEMPTS: '1' }), operation);
+  await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS * 2 + 50);
+  await expect(last).resolves.toBe(transcript);
 });
