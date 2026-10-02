@@ -1,7 +1,7 @@
 import { downloadStoryboard, parseStoryboardSpec, readBoundedBytes, validateStoryboardOptions } from './storyboard';
 import { createYouTubeTransport } from './youtube-transport';
 import { WEB_PROFILE, PLAYER_PROFILES, extractInitialPlayerResponse } from './youtube-player';
-import { YouTubeClientError, type StoryboardOptions, type YouTubeClientOptions } from './youtube-types';
+import { isBotChallengeReason, YouTubeClientError, type StoryboardOptions, type YouTubeClientOptions } from './youtube-types';
 
 export interface StoryboardDiagnostic {
   stage: 'player' | 'download' | 'complete';
@@ -103,7 +103,11 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
       const playabilityStatus = typeof upstreamStatus === 'string' && statuses.has(upstreamStatus) ? upstreamStatus : 'UNKNOWN';
       const spec = parseStoryboardSpec(raw);
       const specState = spec ? 'valid' : object(raw.storyboards).playerStoryboardSpecRenderer !== undefined ? 'malformed' : 'missing';
+      const playabilityReason = object(raw.playabilityStatus).reason;
+      // A bot challenge blames the connection, not the video, so the caller can cool the proxy.
+      const botChallenge = typeof playabilityReason === 'string' && isBotChallengeReason(playabilityReason);
       emit({ stage: 'player', profile: profile.name, status, playabilityStatus, specState,
+        ...(botChallenge ? { failureReason: 'bot_challenge' as const } : {}),
         outcome: playabilityStatus === 'OK' && spec ? 'selected' : 'skipped', elapsedMs: Date.now() - startedAt });
       if (playabilityStatus !== 'OK') { uncertain = true; continue; }
       if (!spec) { malformed ||= specState === 'malformed'; continue; }

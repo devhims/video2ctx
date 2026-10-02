@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { errorDetails, redact } from '../diagnostics.mjs';
+import { diagnosticDetails, errorDetails, redact } from '../diagnostics.mjs';
 
 test('redacts URLs, auth headers, tokens and local paths while preserving error text', () => {
   const source = 'HTTP 403 Forbidden https://user:pass@host/video?sig=SIGNED\nAuthorization: Bearer AUTH\nCookie: session=COOKIE\npassword=PASS token=TOKEN\n/app/private/file.js:12';
@@ -36,4 +36,14 @@ test('retains successful source attribution without URLs or local files', async 
   const event = { stage: 'ffmpeg_success', profile: 'android', formatId: 18, candidateIndex: 1,
     timestampMs: 10000, width: 640, height: 360, sourceWidth: 640, sourceHeight: 360, elapsedMs: 42 };
   assert.deepEqual(diagnosticDetails({ ...event, url: 'https://signed.test/?sig=SECRET', path: '/tmp/frame.jpg' }), event);
+});
+
+test('turns a bot-challenge reason into a finite failure reason that survives a second pass', () => {
+  const challenged = diagnosticDetails({ stage: 'player_response', profile: 'WEB', status: 200, playabilityStatus: 'LOGIN_REQUIRED',
+    reason: 'Sign in to confirm you’re not a bot' });
+  assert.equal(challenged.failureReason, 'bot_challenge');
+  // The job prints details once and the server parses them again; the flag must survive.
+  assert.equal(diagnosticDetails({ ...challenged, reason: undefined }).failureReason, 'bot_challenge');
+  const age = diagnosticDetails({ stage: 'player_response', playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' });
+  assert.equal(age.failureReason, undefined);
 });

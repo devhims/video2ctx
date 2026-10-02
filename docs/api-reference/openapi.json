@@ -7330,7 +7330,8 @@
                             "enum": [
                               "live_or_unconfirmed_broadcast",
                               "invalid_proxy_configuration",
-                              "proxy_tunnel_failed"
+                              "proxy_tunnel_failed",
+                              "bot_challenge"
                             ]
                           },
                           "egress": {
@@ -8528,7 +8529,8 @@
                                 "enum": [
                                   "live_or_unconfirmed_broadcast",
                                   "invalid_proxy_configuration",
-                                  "proxy_tunnel_failed"
+                                  "proxy_tunnel_failed",
+                                  "bot_challenge"
                                 ]
                               },
                               "egress": {
@@ -10037,7 +10039,8 @@
                             "enum": [
                               "live_or_unconfirmed_broadcast",
                               "invalid_proxy_configuration",
-                              "proxy_tunnel_failed"
+                              "proxy_tunnel_failed",
+                              "bot_challenge"
                             ]
                           },
                           "egress": {
@@ -10958,7 +10961,8 @@
                             "enum": [
                               "live_or_unconfirmed_broadcast",
                               "invalid_proxy_configuration",
-                              "proxy_tunnel_failed"
+                              "proxy_tunnel_failed",
+                              "bot_challenge"
                             ]
                           },
                           "egress": {

@@ -121,3 +121,15 @@ test('passes a valid proxy order header to the job and ignores a malformed one',
   }
   assert.deepEqual(seen, [[2, 0, 3, 1], undefined, undefined, undefined]);
 });
+
+test('stored diagnostics keep the bot-challenge flag but not the reason text', async () => {
+  const app = createFrameApp(async (input, { onDiagnostic }) => {
+    onDiagnostic({ stage: 'player_response', profile: 'WEB', status: 200, playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' });
+    return { videoId: input.videoId };
+  });
+  const response = await app.request('/frames', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [1000] }) });
+  const body = await response.json();
+  assert.equal(body.diagnostics.events[0].failureReason, 'bot_challenge');
+  assert.equal(JSON.stringify(body.diagnostics).includes('not a bot'), false);
+});

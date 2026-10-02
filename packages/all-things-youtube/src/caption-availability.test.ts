@@ -15,15 +15,22 @@ const challenged = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sig
 describe('caption availability classification', () => {
   test('a bot challenge is an upstream failure, not missing captions', async () => {
     const { client } = fixture(challenged);
+    // The structured reason lets callers blame the connection; the code alone is ambiguous.
     await expect(client.getTranscript({ videoId: 'AR1Gi3RHanE' }))
-      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true, reason: 'bot_challenge' });
     await expect(client.getCaptionTracks('AR1Gi3RHanE'))
-      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true, reason: 'bot_challenge' });
+  });
+  test('an unavailable video carries no bot-challenge reason', async () => {
+    const { client } = fixture({ playabilityStatus: { status: 'UNPLAYABLE', reason: 'This video is private.' } });
+    const error = await client.getTranscript({ videoId: 'AR1Gi3RHanE' }).catch((value: unknown) => value);
+    expect(error).toMatchObject({ code: 'UNAVAILABLE' });
+    expect((error as { reason?: unknown }).reason).toBeUndefined();
   });
   test('a challenged desktop lookup cannot prove missing captions', async () => {
     const { client } = fixture(playable, challenged);
     await expect(client.getTranscript({ videoId: 'AR1Gi3RHanE' }))
-      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true, reason: 'bot_challenge' });
   });
   test('failed desktop metadata cannot prove missing captions', async () => {
     const { client } = fixture(playable, undefined, 429);

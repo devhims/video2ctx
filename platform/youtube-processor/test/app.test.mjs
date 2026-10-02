@@ -181,3 +181,22 @@ test('timing diagnostics correlate operations without logging transcript content
   assert.ok(timing.durationMs >= 0 && timing.processCpuMs >= 0 && timing.rssBytes > 0);
   assert.equal(JSON.stringify(logs).includes('private fixture text'), false);
 });
+
+test('a storyboard failure keeps the upstream 429 status on its terminal request event', async () => {
+  const { createYouTubeRuntime } = await import('../runtime.mjs');
+  const original = globalThis.fetch;
+  const spec = { playabilityStatus: { status: 'OK' }, storyboards: { playerStoryboardSpecRenderer: {
+    spec: 'https://i.ytimg.com/sb/abcdefghijk/L$L/$N.jpg?sigh=secret|160#90#30#5#5#10000#M$M#secret' } } };
+  globalThis.fetch = async input => String(input).includes('/sb/') ? new Response('limited', { status: 429 })
+    : String(input).includes('/watch?') ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(spec)};`) : Response.json(spec);
+  try {
+    const app = createProcessorApp(createYouTubeRuntime({}));
+    const response = await app.request('/operations', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'storyboard', id: 'abcdefghijk', maxSheets: 1 }) });
+    const body = await response.json();
+    assert.notEqual(response.status, 200);
+    const terminal = body.diagnostics.events.findLast(event => event.stage === 'request');
+    assert.equal(terminal.outcome, 'error');
+    assert.equal(terminal.status, 429);
+  } finally { globalThis.fetch = original; }
+});

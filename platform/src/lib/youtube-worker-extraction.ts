@@ -204,7 +204,10 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           lastFailure = failure;
           // An attempt deadline on a route that never answered is a stall, even on the last route.
           const stalled = !routeAnswered && attempt.signal.aborted && !deadline.aborted;
-          const health = failure.code === 'RATE_LIMITED' || rateLimited ? 'rate_limited'
+          // An HTTP-200 bot challenge arrives as UNAVAILABLE with a structured reason. A bare
+          // UNAVAILABLE stays ambiguous, since it also means the video itself is unavailable.
+          const botChallenge = (error as { reason?: unknown } | null)?.reason === 'bot_challenge';
+          const health = failure.code === 'RATE_LIMITED' || rateLimited || botChallenge ? 'rate_limited'
             : routeStalled || stalled || (transportFailed && !routeAnswered) ? 'route_failure'
               : routeAnswered && VIDEO_LEVEL_CODES.has(failure.code) ? 'success' : undefined;
           if (health) outcomes.push({ slot: route.slot, outcome: health });

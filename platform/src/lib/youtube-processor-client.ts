@@ -181,6 +181,11 @@ function healthFor(env: Env): Map<number, number> {
   return health;
 }
 
+/** True when an attempt's diagnostics show YouTube throttling or challenging the egress route. */
+export function throttled(events: ExtractionAttempt['events']): boolean {
+  return events.some(event => event.status === 429 || event.failureReason === 'bot_challenge');
+}
+
 function processorContainer(env: Env, slot: number) {
   const version = env.YOUTUBE_PROCESSOR_VERSION || 'v1';
   return getContainer<YouTubeProcessorContainer>(env.YOUTUBE_PROCESSOR, `${version}-${slot}`);
@@ -318,7 +323,11 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       lastFailure = error;
       failureKind = extractionFailureKind(error, deadline);
       const classified = error instanceof YouTubeProcessorError;
-      if (classified && error.code === 'RATE_LIMITED') proxyOutcomes.push({ slot: egressSlot, outcome: 'rate_limited' });
+      // The extractor retries 429s and then reports UPSTREAM_ERROR or UNAVAILABLE, so the code alone
+      // misses most throttling. The captured events keep the 429 status and any bot challenge.
+      if ((classified && (error.code === 'RATE_LIMITED' || error.status === 429)) || throttled(capture.events)) {
+        proxyOutcomes.push({ slot: egressSlot, outcome: 'rate_limited' });
+      }
       if (classified) status = error.status;
       const canRetry = !classified || shouldFallbackError(operation, error);
       retry = !deadline.aborted && index + 1 < attempts && canRetry;

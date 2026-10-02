@@ -235,6 +235,25 @@ describe('Worker extraction', () => {
     expect(health.store.get(keyA!)).toMatchObject({ strikes: 0 });
   });
 
+  test('an HTTP-200 caption bot challenge cools the proxy, and a plain UNAVAILABLE does not', async () => {
+    // The Worker bundles the repository's library source, not the published package.
+    const { YouTubeClientError } = await import('../../packages/all-things-youtube/src/youtube-types');
+    const [keyA] = await proxyKeys([urlA, urlB]);
+    for (const [reason, expected] of [['bot_challenge', [{ key: keyA, outcome: 'rate_limited' }]], [undefined, []]] as const) {
+      const health = fakeHealth();
+      // The library's real error shape: UNAVAILABLE after a 200 player response.
+      const challenged: WorkerExtractionDependencies['execute'] = async (_op, fetchImpl) => {
+        await fetchImpl('https://www.youtube.com/youtubei/v1/player');
+        throw new YouTubeClientError('UNAVAILABLE', 'YouTube blocked caption metadata with a bot challenge.', { retryable: true, ...(reason ? { reason } : {}) });
+      };
+      const run = createWorkerExtractionRunner({ execute: challenged, proxyTransport: () => ({ fetch: (async () => Response.json({})) as unknown as typeof fetch, close: async () => {} }) });
+      primaryZero();
+      await expect(run({ ...env(health), YOUTUBE_PROXY_MAX_ATTEMPTS: '1' } as unknown as Env, operation)).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+      expect(health.reports).toEqual(expected);
+      vi.restoreAllMocks();
+    }
+  });
+
   test('extraction works unchanged when the health object is unreachable', async () => {
     const { run } = runner(async () => Response.json({}));
     const unreachable = { getByName: () => { throw new Error('binding missing'); } } as unknown as Env['PROXY_HEALTH'];
@@ -250,6 +269,28 @@ describe('frames', () => {
     ], true)).toEqual([{ slot: 2, outcome: 'route_failure' }, { slot: 0, outcome: 'success' }]);
     expect(frameProxyOutcomes([{ stage: 'proxy', proxySlot: 1, attempt: 1 }], false, 'RATE_LIMITED')).toEqual([{ slot: 1, outcome: 'rate_limited' }]);
     expect(frameProxyOutcomes([{ stage: 'proxy', proxySlot: 1, attempt: 1 }], false, 'MEDIA_UNAVAILABLE')).toEqual([]);
+  });
+
+  test('player and media 429s and bot challenges are attributed to the selected proxy', () => {
+    const selected = { stage: 'proxy' as const, proxySlot: 1, attempt: 1 };
+    // Player 429 swallowed while loading candidates, ending as MEDIA_UNAVAILABLE.
+    expect(frameProxyOutcomes([selected, { stage: 'player_response', profile: 'IOS', status: 429 }], false, 'MEDIA_UNAVAILABLE'))
+      .toEqual([{ slot: 1, outcome: 'rate_limited' }]);
+    // Exhausted media-CDN 429s kept as media_http diagnostics.
+    expect(frameProxyOutcomes([selected, { stage: 'media_http', status: 429 }, { stage: 'media_http', status: 429 }], false, 'MEDIA_UNAVAILABLE'))
+      .toEqual([{ slot: 1, outcome: 'rate_limited' }]);
+    // A bot challenge flagged by the container.
+    expect(frameProxyOutcomes([selected, { stage: 'player_response', profile: 'WEB', status: 200, playabilityStatus: 'LOGIN_REQUIRED', failureReason: 'bot_challenge' }], false, 'MEDIA_UNAVAILABLE'))
+      .toEqual([{ slot: 1, outcome: 'rate_limited' }]);
+    // A 429 on the first proxy, a route failure, then success on the second.
+    expect(frameProxyOutcomes([{ stage: 'proxy', proxySlot: 0, attempt: 1 }, { stage: 'media_http', status: 429 },
+      { stage: 'proxy', proxySlot: 0, attempt: 1, code: 'PROXY_TUNNEL_FAILED' }, { stage: 'proxy', proxySlot: 2, attempt: 2 }], true))
+      .toEqual([{ slot: 0, outcome: 'rate_limited' }, { slot: 2, outcome: 'success' }]);
+    // Expired media URLs (403) and an age gate are not proxy signals.
+    expect(frameProxyOutcomes([selected, { stage: 'media_http', status: 403 }, { stage: 'player_response', playabilityStatus: 'LOGIN_REQUIRED' }], false, 'MEDIA_UNAVAILABLE'))
+      .toEqual([]);
+    // One throttled response on a job that still finished does not cool the proxy.
+    expect(frameProxyOutcomes([selected, { stage: 'player_response', status: 429 }], true)).toEqual([{ slot: 1, outcome: 'success' }]);
   });
 
   test('the Worker sends the health order and records a failed route from diagnostics', async () => {
@@ -273,6 +314,38 @@ describe('frames', () => {
 });
 
 describe('storyboards', () => {
+  async function storyboardOutcome(error: { code: string; status?: number }, events: object[]) {
+    const urls = ['http://a.test/', 'http://b.test/'];
+    const keys = await proxyKeys(urls);
+    const health = fakeHealth();
+    const env = {
+      YOUTUBE_PROCESSOR_INSTANCE_COUNT: '1', YOUTUBE_PROCESSOR_VERSION: 'test-v1', YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '1',
+      YOUTUBE_PROCESSOR_RETRY_BASE_MS: '0', YOUTUBE_PROCESSOR_TIMEOUT_MS: '5000', OUTBOUND_PROXY_URLS: JSON.stringify(urls), PROXY_HEALTH: health.binding,
+      YOUTUBE_PROCESSOR: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json(
+        { error: { ...error, message: 'Storyboard failed.', retryable: true }, diagnostics: { version: 1, droppedEvents: 0, events } }, { status: 502 }) }) },
+    } as unknown as Env;
+    primaryZero();
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' } as YouTubeOperation)).rejects.toBeDefined();
+    vi.restoreAllMocks();
+    return { reports: health.reports, keys };
+  }
+
+  test('sheet 429s, exhausted player 429s and bot challenges cool the proxy', async () => {
+    for (const [error, events] of [
+      [{ code: 'UPSTREAM_ERROR', status: 429 }, [{ stage: 'download', outcome: 'error', status: 429 }, { stage: 'request', outcome: 'error', code: 'UPSTREAM_ERROR', status: 429 }]],
+      [{ code: 'UNAVAILABLE' }, [{ stage: 'player', profile: 'IOS', status: 429, outcome: 'error', code: 'UPSTREAM_ERROR' }, { stage: 'request', outcome: 'error', code: 'UNAVAILABLE' }]],
+      [{ code: 'UNAVAILABLE' }, [{ stage: 'player', profile: 'WEB', status: 200, playabilityStatus: 'LOGIN_REQUIRED', failureReason: 'bot_challenge', outcome: 'skipped' }]],
+    ] as const) {
+      const { reports, keys } = await storyboardOutcome(error, [...events]);
+      expect(reports).toEqual([{ key: keys[0], outcome: 'rate_limited' }]);
+    }
+  });
+
+  test('an unavailable video without throttling evidence is not blamed on the proxy', async () => {
+    const { reports } = await storyboardOutcome({ code: 'UNAVAILABLE' }, [{ stage: 'player', profile: 'IOS', status: 200, playabilityStatus: 'UNPLAYABLE', outcome: 'skipped' }]);
+    expect(reports).toEqual([]);
+  });
+
   test('the egress order puts a cooling proxy last', async () => {
     const urls = ['http://a.test/', 'http://b.test/', 'http://c.test/', 'http://d.test/'];
     const keys = await proxyKeys(urls);

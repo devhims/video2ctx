@@ -11,18 +11,31 @@ export { frameRequestSchema, framesSchema, validateFrameResponse, type VideoFram
 
 /** Per-proxy outcomes from a frames attempt's stored diagnostics. Exported for tests. */
 export function frameProxyOutcomes(events: ExtractionAttempt['events'], succeeded: boolean, failureCode?: string): Array<{ slot: number; outcome: ProxyOutcome }> {
-  const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
+  // The container logs a proxy event when it selects a slot, and another if that route fails.
+  // Player and media events in between belong to the selected slot. A 429 or bot challenge there
+  // means YouTube throttled this exit, even when the job later reports MEDIA_UNAVAILABLE.
+  const slots = new Map<number, { throttled: boolean; routeFailed: boolean }>();
   let selected: number | undefined;
   for (const event of events) {
-    if (event.stage !== 'proxy' || event.proxySlot === undefined) continue;
-    // The container logs the selected slot first, then a failure event if that route failed.
-    if (event.code === 'PROXY_TUNNEL_FAILED' || event.failureReason === 'proxy_tunnel_failed') {
-      outcomes.push({ slot: event.proxySlot, outcome: 'route_failure' });
-      if (selected === event.proxySlot) selected = undefined;
-    } else selected = event.proxySlot;
+    if (event.stage === 'proxy' && event.proxySlot !== undefined) {
+      const state = slots.get(event.proxySlot) ?? { throttled: false, routeFailed: false };
+      slots.set(event.proxySlot, state);
+      if (event.code === 'PROXY_TUNNEL_FAILED' || event.failureReason === 'proxy_tunnel_failed') {
+        state.routeFailed = true;
+        if (selected === event.proxySlot) selected = undefined;
+      } else selected = event.proxySlot;
+      continue;
+    }
+    if (selected !== undefined && (event.status === 429 || event.failureReason === 'bot_challenge')) slots.get(selected)!.throttled = true;
   }
-  if (selected !== undefined && succeeded) outcomes.push({ slot: selected, outcome: 'success' });
-  if (selected !== undefined && failureCode === 'RATE_LIMITED') outcomes.push({ slot: selected, outcome: 'rate_limited' });
+  if (selected !== undefined && failureCode === 'RATE_LIMITED') slots.get(selected)!.throttled = true;
+  const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
+  for (const [slot, state] of slots) {
+    // A job that still finished on its proxy proves the route works; one throttled response is not a ban.
+    if (slot === selected && succeeded) outcomes.push({ slot, outcome: 'success' });
+    else if (state.throttled) outcomes.push({ slot, outcome: 'rate_limited' });
+    else if (state.routeFailed) outcomes.push({ slot, outcome: 'route_failure' });
+  }
   return outcomes;
 }
 
