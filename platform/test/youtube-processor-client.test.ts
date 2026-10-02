@@ -408,4 +408,54 @@ describe('YouTube processor client', () => {
       }),
     );
   });
+
+  test('retries walk every configured proxy even with fewer processor instances', async () => {
+    const containers: string[] = [];
+    const egress: string[] = [];
+    const env = {
+      YOUTUBE_PROCESSOR_INSTANCE_COUNT: '2',
+      YOUTUBE_PROCESSOR_VERSION: 'test-v1',
+      YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '4',
+      YOUTUBE_PROCESSOR_RETRY_BASE_MS: '0',
+      YOUTUBE_PROCESSOR_TIMEOUT_MS: '5000',
+      OUTBOUND_PROXY_URLS: JSON.stringify(['http://a.test', 'http://b.test', 'http://c.test', 'http://d.test']),
+      YOUTUBE_PROCESSOR: {
+        idFromName: (name: string) => name,
+        get: (id: string) => ({
+          fetch: async (request: Request) => {
+            containers.push(id);
+            egress.push(request.headers.get('x-processor-egress-slot')!);
+            return egress.length < 4
+              ? Response.json({ error: { code: 'UNAVAILABLE', retryable: true } }, { status: 503 })
+              : Response.json({ value: { videoId: 'abcdefghijk' } });
+          },
+        }),
+      },
+    } as unknown as Env;
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' } as YouTubeOperation)).resolves.toBeDefined();
+    expect(new Set(egress)).toEqual(new Set(['0', '1', '2', '3']));
+    // The two containers still alternate.
+    expect(new Set(containers).size).toBe(2);
+    expect(containers[0]).not.toBe(containers[1]);
+  });
+
+  test('an unreadable proxy pool keeps the egress slot paired with the container', async () => {
+    const pairs: Array<[string, string]> = [];
+    const env = {
+      YOUTUBE_PROCESSOR_INSTANCE_COUNT: '2', YOUTUBE_PROCESSOR_VERSION: 'test-v1', YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '2',
+      YOUTUBE_PROCESSOR_RETRY_BASE_MS: '0', YOUTUBE_PROCESSOR_TIMEOUT_MS: '5000', OUTBOUND_PROXY_URLS: 'not-json',
+      YOUTUBE_PROCESSOR: {
+        idFromName: (name: string) => name,
+        get: (id: string) => ({
+          fetch: async (request: Request) => {
+            pairs.push([id.split('-').at(-1)!, request.headers.get('x-processor-egress-slot')!]);
+            return Response.json({ error: { code: 'UNAVAILABLE', retryable: true } }, { status: 503 });
+          },
+        }),
+      },
+    } as unknown as Env;
+    await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' } as YouTubeOperation)).rejects.toBeDefined();
+    expect(pairs.length).toBe(2);
+    for (const [container, egressSlot] of pairs) expect(egressSlot).toBe(container);
+  });
 });

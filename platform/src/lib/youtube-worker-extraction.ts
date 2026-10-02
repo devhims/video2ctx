@@ -6,6 +6,8 @@ import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ATTEMPT_BYTES = 32 * 1024 * 1024;
+/** Time a proxy route gets to return its first response before the operation moves to the next proxy. */
+export const ROUTE_FIRST_RESPONSE_TIMEOUT_MS = 5_000;
 const SAFE_CODES = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'] as const;
 type SafeCode = typeof SAFE_CODES[number];
 
@@ -128,6 +130,15 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
         let failureKind: ExtractionAttempt['failureKind'];
         let status: number | undefined;
         let retry = false;
+        // Until this route answers once, a stalled request means a bad exit, not a slow upstream.
+        // The last route keeps only the attempt timeout, because failing it early leaves no alternative.
+        const firstResponseMs = index + 1 < routes.length ? ROUTE_FIRST_RESPONSE_TIMEOUT_MS : undefined;
+        let routeAnswered = false;
+        let routeStalled: YouTubeProcessorError | undefined;
+        // One timer per route, started by its first request. Any response clears it, so a slower
+        // concurrent request on a route that has already answered is never cut short.
+        let routeGuard: AbortController | undefined;
+        let routeGuardTimer: ReturnType<typeof setTimeout> | undefined;
         const events: ExtractionAttempt['events'] = [];
         let droppedEvents = 0;
         const record = (event: ExtractionAttempt['events'][number]) => { if (events.length < 64) events.push(event); else droppedEvents++; };
@@ -135,10 +146,30 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           transport = deps.proxyTransport(route.url);
           const fetchImpl = transport.fetch;
           const trackedFetch: typeof fetch = async (input, init = {}) => {
+            if (routeStalled) throw routeStalled;
             const requestSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
             const activeSignal = requestSignal ? AbortSignal.any([attemptSignal, requestSignal]) : attemptSignal;
             activeSignal.throwIfAborted();
-            const response = await abortable(activeSignal, () => fetchImpl(input, { ...init, signal: activeSignal }));
+            if (!routeAnswered && firstResponseMs !== undefined && !routeGuard) {
+              const guard = new AbortController();
+              routeGuard = guard;
+              routeGuardTimer = setTimeout(() => guard.abort(new DOMException('Route first response', 'TimeoutError')), firstResponseMs);
+            }
+            const guard = routeAnswered ? undefined : routeGuard;
+            const fetchSignal = guard ? AbortSignal.any([activeSignal, guard.signal]) : activeSignal;
+            let response: Response;
+            try {
+              response = await abortable(fetchSignal, () => fetchImpl(input, { ...init, signal: fetchSignal }));
+            } catch (error) {
+              if (guard?.signal.aborted && !activeSignal.aborted) {
+                // Latch the route so library retries on it fail at once instead of stalling again.
+                routeStalled ??= new YouTubeProcessorError('UPSTREAM_ERROR', 'The YouTube proxy route did not respond.', 503, true);
+                throw routeStalled;
+              }
+              throw error;
+            }
+            routeAnswered = true;
+            clearTimeout(routeGuardTimer);
             if (response.status === 429 || response.status >= 500) {
               const raw = response.headers.get('retry-after');
               const seconds = raw === null ? NaN : Number(raw);
@@ -166,17 +197,18 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             return value as YouTubeOperationResult<T>;
           }
         } catch (error) {
-          const failure = safeFailure(error, attemptSignal);
+          const failure = routeStalled ?? safeFailure(error, attemptSignal);
           lastFailure = failure;
           if (!['NOT_FOUND', 'INVALID_INPUT'].includes(failure.code)) upstreamFailure = failure;
           status = failure.status;
-          failureKind = extractionFailureKind(error, attemptSignal);
+          failureKind = routeStalled ? 'timeout' : extractionFailureKind(error, attemptSignal);
           retry = !deadline.aborted && index + 1 < routes.length && shouldFallbackError(operation, failure);
           outcome = retry ? 'fallback' : 'failed';
           record({ stage: 'request', outcome: 'error', code: SAFE_CODES.find(code => code === failure.code) ?? 'UNKNOWN', elapsedMs: Date.now() - started });
           if (!retry) throw operation.kind === 'transcript' && failure.code === 'NOT_FOUND' && upstreamFailure ? upstreamFailure : failure;
         } finally {
           clearTimeout(timer);
+          clearTimeout(routeGuardTimer);
           // Cancel any siblings left by a library Promise.all before changing egress.
           attempt.abort();
           if (transport) {

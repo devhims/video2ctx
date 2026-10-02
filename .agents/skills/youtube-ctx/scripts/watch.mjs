@@ -21984,22 +21984,28 @@ function routeStalled() {
 function firstResponseGuard(fetchImpl, timeoutMs) {
   if (timeoutMs === void 0) return fetchImpl;
   let proven = false;
+  let routeGuard;
+  let routeTimer;
   return async (input, init) => {
     if (proven) return fetchImpl(input, init);
-    const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    if (!routeGuard) {
+      const created = new AbortController();
+      routeGuard = created;
+      routeTimer = setTimeout(() => created.abort(), timeoutMs);
+      routeTimer.unref?.();
+    }
+    const guard = routeGuard;
     try {
       const response = await fetchImpl(input, {
         ...init,
-        signal: init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal
+        signal: init?.signal ? AbortSignal.any([init.signal, guard.signal]) : guard.signal
       });
       proven = true;
+      clearTimeout(routeTimer);
       return response;
     } catch (error) {
-      if (timeout.signal.aborted && !init?.signal?.aborted) throw routeStalled();
+      if (guard.signal.aborted && !init?.signal?.aborted) throw routeStalled();
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
   };
 }

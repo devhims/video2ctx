@@ -167,7 +167,7 @@ describe('platform YouTube container adapter', () => {
       { kind: 'video-signals', id: 'abcdefghijk' },
       { kind: 'transcript', id: 'abcdefghijk', lang: 'hi', granularity: 'word' },
       { kind: 'comments', id: 'abcdefghijk', continuation: 'COMMENTS_PAGE_2' },
-      { kind: 'all-comments', id: 'abcdefghijk', maxPages: 100 },
+      { kind: 'all-comments', id: 'abcdefghijk', maxPages: 5 },
       { kind: 'channel', id: '@ResearchLab' },
       { kind: 'channel-videos', id: '@ResearchLab', continuation: 'VIDEOS_PAGE_2', sort: 'popular' },
       {

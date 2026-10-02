@@ -980,7 +980,7 @@ export const openApiDocument = {
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
           queryParameter(
             'all',
-            'Fetch a bounded newest-first collection rather than one provider-default-ranked page. Inspect meta.partial and meta.warnings before treating the collection as complete.',
+            'Fetch up to five newest-first pages, about 100 comments, rather than one provider-default-ranked page. A crawl that reaches the limit returns what it collected with meta.partial set. Use continuation to page further.',
             { type: 'boolean', default: false },
           ),
         ],

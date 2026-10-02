@@ -89,6 +89,11 @@ describe('YouTube agent provider-operation tools', () => {
     expect(provider.search).not.toHaveBeenCalled();
     expect(provider.channelVideos).not.toHaveBeenCalled();
   });
+  it('reads one comments page even if a model still sends all=true', async () => {
+    const provider = providerFixture();
+    await executeGetVideoComments({ videoId: 'abcdefghijk', all: true } as never, toolContext(provider), 'comments-all');
+    expect(provider.comments).toHaveBeenCalledWith('abcdefghijk', { continuation: undefined });
+  });
   it('maps each added tool wrapper to exactly one provider operation', async () => {
     const provider = providerFixture();
     const context = toolContext(provider);
@@ -97,7 +102,7 @@ describe('YouTube agent provider-operation tools', () => {
       executeGetVideo({ videoId: 'abcdefghijk' }, context, 'video-1'),
       executeGetVideoTracks({ videoId: 'abcdefghijk' }, context, 'tracks-1'),
       executeGetVideoComments({
-        videoId: 'abcdefghijk', all: false,
+        videoId: 'abcdefghijk',
       }, context, 'comments-1'),
       executeGetChannel({ channelId: 'channel-1' }, context, 'channel-1'),
       executeGetChannelVideos({

@@ -2444,7 +2444,7 @@
             "name": "all",
             "in": "query",
             "required": false,
-            "description": "Fetch a bounded newest-first collection rather than one provider-default-ranked page. Inspect meta.partial and meta.warnings before treating the collection as complete.",
+            "description": "Fetch up to five newest-first pages, about 100 comments, rather than one provider-default-ranked page. A crawl that reaches the limit returns what it collected with meta.partial set. Use continuation to page further.",
             "schema": {
               "type": "boolean",
               "default": false

@@ -326,9 +326,16 @@ export async function getAllComments(env: Env, id: string) {
   return (await getAllCommentsWithCache(env, id)).value;
 }
 
+/**
+ * Upper bound for an all-comments crawl. Each page is one proxied YouTube request, and the crawl
+ * must finish inside one extraction attempt, so this stays small. A crawl that reaches it returns
+ * what it collected with meta.partial set.
+ */
+export const ALL_COMMENTS_MAX_PAGES = 5;
+
 export function getAllCommentsWithCache(env: Env, id: string, refresh = false) {
-  return cached(env, 'all-comments', `v6:${id}`, 15 * 60_000, {
-    kind: 'all-comments', id, maxPages: 100,
+  return cached(env, 'all-comments', `v7:${id}:p${ALL_COMMENTS_MAX_PAGES}`, 15 * 60_000, {
+    kind: 'all-comments', id, maxPages: ALL_COMMENTS_MAX_PAGES,
   }, undefined, refresh);
 }
 
