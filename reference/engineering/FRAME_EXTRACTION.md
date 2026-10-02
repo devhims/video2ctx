@@ -396,3 +396,15 @@ returning 522 for media, and healthy, visited all four and returned six frames i
 switched after the 5-second or 3-second check, and finished in 14.8 seconds; the
 other two used their first proxy. A pool of one URL keeps a single attempt with the
 longer timeouts.
+
+### Shared proxy health
+
+The Worker now picks the proxy order for each frames job from the shared
+`ProxyHealth` cooldowns and sends it in an `x-proxy-order` header. The container
+follows that order, skipping slots that fail during the job, and falls back to
+random selection when the header is missing or malformed. After the response, the
+Worker reads the `proxy` diagnostic events: a slot with a `PROXY_TUNNEL_FAILED`
+event is recorded as a route failure, the slot that served a successful job clears
+its cooldown, and a `RATE_LIMITED` job cools its slot for longer. With static ISP
+proxies a bad IP tends to stay bad, so this memory, not the per-job retry, is what
+stops later jobs from paying the 3 to 5 second check on the same proxy again.

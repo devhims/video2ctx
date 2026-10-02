@@ -1642,6 +1642,44 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/admin/proxy-health': {
+      get: {
+        tags: ['Administration'],
+        operationId: 'getAdminProxyHealth',
+        summary: 'Read outbound proxy cooldowns',
+        description: 'Per-slot cooldown state for the configured outbound proxy pool, shared by Worker extraction, storyboards and frames. Returns host and port only, never proxy credentials. Recoveries count successes that cleared a cooldown; routine successes are not recorded.',
+        security: [{ sessionCookie: [] }],
+        responses: {
+          '200': jsonResponse('Health of each configured proxy slot.', {
+            type: 'object', required: ['checkedAt', 'proxies'],
+            properties: {
+              checkedAt: { type: 'string', format: 'date-time' },
+              proxies: { type: 'array', items: {
+                type: 'object',
+                required: ['slot', 'host', 'port', 'cooling', 'coolingUntil', 'strikes', 'lastOutcome', 'lastFailureAt', 'lastRecoveryAt', 'routeFailures', 'rateLimited', 'recoveries'],
+                properties: {
+                  slot: { type: 'integer', minimum: 0, maximum: 3 },
+                  host: { type: 'string' },
+                  port: { type: ['string', 'null'] },
+                  cooling: { type: 'boolean', description: 'True while operations try this proxy after healthy ones.' },
+                  coolingUntil: { type: ['string', 'null'], format: 'date-time' },
+                  strikes: { type: 'integer', minimum: 0, description: 'Consecutive failures that escalated the cooldown.' },
+                  lastOutcome: { type: ['string', 'null'], enum: ['success', 'route_failure', 'rate_limited', null] },
+                  lastFailureAt: { type: ['string', 'null'], format: 'date-time' },
+                  lastRecoveryAt: { type: ['string', 'null'], format: 'date-time' },
+                  routeFailures: { type: 'integer', minimum: 0 },
+                  rateLimited: { type: 'integer', minimum: 0 },
+                  recoveries: { type: 'integer', minimum: 0 },
+                },
+              } },
+            },
+          }),
+          '401': responseRef('Unauthorized'),
+          '403': responseRef('Forbidden'),
+          '503': responseRef('ServiceUnavailable'),
+        },
+      },
+    },
     '/v1/account': {
       get: {
         tags: ['Account'],

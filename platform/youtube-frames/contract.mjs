@@ -6,6 +6,13 @@ export function invalidInput(message) {
   return Object.assign(new Error(message), { code: 'INVALID_INPUT', retryable: false });
 }
 
+// Worker-chosen proxy preference, healthiest first. Advisory: an unusable header is ignored.
+export function parseProxyOrder(value) {
+  if (typeof value !== 'string' || !/^[0-3](,[0-3]){0,3}$/.test(value)) return undefined;
+  const order = value.split(',').map(Number);
+  return new Set(order).size === order.length ? order : undefined;
+}
+
 export function parseFrameRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some(key => !['videoId', 'timestampsMs', 'maxWidth', 'extractionTimeoutMs'].includes(key))) {

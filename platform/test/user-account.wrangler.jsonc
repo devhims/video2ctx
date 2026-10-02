@@ -15,6 +15,10 @@
       {
         "name": "AGENT_RUNTIME",
         "class_name": "AgentRuntimeDO"
+      },
+      {
+        "name": "PROXY_HEALTH",
+        "class_name": "ProxyHealth"
       }
     ]
   },
@@ -23,7 +27,8 @@
       "tag": "v1",
       "new_sqlite_classes": [
         "UserAccountDO",
-        "AgentRuntimeDO"
+        "AgentRuntimeDO",
+        "ProxyHealth"
       ]
     }
   ],

@@ -59,6 +59,7 @@ interface __BaseEnv_Env {
 	MONITOR_SCHEDULER: DurableObjectNamespace<import("./src/index").MonitorScheduler>;
 	AGENT_RUNTIME: DurableObjectNamespace<import("./src/index").AgentRuntimeDO>;
 	USER_ACCOUNT: DurableObjectNamespace<import("./src/index").UserAccountDO>;
+	PROXY_HEALTH: DurableObjectNamespace<import("./src/index").ProxyHealth>;
 	IMPORT_WORKFLOW: Workflow<Parameters<import("./src/index").ImportWorkflow['run']>[0]['payload']>;
 	MONITOR_WORKFLOW: Workflow<Parameters<import("./src/index").MonitorWorkflow['run']>[0]['payload']>;
 }

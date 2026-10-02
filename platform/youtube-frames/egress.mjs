@@ -27,6 +27,7 @@ export function proxyConnections(environment) {
 export function createFrameTransport(environment, {
   select = randomInt,
   excludeSlots = [],
+  preferSlot,
   firstResponseTimeoutMs,
   createDispatcher = url => new ProxyAgent(url),
   fetch = undiciFetch,
@@ -37,7 +38,7 @@ export function createFrameTransport(environment, {
   if (!urls.length) return { fetch: directFetch, close: async () => {}, proxyConfigured: false };
   const slots = urls.map((_, index) => index).filter(index => !excludeSlots.includes(index));
   if (!slots.length) throw new Error("No alternate proxy available.");
-  const slot = slots[select(slots.length)];
+  const slot = slots.includes(preferSlot) ? preferSlot : slots[select(slots.length)];
   let failure;
   let proven = false;
   // One timer per route, started by its first request and cleared by any response, so a slower

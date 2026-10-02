@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { MAX_RESPONSE_BYTES, parseFrameRequest } from './contract.mjs';
 
 export async function runFrameJob(input, { signal, timeoutMs = 60_000,
-  extractionId = randomUUID(), log = logDiagnostic, onDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace } = {}) {
+  extractionId = randomUUID(), log = logDiagnostic, onDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace, proxyOrder } = {}) {
   const request = parseFrameRequest(input);
   // Leave time after the cooperative cutoff for FFmpeg shutdown and packaging.
   timeoutMs = Math.min(timeoutMs, (request.extractionTimeoutMs ?? 45_000) + 3_000);
@@ -18,6 +18,8 @@ export async function runFrameJob(input, { signal, timeoutMs = 60_000,
   try {
     onWorkspace?.(directory);
     await writeFile(join(directory, 'request.json'), JSON.stringify(request));
+    // Routing stays outside the request contract, so the job validates the request unchanged.
+    if (proxyOrder) await writeFile(join(directory, 'routing.json'), JSON.stringify({ proxyOrder }));
     await new Promise((resolve, reject) => {
       // A separate process group lets a deadline stop the job AND its FFmpeg children.
       const child = spawn(process.execPath, [jobPath, directory], {

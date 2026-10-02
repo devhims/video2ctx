@@ -4,9 +4,27 @@ import { getContainer } from '@cloudflare/containers';
 import { z } from 'zod';
 import type { YouTubeFramesContainer } from '../youtube-frames-container';
 import { ApiError, safeErrorLog } from './http';
+import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 
 import { frameRequestSchema, validateFrameResponse, type VideoFrames } from './youtube-frames-contract';
 export { frameRequestSchema, framesSchema, validateFrameResponse, type VideoFrames } from './youtube-frames-contract';
+
+/** Per-proxy outcomes from a frames attempt's stored diagnostics. Exported for tests. */
+export function frameProxyOutcomes(events: ExtractionAttempt['events'], succeeded: boolean, failureCode?: string): Array<{ slot: number; outcome: ProxyOutcome }> {
+  const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
+  let selected: number | undefined;
+  for (const event of events) {
+    if (event.stage !== 'proxy' || event.proxySlot === undefined) continue;
+    // The container logs the selected slot first, then a failure event if that route failed.
+    if (event.code === 'PROXY_TUNNEL_FAILED' || event.failureReason === 'proxy_tunnel_failed') {
+      outcomes.push({ slot: event.proxySlot, outcome: 'route_failure' });
+      if (selected === event.proxySlot) selected = undefined;
+    } else selected = event.proxySlot;
+  }
+  if (selected !== undefined && succeeded) outcomes.push({ slot: selected, outcome: 'success' });
+  if (selected !== undefined && failureCode === 'RATE_LIMITED') outcomes.push({ slot: selected, outcome: 'rate_limited' });
+  return outcomes;
+}
 
 async function withTransportDeadline<T>(timeoutMs: number, signal: AbortSignal | undefined,
   work: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -50,6 +68,10 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
   let failureKind: ExtractionAttempt['failureKind'];
   let finishAttempt: (outcome?: ExtractionAttempt['outcome']) => void = () => {};
   const slot = crypto.getRandomValues(new Uint32Array(1))[0]! % 2;
+  // The container walks this order and skips proxies that fail, so cooling proxies come last.
+  const pool = normalizedProxyUrls(env);
+  const proxyPlan = pool?.length ? await planProxyOrder(env, pool) : undefined;
+  const proxyOutcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
   try {
     return await withTransportDeadline(extractionTimeoutMs + 5_000, signal, async deadline => {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -71,13 +93,17 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
         };
         try {
           const response = await getContainer<YouTubeFramesContainer>(env.YOUTUBE_FRAMES, `v1-${(slot + attempt) % 2}`).fetch(
-            new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId },
+            new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId,
+              ...(proxyPlan ? { 'x-proxy-order': proxyPlan.order.join(',') } : {}) },
               body: JSON.stringify(input), signal: deadline }));
           responseStatus = response.status;
           stage = 'container_response';
           const payload = await boundedContainerJson(response, deadline);
           capture = extractionCapture(payload);
           outcome = 'failed';
+          if (response.ok || response.status !== 503 || !isBusy(payload)) {
+            proxyOutcomes.push(...frameProxyOutcomes(capture.events, response.ok, errorCode(payload)));
+          }
           deadline.throwIfAborted();
           if (!response.ok) {
             const failure = z.object({ error: z.object({ code: z.string().max(100), message: z.string().max(1000) }) }).safeParse(payload);
@@ -108,5 +134,16 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
     if (error instanceof ApiError) throw new ApiError(error.status, error.code, error.message, { extractionId });
     signal?.throwIfAborted();
     throw new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.', { extractionId });
+  } finally {
+    if (proxyPlan) await reportProxyOutcomes(env, proxyPlan, proxyOutcomes);
   }
+}
+
+function errorCode(payload: unknown): string | undefined {
+  const parsed = z.object({ error: z.object({ code: z.string().max(100) }) }).safeParse(payload);
+  return parsed.success ? parsed.data.error.code : undefined;
+}
+
+function isBusy(payload: unknown): boolean {
+  return errorCode(payload) === 'PROCESSOR_BUSY';
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { diagnosticDetails, errorDetails, logDiagnostic, structuredFailure } from './diagnostics.mjs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { parseFrameRequest } from './contract.mjs';
+import { parseFrameRequest, parseProxyOrder } from './contract.mjs';
 import { runFrameJob } from './runtime.mjs';
 
 export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) {
@@ -18,6 +18,7 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
       c.header('Retry-After', '1');
       return c.json({ error: { code: 'PROCESSOR_BUSY', message: 'The frame processor is busy.', retryable: true } }, 503);
     }
+    const proxyOrder = parseProxyOrder(c.req.header('x-proxy-order'));
     const suppliedId = c.req.header('x-extraction-id');
     const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
     c.header('x-extraction-id', extractionId);
@@ -35,7 +36,7 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
     };
     active = true;
     try {
-      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log: safeLog, onDiagnostic: capture }), diagnostics });
+      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log: safeLog, onDiagnostic: capture, ...(proxyOrder ? { proxyOrder } : {}) }), diagnostics });
     } catch (error) {
       const code = typeof error.code === 'string' ? error.code : 'FRAME_EXTRACTION_FAILED';
       const status = code === 'INVALID_INPUT' ? 422 : code === 'NOT_FOUND' ? 404 : code === 'RATE_LIMITED' ? 429

@@ -12,7 +12,7 @@ export const MAX_PROXY_ATTEMPTS = 4;
 // All attempts share one wall-clock budget. Never silently bypass the proxy.
 export async function extractWithProxyFallback(request, {
   extractFrames, environment = process.env, onDiagnostic = () => {},
-  transportFactory = createFrameTransport, now = Date.now,
+  transportFactory = createFrameTransport, now = Date.now, proxyOrder,
 }) {
   const deadline = now() + (request.extractionTimeoutMs ?? 45_000);
   const pool = proxyConnections(environment);
@@ -22,8 +22,11 @@ export async function extractWithProxyFallback(request, {
     // Probe only while another proxy remains. The final route keeps the longer library and
     // FFmpeg timeouts, because failing it fast leaves nothing to switch to.
     const alternateAvailable = attempt < maxAttempts;
+    // Follow the Worker's health order when it sent one; otherwise pick at random as before.
+    const preferSlot = proxyOrder?.find(slot => slot < pool.length && !failedSlots.includes(slot));
     const transport = transportFactory(environment, {
       excludeSlots: [...failedSlots],
+      ...(preferSlot !== undefined ? { preferSlot } : {}),
       ...(alternateAvailable ? { firstResponseTimeoutMs: ROUTE_FIRST_RESPONSE_TIMEOUT_MS } : {}),
     });
     let routeFailed = false;
