@@ -20,8 +20,14 @@ export interface ProxyHealthEntry {
 
 export interface ProxyReport { key: string; outcome: ProxyOutcome }
 
-export const PROXY_HEALTH_LOOKUP_TIMEOUT_MS = 150;
-export const PROXY_HEALTH_REPORT_TIMEOUT_MS = 250;
+// A single global object can be a cross-region round trip away, and slower again when it wakes
+// from eviction, so lookups get 500 ms. The isolate cache below keeps most operations off it.
+export const PROXY_HEALTH_LOOKUP_TIMEOUT_MS = 500;
+export const PROXY_HEALTH_REPORT_TIMEOUT_MS = 500;
+/** How long an isolate reuses a lookup. Short against cooldowns of 2 minutes or more. */
+export const PROXY_HEALTH_CACHE_MS = 10_000;
+/** After a failed lookup, skip the object for this long so an outage costs one wait, not one per operation. */
+export const PROXY_HEALTH_RETRY_AFTER_FAILURE_MS = 10_000;
 const MINUTE = 60_000;
 // Tunnel failures on residential exits are often brief. Rate limits and bot checks on a static IP
 // last longer, and cooling the IP also lowers the request rate YouTube sees from it.
@@ -143,21 +149,45 @@ export interface ProxyPlan {
   entries: Array<ProxyHealthEntry | undefined>;
   /** False when the lookup failed and the order is the plain random rotation. */
   informed: boolean;
+  /** Where the entries came from, and how long a call to the object took when one was made. */
+  source: 'cache' | 'object' | 'fallback';
+  lookupMs?: number;
 }
+
+// Per-isolate state, keyed by the binding so separate environments never share it. Bounded to
+// one pool snapshot per binding, holding hashes and cooldown numbers only.
+interface IsolateHealth { poolKey: string; at: number; entries: Record<string, ProxyHealthEntry>; failedAt?: number }
+const isolateHealth = new WeakMap<object, IsolateHealth>();
 
 /** Health-aware slot order for one operation. Never throws. */
 export async function planProxyOrder(env: ProxyHealthEnv, urls: readonly string[], now = Date.now()): Promise<ProxyPlan> {
   const primary = randomSlot(urls.length);
-  let keys: string[] = [];
+  const fallback = (keys: string[], lookupMs?: number): ProxyPlan =>
+    ({ order: healthOrder(urls.length, primary, [], now), keys, entries: [], informed: false, source: 'fallback', lookupMs });
   // Without the binding there is nothing to consult, so skip hashing on the request path.
-  if (!env.PROXY_HEALTH) return { order: healthOrder(urls.length, primary, [], now), keys, entries: [], informed: false };
-  try {
-    keys = await proxyKeys(urls);
-    const stored = await within(PROXY_HEALTH_LOOKUP_TIMEOUT_MS, () => healthStub(env).lookup(keys));
+  if (!env.PROXY_HEALTH) return fallback([]);
+  let keys: string[] = [];
+  try { keys = await proxyKeys(urls); } catch { return fallback([]); }
+  const poolKey = keys.join(',');
+  const cached = isolateHealth.get(env.PROXY_HEALTH);
+  const informed = (stored: Record<string, ProxyHealthEntry>, source: ProxyPlan['source'], lookupMs?: number): ProxyPlan => {
     const entries = keys.map(key => stored[key]);
-    return { order: healthOrder(urls.length, primary, entries, now), keys, entries, informed: true };
+    return { order: healthOrder(urls.length, primary, entries, now), keys, entries, informed: true, source, lookupMs };
+  };
+  if (cached?.poolKey === poolKey && now - cached.at < PROXY_HEALTH_CACHE_MS) return informed(cached.entries, 'cache');
+  const known = cached?.poolKey === poolKey ? cached.entries : {};
+  // While paused, plan from what this isolate last knew, including failures it saw itself.
+  if (cached?.failedAt !== undefined && now - cached.failedAt < PROXY_HEALTH_RETRY_AFTER_FAILURE_MS) {
+    return Object.keys(known).length ? informed(known, 'cache') : fallback(keys);
+  }
+  const started = Date.now();
+  try {
+    const stored = await within(PROXY_HEALTH_LOOKUP_TIMEOUT_MS, () => healthStub(env).lookup(keys));
+    isolateHealth.set(env.PROXY_HEALTH, { poolKey, at: Date.now(), entries: stored });
+    return informed(stored, 'object', Date.now() - started);
   } catch {
-    return { order: healthOrder(urls.length, primary, [], now), keys, entries: [], informed: false };
+    isolateHealth.set(env.PROXY_HEALTH, { poolKey, at: 0, entries: known, failedAt: Date.now() });
+    return fallback(keys, Date.now() - started);
   }
 }
 
@@ -183,6 +213,14 @@ export async function reportProxyOutcomes(env: ProxyHealthEnv, plan: ProxyPlan, 
   }
   const reports: ProxyReport[] = [...latest].map(([key, outcome]) => ({ key, outcome }));
   if (!reports.length) return;
+  // Apply locally first, so this isolate avoids a proxy it just saw fail even if the write is lost.
+  const cached = env.PROXY_HEALTH ? isolateHealth.get(env.PROXY_HEALTH) : undefined;
+  if (cached && cached.poolKey === plan.keys.join(',')) {
+    const now = Date.now();
+    for (const { key, outcome } of reports) cached.entries = { ...cached.entries, [key]: applyOutcome(cached.entries[key], outcome, now) };
+  }
+  // While the object is known to be failing, the local record is all this isolate can keep.
+  if (cached?.failedAt !== undefined && Date.now() - cached.failedAt < PROXY_HEALTH_RETRY_AFTER_FAILURE_MS) return;
   try { await within(PROXY_HEALTH_REPORT_TIMEOUT_MS, () => healthStub(env).report(reports)); }
   catch { /* Health is advisory. Losing a report only costs a later operation one slow attempt. */ }
 }

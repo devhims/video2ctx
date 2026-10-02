@@ -225,7 +225,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             await abortable(AbortSignal.any([deadline, AbortSignal.timeout(1000)]), () => closing).catch(() => undefined);
           }
           const elapsedMs = Date.now() - started;
-          console.info(JSON.stringify({ event: 'youtube_worker_attempt', extractionId, operation: operation.kind, attempt: index + 1, egress: route.egress, slot: route.slot, elapsedMs, outcome, status, failureKind, bytesRead, healthInformed: plan.informed, cooling: (plan.entries[route.slot]?.until ?? 0) > started }));
+          console.info(JSON.stringify({ event: 'youtube_worker_attempt', extractionId, operation: operation.kind, attempt: index + 1, egress: route.egress, slot: route.slot, elapsedMs, outcome, status, failureKind, bytesRead, healthInformed: plan.informed, healthSource: plan.source, healthLookupMs: plan.lookupMs, cooling: (plan.entries[route.slot]?.until ?? 0) > started }));
           if (operation.kind === 'transcript') emitExtractionDiagnostic(onDiagnostic, { version: 1, kind: 'transcript', videoId: operation.id, extractionId, backend: 'worker', egress: route.egress, attempt: index + 1, slot: route.slot, recordedAt: Date.now(), elapsedMs, outcome, status, failureKind, capture: 'available', events: events.slice(), droppedEvents });
         }
         if (retry) {

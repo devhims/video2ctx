@@ -1,6 +1,6 @@
 import {
   applyOutcome, healthOrder, normalizedProxyUrls, planProxyOrder, proxyKeys, reportProxyOutcomes,
-  PROXY_HEALTH_LOOKUP_TIMEOUT_MS, type ProxyHealthEntry, type ProxyReport,
+  PROXY_HEALTH_CACHE_MS, PROXY_HEALTH_LOOKUP_TIMEOUT_MS, PROXY_HEALTH_RETRY_AFTER_FAILURE_MS, type ProxyHealthEntry, type ProxyReport,
 } from '../src/lib/proxy-health';
 import { createWorkerExtractionRunner, workerProxyUrls, type WorkerExtractionDependencies } from '../src/lib/youtube-worker-extraction';
 import { YouTubeProcessorError, runYouTubeOperation, type YouTubeOperation } from '../src/lib/youtube-processor-client';
@@ -12,17 +12,18 @@ const urlA = 'http://user:secret@proxy-a.example:10001/';
 const urlB = 'http://user:secret@proxy-b.example:10002/';
 
 /** In-memory stand-in for the Durable Object, using the real cooldown policy. */
-function fakeHealth(initial: Record<string, ProxyHealthEntry> = {}, options: { lookup?: () => Promise<never> } = {}) {
+function fakeHealth(initial: Record<string, ProxyHealthEntry> = {}, options: { lookup?: (keys: string[]) => Promise<Record<string, ProxyHealthEntry>> } = {}) {
   const store = new Map(Object.entries(initial));
   const reports: ProxyReport[] = [];
   const stub = {
-    lookup: options.lookup ?? (async (keys: string[]) => Object.fromEntries(keys.filter(key => store.has(key)).map(key => [key, store.get(key)!]))),
-    report: async (batch: ProxyReport[]) => {
+    lookup: vi.fn(options.lookup ?? (async (keys: string[]) => Object.fromEntries(keys.filter(key => store.has(key)).map(key => [key, store.get(key)!])))),
+    report: vi.fn(async (batch: ProxyReport[]) => {
       reports.push(...batch);
       for (const { key, outcome } of batch) store.set(key, applyOutcome(store.get(key), outcome, Date.now()));
-    },
+    }),
   };
-  return { store, reports, binding: { getByName: () => stub } as unknown as Env['PROXY_HEALTH'] };
+  // A fresh binding object per fake, so the per-isolate cache never leaks between tests.
+  return { store, reports, stub, binding: { getByName: () => stub } as unknown as Env['PROXY_HEALTH'] };
 }
 
 function cooling(now = Date.now()): ProxyHealthEntry {
@@ -134,6 +135,41 @@ describe('plan and report', () => {
     await reportProxyOutcomes({ PROXY_HEALTH: health.binding }, { ...plan, keys: await proxyKeys([urlA]) }, [{ slot: 0, outcome: 'success' }]);
     expect(health.reports).toEqual([]);
     await expect(reportProxyOutcomes({} as Env, { ...plan, keys: await proxyKeys([urlA]) }, [{ slot: 0, outcome: 'route_failure' }])).resolves.toBeUndefined();
+  });
+});
+
+describe('isolate cache', () => {
+  test('lookups are reused for the cache window, then refreshed', async () => {
+    const health = fakeHealth();
+    const env = { PROXY_HEALTH: health.binding };
+    const now = Date.now();
+    expect((await planProxyOrder(env, [urlA, urlB], now)).source).toBe('object');
+    expect((await planProxyOrder(env, [urlA, urlB], now + 1000)).source).toBe('cache');
+    expect(health.stub.lookup).toHaveBeenCalledTimes(1);
+    expect((await planProxyOrder(env, [urlA, urlB], Date.now() + PROXY_HEALTH_CACHE_MS + 1)).source).toBe('object');
+    expect(health.stub.lookup).toHaveBeenCalledTimes(2);
+  });
+  test('a failed lookup pauses calls to the object, and reports stay local meanwhile', async () => {
+    const health = fakeHealth({}, { lookup: async () => { throw new Error('overloaded'); } });
+    const env = { PROXY_HEALTH: health.binding };
+    const first = await planProxyOrder(env, [urlA, urlB]);
+    expect(first).toMatchObject({ source: 'fallback', informed: false });
+    await planProxyOrder(env, [urlA, urlB]);
+    expect(health.stub.lookup).toHaveBeenCalledTimes(1);
+    await reportProxyOutcomes(env, first, [{ slot: 0, outcome: 'route_failure' }]);
+    expect(health.stub.report).not.toHaveBeenCalled();
+    // The local record still steers this isolate away from the proxy it saw fail.
+    expect(await planProxyOrder(env, [urlA, urlB])).toMatchObject({ source: 'cache', order: [1, 0] });
+    await planProxyOrder(env, [urlA, urlB], Date.now() + PROXY_HEALTH_RETRY_AFTER_FAILURE_MS + 1);
+    expect(health.stub.lookup).toHaveBeenCalledTimes(2);
+  });
+  test('a reported failure applies to this isolate at once, without waiting for the next lookup', async () => {
+    const health = fakeHealth();
+    const env = { PROXY_HEALTH: health.binding };
+    const plan = await planProxyOrder(env, [urlA, urlB]);
+    await reportProxyOutcomes(env, plan, [{ slot: 0, outcome: 'route_failure' }]);
+    for (let i = 0; i < 4; i++) expect(await planProxyOrder(env, [urlA, urlB])).toMatchObject({ source: 'cache', order: [1, 0] });
+    expect(health.stub.lookup).toHaveBeenCalledTimes(1);
   });
 });
 
