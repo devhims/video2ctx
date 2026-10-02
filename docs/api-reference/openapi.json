@@ -7123,6 +7123,12 @@
             "type": "string",
             "format": "uuid",
             "description": "Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn."
+          },
+          "timeZone": {
+            "type": "string",
+            "maxLength": 64,
+            "example": "Asia/Kolkata",
+            "description": "Optional IANA time zone. The agent interprets relative dates such as today, this week, and this year from the date in this zone when the run is admitted. Defaults to UTC. An unrecognized zone returns 422."
           }
         }
       },

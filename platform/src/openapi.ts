@@ -2248,6 +2248,7 @@ export const openApiDocument = {
           sessionId: { type: 'string', format: 'uuid', description: 'Continue an existing agent session.' },
           conversationId: { type: 'string', format: 'uuid', deprecated: true, description: 'Deprecated request alias for sessionId. If both are supplied, they must match. Responses return only sessionId.' },
           parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
+          timeZone: { type: 'string', maxLength: 64, example: 'Asia/Kolkata', description: 'Optional IANA time zone. The agent interprets relative dates such as today, this week, and this year from the date in this zone when the run is admitted. Defaults to UTC. An unrecognized zone returns 422.' },
         },
       },
       AdminToolTrace:z.toJSONSchema(toolCallDetailSchema,{target:'openapi-3.0'}),

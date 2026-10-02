@@ -61,6 +61,7 @@ import {
   type AgentModelUsageEntry,
 } from './runtime/model-budget';
 import type { EvidenceToolExecution } from './providers/youtube/tool-context';
+import { currentDateGuidance } from './runtime/current-date';
 import {
   conversationReadInputSchema,
   type AgentConversationMessage,
@@ -98,6 +99,7 @@ interface RunRow {
   error: string | null;
   credits_remaining_at_admission: number;
   billing_settled: number;
+  time_zone: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -361,12 +363,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       INSERT INTO agent_runs (
         id, user_id, conversation_id, parent_message_id,
         user_message_id, agent_message_id, turn_ordinal, message, execution_message, status, phase,
-        result_json, error, credits_remaining_at_admission, created_at, updated_at
+        result_json, error, credits_remaining_at_admission, time_zone, created_at, updated_at
       ) VALUES (
         ${runId}, ${parsedAdmission.userId}, ${conversationId},
         ${parentMessageId}, ${userMessageId}, ${agentMessageId}, ${turnOrdinal},
         ${parsedRequest.message}, ${retry ? retry.execution_message ?? retry.message : null}, 'pending', 'admitted', null, null,
-        ${parsedAdmission.creditsRemaining}, ${timestamp}, ${timestamp}
+        ${parsedAdmission.creditsRemaining}, ${parsedRequest.timeZone ?? null}, ${timestamp}, ${timestamp}
       )
     `;
     this.recordEvent(runId, 'run.started', { runId, conversationId, parentMessageId, ...(retry ? { retryOfRunId: retry.id } : {}) });
@@ -560,6 +562,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         env: this.env,
         runId,
         message: row.execution_message ?? row.message,
+        currentDate: currentDateGuidance(row.created_at, row.time_zone),
         sessionAffinity: this.sessionAffinity,
         signal: fiber.signal,
         conversationHistory,
@@ -1320,6 +1323,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     if (!columns.some(column => column.name === 'execution_message')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN execution_message TEXT`;
+    }
+    if (!columns.some(column => column.name === 'time_zone')) {
+      // Older runs have no client zone and fall back to UTC.
+      this.sql`ALTER TABLE agent_runs ADD COLUMN time_zone TEXT`;
     }
     if (!columns.some(column => column.name === 'billing_settled')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN billing_settled INTEGER NOT NULL DEFAULT 0`;

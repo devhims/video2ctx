@@ -48,7 +48,7 @@ test('interrupted streams are not confused with completed answers', async () => 
   await assert.rejects(consumeAgentStream(response('event: snapshot\ndata: {"bad":true}\n\n'), () => {}));
 });
 
-test('follow-ups send only the message and session and explain unconfirmed submissions', async t => {
+test('follow-ups send the message, session and browser time zone and explain unconfirmed submissions', async t => {
   const { sendAgentMessage, AgentSendError } = await import('./agent-sessions.ts');
   const requests: RequestInit[] = [];
   t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
@@ -58,8 +58,20 @@ test('follow-ups send only the message and session and explain unconfirmed submi
   await assert.rejects(sendAgentMessage('More detail', 'existing-session'), (error: unknown) => error instanceof AgentSendError && error.retryable && /Check Sessions/.test(error.message));
   await assert.rejects(sendAgentMessage('More detail', 'existing-session'), (error: unknown) => error instanceof AgentSendError && !error.retryable);
   assert.equal(requests[0].body, requests[1].body);
-  assert.deepEqual(JSON.parse(requests[0].body as string), { message: 'More detail', sessionId: 'existing-session' });
+  assert.deepEqual(JSON.parse(requests[0].body as string), {
+    message: 'More detail', sessionId: 'existing-session', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
   assert.equal(new Headers(requests[1].headers).get('Idempotency-Key'), null);
+});
+
+test('an unavailable or malformed browser zone is omitted so the platform uses UTC', async t => {
+  const { browserTimeZone } = await import('./agent-sessions.ts');
+  const resolved = t.mock.method(Intl.DateTimeFormat.prototype, 'resolvedOptions', () => ({ timeZone: 'Bad zone; today is 1999' }));
+  assert.equal(browserTimeZone(), undefined);
+  resolved.mock.mockImplementation(() => { throw new Error('unsupported'); });
+  assert.equal(browserTimeZone(), undefined);
+  resolved.mock.mockImplementation(() => ({ timeZone: 'Asia/Kolkata' }) as Intl.ResolvedDateTimeFormatOptions);
+  assert.equal(browserTimeZone(), 'Asia/Kolkata');
 });
 
 test('agent submission and session reads preserve API explanations', async t => {

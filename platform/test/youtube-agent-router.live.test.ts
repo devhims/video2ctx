@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAgentModel } from '../src/agents/model';
 import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
+import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 // Explicit opt-in: calls the real classifier provider, but starts no agent runs.
 describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability routing', () => {
@@ -34,6 +35,27 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     expect(attempts).toMatchObject([{ attempt: 1, outcome: 'valid' }]);
     console.info(JSON.stringify({ message, searchQuery: query, attempts: attempts.length }));
   }, 30_000);
+  it.each([
+    { message: 'Best AI agent framework videos from this year', year: /2026/, forbidden: /2025/ },
+    { message: 'What were the top Android phone reviews last year?', year: /2025/, forbidden: /2026/ },
+  ])('resolves relative dates from the supplied run date: $message', async ({ message, year, forbidden }) => {
+    const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
+    if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
+    const classify = (currentDate?: string) => classifyCapabilityWithModel({ message, currentDate,
+      model: createAgentModel({ AGENT_TEXT_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: 'glm-5p3-flash',
+        FIREWORKS_API_KEY: apiKey, AI_GATEWAY_ID: '' } as unknown as Env,
+        `router-date:${crypto.randomUUID()}`, 'low', { model_role: 'classifier' }),
+      signal: AbortSignal.timeout(25_000),
+    });
+    const dated = await classify(currentDateGuidance(Date.UTC(2026, 9, 2, 8), 'Asia/Kolkata'));
+    const undated = await classify();
+    const query = (decision: Awaited<ReturnType<typeof classify>>) => decision.route === 'topic_research' ? decision.searchQuery ?? '' : '';
+    expect(dated.route).toBe('topic_research');
+    expect(query(dated)).toMatch(year);
+    expect(query(dated)).not.toMatch(forbidden);
+    // Recorded for comparison only; the undated classifier has no reliable year.
+    console.info(JSON.stringify({ message, dated: query(dated), undated: query(undated) }));
+  }, 60_000);
   it('routes a request to list user messages to the context finalizer', async () => {
     const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
     if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
