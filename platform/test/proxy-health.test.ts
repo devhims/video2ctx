@@ -293,6 +293,33 @@ describe('frames', () => {
     expect(frameProxyOutcomes([selected, { stage: 'player_response', status: 429 }], true)).toEqual([{ slot: 1, outcome: 'success' }]);
   });
 
+  test('a player 429 survives the container serializers and cools the selected proxy', async () => {
+    // The real path: the job prints diagnosticDetails as a JSON line, the runtime parses it and
+    // runs diagnosticDetails again, the app captures it, and the Worker parses the stored envelope.
+    // @ts-expect-error No declaration file for the container's ESM diagnostics.
+    const { diagnosticDetails } = await import('../youtube-frames/diagnostics.mjs');
+    // @ts-expect-error No declaration file for the container's ESM application.
+    const { createFrameApp } = await import('../youtube-frames/app.mjs');
+    const { extractionCapture } = await import('../src/lib/extraction-diagnostics');
+    const throughJob = (event: Record<string, unknown>) =>
+      diagnosticDetails(JSON.parse(JSON.stringify({ event: 'frame_diagnostic', ...diagnosticDetails(event) }))) as Record<string, unknown>;
+    const app = createFrameApp(async (_input: unknown, { onDiagnostic }: { onDiagnostic: (event: unknown) => void }) => {
+      onDiagnostic(throughJob({ stage: 'proxy', egress: 'proxy', proxySlot: 2, attempt: 1 }));
+      // loadMediaCandidateGroup's shape when the player request itself returns HTTP 429.
+      onDiagnostic(throughJob({ stage: 'player', profile: 'ios',
+        error: Object.assign(new Error('YouTube rate limited the request.'), { code: 'RATE_LIMITED', status: 429 }) }));
+      throw Object.assign(new Error('No usable media.'), { code: 'MEDIA_UNAVAILABLE' });
+    });
+    const response = await app.request('/frames', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [1000] }) });
+    const payload = await response.json();
+    const { events } = extractionCapture(payload);
+    // The stored event keeps the code and loses the nested status, as the review observed.
+    expect(events).toContainEqual(expect.objectContaining({ stage: 'player', code: 'RATE_LIMITED' }));
+    expect(events.find(event => event.stage === 'player')?.status).toBeUndefined();
+    expect(frameProxyOutcomes(events, false, payload.error.code)).toEqual([{ slot: 2, outcome: 'rate_limited' }]);
+  });
+
   test('the Worker sends the health order and records a failed route from diagnostics', async () => {
     const [keyA] = await proxyKeys([urlA, urlB]);
     const health = fakeHealth({ [keyA!]: cooling() });

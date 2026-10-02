@@ -183,7 +183,7 @@ function healthFor(env: Env): Map<number, number> {
 
 /** True when an attempt's diagnostics show YouTube throttling or challenging the egress route. */
 export function throttled(events: ExtractionAttempt['events']): boolean {
-  return events.some(event => event.status === 429 || event.failureReason === 'bot_challenge');
+  return events.some(event => event.status === 429 || event.code === 'RATE_LIMITED' || event.failureReason === 'bot_challenge');
 }
 
 function processorContainer(env: Env, slot: number) {

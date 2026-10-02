@@ -26,7 +26,11 @@ export function frameProxyOutcomes(events: ExtractionAttempt['events'], succeede
       } else selected = event.proxySlot;
       continue;
     }
-    if (selected !== undefined && (event.status === 429 || event.failureReason === 'bot_challenge')) slots.get(selected)!.throttled = true;
+    // A player 429 throws before player_response is emitted, so it is stored as a player event
+    // whose nested error kept its RATE_LIMITED code but lost its status in serialization.
+    if (selected !== undefined && (event.status === 429 || event.code === 'RATE_LIMITED' || event.failureReason === 'bot_challenge')) {
+      slots.get(selected)!.throttled = true;
+    }
   }
   if (selected !== undefined && failureCode === 'RATE_LIMITED') slots.get(selected)!.throttled = true;
   const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
