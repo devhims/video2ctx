@@ -1,10 +1,11 @@
 import { tool } from 'ai';
+import { videoTooLong } from '../../../runtime/video-duration-limit';
 import { z } from 'zod';
 import type { AgentToolContext } from '../tool-context';
 import { evidencePacketForModel } from '../../../runtime/model-evidence';
 import { analyzeVideoTranscriptsInputSchema, executeAnalyzeVideoTranscript } from './analyze-video-transcripts';
 import { executeGetVideoTranscript, getVideoTranscriptInputSchema } from './get-video-transcript';
-import { captionsUnavailable, regionRestricted } from './transcript-tool-errors';
+import { captionsUnavailable, regionRestricted, TranscriptToolStageError } from './transcript-tool-errors';
 import { assetVersionSchema } from './stored-analysis';
 
 export const researchVideoTranscriptsInputSchema = z.object({
@@ -39,7 +40,7 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
       }
       const candidates = replacementCandidates(context);
       let replacements = 0;
-      const skipped: Array<{ videoId: string; code: 'CAPTIONS_UNAVAILABLE' | 'REGION_RESTRICTED'; replacementVideoId?: string }> = [];
+      const skipped: Array<{ videoId: string; code: 'CAPTIONS_UNAVAILABLE' | 'REGION_RESTRICTED' | 'VIDEO_TOO_LONG'; replacementVideoId?: string }> = [];
       const outcomes = await Promise.allSettled(sources.map(async (source, index) => {
         let current = source;
         let attempt = 0;
@@ -47,16 +48,27 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
           context.signal.throwIfAborted();
           let assetVersion: string | undefined;
           const childId = `${toolCallId}:${index}${attempt ? `:replacement:${attempt}` : ''}`;
+          // A saved transcript has no videoId in its input; resolve it from session metadata.
+          const savedVersion = 'assetVersion' in current ? current.assetVersion : undefined;
+          const currentVideoId = 'videoId' in current ? current.videoId
+            : context.session?.brief().assets.find(asset => asset.version === savedVersion)?.videoId;
           try {
+            if ('assetVersion' in current) {
+              const tooLong = context.session?.transcriptOverLimit?.(current.assetVersion);
+              if (tooLong) {
+                if (selection) (selection.tooLong ??= new Set()).add(tooLong.videoId);
+                throw new TranscriptToolStageError('VIDEO_TOO_LONG', tooLong);
+              }
+            }
             assetVersion = 'assetVersion' in current ? current.assetVersion
               : (await executeGetVideoTranscript(current, context, `${childId}:retrieve`)).assetVersions?.[0];
           } catch (error) {
             context.signal.throwIfAborted();
-            if ((!captionsUnavailable(error) && !regionRestricted(error)) || !('videoId' in current)) throw error;
+            if ((!captionsUnavailable(error) && !regionRestricted(error) && !videoTooLong(error)) || !currentVideoId) throw error;
             const next = selection?.allowReplacement && replacements < 8
               && !budget?.isExhausted()
-              ? candidates.find(id => !selection.attempted.has(id) && !selection.unavailable.has(id) && !selection.regionRestricted?.has(id)) : undefined;
-            skipped.push({ videoId: current.videoId, code: regionRestricted(error) ? 'REGION_RESTRICTED' : 'CAPTIONS_UNAVAILABLE', ...(next ? { replacementVideoId: next } : {}) });
+              ? candidates.find(id => !selection.attempted.has(id) && !selection.unavailable.has(id) && !selection.regionRestricted?.has(id) && !selection.tooLong?.has(id)) : undefined;
+            skipped.push({ videoId: currentVideoId, code: videoTooLong(error) ? 'VIDEO_TOO_LONG' : regionRestricted(error) ? 'REGION_RESTRICTED' : 'CAPTIONS_UNAVAILABLE', ...(next ? { replacementVideoId: next } : {}) });
             if (!next) throw error;
             selection!.attempted.add(next);
             replacements++;

@@ -1,4 +1,5 @@
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
+import { agentMaxVideoSeconds } from '../runtime/video-duration-limit';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
@@ -196,6 +197,7 @@ export async function executeResearchRun(options: {
     session: options.session,
     runId: options.runId,
     currentDate: options.currentDate,
+    maxVideoSeconds: agentMaxVideoSeconds(options.env),
     provider,
     saveFramePreviews: options.saveFramePreviews,
     onExtractionDiagnostic: options.onExtractionDiagnostic,

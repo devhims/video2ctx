@@ -150,19 +150,22 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): SearchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = query
       .slice(0, 200)
       .match(/[\p{L}\p{N}_]+/gu)
       ?.slice(0, 20);
     if (!tokens?.length) return [];
+    // Exclusions apply before the limit, so excluded rows can never fill the top 20.
+    const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
     return this.sql
       .exec<SearchRow>(
         `SELECT id,owner,content,metadata FROM session_context_fts
-      WHERE session_context_fts MATCH ? AND scope=? ORDER BY rank LIMIT 20`,
+      WHERE session_context_fts MATCH ? AND scope=?${excluded} ORDER BY rank LIMIT 20`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
+        ...excludedOwners,
       )
       .toArray();
   }
@@ -178,11 +181,15 @@ export class SessionSearch {
     await store.ensureSearchIndexed();
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
-    for (const row of this.matches('evidence', query)) {
+    // Long transcripts indexed before the length limit existed are left out of the query itself.
+    // Their index rows stay, so raising the limit makes them searchable again without reindexing.
+    const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
+    for (const row of this.matches('evidence', query, excluded)) {
       if (seen.has(row.id)) continue;
       const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string };
       const found = metadata.version
-        ? store.has(metadata.version)
+        // Backstop for a version that crossed the limit between the query and this read.
+        ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
           ? (await store.readEvidence(metadata.version, metadata.offset)).packets
           : []
         : store.evidenceForCitations([row.id]);
