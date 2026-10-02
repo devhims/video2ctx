@@ -153,3 +153,18 @@ describe('first media response deadline', () => {
     } finally { await proxy.close(); }
   });
 });
+
+test('a slow concurrent media request survives once the route has answered', async () => {
+  let calls = 0;
+  const proxy = await startMediaRangeProxy({ url: 'https://media.test/?sig=secret', mimeType: 'video/mp4', progressive: true },
+    (async () => {
+      calls++;
+      await new Promise((resolve) => setTimeout(resolve, calls === 1 ? 10 : 150));
+      return new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' } });
+    }) as typeof fetch, new TransferBudget(), 0, undefined, Infinity, 50);
+  try {
+    const responses = await Promise.all([fetch(proxy.url, { headers: { Range: 'bytes=0-2' } }), fetch(proxy.url, { headers: { Range: 'bytes=0-2' } })]);
+    expect(await Promise.all(responses.map((response) => response.text()))).toEqual(['abc', 'abc']);
+    expect(proxy.failure).toBeUndefined();
+  } finally { await proxy.close(); }
+});

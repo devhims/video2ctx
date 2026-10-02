@@ -125,3 +125,12 @@ test('the route deadline stops applying once the route answers, and caller abort
   assert.equal(transport.failure, undefined);
   await transport.close();
 });
+test('a slow concurrent YouTube request survives once another request on the route answered', async () => {
+  const transport = createFrameTransport(environment, { select: () => 0, firstResponseTimeoutMs: 50,
+    createDispatcher: () => ({ close: async () => {} }),
+    fetch: async input => { await new Promise(resolve => setTimeout(resolve, input.endsWith('/slow') ? 120 : 10)); return new Response('ok'); } });
+  const [fast, slow] = await Promise.all([transport.fetch('https://youtube.test/fast'), transport.fetch('https://youtube.test/slow')]);
+  assert.equal(fast.status, 200); assert.equal(slow.status, 200);
+  assert.equal(transport.failure, undefined);
+  await transport.close();
+});

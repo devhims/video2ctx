@@ -266,3 +266,39 @@ test('the first-response deadline ends once the route answers and is off on the 
   await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS * 2 + 50);
   await expect(last).resolves.toBe(transcript);
 });
+
+test('a slow concurrent request is not cut short once another request on the route has answered', async () => {
+  vi.useFakeTimers();
+  const execute = vi.fn<WorkerExtractionDependencies['execute']>(async (_op, fetchImpl) => {
+    // Transcript metadata issues player and desktop requests concurrently.
+    await Promise.all([fetchImpl('https://www.youtube.com/youtubei/v1/player'), fetchImpl('https://www.youtube.com/watch')]);
+    return transcript;
+  });
+  const { run, proxyFetch, proxyTransport } = harness(execute);
+  proxyFetch.mockImplementation(async input => {
+    const slow = String(input).endsWith('/watch');
+    await new Promise(resolve => setTimeout(resolve, slow ? ROUTE_FIRST_RESPONSE_TIMEOUT_MS + 1_000 : 100));
+    return Response.json({});
+  });
+  const started = Date.now();
+  const pending = run(env(), operation);
+  await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS + 1_100);
+  await expect(pending).resolves.toBe(transcript);
+  expect(proxyTransport).toHaveBeenCalledTimes(1);
+  expect(Date.now() - started).toBeLessThan(ROUTE_FIRST_RESPONSE_TIMEOUT_MS + 1_200);
+});
+
+test('concurrent requests on a silent route share one deadline and fail together', async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const execute = vi.fn<WorkerExtractionDependencies['execute']>(async (_op, fetchImpl) => {
+    await Promise.all([fetchImpl('https://www.youtube.com/a'), fetchImpl('https://www.youtube.com/b')]);
+    return transcript;
+  });
+  const { run, proxyFetch, proxyTransport } = harness(execute);
+  proxyFetch.mockImplementation(async () => { calls++; return calls <= 2 ? new Promise<Response>(() => {}) : Response.json({}); });
+  const pending = run(env(), operation);
+  await vi.advanceTimersByTimeAsync(ROUTE_FIRST_RESPONSE_TIMEOUT_MS + 50);
+  await expect(pending).resolves.toBe(transcript);
+  expect(proxyTransport).toHaveBeenCalledTimes(2);
+});

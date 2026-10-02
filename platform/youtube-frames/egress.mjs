@@ -40,6 +40,10 @@ export function createFrameTransport(environment, {
   const slot = slots[select(slots.length)];
   let failure;
   let proven = false;
+  // One timer per route, started by its first request and cleared by any response, so a slower
+  // concurrent request on a route that has already answered is never cut short.
+  let routeGuard;
+  let routeTimer;
   const dispatcher = createDispatcher(urls[slot]);
   return {
     // Metadata, player profiles and media byte ranges share this dispatcher.
@@ -47,17 +51,22 @@ export function createFrameTransport(environment, {
       if (failure) throw failure;
       // Until the route answers once, a stalled request is a route failure, not a slow upstream.
       // Media hosts get their own first-response check in the range proxy.
-      const guard = !proven && firstResponseTimeoutMs !== undefined ? new AbortController() : undefined;
-      const timer = guard && setTimeout(() => guard.abort(), firstResponseTimeoutMs);
+      if (!proven && firstResponseTimeoutMs !== undefined && !routeGuard) {
+        const created = new AbortController();
+        routeGuard = created;
+        routeTimer = setTimeout(() => created.abort(), firstResponseTimeoutMs);
+      }
+      const guard = proven ? undefined : routeGuard;
       const signal = guard ? (init?.signal ? AbortSignal.any([init.signal, guard.signal]) : guard.signal) : init?.signal;
       try {
         const response = await fetch(input, { ...init, signal, dispatcher });
         proven = true;
+        clearTimeout(routeTimer);
         return response;
       } catch (error) {
         if (!init?.signal?.aborted) {
           if (guard?.signal.aborted) {
-            failure = Object.assign(new Error('Outbound proxy route did not respond.'), {
+            failure ??= Object.assign(new Error('Outbound proxy route did not respond.'), {
               code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', causeCode: 'ETIMEDOUT',
             });
             throw failure;
@@ -71,8 +80,6 @@ export function createFrameTransport(environment, {
           }
         }
         throw error;
-      } finally {
-        clearTimeout(timer);
       }
     },
     get failure() { return failure; },
@@ -80,6 +87,7 @@ export function createFrameTransport(environment, {
     // which would hold the job past its budget. Give it a moment, then tear it down.
     // A route already known to have failed is torn down at once.
     close: async ({ force = false } = {}) => {
+      clearTimeout(routeTimer);
       if (force) { await dispatcher.destroy().catch(() => {}); return; }
       let timer;
       const closed = dispatcher.close().then(() => true, () => true);

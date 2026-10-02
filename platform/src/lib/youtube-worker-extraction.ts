@@ -135,6 +135,10 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
         const firstResponseMs = index + 1 < routes.length ? ROUTE_FIRST_RESPONSE_TIMEOUT_MS : undefined;
         let routeAnswered = false;
         let routeStalled: YouTubeProcessorError | undefined;
+        // One timer per route, started by its first request. Any response clears it, so a slower
+        // concurrent request on a route that has already answered is never cut short.
+        let routeGuard: AbortController | undefined;
+        let routeGuardTimer: ReturnType<typeof setTimeout> | undefined;
         const events: ExtractionAttempt['events'] = [];
         let droppedEvents = 0;
         const record = (event: ExtractionAttempt['events'][number]) => { if (events.length < 64) events.push(event); else droppedEvents++; };
@@ -146,8 +150,12 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             const requestSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
             const activeSignal = requestSignal ? AbortSignal.any([attemptSignal, requestSignal]) : attemptSignal;
             activeSignal.throwIfAborted();
-            const guard = !routeAnswered && firstResponseMs !== undefined ? new AbortController() : undefined;
-            const guardTimer = guard && setTimeout(() => guard.abort(new DOMException('Route first response', 'TimeoutError')), firstResponseMs);
+            if (!routeAnswered && firstResponseMs !== undefined && !routeGuard) {
+              const guard = new AbortController();
+              routeGuard = guard;
+              routeGuardTimer = setTimeout(() => guard.abort(new DOMException('Route first response', 'TimeoutError')), firstResponseMs);
+            }
+            const guard = routeAnswered ? undefined : routeGuard;
             const fetchSignal = guard ? AbortSignal.any([activeSignal, guard.signal]) : activeSignal;
             let response: Response;
             try {
@@ -155,14 +163,13 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             } catch (error) {
               if (guard?.signal.aborted && !activeSignal.aborted) {
                 // Latch the route so library retries on it fail at once instead of stalling again.
-                routeStalled = new YouTubeProcessorError('UPSTREAM_ERROR', 'The YouTube proxy route did not respond.', 503, true);
+                routeStalled ??= new YouTubeProcessorError('UPSTREAM_ERROR', 'The YouTube proxy route did not respond.', 503, true);
                 throw routeStalled;
               }
               throw error;
-            } finally {
-              clearTimeout(guardTimer);
             }
             routeAnswered = true;
+            clearTimeout(routeGuardTimer);
             if (response.status === 429 || response.status >= 500) {
               const raw = response.headers.get('retry-after');
               const seconds = raw === null ? NaN : Number(raw);
@@ -201,6 +208,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           if (!retry) throw operation.kind === 'transcript' && failure.code === 'NOT_FOUND' && upstreamFailure ? upstreamFailure : failure;
         } finally {
           clearTimeout(timer);
+          clearTimeout(routeGuardTimer);
           // Cancel any siblings left by a library Promise.all before changing egress.
           attempt.abort();
           if (transport) {
