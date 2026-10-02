@@ -54,6 +54,7 @@
           "api/quickstart",
           "api/authentication",
           "api/conventions",
+          "api/credits",
           "api/discovery",
           "api/entities",
           "api/research",

@@ -16,7 +16,7 @@ Metered responses include:
 | `X-Credits-Charged` | Credits settled for the completed operation |
 | `X-Credits-Remaining` | Account balance after settlement |
 
-Cached provider responses cost 1 credit. Fresh search and comment requests cost 2 credits; other fresh provider-data requests cost 1 credit. Composite analysis operations expose their charge through the same headers.
+A request that fails with `402` returns `X-Credits-Charged: 0`. Each operation holds a reserve before it runs, so a `402` can happen when your balance would cover the final charge. See [credits](/api/credits) for per-operation prices and reserves.
 
 ## Pagination
 

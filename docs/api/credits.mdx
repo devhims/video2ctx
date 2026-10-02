@@ -1,0 +1,54 @@
+---
+title: "Credits"
+description: "What each operation costs, and how reserves and charges work."
+---
+
+{/* Prices come from platform/src/lib/metering.ts. Update these tables when that file changes. */}
+
+Dashboard sessions, CLI sessions, and API keys draw from one credit balance. Every metered response reports what it cost in `X-Credits-Charged` and the balance left in `X-Credits-Remaining`. See [response conventions](/api/conventions#credits) for the headers.
+
+## Reserves and charges
+
+Before an operation runs, the API holds its reserve amount from your balance. When the operation finishes, the API charges the final amount and returns the rest of the hold. A failed operation returns the whole hold.
+
+If your balance is below the reserve, the request fails with `402` and `X-Credits-Charged: 0`, even when the balance would cover the final charge. A report reserves 40 credits and charges 32, so a balance of 35 is not enough to start one.
+
+## Provider data
+
+A request costs the fresh price only when the API fetches new data from the provider. A response served from cache, served stale, or shared with an identical in-flight request costs the cached price.
+
+| Endpoint | Cached | Fresh | Reserve |
+| --- | --- | --- | --- |
+| `GET /v1/providers/{provider}/search` | 1 | 2 | 2 |
+| `GET /v1/providers/{provider}/browse` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/videos/{id}` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/videos/{id}/tracks` | Not cached | 1 | 1 |
+| `GET /v1/providers/{provider}/videos/{id}/transcript` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/videos/{id}/comments` | 1 | 2 | 2 |
+| `GET /v1/providers/{provider}/videos/{id}/endscreen` | Not cached | 1 | 1 |
+| `GET /v1/providers/{provider}/channels/{id}` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/channels/{id}/videos` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/channels/{id}/playlists` | 1 | 1 | 1 |
+| `GET /v1/providers/{provider}/playlists/{id}` | 1 | 1 | 1 |
+
+Each page of a paginated endpoint is a separate request with its own charge. `comments?all=true` fetches every page in one request and charges once.
+
+## Search and analysis
+
+These operations charge a fixed amount whether or not the underlying data was cached.
+
+| Endpoint | Charge | Reserve |
+| --- | --- | --- |
+| `GET /v1/search` | 3 | 3 |
+| `GET /v1/providers/{provider}/trends` | 25 | 25 |
+| `GET /v1/providers/{provider}/trends?insights=deterministic` | 15 | 25 |
+| `POST /v1/trends/plan` | 26 | 32 |
+| `POST /v1/answers` | 10 | 12 |
+| `POST /v1/comparisons` | 20 | 24 |
+| `POST /v1/reports` | 32 | 40 |
+| `GET /v1/providers` | 0 | 0 |
+| `GET /v1/usage` | 0 | 0 |
+
+## Agent tool calls
+
+When an agent fetches provider data during a run, each tool call uses the provider data prices above. Two operations exist only as agent tools: storyboard costs 1 credit cached or fresh, and frames cost 1 cached or 2 fresh. A tool call that reuses data already fetched in the same session costs 0.
