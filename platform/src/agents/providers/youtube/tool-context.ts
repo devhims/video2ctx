@@ -31,7 +31,11 @@ export interface AgentToolContext {
     attempted: Set<string>;
     unavailable: Set<string>;
     regionRestricted?: Set<string>;
+    /** Videos rejected for exceeding the agent's video length limit. */
+    tooLong?: Set<string>;
   };
+  /** Longest video, in seconds, the agent will search for, retrieve or analyze. */
+  maxVideoSeconds?: number;
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;

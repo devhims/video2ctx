@@ -1,4 +1,5 @@
 import type { SearchFilters, SearchResult } from 'all-things-youtube';
+import { formatVideoLimit } from '../../../runtime/video-duration-limit';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { dataOperationCost } from '../../../../lib/metering';
@@ -68,7 +69,12 @@ export function executeSearchYouTube(
       context.signal.throwIfAborted();
       const response = await context.provider.search(parsed.query, filters);
       context.signal.throwIfAborted();
-      const results = response.value.results.slice(0, MAX_RESULTS);
+      // Over-limit videos are dropped before the model or the replacement list can select them.
+      const limit = context.maxVideoSeconds;
+      const tooLong = (result: SearchResult) => limit !== undefined && result.type === 'video'
+        && typeof result.durationSeconds === 'number' && result.durationSeconds > limit;
+      const omitted = response.value.results.slice(0, MAX_RESULTS).filter(tooLong).length;
+      const results = response.value.results.slice(0, MAX_RESULTS).filter(result => !tooLong(result));
       const packetId = `packet:${context.runId}:${safeIdPart(toolCallId)}`;
       const sources = results.map((result, index) => ({
         id: searchSourceId(toolCallId, result, index),
@@ -103,6 +109,9 @@ export function executeSearchYouTube(
           ...response.value.meta.warnings.map((message) => ({ code: 'YOUTUBE_PROVIDER_WARNING', message })),
           ...(response.value.meta.partial
             ? [{ code: 'PARTIAL_YOUTUBE_RESULTS', message: 'YouTube returned partial search results.' }]
+            : []),
+          ...(omitted && limit !== undefined
+            ? [{ code: 'VIDEO_DURATION_LIMIT', message: `${omitted} result${omitted === 1 ? '' : 's'} longer than ${formatVideoLimit(limit)} ${omitted === 1 ? 'was' : 'were'} omitted. The agent currently supports videos up to ${formatVideoLimit(limit)}.` }]
             : []),
         ],
         usage: [{

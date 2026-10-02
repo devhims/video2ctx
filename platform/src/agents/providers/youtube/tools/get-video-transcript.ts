@@ -1,4 +1,5 @@
 import { observeAgentOperation } from '../../../runtime/diagnostics';
+import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -59,6 +60,8 @@ export function executeGetVideoTranscript(
             message: 'YouTube confirmed a country restriction for this video on the current retrieval route. Retrieval was skipped. Do not retry this transcript in this run; explain the access limitation.' }],
         });
       }
+      if (selection?.tooLong?.has(parsed.videoId))
+        throw new TranscriptToolStageError('VIDEO_TOO_LONG', 'This video exceeds the agent video length limit. Select another search result, or tell the user longer videos are not supported yet.');
       if (selection?.unavailable.has(parsed.videoId)) {
         if (context.transcriptPolicy.mode !== 'complete_transcript')
           throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', 'Caption absence was already confirmed. Select another search result.');
@@ -75,6 +78,10 @@ export function executeGetVideoTranscript(
         response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })));
       } catch (error) {
         if (context.signal.aborted) throw error;
+        if (videoTooLong(error)) {
+          if (selection) (selection.tooLong ??= new Set()).add(parsed.videoId);
+          throw new TranscriptToolStageError('VIDEO_TOO_LONG', error);
+        }
         if (regionRestricted(error)) {
           if (selection) (selection.regionRestricted ??= new Set()).add(parsed.videoId);
           throw new TranscriptToolStageError('REGION_RESTRICTED', error);
@@ -86,6 +93,14 @@ export function executeGetVideoTranscript(
         throw new TranscriptToolStageError('TRANSCRIPT_FETCH_FAILED', error);
       }
       context.signal.throwIfAborted();
+      // Covers runs without a session store, where the session provider's check does not apply.
+      if (context.maxVideoSeconds !== undefined) {
+        try { assertTranscriptWithinLimit(parsed.videoId, response.value, context.maxVideoSeconds); }
+        catch (error) {
+          if (selection) (selection.tooLong ??= new Set()).add(parsed.videoId);
+          throw new TranscriptToolStageError('VIDEO_TOO_LONG', error);
+        }
+      }
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       const offset = parsed.offset ?? 0;

@@ -802,3 +802,47 @@ test.each([false, true])('frame pins overlap safely, including session deletion=
       }
     } finally { release(); spy.mockRestore(); }
   }));
+
+function longTranscript(endMs = 21_521_000): Transcript {
+  const value = transcript('A six hour broadcast.');
+  value.segments = [{ startMs: 0, endMs: 5_000, durationMs: 5_000, text: 'Opening.' }, { startMs: endMs - 5_000, endMs, durationMs: 5_000, text: 'Closing.' }];
+  return value;
+}
+
+test('an over-limit transcript is rejected before it becomes a session asset', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-fetch'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-session/too-long-fetch/', undefined, undefined, undefined, 7_200);
+    const p = provider(vi.fn(async () => ({ value: longTranscript(), cacheStatus: 'miss' as const })));
+    await expect(sessionProvider(p, store).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    expect(store.brief().assets).toEqual([]);
+  }));
+
+test('a long transcript saved before the limit existed is never loaded again', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-saved'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-saved/';
+    // Saved by a store without the limit, as in sessions created before this change.
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const p = provider(vi.fn(async () => ({ value: longTranscript(), cacheStatus: 'miss' as const })));
+    const saved = await sessionProvider(p, unlimited).transcript(id);
+    const version = saved.assetVersions![0]!;
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const read = vi.spyOn(limited, 'read');
+    await expect(limited.readEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await expect(limited.readTranscriptEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await expect(limited.readAsset(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await limited.ensureSearchIndexed();
+    // None of the guarded paths read the stored blob.
+    expect(read).not.toHaveBeenCalled();
+    // Reuse through the provider is rejected too, without another fetch.
+    await expect(sessionProvider(p, limited).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    expect(p.transcript).toHaveBeenCalledTimes(1);
+  }));
+
+test('transcripts within the limit are saved and read normally', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('within-limit'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-session/within-limit/', undefined, undefined, undefined, 7_200);
+    const result = await sessionProvider(provider(), store).transcript(id);
+    const evidence = await store.readEvidence(result.assetVersions![0]!);
+    expect(evidence.packets[0]!.excerpts.length).toBeGreaterThan(0);
+  }));
