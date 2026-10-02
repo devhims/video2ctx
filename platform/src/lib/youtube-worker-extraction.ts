@@ -1,6 +1,7 @@
 import { executeWorkerYouTubeOperation, type WorkerYouTubeOperation, type WorkerYouTubeResult } from './youtube-worker-runtime';
 import { createWorkerProxyTransport, type YouTubeFetchTransport } from './youtube-worker-transport';
-import { YouTubeProcessorError, shouldFallbackError, shouldFallbackResult, randomProcessorSlot, processorSlotOrder, type YouTubeOperationResult } from './youtube-processor-client';
+import { YouTubeProcessorError, shouldFallbackError, shouldFallbackResult, type YouTubeOperationResult } from './youtube-processor-client';
+import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { emitExtractionDiagnostic, extractionFailureKind, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
@@ -10,6 +11,8 @@ const MAX_ATTEMPT_BYTES = 32 * 1024 * 1024;
 export const ROUTE_FIRST_RESPONSE_TIMEOUT_MS = 5_000;
 const SAFE_CODES = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'] as const;
 type SafeCode = typeof SAFE_CODES[number];
+/** Answers about the video itself. A proxy that returned one carried the request. */
+const VIDEO_LEVEL_CODES = new Set<string>(['NOT_FOUND', 'INVALID_INPUT', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED']);
 
 function bounded(value: string | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number(value);
@@ -17,23 +20,10 @@ function bounded(value: string | undefined, fallback: number, min: number, max: 
 }
 
 export function workerProxyUrls(env: Pick<Env, 'OUTBOUND_PROXY_URLS' | 'OUTBOUND_PROXY_URL'>): string[] {
-  const pool = env.OUTBOUND_PROXY_URLS?.trim();
-  const single = env.OUTBOUND_PROXY_URL?.trim();
-  try {
-    const values: unknown = pool ? JSON.parse(pool) : single ? [single] : [];
-    if (!Array.isArray(values) || values.length > 4 || (pool && !values.length)) throw new Error();
-    const urls = values.map((value: unknown) => {
-      if (typeof value !== 'string' || !value.trim()) throw new Error();
-      const url = new URL(value);
-      if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.hash) throw new Error();
-      return url.href;
-    });
-    if (new Set(urls).size !== urls.length) throw new Error();
-    return urls;
-  } catch {
-    // URL and JSON parse errors can echo credentials. Never forward their text.
-    throw new YouTubeProcessorError('PROCESSOR_UNAVAILABLE', 'The YouTube proxy configuration is invalid.', 503);
-  }
+  const urls = normalizedProxyUrls(env);
+  // URL and JSON parse errors can echo credentials. Never forward their text.
+  if (!urls) throw new YouTubeProcessorError('PROCESSOR_UNAVAILABLE', 'The YouTube proxy configuration is invalid.', 503);
+  return urls;
 }
 
 function safeFailure(error: unknown, signal: AbortSignal): YouTubeProcessorError {
@@ -105,7 +95,10 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
   return async function run<T extends WorkerYouTubeOperation>(env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink, signal?: AbortSignal): Promise<YouTubeOperationResult<T>> {
     const urls = workerProxyUrls(env);
     if (!urls.length) throw new YouTubeProcessorError('PROCESSOR_UNAVAILABLE', 'A YouTube proxy must be configured for Worker extraction.', 503);
-    const order = processorSlotOrder(urls.length, randomProcessorSlot(urls.length));
+    // Healthy proxies first, in a random rotation. Cooling proxies stay in the order, last.
+    const plan = await planProxyOrder(env, urls);
+    const order = plan.order;
+    const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
     const proxyAttempts = bounded(env.YOUTUBE_PROXY_MAX_ATTEMPTS, 4, 1, 4);
     const routes: Array<{ egress: 'proxy'; slot: number; url: string }> = [];
     for (let i = 0; i < proxyAttempts; i++) { const slot = order[i % order.length]!; routes.push({ egress: 'proxy', slot, url: urls[slot]! }); }
@@ -135,6 +128,9 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
         const firstResponseMs = index + 1 < routes.length ? ROUTE_FIRST_RESPONSE_TIMEOUT_MS : undefined;
         let routeAnswered = false;
         let routeStalled: YouTubeProcessorError | undefined;
+        // Health signals: the proxy failed to carry a request, or YouTube throttled this exit.
+        let transportFailed = false;
+        let rateLimited = false;
         // One timer per route, started by its first request. Any response clears it, so a slower
         // concurrent request on a route that has already answered is never cut short.
         let routeGuard: AbortController | undefined;
@@ -166,10 +162,13 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
                 routeStalled ??= new YouTubeProcessorError('UPSTREAM_ERROR', 'The YouTube proxy route did not respond.', 503, true);
                 throw routeStalled;
               }
+              // No response at all, without a caller or deadline abort: the tunnel, TLS or proxy failed.
+              if (!fetchSignal.aborted) transportFailed = true;
               throw error;
             }
             routeAnswered = true;
             clearTimeout(routeGuardTimer);
+            if (response.status === 429) rateLimited = true;
             if (response.status === 429 || response.status >= 500) {
               const raw = response.headers.get('retry-after');
               const seconds = raw === null ? NaN : Number(raw);
@@ -187,7 +186,11 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
           };
           const value = await abortable(attemptSignal, () => deps.execute(operation, trackedFetch));
           attemptSignal.throwIfAborted();
-          if (operation.kind === 'video' && isVideoMetadataBotChallenge(value)) throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube blocked this connection.', 503, true);
+          if (operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {
+            rateLimited = true;
+            throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube blocked this connection.', 503, true);
+          }
+          outcomes.push({ slot: route.slot, outcome: rateLimited ? 'rate_limited' : 'success' });
           // Partial catalogs probe every distinct route once, without repeated pool passes.
           if (shouldFallbackResult(operation, value) && index + 1 < Math.min(routes.length, urls.length)) {
             outcome = 'fallback'; retry = true;
@@ -199,6 +202,15 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
         } catch (error) {
           const failure = routeStalled ?? safeFailure(error, attemptSignal);
           lastFailure = failure;
+          // An attempt deadline on a route that never answered is a stall, even on the last route.
+          const stalled = !routeAnswered && attempt.signal.aborted && !deadline.aborted;
+          // An HTTP-200 bot challenge arrives as UNAVAILABLE with a structured reason. A bare
+          // UNAVAILABLE stays ambiguous, since it also means the video itself is unavailable.
+          const botChallenge = (error as { reason?: unknown } | null)?.reason === 'bot_challenge';
+          const health = failure.code === 'RATE_LIMITED' || rateLimited || botChallenge ? 'rate_limited'
+            : routeStalled || stalled || (transportFailed && !routeAnswered) ? 'route_failure'
+              : routeAnswered && VIDEO_LEVEL_CODES.has(failure.code) ? 'success' : undefined;
+          if (health) outcomes.push({ slot: route.slot, outcome: health });
           if (!['NOT_FOUND', 'INVALID_INPUT'].includes(failure.code)) upstreamFailure = failure;
           status = failure.status;
           failureKind = routeStalled ? 'timeout' : extractionFailureKind(error, attemptSignal);
@@ -216,7 +228,7 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
             await abortable(AbortSignal.any([deadline, AbortSignal.timeout(1000)]), () => closing).catch(() => undefined);
           }
           const elapsedMs = Date.now() - started;
-          console.info(JSON.stringify({ event: 'youtube_worker_attempt', extractionId, operation: operation.kind, attempt: index + 1, egress: route.egress, slot: route.slot, elapsedMs, outcome, status, failureKind, bytesRead }));
+          console.info(JSON.stringify({ event: 'youtube_worker_attempt', extractionId, operation: operation.kind, attempt: index + 1, egress: route.egress, slot: route.slot, elapsedMs, outcome, status, failureKind, bytesRead, healthInformed: plan.informed, healthSource: plan.source, healthLookupMs: plan.lookupMs, cooling: (plan.entries[route.slot]?.until ?? 0) > started }));
           if (operation.kind === 'transcript') emitExtractionDiagnostic(onDiagnostic, { version: 1, kind: 'transcript', videoId: operation.id, extractionId, backend: 'worker', egress: route.egress, attempt: index + 1, slot: route.slot, recordedAt: Date.now(), elapsedMs, outcome, status, failureKind, capture: 'available', events: events.slice(), droppedEvents });
         }
         if (retry) {
@@ -229,7 +241,10 @@ export function createWorkerExtractionRunner(deps: WorkerExtractionDependencies)
     } catch (error) {
       if (deadline.aborted) throw safeFailure(error, deadline);
       throw error;
-    } finally { clearTimeout(totalTimer); }
+    } finally {
+      clearTimeout(totalTimer);
+      await reportProxyOutcomes(env, plan, outcomes);
+    }
   };
 }
 

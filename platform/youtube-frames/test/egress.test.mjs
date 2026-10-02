@@ -55,3 +55,15 @@ test('an alternate route excludes the failed pool slots', async () => {
   assert.equal(transport.slot, 1);
   await transport.close();
 });
+
+test('a preferred slot is used when available and ignored when excluded', async () => {
+  const chosen = [];
+  for (const options of [{ preferSlot: 1 }, { preferSlot: 1, excludeSlots: [1], select: () => 0 }, { preferSlot: 7, select: () => 0 }]) {
+    const transport = createFrameTransport({ OUTBOUND_PROXY_URLS: JSON.stringify(pool) }, {
+      ...options, createDispatcher: () => ({ close: async () => {} }),
+    });
+    chosen.push(transport.slot);
+    await transport.close();
+  }
+  assert.deepEqual(chosen, [1, 0, 0]);
+});

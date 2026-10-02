@@ -110,3 +110,26 @@ test('captures the proxy tunnel status and category without provider text', asyn
   assert.deepEqual(body.diagnostics.events[0], { stage: 'proxy', proxySlot: 1, attempt: 1,
     code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', status: 522 });
 });
+
+test('passes a valid proxy order header to the job and ignores a malformed one', async () => {
+  const seen = [];
+  const app = createFrameApp(async (input, options) => { seen.push(options.proxyOrder); return { videoId: input.videoId }; });
+  for (const header of ['2,0,3,1', '1,1', 'all', undefined]) {
+    const response = await app.request('/frames', { method: 'POST', body: JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [1000] }),
+      headers: { 'content-type': 'application/json', ...(header ? { 'x-proxy-order': header } : {}) } });
+    assert.equal(response.status, 200);
+  }
+  assert.deepEqual(seen, [[2, 0, 3, 1], undefined, undefined, undefined]);
+});
+
+test('stored diagnostics keep the bot-challenge flag but not the reason text', async () => {
+  const app = createFrameApp(async (input, { onDiagnostic }) => {
+    onDiagnostic({ stage: 'player_response', profile: 'WEB', status: 200, playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' });
+    return { videoId: input.videoId };
+  });
+  const response = await app.request('/frames', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [1000] }) });
+  const body = await response.json();
+  assert.equal(body.diagnostics.events[0].failureReason, 'bot_challenge');
+  assert.equal(JSON.stringify(body.diagnostics).includes('not a bot'), false);
+});

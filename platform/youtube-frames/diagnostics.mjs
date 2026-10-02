@@ -40,8 +40,12 @@ export function errorDetails(error, depth = 0) {
   };
 }
 
+// Same wording the library recognizes. A bot challenge blames the connection, not the video.
+const BOT_CHALLENGE = /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i;
+
 export function diagnosticDetails(event) {
   const safe = { ...structuredFailure(event) };
+  if (typeof event.reason === 'string' && BOT_CHALLENGE.test(event.reason)) safe.failureReason = 'bot_challenge';
   if (['direct', 'proxy'].includes(event.egress)) safe.egress = event.egress;
   if (Number.isInteger(event.proxySlot) && event.proxySlot >= 0 && event.proxySlot < 4) safe.proxySlot = event.proxySlot;
   for (const key of ['stage', 'profile', 'playabilityStatus', 'reason', 'message']) {
@@ -58,7 +62,7 @@ export function diagnosticDetails(event) {
 export function structuredFailure(error) {
   const result = {};
   if (error?.failureReason === 'proxy_tunnel_failed' && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) result.status = error.status;
-  if (['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed'].includes(error?.failureReason)) result.failureReason = error.failureReason;
+  if (['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge'].includes(error?.failureReason)) result.failureReason = error.failureReason;
   if (['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL'].includes(error?.signal)) result.signal = error.signal;
   if (Number.isInteger(error?.exitCode) && error.exitCode >= -255 && error.exitCode <= 255) result.exitCode = error.exitCode;
   const causeCode = error?.causeCode ?? error?.cause?.code;

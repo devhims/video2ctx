@@ -3,13 +3,15 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { extractWithProxyFallback } from './extraction.mjs';
 import { extractFrames } from './dist/extractor.mjs';
-import { MAX_IMAGE_BYTES, parseFrameRequest } from './contract.mjs';
+import { MAX_IMAGE_BYTES, parseFrameRequest, parseProxyOrder } from './contract.mjs';
 
 const directory = process.argv[2];
 try {
   const request = parseFrameRequest(JSON.parse(await readFile(join(directory, 'request.json'), 'utf8')));
+  const routing = await readFile(join(directory, 'routing.json'), 'utf8').then(JSON.parse).catch(() => null);
+  const proxyOrder = parseProxyOrder(Array.isArray(routing?.proxyOrder) ? routing.proxyOrder.join(',') : undefined);
   const result = await extractWithProxyFallback({ ...request, outputDir: directory }, {
-    extractFrames,
+    extractFrames, proxyOrder,
     onDiagnostic: event => console.error(JSON.stringify({ event: 'frame_diagnostic', ...diagnosticDetails(event) })),
   });
   const frames = [];

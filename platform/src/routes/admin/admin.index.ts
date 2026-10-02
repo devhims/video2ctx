@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { App } from '../../types';
 import { requireAdminMutationOrigin, requireAdminSession } from '../../lib/admin-access';
 import { ApiError, body } from '../../lib/http';
+import { normalizedProxyUrls, proxyKeys, readProxyHealth } from '../../lib/proxy-health';
 
 export const adminRoutes = new Hono<App>();
 adminRoutes.use('/admin/*', async (c, next) => {
@@ -54,6 +55,29 @@ adminRoutes.delete('/admin/agent-access', async c => {
   await c.env.DB.prepare('DELETE FROM agent_access_allowlist WHERE lower(trim(email)) = ?')
     .bind(parsed.data.email).run();
   return c.json({ email: parsed.data.email, enabled: false });
+});
+
+// Per-slot health of the current outbound proxy pool. Host and port only, never credentials.
+adminRoutes.get('/admin/proxy-health', async c => {
+  const urls = normalizedProxyUrls(c.env);
+  if (!urls) throw new ApiError(503, 'PROXY_CONFIGURATION_INVALID', 'The outbound proxy pool could not be read.');
+  const keys = await proxyKeys(urls);
+  let entries: Awaited<ReturnType<typeof readProxyHealth>>;
+  try { entries = await readProxyHealth(c.env, keys); }
+  catch { throw new ApiError(503, 'PROXY_HEALTH_UNAVAILABLE', 'Proxy health could not be loaded.'); }
+  const now = Date.now();
+  const iso = (value: number | undefined) => value ? new Date(value).toISOString() : null;
+  return c.json({ checkedAt: new Date(now).toISOString(), proxies: urls.map((value, slot) => {
+    const url = new URL(value);
+    const entry = entries[keys[slot]!];
+    return {
+      slot, host: url.hostname, port: url.port || null,
+      cooling: (entry?.until ?? 0) > now, coolingUntil: (entry?.until ?? 0) > now ? iso(entry!.until) : null,
+      strikes: entry?.strikes ?? 0, lastOutcome: entry?.lastOutcome ?? null,
+      lastFailureAt: iso(entry?.lastFailureAt), lastRecoveryAt: iso(entry?.lastSuccessAt),
+      routeFailures: entry?.routeFailures ?? 0, rateLimited: entry?.rateLimited ?? 0, recoveries: entry?.successes ?? 0,
+    };
+  }) });
 });
 
 adminRoutes.get('/admin/jobs', async c => {

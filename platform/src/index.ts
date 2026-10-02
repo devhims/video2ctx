@@ -12,6 +12,7 @@ export { YouTubeProcessorContainer } from './youtube-processor-container';
 export { YouTubeRequestCoordinator } from './durable-objects/youtube-cache-coordinator';
 export { MonitorScheduler } from './durable-objects/monitor-scheduler';
 export { UserAccountDO } from './durable-objects/user-account';
+export { ProxyHealth } from './durable-objects/proxy-health';
 export { AgentRuntimeDO } from './agents/agent-runtime-do';
 
 export default {

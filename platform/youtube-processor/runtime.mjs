@@ -146,7 +146,9 @@ function createConnectionRuntime(proxyUrl) {
             } catch (error) {
               const code = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR'].includes(error?.code)
                 ? error.code : 'UNKNOWN';
-              onDiagnostic({ stage: 'request', outcome: 'error', code, elapsedMs: Date.now() - startedAt });
+              // Keep the upstream status, so the Worker can tell a 429 apart from a video failure.
+              const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : undefined;
+              onDiagnostic({ stage: 'request', outcome: 'error', code, ...(status ? { status } : {}), elapsedMs: Date.now() - startedAt });
               throw error;
             }
           }

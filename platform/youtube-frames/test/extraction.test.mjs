@@ -138,3 +138,19 @@ test('a slow concurrent YouTube request survives once another request on the rou
   assert.equal(transport.failure, undefined);
   await transport.close();
 });
+
+test('a Worker proxy order is followed, skipping slots that already failed', async () => {
+  let clock = 0; const preferred = [];
+  const result = await extractWithProxyFallback({}, { environment: pool4, now: () => clock, proxyOrder: [2, 0, 3, 1],
+    transportFactory: (_, { excludeSlots, preferSlot }) => {
+      preferred.push(preferSlot);
+      return { slot: preferSlot ?? nextSlot(excludeSlots), proxyConfigured: true, fetch: preferSlot, close: async () => {} };
+    },
+    extractFrames: async options => {
+      if (options.fetch !== 3) { clock += 4000; throw tunnel(); }
+      return { frames: ['ok'] };
+    },
+  });
+  assert.deepEqual(result.frames, ['ok']);
+  assert.deepEqual(preferred, [2, 0, 3]);
+});

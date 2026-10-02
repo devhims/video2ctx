@@ -87,3 +87,26 @@ test('records a sheet 429 in diagnostics when a later player recovers', async ()
   expect(events).toContainEqual(expect.objectContaining({ stage: 'complete', outcome: 'success' }));
   expect(JSON.stringify(events)).not.toContain('secret');
 });
+
+test('marks bot-challenged player responses, but not other sign-in requirements', async () => {
+  const { getStoryboardWithFallback } = await import('./storyboard-client');
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-bot-'));
+  dirs.push(outputDir);
+  const events: Array<Record<string, unknown>> = [];
+  const players = [
+    { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' } },
+    { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' } },
+    withSpec,
+  ];
+  const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/watch?')
+    ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(players.shift())};`)
+    : Response.json(players.shift()));
+  await getStoryboardWithFallback({ videoId: 'abcdefghijk', outputDir, metadataOnly: true, fetch,
+    onDiagnostic: event => events.push(event as Record<string, unknown>) });
+  const player = events.filter(event => event.stage === 'player');
+  expect(player[0]).toMatchObject({ playabilityStatus: 'LOGIN_REQUIRED', failureReason: 'bot_challenge' });
+  expect(player[1]).toMatchObject({ playabilityStatus: 'LOGIN_REQUIRED' });
+  expect(player[1]!.failureReason).toBeUndefined();
+  // The reason text itself never leaves the extractor.
+  expect(JSON.stringify(events)).not.toContain('not a bot');
+});

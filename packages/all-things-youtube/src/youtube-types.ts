@@ -384,15 +384,25 @@ export type YouTubeErrorCode =
   | 'MEDIA_UNAVAILABLE'
   | 'FRAME_EXTRACTION_FAILED';
 
+/** Structured detail for errors whose code alone is ambiguous. */
+export type YouTubeErrorReason = 'bot_challenge';
+
+/** YouTube's anti-automation interstitial, as worded in playability reasons. */
+export function isBotChallengeReason(reason: string): boolean {
+  return /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason);
+}
+
 export class YouTubeClientError extends Error {
   readonly code: YouTubeErrorCode;
   readonly status?: number;
   readonly retryable: boolean;
+  /** Set when YouTube challenged the connection itself, so callers can blame the egress route. */
+  readonly reason?: YouTubeErrorReason;
 
   constructor(
     code: YouTubeErrorCode,
     message: string,
-    options: { status?: number; retryable?: boolean; cause?: unknown } = {}
+    options: { status?: number; retryable?: boolean; cause?: unknown; reason?: YouTubeErrorReason } = {}
   ) {
     super(message);
     if (options.cause !== undefined) {
@@ -402,5 +412,6 @@ export class YouTubeClientError extends Error {
     this.code = code;
     this.status = options.status;
     this.retryable = options.retryable ?? false;
+    if (options.reason !== undefined) this.reason = options.reason;
   }
 }

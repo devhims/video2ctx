@@ -132,3 +132,14 @@ test('subprocess failure reaches the response diagnostics after workspace cleanu
     assert.ok(!JSON.stringify(body).includes('PRIVATE'));
   });
 });
+
+test('hands the proxy order to the job outside the request contract', async () => {
+  await fixture(`import {readFile, writeFile} from 'node:fs/promises';
+    const routing = JSON.parse(await readFile(process.argv[2]+'/routing.json','utf8'));
+    const request = JSON.parse(await readFile(process.argv[2]+'/request.json','utf8'));
+    await writeFile(process.argv[2]+'/result.json', JSON.stringify({value:{routing, keys:Object.keys(request)}}));`, async jobPath => {
+    const result = await runFrameJob({ videoId: 'abcdefghijk', timestampsMs: [0] }, { jobPath, proxyOrder: [3, 1, 0, 2] });
+    assert.deepEqual(result.routing, { proxyOrder: [3, 1, 0, 2] });
+    assert.equal(result.keys.includes('proxyOrder'), false);
+  });
+});

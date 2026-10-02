@@ -6,7 +6,7 @@ const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const extractionEventSchema = z.object({
   stage: z.enum(['catalog_lookup', 'catalog_write', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy']),
-  failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed']).optional(),
+  failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge']).optional(),
   egress: z.enum(['direct', 'proxy']).optional(), proxySlot: z.number().int().min(0).max(3).optional(),
   signal: z.enum(['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL']).optional(),
   causeCode: z.enum(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ENOENT', 'EACCES', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']).optional(),

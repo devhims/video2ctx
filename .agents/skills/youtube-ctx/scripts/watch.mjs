@@ -19030,10 +19030,15 @@ var import_he = __toESM(require_he());
 var import_striptags = __toESM(require_striptags());
 
 // ../all-things-youtube/src/youtube-types.ts
+function isBotChallengeReason(reason) {
+  return /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason);
+}
 var YouTubeClientError = class extends Error {
   code;
   status;
   retryable;
+  /** Set when YouTube challenged the connection itself, so callers can blame the egress route. */
+  reason;
   constructor(code, message, options = {}) {
     super(message);
     if (options.cause !== void 0) {
@@ -19043,6 +19048,7 @@ var YouTubeClientError = class extends Error {
     this.code = code;
     this.status = options.status;
     this.retryable = options.retryable ?? false;
+    if (options.reason !== void 0) this.reason = options.reason;
   }
 };
 
@@ -19648,12 +19654,15 @@ async function getStoryboardWithFallback(options) {
       const playabilityStatus = typeof upstreamStatus === "string" && statuses.has(upstreamStatus) ? upstreamStatus : "UNKNOWN";
       const spec = parseStoryboardSpec(raw);
       const specState = spec ? "valid" : object3(raw.storyboards).playerStoryboardSpecRenderer !== void 0 ? "malformed" : "missing";
+      const playabilityReason = object3(raw.playabilityStatus).reason;
+      const botChallenge = typeof playabilityReason === "string" && isBotChallengeReason(playabilityReason);
       emit({
         stage: "player",
         profile: profile.name,
         status,
         playabilityStatus,
         specState,
+        ...botChallenge ? { failureReason: "bot_challenge" } : {},
         outcome: playabilityStatus === "OK" && spec ? "selected" : "skipped",
         elapsedMs: Date.now() - startedAt
       });
@@ -20596,8 +20605,8 @@ function captionAvailabilityError(raw) {
   const status = string(playability.status);
   if (status === "OK") return void 0;
   const reason = string(playability.reason) ?? "";
-  if (/confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason)) {
-    return new YouTubeClientError("UNAVAILABLE", "YouTube blocked caption metadata with a bot challenge.", { retryable: true });
+  if (isBotChallengeReason(reason)) {
+    return new YouTubeClientError("UNAVAILABLE", "YouTube blocked caption metadata with a bot challenge.", { retryable: true, reason: "bot_challenge" });
   }
   if (status === "LOGIN_REQUIRED" || status === "AGE_CHECK_REQUIRED" || status === "CONTENT_CHECK_REQUIRED") {
     return new YouTubeClientError("AUTH_REQUIRED", "YouTube requires authorization to read this video’s captions.");

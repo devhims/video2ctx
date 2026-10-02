@@ -78,6 +78,7 @@
         "name": "USER_ACCOUNT",
         "class_name": "UserAccountDO",
       },
+      { "name": "PROXY_HEALTH", "class_name": "ProxyHealth" },
     ],
   },
   "migrations": [
@@ -102,6 +103,7 @@
       "new_sqlite_classes": ["UserAccountDO"],
     },
     { "tag": "v6", "new_sqlite_classes": ["YouTubeFramesContainer"] },
+    { "tag": "v7", "new_sqlite_classes": ["ProxyHealth"] },
   ],
   "d1_databases": [
     {

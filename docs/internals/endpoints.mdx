@@ -64,3 +64,4 @@ Reserved for authorized video2ctx platform administration.
 | `GET` | `/v1/admin/agent-access` | `listAgentAccess` | List approved Agent tester emails | `sessionCookie` | Exposes tester email addresses; restrict to authorized operators. |
 | `POST` | `/v1/admin/agent-access` | `grantAgentAccess` | Grant Agent testing access to an email | `sessionCookie` | Grants Agent testing access only; requires an authorized browser session and trusted Origin. |
 | `GET` | `/v1/admin/jobs` | `listAdminJobs` | List recent jobs across users | `sessionCookie` | May expose cross-account operational metadata; restrict it to authorized operators. |
+| `GET` | `/v1/admin/proxy-health` | `getAdminProxyHealth` | Read outbound proxy cooldowns | `sessionCookie` | Shows proxy hosts and ports, never credentials; restrict it to authorized operators. |

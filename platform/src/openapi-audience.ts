@@ -98,6 +98,7 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   grantAgentAccess: 'operator',
   revokeAgentAccess: 'operator',
   listAdminJobs: 'operator',
+  getAdminProxyHealth: 'operator',
   getAccountIdentity: 'consumer',
   deleteAccount: 'first-party',
 };
@@ -142,4 +143,5 @@ export const OPENAPI_INTERNAL_SAFETY: Readonly<Record<string, string>> = {
   grantAgentAccess: 'Grants Agent testing access only; requires an authorized browser session and trusted Origin.',
   revokeAgentAccess: 'Removes Agent access on subsequent requests; requires an explicit operator action and trusted Origin.',
   listAdminJobs: 'May expose cross-account operational metadata; restrict it to authorized operators.',
+  getAdminProxyHealth: 'Shows proxy hosts and ports, never credentials; restrict it to authorized operators.',
 };

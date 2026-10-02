@@ -1,4 +1,5 @@
 import { abortableContainerFetch, boundedContainerJson } from './bounded-container-json';
+import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import type { Storyboard } from '../agents/providers/youtube/storyboard';
 import { getContainer } from '@cloudflare/containers';
@@ -180,6 +181,11 @@ function healthFor(env: Env): Map<number, number> {
   return health;
 }
 
+/** True when an attempt's diagnostics show YouTube throttling or challenging the egress route. */
+export function throttled(events: ExtractionAttempt['events']): boolean {
+  return events.some(event => event.status === 429 || event.code === 'RATE_LIMITED' || event.failureReason === 'bot_challenge');
+}
+
 function processorContainer(env: Env, slot: number) {
   const version = env.YOUTUBE_PROCESSOR_VERSION || 'v1';
   return getContainer<YouTubeProcessorContainer>(env.YOUTUBE_PROCESSOR, `${version}-${slot}`);
@@ -261,10 +267,16 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   order.sort((a, b) => Number((health.get(a) ?? 0) > operationStartedAt) - Number((health.get(b) ?? 0) > operationStartedAt));
   const attempts = maxAttempts(env);
   // Proxy choice is independent of the container instance, so retries walk the whole pool
-  // even when there are fewer processors than proxies. Without a readable pool, keep the
+  // even when there are fewer processors than proxies. Healthy proxies go first, using the
+  // cooldowns shared with Worker extraction and frames. Without a readable pool, keep the
   // historical pairing of egress slot and container slot.
+  const pool = normalizedProxyUrls(env);
+  const proxyPlan = pool?.length ? await planProxyOrder(env, pool) : undefined;
   const poolSize = proxyPoolSize(env);
-  const egressOrder = poolSize ? processorSlotOrder(poolSize, randomProcessorSlot(poolSize)) : undefined;
+  const egressOrder = proxyPlan?.order ?? (poolSize ? processorSlotOrder(poolSize, randomProcessorSlot(poolSize)) : undefined);
+  // The processor does not report whether a failure came from the proxy or the video, so only
+  // unambiguous signals are recorded: a success clears a cooldown, a rate limit starts one.
+  const proxyOutcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
   const deadline = AbortSignal.timeout(processorTimeoutMs(env));
   let lastFailure: unknown;
   let upstreamFailure: YouTubeProcessorError | undefined;
@@ -290,6 +302,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       const result = await resultFrom<YouTubeOperationResult<T>>(response, deadline, payload => { capture = extractionCapture(payload); });
       if (operation.kind === 'video' && isVideoMetadataBotChallenge(result)) {
         reason = 'YOUTUBE_BOT_CHALLENGE';
+        proxyOutcomes.push({ slot: egressSlot, outcome: 'rate_limited' });
         throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube blocked the metadata lookup with a bot challenge. The video may still be available.', 503, true);
       }
       // Empty partial catalogs get one pass across the slots, not extra cycles.
@@ -299,6 +312,8 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
         health.delete(slot);
         outcome = 'success';
         logProcessorAttempt(operation.kind, slot, index, status, 'success', startedAt, undefined, extractionId, operationStartedAt);
+        proxyOutcomes.push({ slot: egressSlot, outcome: 'success' });
+        if (proxyPlan) await reportProxyOutcomes(env, proxyPlan, proxyOutcomes);
         return result;
       }
     } catch (error) {
@@ -308,6 +323,11 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       lastFailure = error;
       failureKind = extractionFailureKind(error, deadline);
       const classified = error instanceof YouTubeProcessorError;
+      // The extractor retries 429s and then reports UPSTREAM_ERROR or UNAVAILABLE, so the code alone
+      // misses most throttling. The captured events keep the 429 status and any bot challenge.
+      if ((classified && (error.code === 'RATE_LIMITED' || error.status === 429)) || throttled(capture.events)) {
+        proxyOutcomes.push({ slot: egressSlot, outcome: 'rate_limited' });
+      }
       if (classified) status = error.status;
       const canRetry = !classified || shouldFallbackError(operation, error);
       retry = !deadline.aborted && index + 1 < attempts && canRetry;
@@ -315,6 +335,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       outcome = retry ? 'fallback' : classified ? 'failed' : 'transport_error';
       delay = Math.max(retryDelayMs(env, index), classified ? error.retryAfterMs : 0);
       if (!retry && classified && !deadline.aborted) {
+        if (proxyPlan) await reportProxyOutcomes(env, proxyPlan, proxyOutcomes);
         throw operation.kind === 'transcript' && error.code === 'NOT_FOUND' && upstreamFailure ? upstreamFailure : error;
       }
     } finally {
@@ -331,6 +352,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     try { await waitBeforeFallback(delay, deadline); }
     catch (error) { lastFailure = error; break; }
   }
+  if (proxyPlan) await reportProxyOutcomes(env, proxyPlan, proxyOutcomes);
   throw new YouTubeProcessorError('PROCESSOR_UNAVAILABLE',
     deadline.aborted ? 'The YouTube operation exceeded the API deadline. Please try again.'
       : lastFailure instanceof Error ? lastFailure.message : 'The YouTube processor is unavailable.', 503, true);

@@ -43,7 +43,7 @@ import {
   Video,
   VideoSignals,
   VideoSummary,
-  YouTubeClientError,
+  isBotChallengeReason, YouTubeClientError,
   YouTubeClientOptions,
 } from './youtube-types';
 
@@ -1152,8 +1152,8 @@ function captionAvailabilityError(raw: JsonObject): YouTubeClientError | undefin
   const status = string(playability.status);
   if (status === 'OK') return undefined;
   const reason = string(playability.reason) ?? '';
-  if (/confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(reason)) {
-    return new YouTubeClientError('UNAVAILABLE', 'YouTube blocked caption metadata with a bot challenge.', { retryable: true });
+  if (isBotChallengeReason(reason)) {
+    return new YouTubeClientError('UNAVAILABLE', 'YouTube blocked caption metadata with a bot challenge.', { retryable: true, reason: 'bot_challenge' });
   }
   if (status === 'LOGIN_REQUIRED' || status === 'AGE_CHECK_REQUIRED' || status === 'CONTENT_CHECK_REQUIRED') {
     return new YouTubeClientError('AUTH_REQUIRED', 'YouTube requires authorization to read this video’s captions.');
