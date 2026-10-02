@@ -802,3 +802,96 @@ test.each([false, true])('frame pins overlap safely, including session deletion=
       }
     } finally { release(); spy.mockRestore(); }
   }));
+
+function longTranscript(endMs = 21_521_000): Transcript {
+  const value = transcript('A six hour broadcast.');
+  value.segments = [{ startMs: 0, endMs: 5_000, durationMs: 5_000, text: 'Opening.' }, { startMs: endMs - 5_000, endMs, durationMs: 5_000, text: 'Closing.' }];
+  return value;
+}
+
+test('an over-limit transcript is rejected before it becomes a session asset', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-fetch'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-session/too-long-fetch/', undefined, undefined, undefined, 7_200);
+    const p = provider(vi.fn(async () => ({ value: longTranscript(), cacheStatus: 'miss' as const })));
+    await expect(sessionProvider(p, store).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    expect(store.brief().assets).toEqual([]);
+  }));
+
+test('a long transcript saved before the limit existed is never loaded again', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-saved'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-saved/';
+    // Saved by a store without the limit, as in sessions created before this change.
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const p = provider(vi.fn(async () => ({ value: longTranscript(), cacheStatus: 'miss' as const })));
+    const saved = await sessionProvider(p, unlimited).transcript(id);
+    const version = saved.assetVersions![0]!;
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const read = vi.spyOn(limited, 'read');
+    await expect(limited.readEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await expect(limited.readTranscriptEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await expect(limited.readAsset(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    await limited.ensureSearchIndexed();
+    // Reuse through the provider is rejected too, without another fetch.
+    await expect(sessionProvider(p, limited).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    expect(p.transcript).toHaveBeenCalledTimes(1);
+    // None of the guarded paths, provider reuse included, read the stored blob.
+    expect(read).not.toHaveBeenCalled();
+  }));
+
+test('transcripts within the limit are saved and read normally', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('within-limit'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-session/within-limit/', undefined, undefined, undefined, 7_200);
+    const result = await sessionProvider(provider(), store).transcript(id);
+    const evidence = await store.readEvidence(result.assetVersions![0]!);
+    expect(evidence.packets[0]!.excerpts.length).toBeGreaterThan(0);
+  }));
+
+test('evidence search skips a long transcript indexed before the limit and keeps other matches', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-indexed'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-indexed/';
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const longId = 'longvideo01';
+    const shortId = 'shortvideo1';
+    const long = { ...longTranscript(), videoId: longId };
+    long.segments = long.segments.map(segment => ({ ...segment, text: 'Gold medal ceremony.' }));
+    const short = { ...transcript('Gold medal ceremony recap.'), videoId: shortId };
+    const fetch = vi.fn(async (videoId: string) => ({ value: videoId === longId ? long : short, cacheStatus: 'miss' as const }));
+    await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
+    await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
+    // Indexed while no limit existed, as in sessions saved before this change.
+    await unlimited.ensureSearchIndexed();
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    expect(found.packets.length).toBeGreaterThan(0);
+    expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).toEqual(expect.arrayContaining([shortId]));
+    expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).not.toContain(longId);
+  }));
+
+test('long transcript matches cannot crowd short-video matches out of the top 20', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-crowding'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-crowding/';
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const longId = 'longvideo02';
+    const shortId = 'shortvideo2';
+    // 100 short, separate passages across six hours: each becomes its own matching index row.
+    const long: Transcript = { ...transcript('Gold medal.'), videoId: longId,
+      segments: Array.from({ length: 100 }, (_, i) => ({ startMs: i * 215_000, endMs: i * 215_000 + 4_000, durationMs: 4_000, text: 'Gold medal.' })) };
+    const short = { ...transcript('Gold medal ceremony recap and team highlights.'), videoId: shortId };
+    const fetch = vi.fn(async (videoId: string) => ({ value: videoId === longId ? long : short, cacheStatus: 'miss' as const }));
+    await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
+    await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
+    await unlimited.ensureSearchIndexed();
+    const videos = (packets: EvidencePacket[]) => packets.flatMap(packet => packet.sources.map(source => source.videoId));
+
+    // Precondition: without the limit, the long transcript fills every one of the 20 slots.
+    const crowded = await unlimited.search.searchEvidence(unlimited, 'gold medal');
+    expect(crowded.packets).toHaveLength(20);
+    expect(videos(crowded.packets)).not.toContain(shortId);
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    expect(videos(found.packets)).toContain(shortId);
+    expect(videos(found.packets)).not.toContain(longId);
+  }));

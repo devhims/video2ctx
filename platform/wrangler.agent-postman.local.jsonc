@@ -35,6 +35,7 @@
     "AGENT_RUNTIME_ENABLED": "true",
     // All authenticated users with data access can use the Agent.
     "AGENT_ACCESS_MODE": "all",
+    "AGENT_MAX_VIDEO_SECONDS": "7200",
     "LOCAL_AUTH_BYPASS_ENABLED": "false",
   },
   "containers": [

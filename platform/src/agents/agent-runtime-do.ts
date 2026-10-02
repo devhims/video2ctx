@@ -1,4 +1,5 @@
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
+import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { videoCatalog } from '../lib/video-catalog';
 import { sessionCatalog } from './runtime/session-catalog';
@@ -170,6 +171,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       },
       sessionCatalog(this.env),
       (work) => this.ctx.storage.transactionSync(work),
+      agentMaxVideoSeconds(this.env),
     ));
   }
   private syncSessionHistory() {

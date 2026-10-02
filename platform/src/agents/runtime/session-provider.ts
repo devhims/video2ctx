@@ -5,6 +5,7 @@ import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contrac
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
 import { storyboardSchema, type Storyboard } from '../providers/youtube/storyboard';
 import { SessionEvidenceStore } from './session-evidence';
+import { assertTranscriptWithinLimit } from './video-duration-limit';
 
 /** Retrieval is reusable independently of the question passed to any analyst. */
 export function sessionProvider(
@@ -29,13 +30,21 @@ export function sessionProvider(
     ...provider,
     transcript: async (id, language, options, diagnostic) => {
       const key = transcriptKey(id, language);
+      // A saved over-limit transcript is rejected from its stored metadata, before any blob read.
+      const saved = store.transcriptOverLimitForKey(key);
+      if (saved) throw saved;
       const fresh = (refresh && !refreshed.has(key)) || !!options?.refresh;
       const result = await store.retrieve(
         key,
         'transcript',
         id,
         fresh,
-        () => provider.transcript(id, language, { refresh: fresh }, diagnostic),
+        async () => {
+          const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic);
+          // Reject before saving, so an over-limit transcript never becomes a session asset.
+          if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, fetched.value, store.maxVideoSeconds);
+          return fetched;
+        },
         (value) => ({
           language: value.translatedTo?.languageCode ?? value.track.languageCode,
           trackId: value.track.id,
@@ -49,6 +58,8 @@ export function sessionProvider(
           value.segments.length > 0 &&
           value.segments.some((segment) => segment.text.trim().length > 0),
       );
+      // A transcript saved before the limit existed is reused without the loader above.
+      if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, result.value, store.maxVideoSeconds);
       if (result.assetVersions?.length) refreshed.add(key);
       if (result.assetVersions?.[0]) {
         const resolvedKey = transcriptKey(

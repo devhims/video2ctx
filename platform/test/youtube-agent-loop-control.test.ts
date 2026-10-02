@@ -1866,6 +1866,61 @@ it.each([true, false])('preserves known country blocks and skips premarked repla
   if (allowReplacement) expect(result).toMatchObject({ failures: [] });
 });
 
+it('replaces an over-limit video with the next search candidate', async () => {
+  const { createResearchVideoTranscriptsTool } = await import('../src/agents/providers/youtube/tools/research-video-transcripts');
+  const context = await transcriptResearchContext();
+  context.maxVideoSeconds = 7_200;
+  const normal = context.provider.transcript;
+  // video000001 is a six-hour broadcast; the replacement is a normal-length video.
+  context.provider.transcript = vi.fn(async (videoId: string, ...rest: unknown[]) => {
+    const result = await (normal as (...args: unknown[]) => Promise<{ value: { segments: Array<{ endMs: number }> } }>)(videoId, ...rest);
+    if (videoId === 'video000001') result.value.segments = [{ ...result.value.segments[0]!, endMs: 21_521_000 }];
+    return result;
+  }) as unknown as typeof context.provider.transcript;
+  context.transcriptSelection = { allowReplacement: true, attempted: new Set(), unavailable: new Set(), regionRestricted: new Set() };
+  context.getEvidence = () => [{ packetId: 'candidates', kind: 'youtube_search',
+    sources: [1, 2].map(n => ({ id: `s${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+    excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+      candidates: [1, 2].map(n => ({ type: 'video', id: `video00000${n}` })),
+    } }],
+  }];
+  const tool = createResearchVideoTranscriptsTool(context);
+  const result = await tool.execute!({ sources: [{ videoId: 'video000001' }], focus: 'Research this topic' },
+    { toolCallId: 'too-long', messages: [], context: {} });
+  expect(result).toMatchObject({ skipped: [{ videoId: 'video000001', code: 'VIDEO_TOO_LONG', replacementVideoId: 'video000002' }], failures: [] });
+  expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', 'video000002']);
+});
+
+it('replaces a saved over-limit transcript given by assetVersion with the next search candidate', async () => {
+  const { createResearchVideoTranscriptsTool } = await import('../src/agents/providers/youtube/tools/research-video-transcripts');
+  const { VideoTooLongError } = await import('../src/agents/runtime/video-duration-limit');
+  const context = await transcriptResearchContext();
+  context.maxVideoSeconds = 7_200;
+  const longVersion = assetVersion(77);
+  const session = context.session!;
+  const brief = session.brief.bind(session);
+  // A six-hour transcript saved before the limit existed.
+  context.session = Object.assign(Object.create(session), {
+    brief: () => ({ ...brief(), assets: [...brief().assets, { version: longVersion, kind: 'transcript', videoId: 'video000001',
+      collectedAt: 1, current: true, details: { endMs: 21_521_000 } }] }),
+    transcriptOverLimit: (version: string) => version === longVersion ? new VideoTooLongError('video000001', 21_521, 7_200) : undefined,
+  });
+  context.transcriptSelection = { allowReplacement: true, attempted: new Set(), unavailable: new Set(), regionRestricted: new Set() };
+  context.getEvidence = () => [{ packetId: 'candidates', kind: 'youtube_search',
+    sources: [1, 2].map(n => ({ id: `s${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+    excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_search_candidates', data: {
+      candidates: [1, 2].map(n => ({ type: 'video', id: `video00000${n}` })),
+    } }],
+  }];
+  // The helper prefetches its fixtures; count only retrievals made by this tool call.
+  vi.mocked(context.provider.transcript).mockClear();
+  const tool = createResearchVideoTranscriptsTool(context);
+  const result = await tool.execute!({ sources: [{ assetVersion: longVersion }], focus: 'Research this topic' },
+    { toolCallId: 'saved-too-long', messages: [], context: {} });
+  expect(result).toMatchObject({ skipped: [{ videoId: 'video000001', code: 'VIDEO_TOO_LONG', replacementVideoId: 'video000002' }], failures: [] });
+  expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000002']);
+});
+
 it('keeps metadata in conversation memory when caption languages exceed the cap', () => {
   const packets = metadataForConversation([{ recordedAt: 2000, packet: {
     packetId: 'large-language-list', kind: 'youtube_video',

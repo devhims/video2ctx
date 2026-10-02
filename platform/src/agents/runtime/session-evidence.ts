@@ -1,4 +1,5 @@
 import { SessionSearch } from './session-search';
+import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
 import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
@@ -54,6 +55,8 @@ export interface SessionAccess {
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
+  /** The over-limit error for a saved transcript, from stored metadata only. */
+  transcriptOverLimit?(version: string): VideoTooLongError | undefined;
   readEvidence(
     version: string,
     offset?: number,
@@ -101,6 +104,8 @@ export class SessionEvidenceStore implements SessionAccess {
     private readonly onVideoRead?: (videoId: string) => Promise<void>,
     private readonly catalog?: SessionCatalog,
     private readonly atomic?: <T>(work: () => T) => T,
+    /** Transcripts longer than this are never loaded for evidence, analysis or indexing. */
+    readonly maxVideoSeconds?: number,
   ) {
     if (catalog && !atomic) throw new Error('Shared session storage requires a SQLite transaction boundary.');
     sql.exec(
@@ -144,12 +149,14 @@ export class SessionEvidenceStore implements SessionAccess {
   async ensureSearchIndexed() {
     const generation = this.generation();
     const rows = this.sql
-      .exec<{ version: string }>(
-        `SELECT version FROM session_assets WHERE kind='transcript'
+      .exec<{ version: string; video_id: string; details_json: string }>(
+        `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'
       AND version NOT IN (SELECT version FROM session_search_assets)`,
       )
       .toArray();
-    for (const { version } of rows) {
+    for (const { version, video_id: videoId, details_json: details } of rows) {
+      // Over-limit transcripts saved before the limit existed stay out of the search index.
+      if (this.overLimit({ kind: 'transcript', videoId, details: JSON.parse(details) })) continue;
       const transcript = (await this.read(version)) as Transcript | null;
       if (generation !== this.generation())
         throw new Error('Session evidence changed during indexing. Retry the search.');
@@ -274,9 +281,37 @@ export class SessionEvidenceStore implements SessionAccess {
   has(version: string) {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
   }
+  /** The over-limit error for a saved transcript, judged from its stored end time. */
+  private overLimit(asset: Pick<SessionAsset, 'kind' | 'videoId' | 'details'>): VideoTooLongError | undefined {
+    if (asset.kind !== 'transcript' || this.maxVideoSeconds === undefined) return undefined;
+    const endMs = (asset.details as { endMs?: unknown } | undefined)?.endMs;
+    return typeof endMs === 'number' && endMs > this.maxVideoSeconds * 1_000
+      ? new VideoTooLongError(asset.videoId, endMs / 1_000, this.maxVideoSeconds) : undefined;
+  }
+  /** The over-limit error for a saved transcript version, judged without loading its blob. */
+  transcriptOverLimit(version: string): VideoTooLongError | undefined {
+    const row = this.sql.exec<{ kind: SessionAssetKind; video_id: string; details_json: string }>(
+      'SELECT kind, video_id, details_json FROM session_assets WHERE version=?', version).toArray()[0];
+    return row ? this.overLimit({ kind: row.kind, videoId: row.video_id, details: JSON.parse(row.details_json) }) : undefined;
+  }
+  /** Saved transcripts over the limit, from stored metadata only. Empty when no limit is set. */
+  overLimitTranscriptVersions(): string[] {
+    if (this.maxVideoSeconds === undefined) return [];
+    return this.sql.exec<{ version: string; video_id: string; details_json: string }>(
+      `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'`).toArray()
+      .filter((row) => this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
+      .map((row) => row.version);
+  }
+  /** The same check for whatever version a reuse key currently points to. */
+  transcriptOverLimitForKey(key: string): VideoTooLongError | undefined {
+    const row = this.sql.exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key).toArray()[0];
+    return row ? this.transcriptOverLimit(row.version) : undefined;
+  }
   async readAsset(version: string) {
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) return null;
+    const tooLong = this.overLimit(asset);
+    if (tooLong) throw tooLong;
     const value = await this.read(version);
     return value === null ? null : { asset, value };
   }
@@ -415,6 +450,8 @@ export class SessionEvidenceStore implements SessionAccess {
   async readEvidence(version: string, offset = 0, query?: string, limit = 30) {
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) throw new Error('Session asset is unavailable or deleted.');
+    const tooLong = this.overLimit(asset);
+    if (tooLong) throw tooLong;
     if (asset.kind === 'transcript') {
       const transcript = (await this.read(version)) as Transcript | null;
       if (!transcript) throw new Error('Session asset is unavailable or deleted.');
