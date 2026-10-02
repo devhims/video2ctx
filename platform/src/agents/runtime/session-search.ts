@@ -182,7 +182,8 @@ export class SessionSearch {
       if (seen.has(row.id)) continue;
       const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string };
       const found = metadata.version
-        ? store.has(metadata.version)
+        // Over-limit transcripts indexed before the length limit existed are skipped, not read.
+        ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
           ? (await store.readEvidence(metadata.version, metadata.offset)).packets
           : []
         : store.evidenceForCitations([row.id]);

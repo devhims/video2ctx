@@ -75,6 +75,15 @@ describe('agent video length limit', () => {
       message: expect.stringContaining('1 result longer than 2 hours was omitted') }));
   });
 
+  it('filters the whole provider page before capping at 12 results', async () => {
+    const results = [...Array.from({ length: 12 }, (_, i) => video(`long${String(i).padStart(7, '0')}`, 21_521)), video('short000001', 600)];
+    const search = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { query: 'q', results, videos: results, channels: [], playlists: [],
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } as SearchResponse }));
+    const packet = await executeSearchYouTube({ query: 'q' }, context({ search }, 7_200), 'search');
+    expect(packet.sources.map(source => source.videoId)).toEqual(['short000001']);
+    expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'VIDEO_DURATION_LIMIT', message: expect.stringContaining('12 results') }));
+  });
+
   it('keeps every result when no limit is configured', async () => {
     const results = [video('long0000001', 21_521)];
     const search = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { query: 'q', results, videos: results, channels: [], playlists: [],

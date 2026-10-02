@@ -832,11 +832,11 @@ test('a long transcript saved before the limit existed is never loaded again', a
     await expect(limited.readTranscriptEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     await expect(limited.readAsset(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     await limited.ensureSearchIndexed();
-    // None of the guarded paths read the stored blob.
-    expect(read).not.toHaveBeenCalled();
     // Reuse through the provider is rejected too, without another fetch.
     await expect(sessionProvider(p, limited).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     expect(p.transcript).toHaveBeenCalledTimes(1);
+    // None of the guarded paths, provider reuse included, read the stored blob.
+    expect(read).not.toHaveBeenCalled();
   }));
 
 test('transcripts within the limit are saved and read normally', async () =>
@@ -845,4 +845,26 @@ test('transcripts within the limit are saved and read normally', async () =>
     const result = await sessionProvider(provider(), store).transcript(id);
     const evidence = await store.readEvidence(result.assetVersions![0]!);
     expect(evidence.packets[0]!.excerpts.length).toBeGreaterThan(0);
+  }));
+
+test('evidence search skips a long transcript indexed before the limit and keeps other matches', async () =>
+  runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-indexed'), async (_instance, state) => {
+    const prefix = 'test-session/too-long-indexed/';
+    const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
+    const longId = 'longvideo01';
+    const shortId = 'shortvideo1';
+    const long = { ...longTranscript(), videoId: longId };
+    long.segments = long.segments.map(segment => ({ ...segment, text: 'Gold medal ceremony.' }));
+    const short = { ...transcript('Gold medal ceremony recap.'), videoId: shortId };
+    const fetch = vi.fn(async (videoId: string) => ({ value: videoId === longId ? long : short, cacheStatus: 'miss' as const }));
+    await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
+    await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
+    // Indexed while no limit existed, as in sessions saved before this change.
+    await unlimited.ensureSearchIndexed();
+
+    const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
+    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    expect(found.packets.length).toBeGreaterThan(0);
+    expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).toEqual(expect.arrayContaining([shortId]));
+    expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).not.toContain(longId);
   }));

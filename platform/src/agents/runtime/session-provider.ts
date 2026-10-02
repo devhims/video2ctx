@@ -30,6 +30,9 @@ export function sessionProvider(
     ...provider,
     transcript: async (id, language, options, diagnostic) => {
       const key = transcriptKey(id, language);
+      // A saved over-limit transcript is rejected from its stored metadata, before any blob read.
+      const saved = store.transcriptOverLimitForKey(key);
+      if (saved) throw saved;
       const fresh = (refresh && !refreshed.has(key)) || !!options?.refresh;
       const result = await store.retrieve(
         key,

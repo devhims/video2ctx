@@ -73,8 +73,9 @@ export function executeSearchYouTube(
       const limit = context.maxVideoSeconds;
       const tooLong = (result: SearchResult) => limit !== undefined && result.type === 'video'
         && typeof result.durationSeconds === 'number' && result.durationSeconds > limit;
-      const omitted = response.value.results.slice(0, MAX_RESULTS).filter(tooLong).length;
-      const results = response.value.results.slice(0, MAX_RESULTS).filter(result => !tooLong(result));
+      // Filter the whole provider page before capping, since topic research gets one search per run.
+      const omitted = response.value.results.filter(tooLong).length;
+      const results = response.value.results.filter(result => !tooLong(result)).slice(0, MAX_RESULTS);
       const packetId = `packet:${context.runId}:${safeIdPart(toolCallId)}`;
       const sources = results.map((result, index) => ({
         id: searchSourceId(toolCallId, result, index),
