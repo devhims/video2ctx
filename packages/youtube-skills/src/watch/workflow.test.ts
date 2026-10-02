@@ -100,6 +100,14 @@ describe('youtube-ctx visual workflow', () => {
     expect(mocks.proxyClose).toHaveBeenCalledTimes(1);
   });
 
+  test('forwards the hosted first-response deadline to each media route', async () => {
+    mocks.extractJpeg.mockResolvedValue({ timestampMs: 1000, path: '/tmp/frame.jpg', mimeType: 'image/jpeg', width: 640, height: 360 });
+    await extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test', mediaFirstResponseTimeoutMs: 3_000 });
+    expect(mocks.startMediaRangeProxy.mock.calls[0]?.[6]).toBe(3_000);
+    await expect(extractFrames({ videoId: video.id, timestampsMs: [1000], outputDir: '/tmp/frame-test', mediaFirstResponseTimeoutMs: 0 }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
   test('extracts frames from an ended broadcast even with legacy isLive metadata', async () => {
     mocks.getDetails.mockResolvedValue({ ...video, isLive: true });
     mocks.extractJpeg.mockResolvedValue({ timestampMs: 1000, path: '/tmp/frame.jpg', mimeType: 'image/jpeg', width: 640, height: 360 });

@@ -343,3 +343,56 @@ preference change. A proxied wrapper test encountered a tunnel 502 and stopped
 in 544 ms. Local configuration had no second proxy, so alternate-route success
 is covered by automated tests, not a live production result. Deploy the Worker
 schema change and rebuilt frames image together, then verify a fresh agent run.
+
+### Media route first-response deadline
+
+A proxy can serve player calls to youtube.com while its CONNECTs to googlevideo
+stall. Run `30211f31-f70c-418d-b3dd-119ba11fbeda` lost 13.5 seconds that way:
+the first candidate waited out FFmpeg's 10-second timeout, and the second needed
+a 522 before the container switched proxies.
+
+When another proxy is available, the first attempt now gives each media route 3
+seconds to return response headers. The range proxy enforces this until the route
+answers once, so a slow later seek is not mistaken for a stall. Any HTTP status,
+including 403, counts as an answer. A stall fails the route as `PROXY_TUNNEL_FAILED`
+with `causeCode: ETIMEDOUT` and no `status`, which separates it from an explicit
+tunnel rejection. The container then switches proxies without trying the remaining
+candidates on that route. The final route keeps the longer FFmpeg wait, because
+failing it early leaves nothing to switch to. Local CLI extraction does not enable
+the deadline.
+
+Closing a route waits one second for in-flight requests, then destroys the proxy
+dispatcher. Before this change, a CONNECT that never answered held the close until
+undici's own 300-second timeout, past the job's hard deadline.
+
+A local reproduction used two loopback CONNECT proxies, one stalling the first
+media CONNECT and returning 522 on the next. On `3mzScaC1UB4` at the run's six
+timestamps, the stalled proxy failed after 3.6 seconds instead of 13.5, and the
+extraction completed in 10.3 seconds instead of 20.4. This used direct egress from
+the test machine, not production proxies. The 3-second threshold is not yet
+validated against slow but working proxies. Deploy the rebuilt frames image to
+both slots; the Worker is unchanged.
+
+### Visiting every configured proxy
+
+Testing all ten Decodo US residential ports on October 2, 2026 showed exit health
+changing minute to minute. At times half the exits returned 522 for googlevideo,
+one returned 522 for every destination, and one stalled on youtube.com. The same
+exit IP failed and later recovered, so this was exit connectivity, not a YouTube
+block. With two attempts per job, two bad exits in a row failed the request.
+
+A frames job now tries up to four proxies, one per configured URL, excluding each
+failed slot. All attempts share the original extraction deadline, and no new attempt
+starts with less than five seconds left. Until a route returns its first response,
+YouTube metadata and player requests get 5 seconds; a stall latches the route as
+`PROXY_TUNNEL_FAILED` with `causeCode: ETIMEDOUT`, so library retries fail at once
+and the job switches proxies. Media keeps its 3-second check. Both checks are off on
+the last remaining proxy. A failed route's dispatcher is destroyed immediately,
+without the one-second close grace.
+
+A reproduction with four loopback proxies, stalling youtube.com, stalling media,
+returning 522 for media, and healthy, visited all four and returned six frames in
+16.1 seconds. Against the production pool, one of three jobs met a stalled exit,
+switched after the 5-second or 3-second check, and finished in 14.8 seconds; the
+other two used their first proxy. A pool of one URL keeps a single attempt with the
+longer timeouts.

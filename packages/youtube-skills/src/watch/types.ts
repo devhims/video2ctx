@@ -39,6 +39,11 @@ export interface ExtractFramesRequest extends YouTubeClientOptions {
   timeBudgetMs?: number;
   /** Optional cap for each format probe and seek; local usage defaults to 30s. */
   frameTimeoutMs?: number;
+  /**
+   * Optional hosted cap on a media route's first response headers. A stall fails the
+   * route with PROXY_TUNNEL_FAILED so the caller can switch proxies. Off by default.
+   */
+  mediaFirstResponseTimeoutMs?: number;
 }
 
 export interface ExtractedFrame {

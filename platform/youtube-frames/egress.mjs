@@ -26,25 +26,42 @@ export function proxyConnections(environment) {
 
 export function createFrameTransport(environment, {
   select = randomInt,
-  excludeSlot,
+  excludeSlots = [],
+  firstResponseTimeoutMs,
   createDispatcher = url => new ProxyAgent(url),
   fetch = undiciFetch,
   directFetch = globalThis.fetch,
+  closeGraceMs = 1_000,
 } = {}) {
   const urls = proxyConnections(environment);
   if (!urls.length) return { fetch: directFetch, close: async () => {}, proxyConfigured: false };
-  const slots = urls.map((_, index) => index).filter(index => index !== excludeSlot);
+  const slots = urls.map((_, index) => index).filter(index => !excludeSlots.includes(index));
   if (!slots.length) throw new Error("No alternate proxy available.");
   const slot = slots[select(slots.length)];
   let failure;
+  let proven = false;
   const dispatcher = createDispatcher(urls[slot]);
   return {
     // Metadata, player profiles and media byte ranges share this dispatcher.
     fetch: async (input, init) => {
       if (failure) throw failure;
-      try { return await fetch(input, { ...init, dispatcher }); }
-      catch (error) {
+      // Until the route answers once, a stalled request is a route failure, not a slow upstream.
+      // Media hosts get their own first-response check in the range proxy.
+      const guard = !proven && firstResponseTimeoutMs !== undefined ? new AbortController() : undefined;
+      const timer = guard && setTimeout(() => guard.abort(), firstResponseTimeoutMs);
+      const signal = guard ? (init?.signal ? AbortSignal.any([init.signal, guard.signal]) : guard.signal) : init?.signal;
+      try {
+        const response = await fetch(input, { ...init, signal, dispatcher });
+        proven = true;
+        return response;
+      } catch (error) {
         if (!init?.signal?.aborted) {
+          if (guard?.signal.aborted) {
+            failure = Object.assign(new Error('Outbound proxy route did not respond.'), {
+              code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', causeCode: 'ETIMEDOUT',
+            });
+            throw failure;
+          }
           const status = tunnelStatus(error);
           if (status !== undefined) {
             failure = Object.assign(new Error('Outbound proxy tunnel failed.'), {
@@ -54,10 +71,22 @@ export function createFrameTransport(environment, {
           }
         }
         throw error;
+      } finally {
+        clearTimeout(timer);
       }
     },
     get failure() { return failure; },
-    close: () => dispatcher.close(),
+    // A stalled CONNECT can keep a graceful close pending until undici's own timeout,
+    // which would hold the job past its budget. Give it a moment, then tear it down.
+    // A route already known to have failed is torn down at once.
+    close: async ({ force = false } = {}) => {
+      if (force) { await dispatcher.destroy().catch(() => {}); return; }
+      let timer;
+      const closed = dispatcher.close().then(() => true, () => true);
+      const graceful = await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, closeGraceMs, false); })]);
+      clearTimeout(timer);
+      if (!graceful) await dispatcher.destroy().catch(() => {});
+    },
     proxyConfigured: true,
     slot,
   };
