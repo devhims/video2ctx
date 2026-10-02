@@ -157,11 +157,14 @@ describe('first media response deadline', () => {
 test('a slow concurrent media request survives once the route has answered', async () => {
   let calls = 0;
   const proxy = await startMediaRangeProxy({ url: 'https://media.test/?sig=secret', mimeType: 'video/mp4', progressive: true },
-    (async () => {
+    // Honors abort like a real fetch, so a stray route timer would fail the slow request.
+    ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
       calls++;
-      await new Promise((resolve) => setTimeout(resolve, calls === 1 ? 10 : 150));
-      return new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' } });
-    }) as typeof fetch, new TransferBudget(), 0, undefined, Infinity, 50);
+      const timer = setTimeout(() => resolve(new Response('abc', {
+        status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' },
+      })), calls === 1 ? 10 : 150);
+      init?.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal!.reason); }, { once: true });
+    })) as typeof fetch, new TransferBudget(), 0, undefined, Infinity, 50);
   try {
     const responses = await Promise.all([fetch(proxy.url, { headers: { Range: 'bytes=0-2' } }), fetch(proxy.url, { headers: { Range: 'bytes=0-2' } })]);
     expect(await Promise.all(responses.map((response) => response.text()))).toEqual(['abc', 'abc']);
