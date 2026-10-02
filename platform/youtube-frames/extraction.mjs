@@ -1,32 +1,49 @@
 import { createFrameTransport, proxyConnections } from './egress.mjs';
 
+// Time allowed for a proxy's first media response headers before switching proxies.
+export const MEDIA_FIRST_RESPONSE_TIMEOUT_MS = 3_000;
+// Time allowed for a proxy's first YouTube metadata or player response before switching proxies.
+export const ROUTE_FIRST_RESPONSE_TIMEOUT_MS = 5_000;
+// Residential exits fail independently, and a failed route costs a few seconds with the
+// probes above, so a job may visit every configured proxy within its budget.
+export const MAX_PROXY_ATTEMPTS = 4;
+
 // A retry is a new extraction, so signed URLs are resolved on the new route.
-// Both attempts share one wall-clock budget. Never silently bypass the proxy.
+// All attempts share one wall-clock budget. Never silently bypass the proxy.
 export async function extractWithProxyFallback(request, {
   extractFrames, environment = process.env, onDiagnostic = () => {},
   transportFactory = createFrameTransport, now = Date.now,
 }) {
   const deadline = now() + (request.extractionTimeoutMs ?? 45_000);
   const pool = proxyConnections(environment);
-  let excludeSlot;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const transport = transportFactory(environment, { excludeSlot });
+  const maxAttempts = Math.max(1, Math.min(pool.length, MAX_PROXY_ATTEMPTS));
+  const failedSlots = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Probe only while another proxy remains. The final route keeps the longer library and
+    // FFmpeg timeouts, because failing it fast leaves nothing to switch to.
+    const alternateAvailable = attempt < maxAttempts;
+    const transport = transportFactory(environment, {
+      excludeSlots: [...failedSlots],
+      ...(alternateAvailable ? { firstResponseTimeoutMs: ROUTE_FIRST_RESPONSE_TIMEOUT_MS } : {}),
+    });
+    let routeFailed = false;
     try {
       onDiagnostic({ stage: 'proxy', egress: transport.proxyConfigured ? 'proxy' : 'direct', proxySlot: transport.slot, attempt });
-      const result = await extractFrames({
+      return await extractFrames({
         ...request, preferResolution: false, timeBudgetMs: Math.max(1, deadline - now()),
         frameTimeoutMs: 10_000, fetch: transport.fetch, onDiagnostic,
+        ...(alternateAvailable ? { mediaFirstResponseTimeoutMs: MEDIA_FIRST_RESPONSE_TIMEOUT_MS } : {}),
         retry: { policy: { maxAttempts: 2, attemptTimeoutMs: 8_000 } },
       });
-      return result;
     } catch (error) {
       const failure = transport.failure ?? error;
       if (failure?.code !== 'PROXY_TUNNEL_FAILED') throw error;
+      routeFailed = true;
       onDiagnostic({ stage: 'proxy', proxySlot: transport.slot, attempt, error: failure });
-      if (attempt === 2 || pool.length < 2 || deadline - now() < 5_000) throw failure;
-      excludeSlot = transport.slot;
+      if (attempt === maxAttempts || deadline - now() < 5_000) throw failure;
+      failedSlots.push(transport.slot);
     } finally {
-      await transport.close();
+      await transport.close({ force: routeFailed });
     }
   }
 }

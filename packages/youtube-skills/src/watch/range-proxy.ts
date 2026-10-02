@@ -64,14 +64,49 @@ export interface MediaRangeProxy {
   close(): Promise<void>;
 }
 
+function routeStalled(): Error {
+  // Reuses the tunnel failure category so the caller switches routes. No status: the route never answered.
+  return Object.assign(new Error('Outbound media route did not respond.'), {
+    code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', causeCode: 'ETIMEDOUT',
+  });
+}
+
+/**
+ * Until the media route has answered once, bound each upstream attempt's time to response headers.
+ * A stalled CONNECT then fails the route quickly instead of waiting for FFmpeg's own timeout.
+ */
+function firstResponseGuard(fetchImpl: typeof fetch, timeoutMs: number | undefined): typeof fetch {
+  if (timeoutMs === undefined) return fetchImpl;
+  let proven = false;
+  return async (input, init) => {
+    if (proven) return fetchImpl(input, init);
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(input, {
+        ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal,
+      });
+      proven = true;
+      return response;
+    } catch (error) {
+      if (timeout.signal.aborted && !init?.signal?.aborted) throw routeStalled();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
 export async function startMediaRangeProxy(
   candidate: MediaCandidate,
-  fetchImpl: typeof fetch,
+  baseFetch: typeof fetch,
   budget: TransferBudget,
   prefixLimit = DEFAULT_PREFIX_CACHE_BYTES,
   onDiagnostic?: DiagnosticSink,
   deadlineAt = Infinity,
+  firstResponseTimeoutMs?: number,
 ): Promise<MediaRangeProxy> {
+  const fetchImpl = firstResponseGuard(baseFetch, firstResponseTimeoutMs);
   const token = randomBytes(18).toString('hex');
   let failure: unknown;
   let prefix = Buffer.alloc(0);

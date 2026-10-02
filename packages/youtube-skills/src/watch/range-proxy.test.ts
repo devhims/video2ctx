@@ -90,3 +90,66 @@ test('retries a temporary media rate limit before forwarding bytes to FFmpeg', a
     expect(ranges).toEqual(['bytes=0-2', 'bytes=0-2']);
   } finally { await proxy.close(); }
 });
+
+// Resolves only when aborted, like a proxy CONNECT that never answers.
+const stalledFetch = (async (_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+  init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+})) as typeof fetch;
+
+describe('first media response deadline', () => {
+  const candidate = { url: 'https://media.test/?sig=secret', mimeType: 'video/mp4', progressive: true };
+
+  test('fails a stalled route quickly as a tunnel failure without retrying', async () => {
+    const events: Array<{ stage: string; error?: { code?: string; causeCode?: string } }> = [];
+    let calls = 0;
+    const proxy = await startMediaRangeProxy(candidate, (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls++;
+      return stalledFetch(input, init);
+    }) as typeof fetch, new TransferBudget(), undefined, event => events.push(event as never), Infinity, 50);
+    try {
+      const startedAt = Date.now();
+      const response = await fetch(proxy.url, { headers: { Range: 'bytes=0-' } });
+      expect(response.status).toBe(502);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(proxy.failure).toMatchObject({ code: 'PROXY_TUNNEL_FAILED', failureReason: 'proxy_tunnel_failed', causeCode: 'ETIMEDOUT' });
+      expect(calls).toBe(1);
+      expect(events).toEqual([expect.objectContaining({ stage: 'media_transfer', error: expect.objectContaining({ code: 'PROXY_TUNNEL_FAILED' }) })]);
+      expect(JSON.stringify(events)).not.toContain('secret');
+    } finally { await proxy.close(); }
+  });
+
+  test('stops applying once the route has answered', async () => {
+    let calls = 0;
+    const proxy = await startMediaRangeProxy(candidate, (async () => {
+      calls++;
+      if (calls === 2) await new Promise((resolve) => setTimeout(resolve, 150));
+      return new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' } });
+    }) as typeof fetch, new TransferBudget(), 0, undefined, Infinity, 50);
+    try {
+      expect(await (await fetch(proxy.url, { headers: { Range: 'bytes=0-2' } })).text()).toBe('abc');
+      // A slower later response is not a route stall; only first contact is bounded.
+      expect(await (await fetch(proxy.url, { headers: { Range: 'bytes=0-2' } })).text()).toBe('abc');
+      expect(proxy.failure).toBeUndefined();
+    } finally { await proxy.close(); }
+  });
+
+  test('a non-success response still proves the route', async () => {
+    const proxy = await startMediaRangeProxy(candidate, (async () => new Response(null, { status: 403 })) as typeof fetch,
+      new TransferBudget(), undefined, undefined, Infinity, 50);
+    try {
+      expect((await fetch(proxy.url)).status).toBe(403);
+      expect(proxy.failure).toBeUndefined();
+    } finally { await proxy.close(); }
+  });
+
+  test('is off by default so local extraction keeps waiting for slow routes', async () => {
+    const proxy = await startMediaRangeProxy(candidate, (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/3', 'content-length': '3' } });
+    }) as typeof fetch, new TransferBudget());
+    try {
+      expect(await (await fetch(proxy.url, { headers: { Range: 'bytes=0-2' } })).text()).toBe('abc');
+      expect(proxy.failure).toBeUndefined();
+    } finally { await proxy.close(); }
+  });
+});

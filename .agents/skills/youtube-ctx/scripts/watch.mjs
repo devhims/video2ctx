@@ -21974,7 +21974,37 @@ async function write(res, bytes) {
     res.once("close", close);
   });
 }
-async function startMediaRangeProxy(candidate, fetchImpl, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic, deadlineAt = Infinity) {
+function routeStalled() {
+  return Object.assign(new Error("Outbound media route did not respond."), {
+    code: "PROXY_TUNNEL_FAILED",
+    failureReason: "proxy_tunnel_failed",
+    causeCode: "ETIMEDOUT"
+  });
+}
+function firstResponseGuard(fetchImpl, timeoutMs) {
+  if (timeoutMs === void 0) return fetchImpl;
+  let proven = false;
+  return async (input, init) => {
+    if (proven) return fetchImpl(input, init);
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(input, {
+        ...init,
+        signal: init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal
+      });
+      proven = true;
+      return response;
+    } catch (error) {
+      if (timeout.signal.aborted && !init?.signal?.aborted) throw routeStalled();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+async function startMediaRangeProxy(candidate, baseFetch, budget, prefixLimit = DEFAULT_PREFIX_CACHE_BYTES, onDiagnostic, deadlineAt = Infinity, firstResponseTimeoutMs) {
+  const fetchImpl = firstResponseGuard(baseFetch, firstResponseTimeoutMs);
   const token = randomBytes(18).toString("hex");
   let failure2;
   let prefix = Buffer.alloc(0);
@@ -22224,7 +22254,7 @@ async function extractConcurrent(timestamps2, run) {
   return results;
 }
 async function extractFrames(options) {
-  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs]) {
+  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs, options.mediaFirstResponseTimeoutMs]) {
     if (limit !== void 0 && (!Number.isSafeInteger(limit) || limit < 1 || limit > 6e4)) {
       throw new YouTubeClientError("INVALID_INPUT", "Extraction time limits must be integers from 1 to 60000ms.");
     }
@@ -22281,7 +22311,15 @@ async function extractFramesWithinBudget(options, deadlineAt) {
       if (Date.now() >= deadlineAt) break;
       const pending = timestamps2.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
-      const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, void 0, (event) => diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }), deadlineAt);
+      const proxy = await startMediaRangeProxy(
+        candidate,
+        fetchImpl,
+        budget,
+        void 0,
+        (event) => diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }),
+        deadlineAt,
+        options.mediaFirstResponseTimeoutMs
+      );
       const run = async (timestampMs) => {
         const startedAt = Date.now();
         try {

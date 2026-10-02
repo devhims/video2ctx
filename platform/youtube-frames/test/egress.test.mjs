@@ -47,9 +47,9 @@ test('redacts every pool entry including encoded and decoded credentials', () =>
   } finally { if (saved === undefined) delete process.env.OUTBOUND_PROXY_URLS; else process.env.OUTBOUND_PROXY_URLS = saved; }
 });
 
-test('an alternate route excludes the failed pool slot', async () => {
+test('an alternate route excludes the failed pool slots', async () => {
   const transport = createFrameTransport({ OUTBOUND_PROXY_URLS: JSON.stringify(pool) }, {
-    excludeSlot: 0, select: count => { assert.equal(count, 1); return 0; },
+    excludeSlots: [0], select: count => { assert.equal(count, 1); return 0; },
     createDispatcher: url => { assert.equal(url, pool[1]); return { close: async () => {} }; },
   });
   assert.equal(transport.slot, 1);

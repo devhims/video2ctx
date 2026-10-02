@@ -187,7 +187,7 @@ async function extractConcurrent(
 }
 
 export async function extractFrames(options: ExtractFramesRequest): Promise<FrameExtractionResult> {
-  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs]) {
+  for (const limit of [options.timeBudgetMs, options.frameTimeoutMs, options.mediaFirstResponseTimeoutMs]) {
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 60_000)) {
       throw new YouTubeClientError('INVALID_INPUT', 'Extraction time limits must be integers from 1 to 60000ms.');
     }
@@ -249,7 +249,8 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
       const pending = timestamps.filter((timestamp) => !frames.has(timestamp));
       if (!pending.length) break;
       const proxy = await startMediaRangeProxy(candidate, fetchImpl, budget, undefined, event =>
-        diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }), deadlineAt);
+        diagnose(options.onDiagnostic, { ...event, profile: group.profile, candidateIndex: group.candidates.indexOf(candidate) }), deadlineAt,
+        options.mediaFirstResponseTimeoutMs);
       const run = async (timestampMs: number) => {
         const startedAt = Date.now();
         try {
