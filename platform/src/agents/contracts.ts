@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidTimeZone } from './runtime/current-date';
 
 export const comparisonVideoIdsSchema = z.array(z.string().regex(/^[A-Za-z0-9_-]{11}$/)).min(2).max(8).optional();
 
@@ -222,6 +223,8 @@ export const agentRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),
   conversationId: z.string().uuid().optional(),
   parentMessageId: z.string().uuid().optional(),
+  timeZone: z.string().trim().refine(isValidTimeZone, 'Use an IANA time zone such as Asia/Kolkata.').optional()
+    .describe('IANA time zone used to interpret relative dates such as today or this year. Defaults to UTC.'),
 });
 
 export const agentAdmissionSchema = z.object({

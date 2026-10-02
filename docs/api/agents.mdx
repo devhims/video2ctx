@@ -34,6 +34,8 @@ For a follow-up, include the `sessionId` returned by the previous request:
 }
 ```
 
+To have relative dates such as "today", "this week", or "this year" resolved in your own zone, add an IANA `timeZone`, for example `"timeZone": "Asia/Kolkata"`. The agent reads the date in that zone when the run is admitted and keeps it for every phase of the run, including recovery. Without `timeZone`, it uses UTC. An unrecognized zone returns `422`. The dashboard sends the browser's zone automatically.
+
 Each accepted submission starts a new run, even if the
 message is identical. Save the `sessionId` and `runId` from the `202` receipt to
 retrieve existing work. If the receipt is lost, check **Dashboard → Sessions** or

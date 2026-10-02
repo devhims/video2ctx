@@ -37,6 +37,8 @@ export interface AgentToolContext {
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;
+  /** Trusted line naming the run's date, appended to research and finalizer instructions. */
+  currentDate?: string;
   getEvidence?(): readonly EvidencePacket[];
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;

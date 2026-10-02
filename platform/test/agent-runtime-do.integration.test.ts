@@ -1266,3 +1266,21 @@ test('failed tool traces publish only matching current extraction diagnostics to
     expect(detail?.payloadState).toBe('complete');
   });
 });
+
+test('a run stores the client time zone and older runs fall back to UTC', async () => {
+  const { runtime, userId } = await seed('run-time-zone');
+  await runInDurableObject(runtime, async (instance, state) => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
+      fiberId: 'zone', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
+    });
+    const zoned = await instance.startRun({ message: 'Videos from this year', conversationId: crypto.randomUUID(), timeZone: 'Asia/Kolkata' },
+      { userId, creditsRemaining: 1000 });
+    const plain = await instance.startRun({ message: 'Videos from today', conversationId: crypto.randomUUID() },
+      { userId, creditsRemaining: 1000 });
+    if ('rejected' in zoned || 'rejected' in plain) throw new Error('run rejected');
+    const zone = (runId: string) => state.storage.sql.exec('SELECT time_zone FROM agent_runs WHERE id = ?', runId).toArray()[0];
+    expect(zone(zoned.runId)).toEqual({ time_zone: 'Asia/Kolkata' });
+    expect(zone(plain.runId)).toEqual({ time_zone: null });
+    fiber.mockRestore();
+  });
+});

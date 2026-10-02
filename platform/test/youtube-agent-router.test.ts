@@ -17,6 +17,7 @@ import { createCapabilityProvider } from '../src/agents/research/capability-prov
 import type { ConversationTurn } from '../src/agents/runtime/conversation-memory';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
+import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
   it.each(['how to get the most out of Claude Opus 4.5 tips and prompting guide', 'Opus prompting guide', 'Opus 5.5 and 4.5 prompting guide'])('rejects changed or dropped versions before discovery: %s', async searchQuery => {
@@ -638,6 +639,36 @@ describe('YouTube agent capability router', () => {
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('I inspected its main argument.');
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(loop.stepCount).toBe(1);
+  });
+
+  it('gives the research loop the run date as a trusted instruction', async () => {
+    const model = finalizingModel();
+    const currentDate = currentDateGuidance(Date.UTC(2026, 9, 1, 20, 0), 'Asia/Kolkata');
+    await runResearchAgentWithModel({
+      model, message: 'Find videos about it from this year',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false },
+      context: { ...inspectContext(), currentDate },
+    });
+    const system = model.doGenerateCalls[0]!.prompt.find(message => message.role === 'system');
+    expect(system?.content).toContain('Current date: Friday, 2 October 2026 (2026-10-02)');
+    // The date must not be smuggled into the untrusted user payload instead.
+    const user = JSON.stringify(model.doGenerateCalls[0]!.prompt.filter(message => message.role !== 'system'));
+    expect(user).not.toContain('Current date:');
+  });
+
+  it('gives the classifier the run date and asks for absolute dates in searchQuery', async () => {
+    const model = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'AI agents 2026' });
+    await classifyCapabilityWithModel({ message: 'AI agent videos from this year', model,
+      signal: new AbortController().signal, currentDate: currentDateGuidance(Date.UTC(2026, 9, 2, 8), 'UTC') });
+    const system = model.doGenerateCalls[0]!.prompt.find(message => message.role === 'system');
+    expect(system?.content).toContain('Current date: Friday, 2 October 2026 (2026-10-02)');
+    expect(system?.content).toContain('write the absolute year or date into searchQuery');
+  });
+
+  it('omits the date line when a caller supplies no date', async () => {
+    const model = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'AI agents' });
+    await classifyCapabilityWithModel({ message: 'AI agent videos', model, signal: new AbortController().signal });
+    expect(JSON.stringify(model.doGenerateCalls[0]!.prompt)).not.toContain('Current date:');
   });
 
   it.each([

@@ -76,12 +76,24 @@ export class AgentSendError extends Error {
   }
 }
 
+// The agent reads relative dates such as "today" in the user's own zone.
+// An unavailable or unusual zone is omitted, so the platform falls back to UTC.
+export function browserTimeZone(): string | undefined {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === 'string' && zone.length <= 64 && /^[A-Za-z0-9_+\-/]+$/.test(zone) ? zone : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function sendAgentMessage(message: string, sessionId?: string): Promise<AgentAdmission> {
   try {
+    const timeZone = browserTimeZone();
     const response = await platformFetch('/v1/agent?include=diagnostics', {
       method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }),
+      body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}), ...(timeZone ? { timeZone } : {}) }),
     });
     if (!response.ok) {
       const error = await platformResponseError(response, response.status >= 500
