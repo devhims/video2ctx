@@ -25,7 +25,7 @@ npx skills add devhims/video2ctx`,
   curl: {
     label: 'Hosted API',
     note: 'Any language, one request. Bearer auth with a key from the dashboard.',
-    code: `curl https://api.video2ctx.dev/v1/providers/youtube/videos/S4tdkSVuxZA/transcript \\
+    code: `curl 'https://api.video2ctx.dev/v1/videos/S4tdkSVuxZA/transcript?provider=youtube' \\
   --header "Authorization: Bearer $VIDEO2CTX_API_KEY"`,
   },
   node: {

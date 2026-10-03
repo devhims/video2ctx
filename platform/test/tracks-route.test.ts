@@ -46,7 +46,7 @@ const executionContext = {
 describe('tracks route', () => {
   test('returns transcript track metadata from the canonical route', async () => {
     const response = await app.request(
-      '/v1/providers/youtube/videos/abcdefghijk/tracks',
+      '/v1/videos/abcdefghijk/tracks?provider=youtube',
       {},
       {} as Env,
       executionContext,
@@ -59,7 +59,7 @@ describe('tracks route', () => {
 
   test('does not expose the former captions route', async () => {
     const response = await app.request(
-      '/v1/providers/youtube/videos/abcdefghijk/captions',
+      '/v1/videos/abcdefghijk/captions?provider=youtube',
       {},
       {} as Env,
       executionContext,

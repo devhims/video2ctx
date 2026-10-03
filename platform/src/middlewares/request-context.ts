@@ -8,7 +8,7 @@ export const requestContext: MiddlewareHandler<App> = async (c, next) => {
     c.set('requestStartedAt', startedAt);
     c.set('agentAdmissionTimings', []);
   }
-  if (c.req.method === 'GET' && /^\/v1\/providers\/[^/]+\/videos\/[^/]+(?:\/|$)/.test(c.req.path)) {
+  if (c.req.method === 'GET' && /^\/v1\/videos\/[^/]+(?:\/|$)/.test(c.req.path)) {
     c.set('dataRequestTimings', []);
   }
   const requestId = c.req.header('cf-ray') ?? crypto.randomUUID();

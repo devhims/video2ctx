@@ -3,19 +3,19 @@ title: "Discovery and trends"
 description: "Search, browse, resolve input, and research topic momentum."
 ---
 
-Use provider discovery when you need public YouTube results and private evidence search when you need material already stored by the account.
+Use provider discovery when you need public YouTube results and project search when you need indexed material from one of your projects.
 
 | Capability | Endpoint |
 | --- | --- |
 | List provider capabilities | `GET /v1/providers` |
-| Search YouTube | `GET /v1/providers/youtube/search` |
-| Browse a supported catalog | `GET /v1/providers/youtube/browse` |
-| Search private evidence | `GET /v1/search` |
-| Build a trend report | `GET /v1/providers/youtube/trends` |
+| Search YouTube | `GET /v1/search?provider=youtube` |
+| Browse a supported catalog | `GET /v1/browse?provider=youtube` |
+| Search private evidence | `GET /v1/projects/{projectId}/search` |
+| Build a trend report | `GET /v1/trends?provider=youtube` |
 | Generate a plan from a report | `POST /v1/trends/plan` |
 
 ```bash
-curl --get 'https://api.video2ctx.dev/v1/providers/youtube/search' \
+curl --get 'https://api.video2ctx.dev/v1/search?provider=youtube' \
   --header "Authorization: Bearer $VIDEO2CTX_API_KEY" \
   --data-urlencode 'q=AI agents' \
   --data 'type=video'

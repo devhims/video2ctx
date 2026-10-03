@@ -48,7 +48,7 @@ const executionContext = {
 
 describe('channel routes', () => {
   test('returns only core metadata from the channel resource', async () => {
-    const response = await app.request('/v1/providers/youtube/channels/UC123', {}, {} as Env, executionContext);
+    const response = await app.request('/v1/channels/UC123?provider=youtube', {}, {} as Env, executionContext);
     const body = await response.json<Record<string, unknown>>();
 
     expect(response.status).toBe(200);
@@ -59,10 +59,10 @@ describe('channel routes', () => {
 
   test('forwards independent continuation tokens to channel catalogs', async () => {
     const videosResponse = await app.request(
-      '/v1/providers/youtube/channels/UC123/videos?sort=popular&continuation=VIDEO_TOKEN', {}, {} as Env, executionContext,
+      '/v1/channels/UC123/videos?provider=youtube&sort=popular&continuation=VIDEO_TOKEN', {}, {} as Env, executionContext,
     );
     const playlistsResponse = await app.request(
-      '/v1/providers/youtube/channels/UC123/playlists?sort=last-video-added&continuation=PLAYLIST_TOKEN', {}, {} as Env, executionContext,
+      '/v1/channels/UC123/playlists?provider=youtube&sort=last-video-added&continuation=PLAYLIST_TOKEN', {}, {} as Env, executionContext,
     );
 
     expect(videosResponse.status).toBe(200);
@@ -75,7 +75,7 @@ describe('channel routes', () => {
 
   test('rejects unsupported channel catalog sorts', async () => {
     const response = await app.request(
-      '/v1/providers/youtube/channels/UC123/videos?sort=most-liked', {}, {} as Env, executionContext,
+      '/v1/channels/UC123/videos?provider=youtube&sort=most-liked', {}, {} as Env, executionContext,
     );
 
     expect(response.status).toBe(422);

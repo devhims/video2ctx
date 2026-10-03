@@ -5,6 +5,15 @@ import { OPENAPI_INTERNAL_SAFETY, OPENAPI_OPERATION_AUDIENCE } from '../src/open
 const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']);
 
 describe('documentation audience', () => {
+  test.each([
+    ['/v1/projects/{projectId}/answers', 'createAnswer'],
+    ['/v1/projects/{projectId}/comparisons', 'createComparison'],
+    ['/v1/projects/{projectId}/reports', 'createReport'],
+  ] as const)('keeps %s documented internally with browser-session access', (path, operationId) => {
+    expect(OPENAPI_OPERATION_AUDIENCE[operationId]).toBe('first-party');
+    expect(openApiDocument.paths[path].post.security).toEqual([{ sessionCookie: [] }, { demoUser: [] }]);
+  });
+
   test('classifies every OpenAPI operation exactly once', () => {
     const operationIds = Object.values(openApiDocument.paths).flatMap((pathItem) =>
       Object.entries(pathItem)

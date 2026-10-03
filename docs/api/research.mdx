@@ -1,6 +1,6 @@
 ---
 title: "Projects and research"
-description: "Store sources, run durable jobs, and produce cited outputs."
+description: "Store sources, search indexed evidence, and export project material."
 ---
 
 Projects are account-owned containers for source material and research outputs.
@@ -9,10 +9,9 @@ Projects are account-owned containers for source material and research outputs.
   <Step title="Create a project">Use `POST /v1/projects` with a name and optional description or tags.</Step>
   <Step title="Add or import material">Add an item directly, or use `POST /v1/imports` to create a durable ingestion job.</Step>
   <Step title="Observe job state">Poll `GET /v1/jobs/{id}` until the job succeeds, partially succeeds, fails, or is cancelled.</Step>
-  <Step title="Build an output">Use cited answers, comparisons, reports, or project exports depending on the result you need.</Step>
+  <Step title="Search indexed evidence">Use `GET /v1/projects/{projectId}/search?q=...` to search the project’s indexed material. API keys and CLI sessions require both `data:read` and `account:access` permissions.</Step>
+  <Step title="Export a project">Use project exports to download saved material.</Step>
 </Steps>
-
-AI-generated answers receive bounded, untrusted evidence and return citations that identify the supporting records. Consumers should display the cited source and timestamp rather than presenting generated prose without provenance.
 
 <Warning>
   Exports and research jobs are user-owned. Never expose their IDs as if they were authorization tokens; the API still verifies account ownership.

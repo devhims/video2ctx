@@ -39,32 +39,58 @@ describe('provider routing', () => {
     });
   });
 
-  test('rejects an unsupported provider with a stable validation code', async () => {
-    const response = await app.request('/v1/providers/vimeo/videos/video-1', {}, {} as Env, executionContext);
+  test.each(['vimeo', ' youtube', 'youtube ', 'YouTube'])('rejects nonmatching provider %j', async (provider) => {
+    vi.mocked(meterOperation).mockClear();
+    const response = await app.request(`/v1/videos/video-1?provider=${encodeURIComponent(provider)}`, {}, {} as Env, executionContext);
 
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'PROVIDER_NOT_SUPPORTED' } });
+    expect(meterOperation).not.toHaveBeenCalled();
   });
 
-  test('does not retain the unpublished unscoped source aliases', async () => {
-    expect((await app.request('/v1/videos/video-1', {}, {} as Env, executionContext)).status).toBe(404);
-    expect((await app.request('/v1/browse', {}, {} as Env, executionContext)).status).toBe(404);
+  test.each([
+    '/search', '/browse', '/trends', '/videos/video-1', '/videos/video-1/tracks',
+    '/videos/video-1/transcript', '/videos/video-1/comments', '/videos/video-1/endscreen',
+    '/channels/channel-1', '/channels/channel-1/videos', '/channels/channel-1/playlists', '/playlists/playlist-1',
+  ])('requires exactly one provider before billing for %s', async (path) => {
+    for (const query of ['', '?provider=', '?provider=%20', '?provider=youtube&provider=vimeo']) {
+      vi.mocked(meterOperation).mockClear();
+      const response = await app.request(`/v1${path}${query}`, {}, {} as Env, executionContext);
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toMatchObject({ error: {
+        code: query.includes('&') ? 'INVALID_INPUT' : 'PROVIDER_REQUIRED',
+      } });
+      expect(meterOperation).not.toHaveBeenCalled();
+    }
+  });
+
+  test.each(['/providers/youtube/search', '/providers/youtube/videos/video-1', '/answers', '/comparisons', '/reports'])(
+    'removes the old route %s', async (path) => {
+      const response = await app.request(`/v1${path}`, { method: path.startsWith('/providers/') ? 'GET' : 'POST' }, {} as Env, executionContext);
+      expect(response.status).toBe(404);
+    },
+  );
+
+  test('does not reinterpret the former private search as provider search without a provider', async () => {
+    const response = await app.request('/v1/search?q=batteries&projectId=project-1', {}, {} as Env, executionContext);
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'PROVIDER_REQUIRED' } });
   });
 });
 
 
 describe('explicit video refresh', () => {
   afterEach(() => vi.restoreAllMocks());
-  test.each(['', '?refresh=false', '?refresh=true'])('forwards refresh selection %s', async (query) => {
-    const provider = getProvider('youtube'), refresh = query === '?refresh=true';
+  test.each(['', '&refresh=false', '&refresh=true'])('forwards refresh selection %s', async (query) => {
+    const provider = getProvider('youtube'), refresh = query === '&refresh=true';
     const metadata = vi.spyOn(provider, 'getVideo').mockResolvedValue({ cacheStatus: 'hit', value: {} } as never);
     const transcript = vi.spyOn(provider, 'getTranscript').mockResolvedValue({ cacheStatus: 'hit', value: {} } as never);
     const comments = vi.spyOn(provider, 'getComments').mockResolvedValue({ cacheStatus: 'hit', value: {} } as never);
     const all = vi.spyOn(provider, 'getAllComments').mockResolvedValue({ cacheStatus: 'hit', value: {} } as never);
     for (const suffix of ['', '/transcript', '/comments']) {
-      expect((await app.request(`/v1/providers/youtube/videos/abcdefghijk${suffix}${query}`, {}, {} as Env, executionContext)).status).toBe(200);
+      expect((await app.request(`/v1/videos/abcdefghijk${suffix}?provider=youtube${query}`, {}, {} as Env, executionContext)).status).toBe(200);
     }
-    await app.request(`/v1/providers/youtube/videos/abcdefghijk/comments${query || '?'}${query ? '&' : ''}all=true`, {}, {} as Env, executionContext);
+    await app.request(`/v1/videos/abcdefghijk/comments?provider=youtube${query}&all=true`, {}, {} as Env, executionContext);
     expect(metadata).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', refresh);
     expect(transcript).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', undefined, undefined, refresh);
     expect(comments).toHaveBeenCalledWith(expect.anything(), 'abcdefghijk', undefined, refresh);
@@ -72,7 +98,7 @@ describe('explicit video refresh', () => {
   });
   test.each(['', '/transcript', '/comments'])('rejects invalid refresh before billing %s', async (suffix) => {
     vi.mocked(meterOperation).mockClear();
-    const response = await app.request(`/v1/providers/youtube/videos/abcdefghijk${suffix}?refresh=maybe`, {}, {} as Env, executionContext);
+    const response = await app.request(`/v1/videos/abcdefghijk${suffix}?provider=youtube&refresh=maybe`, {}, {} as Env, executionContext);
     expect(response.status).toBe(422);
     expect(meterOperation).not.toHaveBeenCalled();
   });

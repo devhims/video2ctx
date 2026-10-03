@@ -15,7 +15,7 @@ describe('agent-only frame extraction', () => {
     app.use('*', async (c, next) => { c.set('principal', principal); await next(); });
     app.route('/v1', dataRoutes);
     app.onError((error, c) => jsonError(c, error));
-    const response = await app.request('/v1/providers/youtube/videos/abcdefghijk/frames', {
+    const response = await app.request('/v1/videos/abcdefghijk/frames?provider=youtube', {
       method,
       ...(method === 'POST' ? {
         headers: { 'content-type': 'application/json' },

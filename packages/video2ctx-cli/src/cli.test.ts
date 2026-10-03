@@ -169,7 +169,7 @@ describe('video2ctx CLI API transport', () => {
     });
 
     const exitCode = await runCli([
-      'api', 'GET', '/v1/providers/youtube/search?q=test', '--include-meta',
+      'api', 'GET', '/v1/search?provider=youtube&q=test', '--include-meta',
     ], state.deps);
 
     expect(exitCode).toBe(0);
@@ -204,7 +204,7 @@ describe('video2ctx CLI API transport', () => {
     expect(exitCode).toBe(0);
     expect(state.requests).toHaveLength(1);
     expect(state.requests[0]?.url).toBe(
-      'https://api.video2ctx.dev/v1/providers/youtube/videos/dQw4w9WgXcQ/transcript?format=text&lang=en',
+      'https://api.video2ctx.dev/v1/videos/dQw4w9WgXcQ/transcript?provider=youtube&format=text&lang=en',
     );
     expect(JSON.parse(state.stdout[0] ?? '')).toMatchObject({
       videoId: 'dQw4w9WgXcQ',

@@ -78,7 +78,7 @@ const dataErrors = {
 const idParameter = pathParameter('id', 'Resource identifier.');
 const providerParameter = {
   name: 'provider',
-  in: 'path',
+  in: 'query',
   required: true,
   description: 'External video provider.',
   schema: { type: 'string', enum: PROVIDER_IDS, example: 'youtube' },
@@ -330,10 +330,10 @@ export const openApiDocument = {
     },
     description: [
       'Interactive contract for the video2ctx platform Worker.',
-      'Provider data uses explicit paths such as /v1/providers/youtube/videos/{id}. User-owned projects, private search, and analysis remain provider-neutral.',
+      'Provider reads use paths such as /v1/videos/{id}?provider=youtube. Private search and analysis are scoped to /v1/projects/{projectId}.',
       'Product routes accept a Better Auth browser session, a device-authorized CLI session, or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
       'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',
-      'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free. Composite analysis pricing is unchanged.',
+      'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free.',
       'Device-authorized CLI sessions and API keys can access normal user-owned data, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
       'When running locally with ENVIRONMENT other than production, set X-Demo-User to any stable value to create and use an isolated demo account.',
     ].join('\n\n'),
@@ -785,20 +785,21 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/search': {
+    '/v1/projects/{projectId}/search': {
       get: {
         tags: ['Discovery'],
         operationId: 'searchPrivateEvidence',
-        summary: 'Search the user’s private indexed evidence',
-        description: 'Searches material previously saved or imported into the current user’s private research index.',
+        summary: 'Search a project’s indexed evidence',
+        description: 'Searches indexed material in the specified project. The authenticated user must own the project. API keys and CLI sessions require both data:read and account:access permissions.',
         security: dataSecurity,
         parameters: [
           queryParameter('q', 'Evidence search query.', { type: 'string', maxLength: 500, example: 'AI agents' }, true),
-          queryParameter('projectId', 'Restrict private retrieval to a project.', { type: 'string' }),
+          pathParameter('projectId', 'Project owned by the authenticated user.'),
         ],
         responses: {
           '200': meteredJsonResponse('Matching private evidence.', schemaRef('PrivateSearchResponse')),
           ...dataErrors,
+          '404': responseRef('NotFound'),
         },
       },
     },
@@ -807,7 +808,7 @@ export const openApiDocument = {
         tags: ['Providers'],
         operationId: 'listProviders',
         summary: 'List supported video providers',
-        description: 'Returns the provider identifiers accepted in provider-scoped paths and the capabilities currently implemented for each provider.',
+        description: 'Returns the provider identifiers accepted by the required provider query parameter and the capabilities currently implemented for each provider.',
         security: dataSecurity,
         responses: {
           '200': meteredJsonResponse('Supported providers.', schemaRef('ProviderList')),
@@ -815,7 +816,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/search': {
+    '/v1/search': {
       get: {
         tags: ['Discovery'],
         operationId: 'searchProvider',
@@ -840,7 +841,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/browse': {
+    '/v1/browse': {
       get: {
         tags: ['Discovery'],
         operationId: 'browseProvider',
@@ -868,7 +869,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/trends': {
+    '/v1/trends': {
       get: {
         tags: ['Discovery'],
         operationId: 'researchTrends',
@@ -905,7 +906,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/videos/{id}': {
+    '/v1/videos/{id}': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideo',
@@ -924,7 +925,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/videos/{id}/tracks': {
+    '/v1/videos/{id}/tracks': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoTracks',
@@ -942,7 +943,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/videos/{id}/transcript': {
+    '/v1/videos/{id}/transcript': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoTranscript',
@@ -967,7 +968,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/videos/{id}/comments': {
+    '/v1/videos/{id}/comments': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoComments',
@@ -994,7 +995,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/videos/{id}/endscreen': {
+    '/v1/videos/{id}/endscreen': {
       get: {
         tags: ['Videos'],
         operationId: 'getVideoEndscreen',
@@ -1010,7 +1011,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/channels/{id}': {
+    '/v1/channels/{id}': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannel',
@@ -1027,7 +1028,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/channels/{id}/videos': {
+    '/v1/channels/{id}/videos': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannelVideos',
@@ -1049,7 +1050,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/channels/{id}/playlists': {
+    '/v1/channels/{id}/playlists': {
       get: {
         tags: ['Channels'],
         operationId: 'getChannelPlaylists',
@@ -1071,7 +1072,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/providers/{provider}/playlists/{id}': {
+    '/v1/playlists/{id}': {
       get: {
         tags: ['Playlists'],
         operationId: 'getPlaylist',
@@ -1244,42 +1245,51 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/answers': {
+    '/v1/projects/{projectId}/answers': {
       post: {
         tags: ['Research'],
         operationId: 'createAnswer',
         summary: 'Generate a cited answer',
-        security: dataSecurity,
+        description: 'Internal research implementation under refinement; unavailable to API keys and CLI sessions.',
+        security: privateSecurity,
+        parameters: [pathParameter('projectId', 'Project owned by the authenticated user.')],
         requestBody: jsonBody(schemaRef('AnswerRequest')),
         responses: {
           '200': meteredJsonResponse('Evidence-grounded answer.', schemaRef('CitedAnswer')),
           ...dataErrors,
+          '404': responseRef('NotFound'),
         },
       },
     },
-    '/v1/comparisons': {
+    '/v1/projects/{projectId}/comparisons': {
       post: {
         tags: ['Research'],
         operationId: 'createComparison',
         summary: 'Compare private research sources',
-        security: dataSecurity,
+        description: 'Internal research implementation under refinement; unavailable to API keys and CLI sessions.',
+        security: privateSecurity,
+        parameters: [pathParameter('projectId', 'Project owned by the authenticated user.')],
         requestBody: jsonBody(schemaRef('ComparisonRequest')),
         responses: {
           '200': meteredJsonResponse('Evidence-grounded comparison.', schemaRef('CitedAnswer')),
           ...dataErrors,
+          '404': responseRef('NotFound'),
         },
       },
     },
-    '/v1/reports': {
+    '/v1/projects/{projectId}/reports': {
       post: {
         tags: ['Research'],
         operationId: 'createReport',
         summary: 'Generate an evidence-first report',
-        security: dataSecurity,
+        description: 'Internal research implementation under refinement; unavailable to API keys and CLI sessions.',
+        security: privateSecurity,
+        parameters: [pathParameter('projectId', 'Project owned by the authenticated user.')],
         requestBody: jsonBody(schemaRef('ReportRequest')),
         responses: {
           '200': meteredJsonResponse('Evidence-grounded report.', schemaRef('CitedAnswer')),
           ...dataErrors,
+          '404': responseRef('NotFound'),
         },
       },
     },
@@ -2437,14 +2447,12 @@ export const openApiDocument = {
         },
       },
       AnswerRequest: {
-        type: 'object', required: ['question'], properties: {
-          question: { type: 'string', minLength: 1, maxLength: 2000 }, projectId: { type: 'string' },
-          provider: schemaRef('ProviderId'), entityId: { type: 'string' }, scope: { type: 'string', enum: ['private', 'public'], default: 'private' },
+        type: 'object', additionalProperties: false, required: ['question'], properties: {
+          question: { type: 'string', minLength: 1, maxLength: 2000 },
         },
-        dependentRequired: { entityId: ['provider'] },
       },
-      ComparisonRequest: { type: 'object', properties: { question: { type: 'string', maxLength: 2000 }, projectId: { type: 'string' } } },
-      ReportRequest: { type: 'object', properties: { prompt: { type: 'string', maxLength: 2000 }, projectId: { type: 'string' } } },
+      ComparisonRequest: { type: 'object', additionalProperties: false, properties: { question: { type: 'string', maxLength: 2000 } } },
+      ReportRequest: { type: 'object', additionalProperties: false, properties: { prompt: { type: 'string', maxLength: 2000 } } },
       CreateExportRequest: { type: 'object', required: ['format'], properties: { format: { type: 'string', description: 'Supported export format.', example: 'markdown' } } },
       Export: storedRecord,
       MonitorIntervalMinutes: {

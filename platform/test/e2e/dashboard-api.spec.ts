@@ -14,7 +14,7 @@ const transcript = { videoId, text: 'Transcript arrived successfully.', segments
 test.beforeEach(async ({ page, context }) => {
   await context.addCookies([{ name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' }]);
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'video', provider: 'youtube', id: videoId } }));
-  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: { id: videoId, title: 'Transcript deadline regression', thumbnails: [], channel: { id: 'channel', name: 'Creator' } } }));
+  await page.route(`**/api/platform/v1/videos/${videoId}?**`, route => route.fulfill({ json: { id: videoId, title: 'Transcript deadline regression', thumbnails: [], channel: { id: 'channel', name: 'Creator' } } }));
 });
 
 test('recent video sources survive reload and restore datasets without provider requests', async ({ page }) => {
@@ -22,8 +22,8 @@ test('recent video sources survive reload and restore datasets without provider 
   const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
     data: { id: videoId, title: source.title, thumbnails: [] }, transcript, requestedData: ['transcript'], dataErrors: {} } };
   let remembered = false, providerReads = 0;
-  page.on('request', request => { if (request.url().includes('/v1/providers/')) providerReads++; });
-  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   await page.route('**/api/platform/v1/sources/recent**', async route => {
     if (route.request().method() === 'POST') {
       const request = route.request().postDataJSON();
@@ -59,7 +59,7 @@ test('recent searches restore their saved result list and dataset choices', asyn
   let remembered = false, providerReads = 0;
   await page.unroute('**/api/platform/v1/resolve');
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query: source.input } }));
-  await page.route('**/api/platform/v1/providers/youtube/search?**', route => { providerReads++; return route.fulfill({ json: { results: items } }); });
+  await page.route('**/api/platform/v1/search?**', route => { providerReads++; return route.fulfill({ json: { results: items } }); });
   await page.route('**/api/platform/v1/sources/recent**', async route => {
     if (route.request().method() === 'POST') {
       expect(route.request().postDataJSON()).toEqual({ input: source.input, snapshot: { kind: 'search', selectedData: ['transcript'] } });
@@ -178,7 +178,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark'] as con
 test('clicking the active Sources sidebar clears an inspector and a pending request', async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route(`**/videos/${videoId}/transcript`, async route => { await gate; await route.fulfill({ json: transcript }).catch(() => {}); });
+  await page.route(`**/videos/${videoId}/transcript?**`, async route => { await gate; await route.fulfill({ json: transcript }).catch(() => {}); });
   await page.goto('/dashboard/sources');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
   await page.getByRole('button', { name: /Inspect/ }).click();
@@ -196,7 +196,7 @@ test('slow transcript finishes after the old browser deadline', async ({ page })
   const gate = new Promise<void>(resolve => { release = resolve; });
   let started!: () => void;
   const requested = new Promise<void>(resolve => { started = resolve; });
-  await page.route(`**/videos/${videoId}/transcript`, async route => { started(); await gate; await route.fulfill({ json: transcript }); });
+  await page.route(`**/videos/${videoId}/transcript?**`, async route => { started(); await gate; await route.fulfill({ json: transcript }); });
   await page.goto('/dashboard?section=discover');
   await page.clock.install();
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
@@ -210,8 +210,8 @@ test('slow transcript finishes after the old browser deadline', async ({ page })
 
 test('source errors mirror the API and retry only the failed dataset', async ({ page }) => {
   let attempts = 0; let videoReads = 0;
-  page.on('request', request => { if (request.url().endsWith(`/videos/${videoId}`)) videoReads++; });
-  await page.route(`**/videos/${videoId}/transcript`, route => ++attempts === 1
+  page.on('request', request => { if (new URL(request.url()).pathname.endsWith(`/videos/${videoId}`)) videoReads++; });
+  await page.route(`**/videos/${videoId}/transcript?**`, route => ++attempts === 1
     ? route.fulfill({ status: 504, json: { error: { code: 'PROVIDER_TIMEOUT', message: 'The API transcript deadline expired.' } } })
     : route.fulfill({ json: transcript }));
   await page.goto('/dashboard?section=discover');
@@ -230,8 +230,8 @@ for (const inputMode of ['name', 'handle', 'url'] as const) test(`Monitors adds 
   let attempts = 0;
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'channel', id: '@science' } }));
-  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: channelId, name: 'Science channel', handle: '@science' } }));
-  await page.route('**/api/platform/v1/providers/youtube/search?**', route => {
+  await page.route('**/api/platform/v1/channels/**', route => route.fulfill({ json: { id: channelId, name: 'Science channel', handle: '@science' } }));
+  await page.route('**/api/platform/v1/search?**', route => {
     expect(new URL(route.request().url()).searchParams.get('type')).toBe('channel');
     return route.fulfill({ json: { results: [{ type: 'channel', id: channelId, name: 'Science channel', thumbnails: [] }] } });
   });
@@ -284,7 +284,7 @@ test('Monitors rejects video URLs and shows an empty channel search without crea
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/v1/monitors')) creates++; });
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'video', id: videoId } }));
-  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [] } }));
+  await page.route('**/api/platform/v1/search?**', route => route.fulfill({ json: { results: [] } }));
   try {
     await page.goto('/dashboard/monitors');
     const form = page.getByRole('region', { name: 'Add channel', exact: true });
@@ -321,7 +321,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
   await page.emulateMedia({ colorScheme });
   if (colorScheme === 'dark') await page.setViewportSize({ width: 390, height: 844 });
   const scenario = await accountScenario(page, { responses: { '/v1/monitors': { body: { monitors: [] } } } });
-  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'OpenAI', handle: '@OpenAI' } }));
+  await page.route('**/api/platform/v1/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'OpenAI', handle: '@OpenAI' } }));
   await page.route('**/api/platform/v1/monitors', route => route.request().method() === 'POST'
     ? route.fulfill({ status: 403, json: { error: { code: 'PLAN_LIMIT_REACHED', message: 'Your plan allows up to 1 monitors.' } } }) : route.continue());
   try {
@@ -355,7 +355,7 @@ for (const colorScheme of ['light', 'dark'] as const) test(`Monitors shows plan 
 
 test('Monitors header and channel lookup remain interactive while the list is pending', async ({ page }) => {
   const scenario = await accountScenario(page, { delays: ['/v1/monitors'] });
-  await page.route('**/api/platform/v1/providers/youtube/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'Science channel' } }));
+  await page.route('**/api/platform/v1/channels/**', route => route.fulfill({ json: { id: `UC${'a'.repeat(22)}`, name: 'Science channel' } }));
   try {
     await page.goto('/dashboard/monitors', { waitUntil: 'commit' });
     await expect(page.getByRole('heading', { name: 'Watch for new videos' })).toBeVisible();
@@ -434,14 +434,14 @@ test('transcript renders while metadata is pending, then survives its failure', 
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let metadataReads = 0; let transcriptReads = 0;
-  await page.route(`**/videos/${videoId}`, async route => {
+  await page.route(`**/videos/${videoId}?**`, async route => {
     metadataReads++;
     if (metadataReads === 1) {
       await gate;
       await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'YouTube blocked the metadata lookup.' } } });
     } else await route.fulfill({ json: { id: videoId, title: 'Recovered metadata', channel: { id: 'channel', name: 'Creator' } } });
   });
-  await page.route(`**/videos/${videoId}/transcript`, route => { transcriptReads++; return route.fulfill({ json: transcript }); });
+  await page.route(`**/videos/${videoId}/transcript?**`, route => { transcriptReads++; return route.fulfill({ json: transcript }); });
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
   await page.getByRole('button', { name: /Inspect/ }).click();
@@ -461,7 +461,7 @@ test('metadata renders before a pending transcript and cancel preserves it', asy
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let reads = 0;
-  await page.route(`**/videos/${videoId}/transcript`, async route => {
+  await page.route(`**/videos/${videoId}/transcript?**`, async route => {
     if (++reads === 1) await gate;
     await route.fulfill({ json: transcript }).catch(() => {});
   });
@@ -484,7 +484,7 @@ test('confirmed missing captions show an empty state without a retry action and 
   const source = { id: 'ad8f901c-11e8-44e2-97cb-9a09b965c455', input: `https://youtu.be/${videoId}`, title: 'Video without captions', kind: 'inspection', updatedAt: Date.now() };
   const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
     data: { id: videoId, title: source.title, thumbnails: [] }, requestedData: ['transcript'], dataErrors: { transcript: message } } };
-  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ status: 404, json: { error: { code: 'CAPTIONS_UNAVAILABLE', message } } }));
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ status: 404, json: { error: { code: 'CAPTIONS_UNAVAILABLE', message } } }));
   await page.route('**/api/platform/v1/sources/recent**', route => route.fulfill({ json: route.request().method() === 'POST'
     ? { source } : route.request().url().endsWith(source.id) ? { source, snapshot } : { sources: [source] } }));
   await page.goto('/dashboard/sources');
@@ -504,7 +504,7 @@ for (const mobile of [false, true]) test(`retrying a transient transcript failur
   let reads = 0;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route(`**/videos/${videoId}/transcript`, async route => {
+  await page.route(`**/videos/${videoId}/transcript?**`, async route => {
     if (++reads === 1) return route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'YouTube is temporarily unavailable.' } } });
     await gate;
     await route.fulfill({ json: transcript });
@@ -794,13 +794,13 @@ test('adding sources from a project saves the search and opened video in that pr
     return route.fulfill({ json: { source: { id, ...source, updatedAt: Date.now() }, snapshot } });
   });
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
-  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [{
+  await page.route('**/api/platform/v1/search?**', route => route.fulfill({ json: { results: [{
     provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [],
   }] } }));
-  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: {
+  await page.route(`**/api/platform/v1/videos/${videoId}?**`, route => route.fulfill({ json: {
     id: videoId, title: 'Codex tips video', thumbnails: [], channel: { id: 'channel', name: 'Creator' },
   } }));
-  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   try {
     await page.goto('/dashboard/projects');
     await page.getByRole('button', { name: 'codex 0 sources' }).click();
@@ -850,13 +850,13 @@ test('failed search saves survive video success and retry into their original pr
     return route.fulfill({ status: 201, json: { source: { id: crypto.randomUUID(), input: body.input, title: body.input, kind: body.snapshot.kind, updatedAt: Date.now() } } });
   });
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
-  await page.route('**/api/platform/v1/providers/youtube/search?**', route => route.fulfill({ json: { results: [{
+  await page.route('**/api/platform/v1/search?**', route => route.fulfill({ json: { results: [{
     provider: 'youtube', type: 'video', id: videoId, title: 'Retry test video', thumbnails: [],
   }] } }));
-  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}`, route => route.fulfill({ json: {
+  await page.route(`**/api/platform/v1/videos/${videoId}?**`, route => route.fulfill({ json: {
     id: videoId, title: 'Retry test video', thumbnails: [], channel: { id: 'channel', name: 'Creator' },
   } }));
-  await page.route(`**/api/platform/v1/providers/youtube/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   try {
     await page.goto(`/dashboard/sources?project=${first}`);
     await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(query);
@@ -999,7 +999,7 @@ test('settings renders while navigation access checks are pending', async ({page
 
 test('an active transcript finishes in the background and the Sources sidebar returns home',async({page})=>{
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
- await page.route(`**/videos/${videoId}/transcript`,async route=>{reads++;await gate;await route.fulfill({json:transcript});});
+ await page.route(`**/videos/${videoId}/transcript?**`,async route=>{reads++;await gate;await route.fulfill({json:transcript});});
  await page.goto('/dashboard/sources');
  await page.getByRole('textbox',{name:'Video search or YouTube URL'}).fill(`https://youtube.com/watch?v=${videoId}`);
  await page.getByRole('button',{name:/Inspect/}).click();
@@ -1018,7 +1018,7 @@ test('an active transcript finishes in the background and the Sources sidebar re
 
 test('an active trend request survives projects navigation without restarting',async({page})=>{
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
- await page.route('**/v1/providers/youtube/trends?**',async route=>{reads++;await gate;await route.fulfill({status:503,json:{error:{message:'Retained scan completed with a provider error.'}}});});
+ await page.route('**/v1/trends?**',async route=>{reads++;await gate;await route.fulfill({status:503,json:{error:{message:'Retained scan completed with a provider error.'}}});});
  await page.goto('/dashboard/trends');
  await page.getByRole('textbox',{name:'Topic or niche'}).fill('test topic');
  await page.getByRole('button',{name:/Research topic/}).click();
@@ -1102,14 +1102,16 @@ for (const mobile of [false, true]) {
     await expect(page.getByRole('alert').filter({ hasText: 'Transcript refresh failed.' })).toHaveCount(0);
     await expect(refresh).toHaveCount(0);
     expect(refreshAttempts).toBe(2);
-    expect(reads.filter(url => url.endsWith(`${videoId}?refresh=true`))).toHaveLength(1);
-    expect(reads.filter(url => url.endsWith('/transcript?refresh=true'))).toHaveLength(2);
+    const freshReads = reads.map(path => new URL(path, 'http://localhost')).filter(url => url.searchParams.get('refresh') === 'true');
+    expect(freshReads.filter(url => url.pathname.endsWith(`/videos/${videoId}`))).toHaveLength(1);
+    expect(freshReads.filter(url => url.pathname.endsWith('/transcript'))).toHaveLength(2);
+    expect(freshReads.every(url => url.searchParams.get('provider') === 'youtube')).toBe(true);
     expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   });
 }
 
 test('fresh video data does not offer a saved-data refresh button', async ({ page }) => {
-  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: { ...transcript, freshness: { state: 'fresh', fetchedAt: Date.now() } } }));
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: { ...transcript, freshness: { state: 'fresh', fetchedAt: Date.now() } } }));
   await page.goto('/dashboard?section=discover');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtube.com/watch?v=${videoId}`);
   await page.getByRole('button', { name: /Inspect/ }).click();
@@ -1126,7 +1128,7 @@ test('a known video opens without waiting for the remote URL resolver', async ({
     await gate;
     await route.fulfill({ json: { kind: 'video', provider: 'youtube', id: videoId } });
   });
-  await page.route(`**/videos/${videoId}/transcript`, route => route.fulfill({ json: transcript }));
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   await page.goto('/dashboard/sources');
   await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
   try {

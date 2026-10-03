@@ -14,7 +14,7 @@ test('waits for the API beyond former dashboard deadlines', async t => {
     finish = resolve;
     init.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')));
   }));
-  const request = platformRequest('/v1/providers/youtube/videos/video/transcript');
+  const request = platformRequest('/v1/videos/video/transcript?provider=youtube');
   t.mock.timers.tick(180_000);
   finish(Response.json({ text: 'Transcript exists' }));
   assert.deepEqual(await request, { text: 'Transcript exists' });

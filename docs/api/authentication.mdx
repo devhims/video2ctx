@@ -30,6 +30,8 @@ Authorization: Bearer aty_…
 
 Personal API keys can access normal user-owned data, projects, imports, exports, monitors, notifications, and usage. The published agent skills intentionally expose a narrower surface; the public OpenAPI contract remains the source of truth for each route's accepted credential type.
 
+Project search requires both `data:read` and `account:access` permissions. The authenticated user must also own the project.
+
 ## Key safety
 
 - Keep keys in server-side secrets or environment variables.

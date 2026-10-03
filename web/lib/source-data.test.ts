@@ -11,7 +11,7 @@ for (const [status, code, message] of [
 ] as const) {
   test(`source panel preserves the actual ${code} API error`, async t => {
     t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code, message } }, { status }));
-    assert.deepEqual(await loadSourceData(() => platformRequest('/v1/providers/youtube/videos/video/transcript')), { error: message });
+    assert.deepEqual(await loadSourceData(() => platformRequest('/v1/videos/video/transcript?provider=youtube')), { error: message });
   });
 }
 

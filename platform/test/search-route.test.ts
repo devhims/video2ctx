@@ -34,7 +34,7 @@ describe('provider search route', () => {
     } as unknown as Env;
 
     const response = await app.request(
-      `/v1/providers/youtube/search?q=research&type=${type}&continuation=NEXT_SEARCH_PAGE`,
+      `/v1/search?provider=youtube&q=research&type=${type}&continuation=NEXT_SEARCH_PAGE`,
       {},
       env,
       { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,

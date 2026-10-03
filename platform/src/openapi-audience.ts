@@ -72,9 +72,9 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   addProjectItem: 'consumer',
   createImport: 'consumer',
   getJob: 'consumer',
-  createAnswer: 'consumer',
-  createComparison: 'consumer',
-  createReport: 'consumer',
+  createAnswer: 'first-party',
+  createComparison: 'first-party',
+  createReport: 'first-party',
   createProjectExport: 'consumer',
   downloadExport: 'consumer',
   listMonitors: 'consumer',
@@ -108,6 +108,9 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
  * Tests keep this inventory aligned with the non-consumer audience map.
  */
 export const OPENAPI_INTERNAL_SAFETY: Readonly<Record<string, string>> = {
+  createReport: 'Internal research implementation under refinement. Browser-session only; API keys and CLI sessions are rejected. Reserves 40 credits and charges 32 on success.',
+  createComparison: 'Internal research implementation under refinement. Browser-session only; API keys and CLI sessions are rejected. Reserves 24 credits and charges 20 on success.',
+  createAnswer: 'Internal research implementation under refinement. Browser-session only; API keys and CLI sessions are rejected. Reserves 12 credits and charges 10 on success.',
   listRecentSources: 'Browser-session only. Lists inputs belonging to the authenticated user without exposing shared asset references.',
   saveRecentSource: 'Browser-session only. Resolves existing provider assets server-side; never accepts client-supplied R2 keys or video payloads.',
   getRecentSource: 'Browser-session only. Verifies user ownership before reading the saved shared references.',

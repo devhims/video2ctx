@@ -7,11 +7,11 @@ description: "Retrieve normalized provider resources and their related data."
 
 Start with video details, then request only the deeper datasets your workflow needs.
 
-- `GET /v1/providers/youtube/videos/{id}` — core metadata
-- `GET /v1/providers/youtube/videos/{id}/tracks` — available transcript tracks
-- `GET /v1/providers/youtube/videos/{id}/transcript?format=text|segments|words` — compact text, timed segments, or timed words; omitting `format` preserves the rich words response
-- `GET /v1/providers/youtube/videos/{id}/comments` — paginated public comments
-- `GET /v1/providers/youtube/videos/{id}/endscreen` — end-screen links
+- `GET /v1/videos/{id}?provider=youtube` — core metadata
+- `GET /v1/videos/{id}/tracks?provider=youtube` — available transcript tracks
+- `GET /v1/videos/{id}/transcript?provider=youtube&format=text|segments|words` — compact text, timed segments, or timed words; omitting `format` preserves the rich words response
+- `GET /v1/videos/{id}/comments?provider=youtube` — paginated public comments
+- `GET /v1/videos/{id}/endscreen?provider=youtube` — end-screen links
 
 The default comments request returns YouTube's default-ranked page. Add `all=true` for up to five newest-first pages, about 100 comments. A crawl that reaches that limit returns what it collected with `meta.partial: true` and a warning, so inspect `meta.partial` and `meta.warnings` before treating it as complete. To read further, page with `continuation`; each page is a separate request.
 
@@ -19,13 +19,13 @@ Video metadata lookups retry explicit YouTube bot challenges, with up to three p
 
 ## Channels
 
-- `GET /v1/providers/youtube/channels/{id}` — profile, public totals, links, and metadata
-- `GET /v1/providers/youtube/channels/{id}/videos` — paginated video catalog
-- `GET /v1/providers/youtube/channels/{id}/playlists` — paginated playlist catalog
+- `GET /v1/channels/{id}?provider=youtube` — profile, public totals, links, and metadata
+- `GET /v1/channels/{id}/videos?provider=youtube` — paginated video catalog
+- `GET /v1/channels/{id}/playlists?provider=youtube` — paginated playlist catalog
 
 ## Playlists
 
-`GET /v1/providers/youtube/playlists/{id}` returns playlist metadata and its paginated video index. Fetching a playlist does not automatically fetch transcripts or comments for every video.
+`GET /v1/playlists/{id}?provider=youtube` returns playlist metadata and its paginated video index. Fetching a playlist does not automatically fetch transcripts or comments for every video.
 
 <Tip>
   IDs, handles, and supported YouTube URLs are normalized by the provider pipeline, but hosted API path parameters should use the resource ID returned by discovery whenever possible.

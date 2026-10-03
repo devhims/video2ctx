@@ -230,11 +230,11 @@ frame-lock probe, no sequential render order, no seam crossfade.
 
 | Beat | Movement within the take (wordless) | DOM overlay | Endpoint |
 | --- | --- | --- | --- |
-| 0 → 1 **Transcript** | Camera pushes into a solid glowing slab of footage; the front face peels away as a dense stack of thin horizontal strata | Timestamped segment rows, real `mm:ss` values | `GET /v1/providers/youtube/videos/:id/transcript` |
-| 2 **Channel** | An identity plate separates upward and holds beside the slab | Channel card: name, handle, source link | `GET /v1/providers/youtube/channels/:id` |
-| 3 **Comments** | A cloud of small translucent planes emerges from behind the slab and drifts into a column | Comment cards with pinned/hearted/like state | `GET /v1/providers/youtube/videos/:id/comments` |
-| 4 **Playlist** | Camera drifts laterally; the single slab is revealed as one card in a long receding strip | Playlist strip with position indices | `GET /v1/providers/youtube/playlists/:id` |
-| 5 **Search** | Camera lifts and pulls back; the strip becomes one row in a wide field of slabs, then a narrowing beam isolates a few | Query pill + result rows | `GET /v1/providers/youtube/search` |
+| 0 → 1 **Transcript** | Camera pushes into a solid glowing slab of footage; the front face peels away as a dense stack of thin horizontal strata | Timestamped segment rows, real `mm:ss` values | `GET /v1/videos/:id/transcript?provider=youtube` |
+| 2 **Channel** | An identity plate separates upward and holds beside the slab | Channel card: name, handle, source link | `GET /v1/channels/:id?provider=youtube` |
+| 3 **Comments** | A cloud of small translucent planes emerges from behind the slab and drifts into a column | Comment cards with pinned/hearted/like state | `GET /v1/videos/:id/comments?provider=youtube` |
+| 4 **Playlist** | Camera drifts laterally; the single slab is revealed as one card in a long receding strip | Playlist strip with position indices | `GET /v1/playlists/:id?provider=youtube` |
+| 5 **Search** | Camera lifts and pulls back; the strip becomes one row in a wide field of slabs, then a narrowing beam isolates a few | Query pill + result rows | `GET /v1/search?provider=youtube` |
 | Finale | The field re-collapses toward the original slab | The five parts snap into one JSON object + `Get an API key` | — |
 
 Left sticky rail per beat: beat number, label, the endpoint path in mono, one line of copy, a
