@@ -26,6 +26,7 @@ export function redactProxyError(error, proxyUrl) {
     code: error.code,
     status: error.status,
     retryable: error.retryable,
+    ...(error.reason === 'bot_challenge' ? { reason: 'bot_challenge' } : {}),
   });
 }
 

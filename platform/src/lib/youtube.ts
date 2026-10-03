@@ -102,14 +102,15 @@ export function withYouTubeMetadata<T>(value: T): T {
   } as T;
 }
 
-function processorError(error: {code: string; message: string}, extractionId?: string): ApiError {
+function processorError(error: {code: string; message: string; reason?: 'bot_challenge'}, extractionId?: string): ApiError {
   const status = error.code === 'INVALID_INPUT' ? 422
     : error.code === 'NOT_FOUND' || error.code === 'CAPTIONS_UNAVAILABLE' ? 404
     : error.code === 'AUTH_REQUIRED' ? 401
     : error.code === 'RATE_LIMITED' ? 429
     : error.code === 'UNAVAILABLE' || error.code === 'PROCESSOR_BUSY' || error.code === 'PROCESSOR_UNAVAILABLE' ? 503
     : 502;
-  return new ApiError(status, error.code, error.message, extractionId ? { extractionId } : undefined);
+  return Object.assign(new ApiError(status, error.code, error.message, extractionId ? { extractionId } : undefined),
+    error.reason === 'bot_challenge' ? { reason: error.reason } : {});
 }
 
 type ResourceResult<T extends VideoResourceOperation> = T extends FrameOperation ? VideoFrames : T extends YouTubeOperation ? YouTubeOperationResult<T> : never;
@@ -166,7 +167,7 @@ async function cached<T extends VideoResourceOperation>(
     );
   }
   if (Array.isArray(response.diagnostics)) {
-    for (const event of response.diagnostics.slice(0, 4)) emitExtractionDiagnostic(onDiagnostic, event);
+    for (const event of response.diagnostics.slice(0, 5)) emitExtractionDiagnostic(onDiagnostic, event);
   }
   if (!response.ok && response.error) {
     if (response.error.apiStatus) throw new ApiError(response.error.apiStatus,response.error.code,response.error.message);

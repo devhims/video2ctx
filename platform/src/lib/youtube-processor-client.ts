@@ -72,6 +72,7 @@ interface ProcessorFailure {
     message?: string;
     status?: number;
     retryable?: boolean;
+    reason?: string;
   };
 }
 
@@ -93,6 +94,7 @@ export class YouTubeProcessorError extends Error {
     readonly status?: number,
     readonly retryable = false,
     readonly retryAfterMs = 0,
+    readonly reason?: 'bot_challenge',
   ) {
     super(message);
   }
@@ -237,6 +239,7 @@ async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload
       typeof failure?.status === 'number' ? failure.status : response.status,
       typeof failure?.retryable === 'boolean' ? failure.retryable : response.status === 429 || response.status >= 500,
       retryAfterMs(response),
+      failure?.reason === 'bot_challenge' ? 'bot_challenge' : undefined,
     );
   }
 
@@ -257,7 +260,8 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
   return visualSpan('extraction', async () => {
     // Missing or malformed configuration keeps its existing behavior. Direct
     // fallback is only for an exhausted, explicitly configured proxy pool.
-    if (!normalizedProxyUrls(env)?.length) return runYouTubeOperationImpl(env, operation, onDiagnostic);
+    if (String(env.YOUTUBE_DIRECT_FALLBACK).trim().toLowerCase() === 'off' || !normalizedProxyUrls(env)?.length)
+      return runYouTubeOperationImpl(env, operation, onDiagnostic);
     const worker = String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard';
     const budget = worker ? boundedInteger(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 300_000) : processorTimeoutMs(env);
     const deadlineAt = Date.now() + budget;
@@ -273,7 +277,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       return await runYouTubeOperationImpl(env, operation, record, proxyDeadline.signal);
     } catch (error) {
       if (!canTryDirect(error) || Date.now() >= deadlineAt) throw error;
-      return await runDirectContainerAttempt(env, operation, deadlineAt, previous, onDiagnostic);
+      return await runDirectContainerAttempt(env, operation, deadlineAt, previous, error, onDiagnostic);
     } finally {
       clearTimeout(timer);
     }
@@ -288,7 +292,8 @@ function canTryDirect(error: unknown): boolean {
 }
 
 async function runDirectContainerAttempt<T extends YouTubeOperation>(
-  env: Env, operation: T, operationDeadlineAt: number, previous: ExtractionAttempt | undefined, onDiagnostic?: ExtractionDiagnosticSink,
+  env: Env, operation: T, operationDeadlineAt: number, previous: ExtractionAttempt | undefined,
+  proxyError: unknown, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
   const startedAt = Date.now();
   const deadlineAt = Math.min(operationDeadlineAt, startedAt + DIRECT_FALLBACK_TIMEOUT_MS);
@@ -328,8 +333,10 @@ async function runDirectContainerAttempt<T extends YouTubeOperation>(
     failureKind = extractionFailureKind(error, signal);
     code = error instanceof YouTubeProcessorError ? error.code : undefined;
     // Preserve confirmed content restrictions discovered on the final route.
-    if (error instanceof YouTubeProcessorError && ['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'NOT_FOUND'].includes(error.code)) throw error;
-    throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube is not available right now.', 503);
+    if (error instanceof YouTubeProcessorError && ['AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'NOT_FOUND'].includes(error.code)) throw error;
+    // A failed optional route must not change the public error contract or erase
+    // the proxy's classification, retryability, retry delay, or structured reason.
+    throw proxyError;
   } finally {
     clearTimeout(timer);
     console.info(JSON.stringify({ event: 'youtube_direct_fallback', extractionId, operation: operation.kind,

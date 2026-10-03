@@ -680,7 +680,7 @@ test('does not restart an exhausted transcript extraction in the same run', asyn
   await runInDurableObject(runtime, async instance => {
     const calls = instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`;
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ status: 'failed', credits: 0, error: expect.stringContaining('[upstream=UNAVAILABLE]') });
+    expect(calls[0]).toMatchObject({ status: 'failed', credits: 0, error: expect.stringContaining('[upstream=UNAVAILABLE; reason=bot_challenge]') });
     const manager = (instance as unknown as { traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager }).traceManager;
     await manager.publishPending();
     const traces = await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_name=?')
@@ -688,7 +688,7 @@ test('does not restart an exhausted transcript extraction in the same run', asyn
     expect(traces.results).toHaveLength(3);
     for (const trace of traces.results) {
       expect((await readAdminToolTrace(env, runId, trace.trace_id))?.error).toMatchObject({
-        code: 'YOUTUBE_UNAVAILABLE', message: expect.stringContaining('[upstream=UNAVAILABLE]'),
+        code: 'YOUTUBE_UNAVAILABLE', message: expect.stringContaining('[upstream=UNAVAILABLE; reason=bot_challenge]'),
       });
     }
   });

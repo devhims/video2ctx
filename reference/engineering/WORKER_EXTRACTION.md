@@ -1,6 +1,6 @@
 # Worker YouTube extraction
 
-The Worker can execute core YouTube operations using the shared extraction library. Initial attempts use the configured proxy gateways. Eligible failures retry through the proxy pool, then receive one direct attempt in an existing processor container. The proxy provider selects the proxy exit IP; the Worker runs the YouTube client and verifies YouTube's TLS certificate on proxied attempts.
+The Worker can execute core YouTube operations using the shared extraction library. Initial attempts use the configured proxy gateways. Eligible failures retry through the proxy pool, then receive one direct attempt in a configured processor container. The proxy provider selects the proxy exit IP; the Worker runs the YouTube client and verifies YouTube's TLS certificate on proxied attempts.
 
 The rollout switch defaults to `worker`. `YOUTUBE_EXTRACTION_BACKEND=worker` moves search, browse, video metadata and signals, channels, playlists, comments, caption catalogs, transcripts and end screens into the Worker. Storyboards remain in the processor container, including its image conversion. Exact frames remain in the FFmpeg container. Caching, coalescing, authentication, billing and public result shapes stay at their existing boundaries.
 
@@ -46,16 +46,23 @@ Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array o
 
 ### Final direct attempt
 
-After eligible proxy failures, the operation uses one existing processor slot with a private `x-processor-egress: direct` request. It reuses the container's native-fetch extraction path with library retries limited to one. Concurrent proxy operations retain their own transports. This applies to core data operations and storyboards, including when the primary backend is `container`; exact frames use a separate container and are unchanged.
+After eligible proxy failures, the operation uses one configured processor slot with a private `x-processor-egress: direct` request. It reuses the container's native-fetch extraction path with library retries limited to one. Concurrent proxy operations retain their own transports. This applies to core data operations and storyboards, including when the primary backend is `container`; exact frames use a separate container and are unchanged.
 
-The fallback gets at most five seconds, including startup and response-body reads. The proxy phase reserves that time inside the existing total operation budget, or half the total for budgets below ten seconds. The container receives an absolute deadline and bounds its own outbound requests too. No new container slot or proxy secret is needed. Confirmed missing captions, region/authentication restrictions, invalid input, and terminal not-found errors do not trigger direct fallback. An availability failure on the direct route becomes `UNAVAILABLE` with "YouTube is not available right now." Specific content restrictions discovered there remain specific.
+The fallback gets at most five seconds, including startup and response-body reads. The proxy phase reserves that time inside the existing total operation budget, or half the total for budgets below ten seconds. The container receives an absolute deadline and bounds its own outbound requests too. No new container slot or proxy secret is needed. Confirmed missing captions, region/authentication restrictions, invalid input, and terminal not-found errors do not trigger direct fallback. If the direct attempt fails, the operation rethrows the original proxy error, retaining its code, status, retryability, retry delay, and safe structured reason. Specific content restrictions discovered on the direct route take precedence. The friendly availability message belongs to the agent layer, not public data extraction.
 
-The container acknowledges the selected route in its response header. An old image that ignores direct routing cannot be accepted as direct recovery. Deploy the updated processor image with the Worker. Direct attempts log `youtube_direct_fallback` and append `backend: container`, `egress: direct` diagnostics using the same extraction ID and the next attempt number. Direct success does not clear proxy cooldowns.
+The container acknowledges the selected route in its response header. An old image that ignores direct routing cannot be accepted as direct recovery. Deploy the updated processor image with the Worker. Direct attempts log `youtube_direct_fallback` and append `backend: container`, `egress: direct` diagnostics using the same extraction ID and the next attempt number. Direct success does not clear proxy cooldowns. The cache forwards all five attempt diagnostics.
+
+Set `YOUTUBE_DIRECT_FALLBACK=off` to bypass the direct route and give the proxy phase its full original budget. This changes Worker configuration only; it does not require an image rebuild or proxy-secret changes. Cloudflare still needs to apply the updated Worker configuration. Keep the setting in deployment configuration so the next deployment does not restore `on` unexpectedly.
+
+A configured slot is not necessarily warm. A direct request can wake a sleeping container and still exhaust its five-second deadline. The container can then remain idle for the existing `sleepAfter = '30m'` window. `youtube_direct_container_state` records whether the process was already running before the request, its extraction ID, and container ID. `youtube_processor_started` records completed starts. These logs distinguish cold-start attempts from successful starts without an extra routing RPC. Production cold-start frequency and cost have not been measured.
+
+For rollout, deploy the updated processor image before enabling the Worker fallback. For rollback, set the flag to `off` first; the processor image can remain deployed. Old images that omit the routing acknowledgement produce `INVALID_PROCESSOR_RESPONSE` in the direct-attempt log while the caller retains the original proxy error.
 
 ### Operation settings
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `YOUTUBE_DIRECT_FALLBACK` | `on` | Set to `off` to disable direct fallback without changing the backend or image |
 | `YOUTUBE_EXTRACTION_BACKEND` | `worker` | Set to `container` to roll back core extraction |
 | `YOUTUBE_EXTRACTION_TIMEOUT_MS` | `120000` | Entire operation including retry waits |
 | `YOUTUBE_PROXY_TIMEOUT_MS` | `25000` | Budget for each proxy attempt |

@@ -41,7 +41,8 @@ export function normalizeProcessorError(error) {
 
   return {
     responseStatus: statusForCode(code),
-    error: { code, message, status: upstreamStatus, retryable },
+    error: { code, message, status: upstreamStatus, retryable,
+      ...(error?.reason === 'bot_challenge' ? { reason: 'bot_challenge' } : {}) },
   };
 }
 

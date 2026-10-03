@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { runYouTubeOperation, YouTubeProcessorError } from '../src/lib/youtube-processor-client';
 import * as worker from '../src/lib/youtube-worker-extraction';
+import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
+import { getTranscriptWithCache } from '../src/lib/youtube';
+import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import type { ExtractionAttempt } from '../src/lib/extraction-diagnostics';
 
 const operation = { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' } as const;
@@ -55,9 +59,9 @@ test('storyboard extraction uses the same final direct route', async () => {
   expect(requests.at(-1)!.headers.get('x-processor-egress')).toBe('direct');
 });
 
-test('returns clear unavailability only after the final direct attempt fails', async () => {
+test('preserves the proxy failure after the final direct attempt fails', async () => {
   const { env, containerFetch, diagnostics, record } = setup('worker', false);
-  await expect(runYouTubeOperation(env, operation, record)).rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'YouTube is not available right now.' });
+  await expect(runYouTubeOperation(env, operation, record)).rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'YouTube is temporarily unavailable.', retryable: true });
   expect(containerFetch).toHaveBeenCalledTimes(1);
   expect(diagnostics.at(-1)).toMatchObject({ attempt: 5, egress: 'direct', outcome: 'failed' });
 });
@@ -122,4 +126,86 @@ test('reserves fallback time inside the original operation deadline and cancels 
   await rejected;
   expect(directSignal!.aborted).toBe(true);
   expect(diagnostics.at(-1)).toMatchObject({ egress: 'direct', failureKind: 'timeout' });
+});
+
+test.each(['RATE_LIMITED', 'UPSTREAM_ERROR', 'UNAVAILABLE'] as const)('preserves the exact original %s error when direct fallback fails', async code => {
+  const { env, workerRun, containerFetch } = setup();
+  const original = Object.assign(new YouTubeProcessorError(code, 'Original proxy failure', 429, true, 3000), { reason: 'bot_challenge' });
+  workerRun.mockRejectedValue(original);
+  containerFetch.mockRejectedValue(new Error('Container startup failed'));
+  await expect(runYouTubeOperation(env, operation)).rejects.toBe(original);
+  expect(console.info).toHaveBeenCalledWith(expect.stringContaining('youtube_direct_fallback'));
+});
+
+test.each(['old-image', 'invalid-input'])('%s direct failures preserve the original infrastructure error', async failure => {
+  const { env, workerRun, containerFetch } = setup();
+  const original = new Error('Proxy adapter failure');
+  workerRun.mockRejectedValue(original);
+  containerFetch.mockResolvedValue(failure === 'old-image' ? Response.json({ value: { text: 'Still proxied' } })
+    : Response.json({ error: { code: 'INVALID_INPUT', message: 'Invalid internal direct request' } }, {
+      status: 422, headers: { 'x-processor-egress': 'direct' },
+    }));
+  await expect(runYouTubeOperation(env, operation)).rejects.toBe(original);
+  expect(console.info).toHaveBeenCalledWith(expect.stringContaining(failure === 'old-image' ? 'INVALID_PROCESSOR_RESPONSE' : 'INVALID_INPUT'));
+});
+
+test.each(['worker', 'container'] as const)('the off switch skips direct fallback for %s', async backend => {
+  const { env, requests, execute } = setup(backend, false);
+  Object.assign(env, { YOUTUBE_DIRECT_FALLBACK: 'off' });
+  await expect(runYouTubeOperation(env, operation)).rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+  expect(requests.filter(request => request.headers.get('x-processor-egress') === 'direct')).toHaveLength(0);
+  expect(execute).toHaveBeenCalledTimes(backend === 'worker' ? 4 : 0);
+  expect(requests).toHaveLength(backend === 'worker' ? 0 : 4);
+});
+
+test('the off switch preserves time that would otherwise be reserved for fallback', async () => {
+  vi.useFakeTimers();
+  const { env, execute, containerFetch } = setup();
+  Object.assign(env, { YOUTUBE_DIRECT_FALLBACK: 'off', YOUTUBE_EXTRACTION_TIMEOUT_MS: '1000' });
+  execute.mockImplementation(async () => {
+    await new Promise(resolve => setTimeout(resolve, 800));
+    return { text: 'Proxy recovered within its original budget' } as never;
+  });
+  const pending = runYouTubeOperation(env, operation);
+  const result = expect(pending).resolves.toMatchObject({ text: 'Proxy recovered within its original budget' });
+  await vi.advanceTimersByTimeAsync(801);
+  await result;
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(containerFetch).not.toHaveBeenCalled();
+});
+
+test.each(['AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'NOT_FOUND'] as const)('preserves a confirmed %s restriction from the direct route', async code => {
+  const { env, containerFetch } = setup();
+  containerFetch.mockResolvedValue(Response.json({ error: { code, message: 'Content restriction', retryable: false } }, {
+    status: 404, headers: { 'x-processor-egress': 'direct' },
+  }));
+  await expect(runYouTubeOperation(env, operation)).rejects.toMatchObject({ code, retryable: false });
+});
+
+test.each(['worker', 'container'] as const)('retains bot classification through %s proxies, direct fallback, cache wire, and agent tool', async backend => {
+  const { env, execute, containerFetch, diagnostics, record } = setup(backend, false);
+  execute.mockRejectedValue(Object.assign(new Error('SECRET upstream response'), { code: 'UNAVAILABLE', reason: 'bot_challenge' }));
+  containerFetch.mockImplementation(async request => Response.json({ error: {
+    code: request.headers.get('x-processor-egress') === 'direct' ? 'UPSTREAM_ERROR' : 'UNAVAILABLE',
+    message: 'YouTube challenged this route.', reason: 'bot_challenge', retryable: true,
+  } }, { status: 503, headers: { 'x-processor-egress': request.headers.get('x-processor-egress') ?? 'proxy' } }));
+  const coordinator = new YouTubeCacheCoordinatorCore(env, (bindings, input, onDiagnostic) =>
+    runYouTubeOperation(bindings, input as typeof operation, onDiagnostic));
+  Object.assign(env, {
+    YOUTUBE_CACHE: { get: vi.fn(async () => null), put: vi.fn() },
+    YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad: async (json: string) =>
+      JSON.stringify(await coordinator.getOrLoad(JSON.parse(json))) }) },
+  });
+  const context: AgentToolContext = {
+    runId: 'fallback-chain', signal: new AbortController().signal,
+    transcriptPolicy: { mode: 'complete_transcript' }, finalize: vi.fn(),
+    provider: { transcript: (id: string, language?: string) => getTranscriptWithCache(env, id, language, record) } as AgentToolContext['provider'],
+    executeEvidenceTool: execution => execution.execute(),
+  };
+  await expect(executeGetVideoTranscript({ videoId: operation.id }, context, 'transcript')).rejects.toMatchObject({
+    code: 'YOUTUBE_UNAVAILABLE', message: expect.stringContaining('[upstream=UNAVAILABLE; reason=bot_challenge]'),
+    cause: expect.objectContaining({ code: 'UNAVAILABLE', reason: 'bot_challenge' }),
+  });
+  expect(diagnostics).toHaveLength(5);
+  expect(diagnostics.at(-1)).toMatchObject({ egress: 'direct', outcome: 'failed' });
 });

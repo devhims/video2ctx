@@ -40,6 +40,7 @@ export interface YouTubeCacheResponse {
     message: string;
     status?: number;
     retryable: boolean;
+    reason?: 'bot_challenge';
   };
 }
 
@@ -144,7 +145,7 @@ export class YouTubeCacheCoordinatorCore {
 
     const diagnostics: ExtractionAttempt[] = [];
     const onDiagnostic: ExtractionDiagnosticSink = event => {
-      if (['transcript','storyboard','frames'].includes(request.operation.kind) && diagnostics.length < 4) {
+      if (['transcript','storyboard','frames'].includes(request.operation.kind) && diagnostics.length < (request.operation.kind === 'frames' ? 4 : 5)) {
         emitExtractionDiagnostic(item => { diagnostics.push(item); }, event);
       }
     };
@@ -239,6 +240,7 @@ function failureFrom(error: unknown): YouTubeCacheResponse {
         message: error.message,
         status: error.status,
         retryable: error.retryable,
+        ...(error.reason === 'bot_challenge' ? { reason: error.reason } : {}),
       },
     };
   }
