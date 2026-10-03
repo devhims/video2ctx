@@ -1284,3 +1284,31 @@ test('a run stores the client time zone and older runs fall back to UTC', async 
     fiber.mockRestore();
   });
 });
+
+
+test('visual latency survives successful and failed trace publication', async () => {
+  const {runtime,runId}=await seed('trace-visual-latency','running');
+  await runInDurableObject(runtime, async instance => {
+    const {diagnoseVisualTool, visualSpan, countVisualWork}=await import('../src/lib/visual-diagnostics');
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    for (const fail of [false,true]) {
+      const toolCallId=fail?'visual-failure':'visual-success';
+      const failure=new Error('extraction failed');
+      const result=manager.track(runId,{toolCallId,name:'get_video_frames',operation:'frames',input:{},
+        execute:()=>diagnoseVisualTool('frames',()=>visualSpan('retrieval',async()=>{
+          countVisualWork('requestedImages',2);
+          if(fail) throw failure;
+          return {artifacts:[{data:{}}]};
+        }))});
+      if(fail) await expect(result).rejects.toBe(failure); else await result;
+      await manager.publishPending();
+      const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?')
+        .bind(runId,toolCallId).first<{trace_id:string}>();
+      const detail=await readAdminToolTrace(env,runId,row!.trace_id);
+      const diagnostics=fail?detail?.error?.visualDiagnostics
+        :(detail?.output as {artifacts:{data:{visualDiagnostics:unknown}}[]}).artifacts[0]!.data.visualDiagnostics;
+      expect(diagnostics).toMatchObject({version:1,scope:'tool',kind:'frames',outcome:fail?'error':'success',counters:{requestedImages:2}});
+      expect(detail?.payloadState).toBe('complete');
+    }
+  });
+});

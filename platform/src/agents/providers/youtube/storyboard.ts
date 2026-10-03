@@ -49,3 +49,9 @@ export const storyboardSchema = z.object({
   }
 });
 export type Storyboard = z.infer<typeof storyboardSchema>;
+
+/** Image-download failures do not make the discovered manifest incomplete. */
+export function storyboardMetadata(board: Storyboard): Storyboard {
+  return storyboardSchema.parse({ ...board, sheets: [], selection: { mode: 'metadata' },
+    meta: { partial: false, warnings: [] } });
+}

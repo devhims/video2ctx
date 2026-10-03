@@ -1,3 +1,5 @@
+import { visualSpan, linkVisualWork } from './visual-diagnostics';
+import type { VerifiedImage } from './verified-image';
 import { emitExtractionDiagnostic, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import type {
   BrowseOptions,
@@ -38,6 +40,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  verifiedImages?: VerifiedImage[];
   frameTimingsMs?: { sessionLookup: number; retrieval: number; sessionPin: number };
   catalogVersions?: VideoAssetReference[];
   sessionReused?: boolean;
@@ -124,7 +127,8 @@ async function cached<T extends VideoResourceOperation>(
   const catalog = videoCatalog(env);
   const resource = videoResourceKey(operation);
   const cacheKey = catalog && resource ? `video-resource:v1:${await hash(JSON.stringify(resource))}` : legacyCacheKey;
-  const stored = catalog && resource && !refresh ? await readVideoResource(env,operation) : null;
+  // Visual selections are checked once inside the coalescing coordinator.
+  const stored = catalog && resource && !refresh && operation.kind !== 'storyboard' && operation.kind !== 'frames' ? await readVideoResource(env,operation) : null;
   const existing = stored ? {version:1 as const,...stored,value:stored.value as ResourceResult<T>}
     : catalog && resource ? null : await readYouTubeCacheEntry<ResourceResult<T>>(env, cacheKey, type);
 
@@ -135,15 +139,19 @@ async function cached<T extends VideoResourceOperation>(
 
   let response;
   try {
-    const wireResponse = await env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey).getOrLoad(JSON.stringify({
-      cacheKey,
-      legacyCacheKey,
-      resourceType: type,
-      maxAgeMs,
-      operation,
-      refresh,
-    }));
-    response = parseCoordinatorResponse(wireResponse);
+    response = await visualSpan('coordinator_wait', async () => {
+      const wireResponse = await env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey).getOrLoad(JSON.stringify({
+        cacheKey,
+        legacyCacheKey,
+        resourceType: type,
+        maxAgeMs,
+        operation,
+        refresh,
+      }));
+      const parsed = parseCoordinatorResponse(wireResponse);
+      linkVisualWork(parsed.visualDiagnostics, parsed.cacheStatus);
+      return parsed;
+    });
   } catch (error) {
     if (existing && !refresh) return cachedValue(existing, 'stale', !!resource);
     throw new ApiError(

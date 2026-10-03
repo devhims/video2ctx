@@ -1,3 +1,4 @@
+import { visualSpan, countVisualWork, linkVisualExtraction } from './visual-diagnostics';
 import { abortableContainerFetch, boundedContainerJson } from './bounded-container-json';
 import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
@@ -250,6 +251,12 @@ async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload
 export async function runYouTubeOperation<T extends YouTubeOperation>(
   env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
+  return visualSpan('extraction', () => runYouTubeOperationImpl(env, operation, onDiagnostic));
+}
+
+async function runYouTubeOperationImpl<T extends YouTubeOperation>(
+  env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
+): Promise<YouTubeOperationResult<T>> {
   if (String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard') {
     const { runWorkerYouTubeOperation } = await import('./youtube-worker-extraction');
     return runWorkerYouTubeOperation(env, operation, onDiagnostic) as Promise<YouTubeOperationResult<T>>;
@@ -291,6 +298,8 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     let retry = false;
     try {
       deadline.throwIfAborted();
+      countVisualWork('containerAttempts');
+      linkVisualExtraction(extractionId, index + 1);
       const response = await abortableContainerFetch(deadline, () => processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId, 'x-processor-egress-slot': String(egressSlot) }, body, signal: deadline,
       })));

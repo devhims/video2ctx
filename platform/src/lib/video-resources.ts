@@ -1,6 +1,7 @@
+import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { timeStoryboardStage } from './storyboard-timing';
 import { mapInBatches } from './map-in-batches';
-import { storyboardSchema, type Storyboard } from '../agents/providers/youtube/storyboard';
+import { storyboardMetadata, storyboardSchema, type Storyboard } from '../agents/providers/youtube/storyboard';
 import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-frames-contract';
 import { getVideoFrames } from './youtube-frames';
 import { runYouTubeOperation, type YouTubeOperation } from './youtube-processor-client';
@@ -158,6 +159,69 @@ function boardWithSheets(
   });
 }
 
+/** Request-local lookup shared by the coordinator and loader, including partial hits. */
+export interface StoryboardLookup {
+  kind: 'storyboard';
+  metadata: StoredVideoAsset<Storyboard> | null;
+  hits: StoredVideoAsset<Storyboard>[];
+  missing: number[];
+  stored: StoredVideoAsset<Storyboard> | null;
+}
+export async function readStoryboardSelection(
+  env: Env,
+  op: Extract<YouTubeOperation, { kind: 'storyboard' }>,
+): Promise<StoryboardLookup> {
+  return timeStoryboardStage(op.id, 'catalog_lookup', async () => {
+    countVisualWork('catalogLookupPasses');
+    const store = videoCatalog(env);
+    const metadata = store ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
+    if (!metadata?.complete) {
+      countVisualWork('catalogMisses');
+      return { kind: 'storyboard', metadata: null, hits: [], missing: [], stored: null };
+    }
+    const indexes = sheetIndexes(metadata.value, op);
+    const keys = await Promise.all(indexes.map(index => sheetKey(metadata.value, index)));
+    const saved = await store!.readSavedMany<Storyboard>(keys);
+    const hits = saved.filter((asset): asset is StoredVideoAsset<Storyboard> => !!asset?.complete);
+    const missing = indexes.filter((_, index) => !saved[index]?.complete);
+    countVisualWork('catalogHits', hits.length + 1);
+    countVisualWork('catalogMisses', missing.length);
+    return { kind: 'storyboard', metadata, hits, missing, stored: missing.length ? null : combined(
+      boardWithSheets(metadata.value, op, hits.map(asset => asset.value)), [metadata, ...hits]) };
+  });
+}
+
+export interface FrameLookup {
+  kind: 'frames';
+  hits: StoredVideoAsset<VideoFrames>[];
+  missing: number[];
+  stored: StoredVideoAsset<VideoFrames> | null;
+  lookupMs: number;
+}
+export type VisualLookup = StoryboardLookup | FrameLookup;
+
+export async function readFrameSelection(env: Env, op: FrameOperation): Promise<FrameLookup> {
+  return visualSpan('catalog_lookup', () => readFrameSelectionImpl(env, op));
+}
+
+async function readFrameSelectionImpl(env: Env, op: FrameOperation): Promise<FrameLookup> {
+  countVisualWork('catalogLookupPasses');
+  const started = Date.now();
+  const request = frameRequestSchema.parse({videoId: op.id, timestampsMs: op.timestampsMs, maxWidth: op.maxWidth});
+  const times = [...new Set(request.timestampsMs)].sort((a, b) => a - b);
+  const store = videoCatalog(env);
+  const saved = store ? await store.readSavedMany<VideoFrames>(times.map(time => frameKey(op, time))) : [];
+  const hits = saved.filter((asset): asset is StoredVideoAsset<VideoFrames> => !!asset?.complete);
+  const present = new Set(hits.flatMap(asset => asset.value.frames.map(frame => frame.timestampMs)));
+  const missing = times.filter(time => !present.has(time));
+  countVisualWork('catalogHits', times.length - missing.length);
+  countVisualWork('catalogMisses', missing.length);
+  return {kind: 'frames', hits, missing, lookupMs: Date.now() - started,
+    stored: missing.length ? null : combined(framesSchema.parse({videoId: op.id,
+      frames: hits.flatMap(asset => asset.value.frames).sort((a, b) => a.timestampMs - b.timestampMs),
+      failures: [], meta: {partial: false, warnings: []}}), hits)};
+}
+
 export async function readVideoResource(
   env: Env,
   op: VideoResourceOperation,
@@ -166,40 +230,10 @@ export async function readVideoResource(
   const key = videoResourceKey(op);
   if (!store || !key) return null;
   if (op.kind === 'storyboard') {
-    const metadata = await store.readSaved<Storyboard>(metadataKey(op.id));
-    if (!metadata) return null;
-    if (op.metadataOnly) return metadata;
-    const indexes = sheetIndexes(metadata.value, op);
-    const sheets = await Promise.all(
-      indexes.map(async (index) => store.readSaved<Storyboard>(await sheetKey(metadata.value, index))),
-    );
-    if (sheets.some((sheet) => !sheet)) return null;
-    const present = sheets.filter((sheet): sheet is StoredVideoAsset<Storyboard> => !!sheet);
-    return combined(
-      boardWithSheets(
-        metadata.value,
-        op,
-        present.map((sheet) => sheet.value),
-      ),
-      [metadata, ...present],
-    );
+    if (op.metadataOnly) return store.readSaved<Storyboard>(metadataKey(op.id));
+    return (await readStoryboardSelection(env, op)).stored;
   }
-  if (op.kind === 'frames') {
-    const assets = await Promise.all(
-      op.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))),
-    );
-    if (assets.some((asset) => !asset)) return null;
-    const present = assets.filter((asset): asset is StoredVideoAsset<VideoFrames> => !!asset);
-    return combined(
-      framesSchema.parse({
-        videoId: op.id,
-        frames: present.flatMap((asset) => asset.value.frames),
-        failures: [],
-        meta: { partial: false, warnings: [] },
-      }),
-      present,
-    );
-  }
+  if (op.kind === 'frames') return (await readFrameSelection(env, op)).stored;
   const stored = await store.readSaved(key);
   // Older Workers may still write the legacy kind during a rolling deployment.
   return stored ?? (op.kind === 'video' ? store.read({ ...key, kind: 'video' }) : null);
@@ -229,13 +263,13 @@ export async function saveVideoResource(
         // Metadata was loaded separately; saving images must not renew its freshness.
         const expected = sheetIndexes(board, op);
         const framesPerSheet = board.manifest.framesPerSheet;
-        const sheetReferences = await timeStoryboardStage(op.id, 'catalog_write', () => mapInBatches(board.sheets, async (sheet) => {
+        const writes = await Promise.all(board.sheets.map(async (sheet) => {
           const index = sheet.firstFrameIndex / framesPerSheet;
           if (!Number.isInteger(index) || !expected.includes(index))
             throw new Error('Unexpected storyboard sheet.');
-          return store.save(
-            await sheetKey(board, index),
-            {
+          return {
+            key: await sheetKey(board, index),
+            value: {
               ...board,
               sheets: [sheet],
               selection: { mode: 'indexes', requestedSheetIndexes: [index] },
@@ -243,14 +277,15 @@ export async function saveVideoResource(
             },
             fetchedAt,
             maxAgeMs,
-            true,
-            {
+            complete: true,
+            coverage: {
               startMs: sheet.firstFrameIndex * sheet.intervalMs,
               endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
               frameCount: sheet.frameCount,
             },
-          );
+          };
         }));
+        const sheetReferences = await timeStoryboardStage(op.id, 'catalog_write', () => store.saveMany(writes));
         references.push(...sheetReferences);
       } else
         await save(metadataKey(op.id), board, fetchedAt, maxAgeMs, resourceComplete(op, board), {
@@ -267,14 +302,12 @@ export async function saveVideoResource(
       frames.frames.some((frame) => !op.timestampsMs.includes(frame.timestampMs))
     )
       throw new Error('Unexpected video frame.');
-    return mapInBatches(frames.frames, frame => store.save(
-        frameKey(op, frame.timestampMs),
-        { ...frames, frames: [frame], failures: [], meta: { ...frames.meta, partial: false } },
-        fetchedAt,
-        maxAgeMs,
-        true,
-        { timestampMs: frame.timestampMs, width: frame.width, height: frame.height, maxWidth: op.maxWidth },
-      ));
+    return store.saveMany(frames.frames.map(frame => ({
+      key: frameKey(op, frame.timestampMs),
+      value: { ...frames, frames: [frame], failures: [], meta: { ...frames.meta, partial: false } },
+      fetchedAt, maxAgeMs, complete: true,
+      coverage: { timestampMs: frame.timestampMs, width: frame.width, height: frame.height, maxWidth: op.maxWidth },
+    })));
   }
   const data = value as {
     segments?: unknown[];
@@ -298,6 +331,7 @@ export async function loadVideoResource(
   diagnostic?: ExtractionDiagnosticSink,
   refresh = false,
   onVersions?: (references: VideoAssetReference[]) => void,
+  visualLookup?: VisualLookup,
 ): Promise<unknown> {
   const store = videoCatalog(env);
   if (op.kind === 'frames') {
@@ -306,18 +340,11 @@ export async function loadVideoResource(
       timestampsMs: op.timestampsMs,
       maxWidth: op.maxWidth,
     });
-    const lookupStarted = Date.now();
     let lastAttempt: ExtractionAttempt | undefined;
-    const saved =
-      store && !refresh
-        ? await Promise.all(request.timestampsMs.map((time) => store.readSaved<VideoFrames>(frameKey(op, time))))
-        : [];
-    const lookupMs = Date.now() - lookupStarted;
-    const hits = saved.filter(
-      (asset): asset is StoredVideoAsset<VideoFrames> => !!asset && asset.complete,
-    );
-    const times = new Set(hits.flatMap((asset) => asset.value.frames.map((frame) => frame.timestampMs)));
-    const missing = request.timestampsMs.filter((time) => !times.has(time));
+    const lookup = refresh ? undefined : visualLookup?.kind === 'frames' ? visualLookup : await readFrameSelection(env, op);
+    const lookupMs = lookup?.lookupMs ?? 0;
+    const hits = lookup?.hits ?? [];
+    const missing = lookup?.missing ?? [...new Set(request.timestampsMs)].sort((a, b) => a - b);
     const fetchedAt = Date.now();
     let catalogWriteMs: number | undefined;
     let catalogSucceeded = false;
@@ -338,7 +365,7 @@ export async function loadVideoResource(
       let versions: VideoAssetReference[] = [];
       if (fetched) {
         try {
-          versions = await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames);
+          versions = await visualSpan('catalog_write', () => saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames));
           catalogSucceeded = true;
         } finally {
           catalogWriteMs = Date.now() - writeStarted;
@@ -366,36 +393,26 @@ export async function loadVideoResource(
   }
   if (op.kind !== 'storyboard') return runYouTubeOperation(env, op, diagnostic);
   if (!store || op.metadataOnly) return storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
-  let metadata = !refresh ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
-  if (!metadata || !metadata.complete) {
-    const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
+  const lookup = refresh ? undefined : visualLookup?.kind === 'storyboard' ? visualLookup : await readStoryboardSelection(env, op);
+  const metadata = lookup?.metadata;
+  if (!metadata) {
+    // A cold or refreshed selection discovers the manifest and downloads images in
+    // one container invocation. No second startup or repeated YouTube discovery.
     const fetchedAt = Date.now();
-    const value = storyboardSchema.parse(await runYouTubeOperation(env, metadataOp, diagnostic));
-    const catalogVersions = await saveVideoResource(
-      env,
-      metadataOp,
-      value,
-      fetchedAt,
-      VIDEO_MAX_AGE.storyboard,
-    );
-    metadata = {
-      value,
-      fetchedAt,
-      freshUntil: fetchedAt + VIDEO_MAX_AGE.storyboard,
-      complete: true,
-      catalogVersions,
-    };
+    const fetched = storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
+    if (fetched.videoId !== op.id) throw new Error('Storyboard video mismatch.');
+    sheetIndexes(fetched, op);
+    const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
+    // Independent assets share no publication dependency. Drain both on failure.
+    const versions = await mapInBatches([
+      { operation: metadataOp, value: storyboardMetadata(fetched) },
+      { operation: op, value: fetched },
+    ], item => saveVideoResource(env, item.operation, item.value, fetchedAt, VIDEO_MAX_AGE.storyboard));
+    onVersions?.(versions.flat());
+    return fetched;
   }
-  const indexes = sheetIndexes(metadata.value, op);
-  const saved = await Promise.all(
-    indexes.map(async (index) =>
-      refresh ? null : store.readSaved<Storyboard>(await sheetKey(metadata.value, index)),
-    ),
-  );
-  const hits = saved.filter(
-    (asset): asset is StoredVideoAsset<Storyboard> => !!asset && asset.complete,
-  );
-  const missing = indexes.filter((_, index) => !saved[index]?.complete);
+  const hits = lookup!.hits;
+  const missing = lookup!.missing;
   const versions = [...(metadata.catalogVersions ?? []), ...hits.flatMap((hit) => hit.catalogVersions ?? [])];
   if (!missing.length) {
     onVersions?.(versions);

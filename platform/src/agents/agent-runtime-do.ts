@@ -599,13 +599,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         },
         onDraft: draft => this.updateDraft(runId, draft),
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
-        saveFramePreviews: (frames, signal) => {
+        saveFramePreviews: (frames, signal, verifiedImages) => {
           this.assertRunActive(runId);
-          return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal, this.env.VIDEO_ASSETS);
+          return saveFramePreviews(this.env.RESEARCH, row.user_id, frames, signal, this.env.VIDEO_ASSETS, verifiedImages);
         },
-        saveStoryboardPreviews: (storyboard, signal) => {
+        saveStoryboardPreviews: (storyboard, signal, verifiedImages) => {
           this.assertRunActive(runId);
-          return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal, this.env.VIDEO_ASSETS);
+          return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal, this.env.VIDEO_ASSETS, verifiedImages);
         },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });

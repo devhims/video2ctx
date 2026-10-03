@@ -1,3 +1,4 @@
+import { captureVisualWork } from '../src/lib/visual-diagnostics';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { VideoCatalog } from '../src/lib/video-catalog';
@@ -32,13 +33,16 @@ function fixture() {
   );
   sql.exec(readFileSync(new URL('../video-catalog-migrations/0003_historical_asset_versions.sql', import.meta.url), 'utf8'));
   let failCommit = false;
+  const queries: string[] = [];
+  const batches: string[][] = [];
   const sqlStatements = new WeakMap<D1PreparedStatement, { query: string; params: (string | number | null)[] }>();
   function prepare(query: string, params: (string | number | null)[] = []): D1PreparedStatement {
     const statement = {
       bind: (...values: (string | number | null)[]) => prepare(query, values),
-      first: async () => sql.prepare(query).get(...params) ?? null,
-      all: async () => ({ success: true, results: sql.prepare(query).all(...params) }),
+      first: async () => { queries.push(query); return sql.prepare(query).get(...params) ?? null; },
+      all: async () => { queries.push(query); return { success: true, results: sql.prepare(query).all(...params) }; },
       run: async () => {
+        queries.push(query);
         sql.prepare(query).run(...params);
         return { success: true };
       },
@@ -49,14 +53,17 @@ function fixture() {
   const db = {
     prepare,
     batch: async (statements: D1PreparedStatement[]) => {
+      const batchQueries = statements.map(statement => sqlStatements.get(statement)!.query);
+      batches.push(batchQueries);
+      queries.push(...batchQueries);
       if (failCommit && statements.some(statement => sqlStatements.get(statement)!.query.includes("SET state='ready'"))) throw new Error('simulated database outage');
       sql.exec('BEGIN');
       try {
         const results = [];
         for (const statement of statements) {
           const { query, params } = sqlStatements.get(statement)!;
-          sql.prepare(query).run(...params);
-          results.push({ success: true });
+          const resultsRows = sql.prepare(query).all(...params);
+          results.push({ success: true, results: resultsRows });
         }
         sql.exec('COMMIT');
         return results;
@@ -87,6 +94,8 @@ function fixture() {
   const env = { VIDEO_CATALOG: db, VIDEO_ASSETS: bucket, YOUTUBE_CACHE: kv } as unknown as Env;
   return {
     sql,
+    queries,
+    batches,
     db,
     bucket,
     objects,
@@ -614,43 +623,40 @@ test('normalizes fresh storyboard metadata before returning and pinning its save
     .resolves.toMatchObject({ asset: refs[0] });
 });
 
-test('persists frames in bounded concurrent batches and returns references in timestamp order', async () => {
+test('persists frames with bounded R2 concurrency and returns references in timestamp order', async () => {
   const f = fixture();
-  const original = VideoCatalog.prototype.save;
+  const put = vi.mocked(f.bucket.put).getMockImplementation()!;
   let active = 0, peak = 0;
-  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+  vi.mocked(f.bucket.put).mockImplementation(async (...args) => {
     active++;
     peak = Math.max(peak, active);
     await new Promise(resolve => setTimeout(resolve, 5));
-    try { return await original.apply(this, args); }
+    try { return await put(...args); }
     finally { active--; }
   });
-  try {
-    const times = [1000, 2000, 3000, 4000, 5000, 6000];
-    const refs = await saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
-      { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000);
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect(refs.map(ref => ref.variant)).toEqual(times.map(time => `v1:640:${time}`));
-  } finally { save.mockRestore(); }
+  const times = [1000, 2000, 3000, 4000, 5000, 6000];
+  const refs = await saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
+    { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000);
+  expect(peak).toBe(4);
+  expect(active).toBe(0);
+  expect(refs.map(ref => ref.variant)).toEqual(times.map(time => `v1:640:${time}`));
+  expect(f.batches).toHaveLength(2);
 });
 
 test('settles started frame writes before rejecting and does not start the next batch', async () => {
   const f = fixture();
   let settled = 0;
-  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async () => {
-    const index = save.mock.calls.length;
+  vi.mocked(f.bucket.put).mockImplementation(async () => {
+    const index = vi.mocked(f.bucket.put).mock.calls.length;
     await new Promise(resolve => setTimeout(resolve, index === 1 ? 0 : 10));
     settled++;
     throw new Error('storage unavailable');
   });
-  try {
-    const times = [1000, 2000, 3000, 4000, 5000, 6000];
-    await expect(saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
-      { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000)).rejects.toThrow('storage unavailable');
-    expect(save).toHaveBeenCalledTimes(4);
-    expect(settled).toBe(4);
-  } finally { save.mockRestore(); }
+  const times = [1000, 2000, 3000, 4000, 5000, 6000];
+  await expect(saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
+    { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000)).rejects.toThrow('could not be saved');
+  expect(f.bucket.put).toHaveBeenCalledTimes(4);
+  expect(settled).toBe(4);
 });
 
 test('attaches catalog timings to extraction diagnostics even when persistence fails', async () => {
@@ -661,7 +667,7 @@ test('attaches catalog timings to extraction diagnostics even when persistence f
     return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
   });
   const diagnostic = vi.fn();
-  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockRejectedValue(new Error('storage unavailable'));
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany').mockRejectedValue(new Error('storage unavailable'));
   try {
     await expect(loadVideoResource(f.env, { kind: 'frames', id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 }, diagnostic))
       .rejects.toThrow('storage unavailable');
@@ -682,8 +688,8 @@ test('forwards extraction diagnostics before a stalled catalog write', async () 
   });
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const original = VideoCatalog.prototype.save;
-  const save = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+  const original = VideoCatalog.prototype.saveMany;
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany').mockImplementation(async function (this: VideoCatalog, ...args) {
     expect(diagnostic).toHaveBeenCalledTimes(1);
     expect(diagnostic.mock.calls[0]![0]).toMatchObject({ events: extractionFixture.events });
     release();
@@ -695,4 +701,279 @@ test('forwards extraction diagnostics before a stalled catalog write', async () 
     await pending;
     expect(diagnostic).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'catalog', outcome: 'success' }));
   } finally { save.mockRestore(); }
+});
+
+test('storyboard cold-path simulation uses one container and one catalog lookup pass', async () => {
+  const f = fixture();
+  const reads = vi.spyOn(VideoCatalog.prototype, 'readSaved');
+  const core = new YouTubeCacheCoordinatorCore(f.env);
+  f.env.YOUTUBE_REQUEST_COORDINATOR = { getByName: () => ({
+    getOrLoad: async (wire: string) => JSON.stringify(await core.getOrLoad(JSON.parse(wire))),
+  }) } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  vi.mocked(runYouTubeOperation).mockImplementation(async (_env, op) =>
+    storyboard(op.kind === 'storyboard' && op.metadataOnly ? [] : [0, 1, 2]) as never);
+  try {
+    const result = await getVideoResource(f.env, { kind: 'storyboard', id, maxSheets: 3 });
+    expect(result.value.sheets).toHaveLength(3);
+    expect(runYouTubeOperation).toHaveBeenCalledTimes(1);
+    expect(reads.mock.calls.map(([key]) => key.kind)).toEqual(['storyboard_manifest']);
+    expect(result.catalogVersions).toHaveLength(4);
+  } finally { reads.mockRestore(); }
+});
+
+test('storyboard partial-cache simulation retains hits across the coordinator lookup', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, storyboard(), 1, 60_000);
+  await saveVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [0] }, storyboard([0]), 1, 60_000);
+  const reads = vi.spyOn(VideoCatalog.prototype, 'readSaved');
+  const batchReads = vi.spyOn(VideoCatalog.prototype, 'readSavedMany');
+  const core = new YouTubeCacheCoordinatorCore(f.env);
+  f.env.YOUTUBE_REQUEST_COORDINATOR = { getByName: () => ({
+    getOrLoad: async (wire: string) => JSON.stringify(await core.getOrLoad(JSON.parse(wire))),
+  }) } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  vi.mocked(runYouTubeOperation).mockResolvedValue(storyboard([1, 2]));
+  try {
+    const result = await getVideoResource(f.env, { kind: 'storyboard', id, maxSheets: 3 });
+    expect(result.value.sheets).toHaveLength(3);
+    expect(runYouTubeOperation).toHaveBeenCalledExactlyOnceWith(f.env,
+      expect.objectContaining({ sheetIndexes: [1, 2], maxSheets: 2 }), expect.any(Function));
+    expect(reads.mock.calls.filter(([key]) => key.kind === 'storyboard_manifest')).toHaveLength(1);
+    expect(batchReads).toHaveBeenCalledTimes(1);
+    expect(batchReads.mock.calls[0]![0]).toHaveLength(3);
+  } finally { reads.mockRestore(); batchReads.mockRestore(); }
+});
+
+
+test('eight-sheet miss simulation batches lookups into two D1 calls and one activity update', async () => {
+  const f = fixture();
+  const board = { ...storyboard(), frameCount: 16,
+    manifest: { ...storyboard().manifest!, totalSheets: 8, lastSampleMs: 150_000 } };
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, board, Date.now(), 60_000);
+  f.queries.length = 0;
+  f.batches.length = 0;
+  const { readStoryboardSelection } = await import('../src/lib/video-resources');
+  const lookup = await readStoryboardSelection(f.env, {kind: 'storyboard', id, maxSheets: 12});
+  expect(lookup.missing).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  expect(f.batches.map(batch => batch.length)).toEqual([8, 9]);
+  expect(f.queries.filter(query => query.includes('INSERT INTO videos'))).toHaveLength(1);
+  // One manifest SELECT plus 17 sheet/activity statements, previously 3 * 24 for sheets alone.
+  expect(f.queries).toHaveLength(18);
+});
+
+test('cold storyboard requests coalesce, then reuse all saved sheets without another container', async () => {
+  const f = fixture();
+  const core = new YouTubeCacheCoordinatorCore(f.env);
+  const op = {kind: 'storyboard', id, maxSheets: 3} as const;
+  const selection = {...request, cacheKey: 'storyboard-cold', operation: op, resourceType: 'storyboard'};
+  let finish!: (board: Storyboard) => void;
+  const pending = new Promise<Storyboard>(resolve => { finish = resolve; });
+  vi.mocked(runYouTubeOperation).mockReturnValue(pending as never);
+  const first = core.getOrLoad(selection);
+  const second = core.getOrLoad(selection);
+  finish(storyboard([0, 1, 2]));
+  const results = await Promise.all([first, second]);
+  expect(results.map(result => result.cacheStatus)).toEqual(['miss', 'coalesced']);
+  expect(results[1]!.visualDiagnostics?.operationId).toBe(results[0]!.visualDiagnostics?.operationId);
+  expect(results[0]!.visualDiagnostics?.counters.catalogLookupPasses).toBe(1);
+  expect(results.every(result => result.catalogVersions?.length === 4)).toBe(true);
+  const warm = await new YouTubeCacheCoordinatorCore(f.env).getOrLoad(selection);
+  expect(warm).toMatchObject({ok:true, cacheStatus:'hit', value:{sheets:storyboard([0,1,2]).sheets}});
+  expect(runYouTubeOperation).toHaveBeenCalledTimes(1);
+});
+
+test('storyboard refresh gets a new manifest and sheets together and a failure cannot return stale data', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, {kind:'storyboard',id,metadataOnly:true}, storyboard(), 1, 60_000);
+  const core = new YouTubeCacheCoordinatorCore(f.env);
+  const selection = {...request, cacheKey:'storyboard-refresh', resourceType:'storyboard', refresh:true,
+    operation:{kind:'storyboard',id,maxSheets:3} as const};
+  const updated = storyboard([0,1,2]);
+  updated.intervalMs = 20_000;
+  updated.manifest!.lastSampleMs = 100_000;
+  updated.sheets.forEach(sheet => {sheet.intervalMs = 20_000;});
+  vi.mocked(runYouTubeOperation).mockResolvedValueOnce(updated);
+  expect(await core.getOrLoad(selection)).toMatchObject({ok:true,value:updated});
+  expect(runYouTubeOperation).toHaveBeenCalledTimes(1);
+  expect(await readVideoResource(f.env, selection.operation)).toMatchObject({value:{intervalMs:20_000}});
+  vi.mocked(runYouTubeOperation).mockRejectedValueOnce(new Error('Container unavailable'));
+  expect(await core.getOrLoad(selection)).toMatchObject({ok:false});
+});
+
+test('legacy storyboard promotion includes the manifest reference for one-call session pinning', async () => {
+  const f = fixture();
+  f.kv.get.mockResolvedValue({version:1, value:storyboard([0,1,2]), fetchedAt:123, freshUntil:124});
+  const result = await new YouTubeCacheCoordinatorCore(f.env).getOrLoad({...request,
+    resourceType:'storyboard', operation:{kind:'storyboard', id, maxSheets:3}});
+  expect(result).toMatchObject({ok:true,cacheStatus:'hit',fetchedAt:123});
+  expect(result.catalogVersions?.map(asset=>asset.kind)).toEqual([
+    'storyboard_manifest','storyboard_sheet','storyboard_sheet','storyboard_sheet']);
+  expect(await readVideoResource(f.env,{kind:'storyboard',id,metadataOnly:true})).toMatchObject({fetchedAt:123});
+  expect(runYouTubeOperation).not.toHaveBeenCalled();
+});
+
+test('eight storyboard sheets publish with two D1 batches while retaining per-image journal ordering', async () => {
+  const f = fixture();
+  const board = { ...storyboard(), frameCount:16, selection:{mode:'spread' as const},
+    manifest:{...storyboard().manifest!,totalSheets:8,lastSampleMs:150000},
+    sheets:Array.from({length:8},(_,index)=>({...storyboard([0]).sheets[0]!,firstFrameIndex:index*2})) };
+  const put = vi.mocked(f.bucket.put).getMockImplementation()!;
+  vi.mocked(f.bucket.put).mockImplementation(async (...args) => {
+    expect(f.sql.prepare("SELECT count(*) AS n FROM video_asset_versions WHERE state='pending'").get()).toMatchObject({n:8});
+    expect(f.sql.prepare('SELECT count(*) AS n FROM video_assets').get()).toMatchObject({n:0});
+    if (String(args[0]).endsWith('.json')) expect([...f.objects.keys()].some(key=>key.endsWith('.jpg'))).toBe(true);
+    return put(...args);
+  });
+  const versions = await saveVideoResource(f.env,{kind:'storyboard',id,maxSheets:8},board,Date.now(),60000);
+  expect(versions).toHaveLength(8);
+  expect(f.batches.map(batch=>batch.length)).toEqual([9,16]);
+  expect(f.sql.prepare("SELECT count(*) AS n FROM video_asset_versions WHERE state='ready'").get()).toMatchObject({n:8});
+});
+
+test('batched writes drain started uploads, preserve successes and leave later sheets unstarted on failure', async () => {
+  const f = fixture();
+  const inputs = Array.from({length:8}, (_,index) => ({key:{videoId:id,kind:'test',variant:String(index)},
+    value:{index,imageBase64:jpeg}, fetchedAt:Date.now()-600000,maxAgeMs:60000,complete:true}));
+  const put = vi.mocked(f.bucket.put).getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve=>{release=resolve;});
+  const manifests: number[] = [];
+  vi.mocked(f.bucket.put).mockImplementation(async (...args) => {
+    if (String(args[0]).endsWith('.json')) {
+      const index = JSON.parse(args[1] as string).index as number;
+      manifests.push(index);
+      if (index===0) throw new Error('simulated manifest upload failure');
+      if (index===1) await gate;
+    }
+    return put(...args);
+  });
+  let settled = false;
+  const pending = f.store.saveMany(inputs);
+  const rejected = expect(pending).rejects.toThrow('could not be saved');
+  void pending.then(()=>{settled=true;},()=>{settled=true;});
+  await vi.waitFor(()=>expect(manifests).toHaveLength(4));
+  expect(settled).toBe(false);
+  expect(f.batches).toHaveLength(1);
+  release();
+  await rejected;
+  expect(manifests.sort()).toEqual([0,1,2,3]);
+  expect(f.batches.map(batch=>batch.length)).toEqual([9,6]);
+  expect(f.sql.prepare('SELECT variant FROM video_assets ORDER BY variant').all()).toEqual([{variant:'1'},{variant:'2'},{variant:'3'}]);
+  await f.store.reconcile();
+  expect(f.sql.prepare("SELECT count(*) AS n FROM video_asset_versions WHERE state='pending'").get()).toMatchObject({n:0});
+});
+
+test('batched writes recover all uploaded assets after a failed publication and upload nothing after journal failure', async () => {
+  const f = fixture();
+  const inputs = Array.from({length:8}, (_,index) => ({key:{videoId:id,kind:'test',variant:String(index)},
+    value:{index,imageBase64:jpeg}, fetchedAt:Date.now()-600000,maxAgeMs:60000,complete:true}));
+  f.failCommit(true);
+  await expect(f.store.saveMany(inputs)).rejects.toThrow('could not be saved');
+  expect(f.sql.prepare('SELECT count(*) AS n FROM video_assets').get()).toMatchObject({n:0});
+  expect([...f.objects.keys()].filter(key=>key.endsWith('.json'))).toHaveLength(8);
+  f.failCommit(false);
+  expect(await f.store.reconcile()).toBe(8);
+  expect((await f.store.readSavedMany(inputs.map(input=>input.key))).every(Boolean)).toBe(true);
+  const g = fixture();
+  vi.spyOn(g.db,'batch').mockRejectedValueOnce(new Error('journal unavailable'));
+  await expect(g.store.saveMany(inputs)).rejects.toThrow('could not be saved');
+  expect(g.bucket.put).not.toHaveBeenCalled();
+});
+
+test.each([false,true])('cold metadata and sheet persistence overlap and drain both writes on metadata failure=%s', async failure => {
+  const f = fixture();
+  vi.mocked(runYouTubeOperation).mockResolvedValue(storyboard([0,1,2]));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve=>{release=resolve;});
+  const started: string[] = [];
+  const save = vi.spyOn(VideoCatalog.prototype,'save').mockImplementation(async key=>{
+    started.push('metadata');
+    if (failure) throw new Error('metadata failure');
+    await gate;
+    return {...key,contentHash:'metadata'};
+  });
+  const many = vi.spyOn(VideoCatalog.prototype,'saveMany').mockImplementation(async inputs=>{
+    started.push('sheets');
+    await gate;
+    return inputs.map(input=>({...input.key,contentHash:'sheet'}));
+  });
+  try {
+    let settled=false;
+    const pending=loadVideoResource(f.env,{kind:'storyboard',id,maxSheets:3});
+    const result = failure ? expect(pending).rejects.toThrow('metadata failure') : expect(pending).resolves.toMatchObject({sheets:storyboard([0,1,2]).sheets});
+    void pending.then(()=>{settled=true;},()=>{settled=true;});
+    await vi.waitFor(()=>expect(started.sort()).toEqual(['metadata','sheets']));
+    expect(settled).toBe(false);
+    release();
+    await result;
+  } finally {save.mockRestore();many.mockRestore();release();}
+});
+
+test('six-frame cold simulation performs one lookup pass and two write batches', async () => {
+  const f=fixture();
+  const times=[1000,2000,3000,4000,5000,6000];
+  const core=new YouTubeCacheCoordinatorCore(f.env);
+  f.env.YOUTUBE_REQUEST_COORDINATOR={getByName:()=>({
+    getOrLoad:async(wire:string)=>JSON.stringify(await core.getOrLoad(JSON.parse(wire))),
+  })} as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  let lookupStatements=0;
+  vi.mocked(getVideoFrames).mockImplementation(async()=>{
+    lookupStatements=f.queries.length;
+    return {videoId:id,frames:times.map(frame),failures:[],meta:{partial:false,warnings:[]}};
+  });
+  const {value:result,diagnostics}=await captureVisualWork('tool','frames',()=>getVideoResource(f.env,{kind:'frames',id,timestampsMs:times,maxWidth:640,extractionTimeoutMs:5000}));
+  const measured=diagnostics.linked[0]!.work;
+  expect(measured.counters).toMatchObject({catalogLookupPasses:1,catalogMisses:6,catalogD1Statements:f.queries.length,catalogD1Batches:f.batches.length, catalogR2Puts:vi.mocked(f.bucket.put).mock.calls.length});
+  expect(diagnostics.counters.catalogD1Statements).toBeUndefined();
+  expect(result.value.frames.map(frame=>frame.timestampMs)).toEqual(times);
+  expect(getVideoFrames).toHaveBeenCalledTimes(1);
+  expect(lookupStatements).toBe(13);
+  expect(f.batches.map(batch=>batch.length)).toEqual([6,7,7,12]);
+  expect(result.catalogVersions).toHaveLength(6);
+});
+
+test('frame coordinator retains partial cache hits, coalesces extraction, and retries only failed timestamps', async () => {
+  const f=fixture();
+  const op={kind:'frames' as const,id,timestampsMs:[1000,2000,3000],maxWidth:640,extractionTimeoutMs:5000};
+  await saveVideoResource(f.env,{...op,timestampsMs:[1000]},
+    {videoId:id,frames:[frame(1000)],failures:[],meta:{partial:false,warnings:[]}},123,60000);
+  const core=new YouTubeCacheCoordinatorCore(f.env);
+  const request={cacheKey:'frames-partial',resourceType:'frames',operation:op,maxAgeMs:60000};
+  vi.mocked(getVideoFrames).mockResolvedValueOnce({videoId:id,frames:[frame(2000)],
+    failures:[{timestampMs:3000,code:'TIMEOUT',message:'timeout',retryable:true}],meta:{partial:true,warnings:[]}});
+  const lookup=vi.spyOn(VideoCatalog.prototype,'readSavedMany');
+  try {
+    const [first,second]=await Promise.all([core.getOrLoad(request),core.getOrLoad(request)]);
+    expect(first).toMatchObject({ok:true,cacheStatus:'miss',value:{frames:[frame(1000),frame(2000)],meta:{partial:true}}});
+    expect(second.cacheStatus).toBe('coalesced');
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(getVideoFrames).toHaveBeenCalledExactlyOnceWith(f.env,{videoId:id,timestampsMs:[2000,3000],maxWidth:640},
+      undefined,{extractionTimeoutMs:5000},expect.any(Function));
+    vi.mocked(getVideoFrames).mockResolvedValueOnce({videoId:id,frames:[frame(3000)],failures:[],meta:{partial:false,warnings:[]}});
+    expect(await core.getOrLoad(request)).toMatchObject({ok:true,value:{frames:[frame(1000),frame(2000),frame(3000)]}});
+    expect(getVideoFrames).toHaveBeenLastCalledWith(f.env,{videoId:id,timestampsMs:[3000],maxWidth:640},
+      undefined,{extractionTimeoutMs:5000},expect.any(Function));
+    expect(await new YouTubeCacheCoordinatorCore(f.env).getOrLoad(request)).toMatchObject({cacheStatus:'hit'});
+    expect(getVideoFrames).toHaveBeenCalledTimes(2);
+    expect(await readVideoResource(f.env,{...op,timestampsMs:[1000]})).toMatchObject({fetchedAt:123});
+    expect(await readVideoResource(f.env,{...op,timestampsMs:[1000],maxWidth:320})).toBeNull();
+  } finally {lookup.mockRestore();}
+});
+
+test('frame refresh bypasses saved lookup, preserves its budget and cannot return stale data on failure', async () => {
+  const f=fixture();
+  const op={kind:'frames' as const,id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:17000};
+  const value={videoId:id,frames:[frame(1000)],failures:[],meta:{partial:false,warnings:[]}};
+  await saveVideoResource(f.env,op,value,1,60000);
+  const lookup=vi.spyOn(VideoCatalog.prototype,'readSavedMany');
+  const core=new YouTubeCacheCoordinatorCore(f.env);
+  const request={cacheKey:'frames-refresh',resourceType:'frames',operation:op,maxAgeMs:60000,refresh:true};
+  try {
+    vi.mocked(getVideoFrames).mockResolvedValueOnce(value);
+    expect(await core.getOrLoad(request)).toMatchObject({ok:true,cacheStatus:'miss'});
+    expect(lookup).not.toHaveBeenCalled();
+    expect(getVideoFrames).toHaveBeenLastCalledWith(f.env,{videoId:id,timestampsMs:[1000],maxWidth:640},
+      undefined,{extractionTimeoutMs:17000},expect.any(Function));
+    vi.mocked(getVideoFrames).mockRejectedValueOnce(new Error('extraction failed'));
+    expect(await core.getOrLoad(request)).toMatchObject({ok:false});
+  } finally {lookup.mockRestore();}
 });

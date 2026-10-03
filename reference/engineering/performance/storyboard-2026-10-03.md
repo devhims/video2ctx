@@ -1,0 +1,140 @@
+# One-pass storyboard retrieval
+
+Storyboard selections now check the shared catalog once, retain partial hits, and
+fetch missing images in one processor operation. On a cold request, that operation
+also discovers the manifest. The application still saves immutable sources,
+verifies session references, and creates previews. The container handles YouTube
+metadata discovery and downloads within that single operation.
+
+## Changes
+
+The tool no longer recursively requests metadata before an image selection. The
+session provider derives and pins the manifest from the combined response, then
+pins its images. Explicit metadata-only calls still work. A known session manifest
+still lets the tool reject invalid selections before calling the provider. On a
+cold request, the processor validates selections against the discovered manifest.
+The tool records one provider usage entry for a combined selection.
+
+The outer provider delegates storyboard catalog lookup to the request coordinator.
+The coordinator passes a request-local lookup, including partial hits, to the
+loader. No process-global cache or cross-request image lifetime is introduced.
+Concurrent identical misses still coalesce. Batched D1 reads check current pointers
+in one call and missing historical versions in a second call, sharing one activity
+update per video. R2 reads remain bounded to four concurrent assets.
+Shared-cache hits now pass through the coordinator RPC, so warm latency also needs
+checking after rollout. Reuse of already pinned session assets stays local to the
+session path.
+
+Cold and explicit-refresh selections use one container invocation. Existing
+metadata lets the loader request only missing sheets. Legacy KV promotion includes
+both manifest and sheet references with their original timestamps. Saved JPEGs,
+JSON manifests, write journals, publication ordering, session reference verification,
+and generation/cancellation checks retain their existing behavior.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#e2e8f0', 'actorTextColor': '#0f172a', 'actorBorder': '#64748b', 'signalColor': '#334155', 'signalTextColor': '#334155', 'sequenceNumberColor': '#ffffff'}}}%%
+sequenceDiagram
+    autonumber
+    participant A as Agent and session
+    participant C as Cache coordinator
+    participant S as Shared catalog
+    participant Y as YouTube processor
+    A->>C: Request selected images
+    C->>S: Read manifest and batch selected sheet lookups once
+    S-->>C: Available images and missing indexes
+    C->>Y: One operation for missing images, including discovery if cold
+    Y-->>C: Manifest and images
+    C->>S: Save newly fetched sources
+    C-->>A: Images and immutable references
+    A->>S: Verify and pin session versions
+```
+
+The former metadata-only container call and repeated catalog passes are removed.
+All storage and verification components remain.
+
+## Storage follow-up
+
+A selection now journals all sheet versions in one D1 batch, uploads each JPEG
+before its JSON manifest with at most four assets in flight, then publishes the
+completed versions in one D1 batch. A failed upload drains its started siblings
+and publishes successful assets before rejecting. Later upload groups do not start.
+A failed publication leaves the journal available for reconciliation. Single-asset
+and historical writes share the same preparation and publication SQL as batches.
+
+Cold metadata and sheet persistence now run concurrently. Both finish before the
+caller receives success or failure, so metadata failure cannot leave unobserved
+sheet writes in flight. They remain separate assets with independent publication.
+
+Session attachment still reads and compares the exact shared payload. That read
+can now issue a request-local `VerifiedImage` after matching the JPEG bytes to their
+content-addressed key. Preview creation accepts this evidence only for the same
+R2 bucket and image key, eliminating a repeated HEAD call. The evidence is neither
+persisted nor included in tool output. Serialized objects, different buckets,
+different images, and paths without this evidence retain the HEAD check. Existing
+saved-session hits currently use that fallback. Private preview writes, rollback,
+and revocation are unchanged; the session verification reads are still required.
+
+## Simulation results
+
+Tests execute the actual provider/cache/loader functions and catalog SQL with a
+mocked external processor. Additional integration tests use local workerd, D1, R2,
+and Durable Objects. They do not contact YouTube or measure production latency.
+
+| Scenario | Before | After |
+| --- | ---: | ---: |
+| Cold selection, successful container invocations | 2 | 1 |
+| Partial-cache selection, catalog lookup passes | 3 | 1 |
+| Eight missing sheets, sheet lookup SQL statements | 72 | 17 |
+| Eight missing sheets, D1 transport calls for sheet lookup | 72 individual calls across parallel sheets | 2 batches |
+| Concurrent identical cold selections | Coalesced | Coalesced, one extraction |
+| Complete saved selection | No extraction | No extraction |
+| Eight new sheets, journal and publication D1 calls | 16 | 2 batches |
+| Cold metadata and sheet persistence | Sequential | Concurrent, both drained |
+| Eight newly pinned sheets, preview R2 HEAD calls | 8 | 0 with matching verification evidence |
+
+The 17 sheet statements are eight current-pointer SELECTs, eight historical
+SELECTs, and one activity upsert. The manifest lookup is additional. The old 72
+statements were three passes of eight sheets with three statements per miss;
+they were not 72 sequential network waits. A fully cold request with no saved
+manifest skips sheet lookups entirely.
+
+Regression coverage includes partial reuse, refresh and refresh failure, legacy
+promotion, exact shared-version pinning, metadata-only requests, invalid known
+selections, missing images, historical fallback, and deletion/cancellation during
+both extraction and session pinning. Existing journal recovery tests still run.
+
+Validation commands, run from `platform/`:
+
+```sh
+npx vitest run
+npm run test:video-catalog
+npm run test:user-account
+npm --prefix youtube-processor test
+npm run build
+```
+
+After the storage follow-up, the full unit run passed 1,081 tests with 38 skipped.
+Local Cloudflare suites passed 141 tests and the final TypeScript build passed.
+The processor's 39 tests passed during the earlier container-call consolidation;
+no processor code changed in the storage follow-up. New tests cover journal and
+publication failures, partial upload recovery, write overlap, drain-on-failure,
+and preview verification matching, fallback and serialization. Local workerd tests
+exercise the verified-read path through real session pinning and preview creation.
+
+`storyboard_stage_timing` now includes `catalog_lookup`, covering manifest lookup,
+sheet queries and hydration. Existing container attempt/timing events distinguish
+container startup/transport from extraction. Existing catalog-write, session-pin,
+and preview timings remain available. Correlate inner stages using the enclosing
+Worker invocation and video ID.
+
+## Rollout and remaining measurement
+
+Only the platform Worker needs deployment. No processor image, library release,
+schema migration, secret, or container-size change is needed. The deployed processor
+already supports combined discovery and downloads.
+
+A production cold and warm replay is still required to verify the ten-second goal.
+Simulations confirm removal of duplicate work, not production elapsed time. The
+remaining container startup, YouTube latency, source writes, session verification,
+and previews must be measured after deployment. Do not add earlier isolated timing
+samples and present their sum as a measured end-to-end improvement.

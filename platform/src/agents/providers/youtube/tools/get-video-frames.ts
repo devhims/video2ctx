@@ -1,3 +1,4 @@
+import { diagnoseVisualTool, visualSpan, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { ExtractionAttempt } from '../../../../lib/extraction-diagnostics';
@@ -19,7 +20,7 @@ export function createGetVideoFramesTool(context: AgentToolContext) {
     outputSchema: evidencePacketSchema,
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
+        const { visualDiagnostics: _visualDiagnostics, timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -35,20 +36,22 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     input: parsed,
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
     semanticKey: `frames:${JSON.stringify(request)}`,
-    execute: async () => {
+    execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
       const extractionTimeoutMs = frameExtractionBudget(context.researchDeadlineAt);
       if (extractionTimeoutMs < FRAME_EXTRACTION_MIN_MS) {
         throw new Error('Insufficient time for frame extraction and analysis. Finalize using the available evidence.');
       }
+      countVisualWork('requestedImages', request.timestampsMs.length);
       const startedAt = Date.now();
       const extractionDiagnostics: ExtractionAttempt[] = [];
-      const response = await context.provider.frames(request, context.signal, { extractionTimeoutMs },
-        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); });
+      const response = await visualSpan('retrieval', () => context.provider.frames!(request, context.signal, { extractionTimeoutMs },
+        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }));
       context.signal.throwIfAborted();
       const providerMs = Date.now() - startedAt;
       const frames = validateFrameResponse(request, response.value);
+      countVisualWork('returnedImages', frames.frames.length);
       console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
         extractionMs: Date.now() - startedAt, extractionTimeoutMs,
         sessionReused: response.sessionReused === true, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
@@ -72,7 +75,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       if (context.saveFramePreviews) {
         try {
           const previews = z.array(framePreviewSchema).max(6).parse(
-            await context.saveFramePreviews(frames, context.signal),
+            await visualSpan('previews', () => context.saveFramePreviews!(frames, context.signal, response.verifiedImages)),
           );
           packet.artifacts[0]!.data.previews = previews;
         } catch {
@@ -87,6 +90,6 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       console.info(JSON.stringify({ event: 'frame_stage_timing', runId: context.runId, toolCallId, videoId: parsed.videoId, timingsMs }));
       context.signal.throwIfAborted();
       return packet;
-    },
+    }, { runId: context.runId, toolCallId }),
   });
 }

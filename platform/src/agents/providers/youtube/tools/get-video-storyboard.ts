@@ -1,3 +1,4 @@
+import { diagnoseVisualTool, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { withRunDeadline } from '../../../runtime/deadline';
 import { storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../../../runtime/storyboard-budget';
 import { timeStoryboardStage } from '../../../../lib/storyboard-timing';
@@ -31,7 +32,7 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
     outputSchema: evidencePacketSchema,
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { timingsMs: _timings, ...data } = artifact.data;
+        const { visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -44,7 +45,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
-    execute: async () => {
+    execute: () => diagnoseVisualTool('storyboard', async () => {
       context.signal.throwIfAborted();
       const budget = storyboardRetrievalBudget(context.researchDeadlineAt);
       if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
@@ -52,30 +53,26 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       return withRunDeadline(Date.now() + budget, context.signal,
         signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId),
         'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
-    },
+    }, { runId: context.runId, toolCallId }),
   });
 }
 
-/** Missing metadata is fetched inside the same tool call, so it shares its metering and trace. */
+/** A selection retrieves its manifest and images in a single provider request. */
 async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
   const startedAt = Date.now();
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
-  let metadata: EvidencePacket | undefined;
   context.signal.throwIfAborted();
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   if (!metadataOnly) {
-    let evidence = context.getEvidence?.() ?? [];
-    if (!findStoryboardMetadata(parsed.videoId, evidence)) {
-      metadata = await retrieveVideoStoryboard({ videoId: parsed.videoId }, context, toolCallId);
-      evidence = [...evidence, metadata];
-    }
-    validateStoryboardSelection(parsed, evidence);
+    const evidence = context.getEvidence?.() ?? [];
+    if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
   }
   const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
     maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);
+  countVisualWork('returnedImages', storyboard.sheets.length);
   if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
   if (metadataOnly !== (storyboard.selection?.mode === 'metadata')) throw new Error('Storyboard response does not match the requested operation.');
   const timingsMs = { retrieval: Date.now() - startedAt, previews: 0, total: 0 };
@@ -96,14 +93,14 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
         : [{ code: 'SAMPLED_VISUAL_EVIDENCE', message: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.' }]),
       ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
     ],
-    assetVersions: [...new Set([...(metadata?.assetVersions ?? []), ...(response.assetVersions ?? [])])],
-    usage: [...(metadata?.usage ?? []), { operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+    assetVersions: [...new Set(response.assetVersions ?? [])],
+    usage: [{ operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
   });
   if (!metadataOnly && context.saveStoryboardPreviews) {
     const previewStartedAt = Date.now();
     try {
       packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
-        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal), { runId: context.runId, toolCallId }),
+        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal, response.verifiedImages), { runId: context.runId, toolCallId }),
       );
     } catch {
       context.signal.throwIfAborted();

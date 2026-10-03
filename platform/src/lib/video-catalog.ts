@@ -1,4 +1,7 @@
+import { countVisualWork, visualSpan } from './visual-diagnostics';
+import { VerifiedImage } from './verified-image';
 import { sha256 } from './http';
+import { mapInBatches } from './map-in-batches';
 
 export interface VideoAssetKey {
   videoId: string;
@@ -10,11 +13,27 @@ export interface VideoAssetReference extends VideoAssetKey {
   contentHash: string;
 }
 export interface StoredVideoAsset<T = unknown> {
+  verifiedImages?: VerifiedImage[];
   value: T;
   fetchedAt: number;
   freshUntil: number;
   complete: boolean;
   catalogVersions?: VideoAssetReference[];
+}
+export interface VideoAssetWrite {
+  key: VideoAssetKey;
+  value: unknown;
+  fetchedAt: number;
+  maxAgeMs: number;
+  complete: boolean;
+  coverage?: Record<string, unknown>;
+}
+interface PreparedWrite {
+  row: AssetRow;
+  reference: VideoAssetReference;
+  images: ImageWrite[];
+  payload: string;
+  journal: D1PreparedStatement;
 }
 interface AssetRow {
   video_id: string;
@@ -43,8 +62,15 @@ export class VideoCatalog {
     private readonly bucket: R2Bucket,
   ) {}
 
+  private batch<T = unknown>(statements: D1PreparedStatement[]) {
+    countVisualWork('catalogD1Batches');
+    countVisualWork('catalogD1Statements', statements.length);
+    return visualSpan('catalog_d1', () => this.db.batch<T>(statements));
+  }
+
   async requested(videoId: string, at = Date.now()): Promise<void> {
-    await this.requestStatement(videoId, at).run();
+    countVisualWork('catalogD1Statements');
+    await visualSpan('catalog_d1', () => this.requestStatement(videoId, at).run());
   }
 
   private requestStatement(videoId: string, at = Date.now()) {
@@ -58,13 +84,14 @@ export class VideoCatalog {
   }
 
   async read<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
-    const row = await this.db
+    countVisualWork('catalogD1Statements');
+    const row = await visualSpan('catalog_d1', () => this.db
       .prepare(
         `SELECT a.*, v.last_requested_at FROM video_assets a
       JOIN videos v ON v.video_id=a.video_id WHERE a.video_id=? AND a.kind=? AND a.variant=?`,
       )
       .bind(key.videoId, key.kind, key.variant)
-      .first<AssetRow>();
+      .first<AssetRow>());
     if (!row || Date.now() - (row.last_requested_at ?? 0) > REQUEST_RESOLUTION_MS)
       await this.requested(key.videoId);
     if (!row) return null;
@@ -72,13 +99,14 @@ export class VideoCatalog {
   }
 
   async readVersion<T>(reference: VideoAssetReference): Promise<StoredVideoAsset<T> | null> {
-    const row = await this.db
+    countVisualWork('catalogD1Statements');
+    const row = await visualSpan('catalog_d1', () => this.db
       .prepare(
         `SELECT * FROM video_asset_versions
       WHERE video_id=? AND kind=? AND variant=? AND content_hash=?`,
       )
       .bind(reference.videoId, reference.kind, reference.variant, reference.contentHash)
-      .first<AssetRow>();
+      .first<AssetRow>());
     return row ? this.readRow<T>(row) : null;
   }
 
@@ -86,21 +114,55 @@ export class VideoCatalog {
   async readSaved<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
     const current = await this.read<T>(key);
     if (current) return current;
-    const row = await this.db.prepare(`SELECT * FROM video_asset_versions
+    countVisualWork('catalogD1Statements');
+    const row = await visualSpan('catalog_d1', () => this.db.prepare(`SELECT * FROM video_asset_versions
       WHERE video_id=? AND kind=? AND variant=? AND state='ready' AND complete=1
       ORDER BY fetched_at DESC, content_hash LIMIT 1`)
-      .bind(key.videoId, key.kind, key.variant).first<AssetRow>();
+      .bind(key.videoId, key.kind, key.variant).first<AssetRow>());
     return row ? this.readRow<T>(row) : null;
   }
 
+  /** One current-pointer round trip, then one fallback/activity batch if needed. */
+  async readSavedMany<T>(keys: VideoAssetKey[]): Promise<(StoredVideoAsset<T> | null)[]> {
+    if (!keys.length) return [];
+    const rows = await this.batch<AssetRow>(keys.map(key => this.db.prepare(
+      `SELECT a.*, v.last_requested_at FROM video_assets a
+       JOIN videos v ON v.video_id=a.video_id WHERE a.video_id=? AND a.kind=? AND a.variant=?`,
+    ).bind(key.videoId, key.kind, key.variant)));
+    const activity = new Set<string>();
+    const values = await mapInBatches(rows, async (result, index) => {
+      const row = result.results[0];
+      if (!row || Date.now() - (row.last_requested_at ?? 0) > REQUEST_RESOLUTION_MS)
+        activity.add(keys[index]!.videoId);
+      return row ? this.readRow<T>(row) : null;
+    });
+    const missing = keys.flatMap((key, index) => values[index] ? [] : [{ key, index }]);
+    const statements = [
+      ...[...activity].map(videoId => this.requestStatement(videoId)),
+      ...missing.map(({key}) => this.db.prepare(`SELECT * FROM video_asset_versions
+        WHERE video_id=? AND kind=? AND variant=? AND state='ready' AND complete=1
+        ORDER BY fetched_at DESC, content_hash LIMIT 1`).bind(key.videoId, key.kind, key.variant)),
+    ];
+    if (statements.length) {
+      const fallback = await this.batch<AssetRow>(statements);
+      await mapInBatches(missing, async ({index}, offset) => {
+        const row = fallback[activity.size + offset]!.results[0];
+        values[index] = row ? await this.readRow<T>(row) : null;
+      });
+    }
+    return values;
+  }
+
   private async readRow<T>(row: AssetRow): Promise<StoredVideoAsset<T> | null> {
-    const object = await this.bucket.get(row.object_key);
+    const object = await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Gets'); return this.bucket.get(row.object_key); });
     if (!object) return null;
     const payload = await object.text();
     if ((await sha256(payload)) !== row.content_hash) return null;
     try {
-      const value = await this.hydrate(JSON.parse(payload) as Json, row.video_id);
+      const verifiedImages: VerifiedImage[] = [];
+      const value = await this.hydrate(JSON.parse(payload) as Json, row.video_id, verifiedImages);
       return {
+        verifiedImages,
         value: value as T,
         fetchedAt: row.fetched_at,
         freshUntil: row.fresh_until,
@@ -131,7 +193,54 @@ export class VideoCatalog {
     }
   }
 
+  /** Publish up to twenty independent live assets using shared D1 round trips. */
+  async saveMany(inputs: VideoAssetWrite[]): Promise<VideoAssetReference[]> {
+    if (!inputs.length) return [];
+    try {
+      if (inputs.length > 20) throw new Error('Too many assets in a catalog write batch.');
+      const writes = await mapInBatches(inputs, input => this.prepareWrite(input.key, input.value,
+        input.fetchedAt, input.maxAgeMs, input.complete, input.coverage ?? {}, true));
+      const videoIds = [...new Set(inputs.map(input => input.key.videoId))];
+      await this.batch([...videoIds.map(id => this.requestStatement(id)), ...writes.map(write => write.journal)]);
+      const completed: PreparedWrite[] = [];
+      let failed: { cause: unknown } | undefined;
+      try {
+        await mapInBatches(writes, async write => {
+          await this.upload(write);
+          completed.push(write);
+        });
+      } catch (cause) { failed = { cause }; }
+      // mapInBatches drains started uploads before throwing. Publish every success,
+      // including siblings of a failed upload, without starting later batches.
+      if (completed.length) await this.batch(completed.flatMap(write => this.publishStatements(write.row)));
+      if (failed) throw failed.cause;
+      return writes.map(write => write.reference);
+    } catch (cause) {
+      throw new VideoCatalogWriteError('Video evidence could not be saved. Please retry.', { cause });
+    }
+  }
+
   private async write(
+    key: VideoAssetKey, value: unknown, fetchedAt: number, maxAgeMs: number,
+    complete: boolean, coverage: Record<string, unknown>, publishCurrent: boolean,
+  ): Promise<VideoAssetReference> {
+    const write = await this.prepareWrite(key, value, fetchedAt, maxAgeMs, complete, coverage, publishCurrent);
+    // A backfill must not renew an existing version or change its recovery intent.
+    if (!publishCurrent && await this.readVersion(write.reference)) return write.reference;
+    await this.batch([this.requestStatement(key.videoId), write.journal]);
+    await this.upload(write);
+    await this.publish(write.row);
+    return write.reference;
+  }
+
+  private async upload(write: PreparedWrite): Promise<void> {
+    // A manifest is written last so recovery cannot publish incomplete media.
+    for (const image of write.images)
+      await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Puts'); return this.bucket.put(image.key, image.bytes, { httpMetadata: { contentType: 'image/jpeg' } }); });
+    await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Puts'); return this.bucket.put(write.row.object_key, write.payload, { httpMetadata: { contentType: 'application/json' } }); });
+  }
+
+  private async prepareWrite(
     key: VideoAssetKey,
     value: unknown,
     fetchedAt: number,
@@ -139,22 +248,17 @@ export class VideoCatalog {
     complete: boolean,
     coverage: Record<string, unknown>,
     publishCurrent: boolean,
-  ): Promise<VideoAssetReference> {
+  ): Promise<PreparedWrite> {
     const images: ImageWrite[] = [];
     const serialized = await this.dehydrate(JSON.parse(JSON.stringify(value)) as Json, key.videoId, images);
     const payload = JSON.stringify(serialized);
     const hash = await sha256(payload);
     const objectKey = `youtube/videos/${key.videoId}/${key.kind}/${await sha256(key.variant)}/${hash}.json`;
     const reference = { ...key, contentHash: hash };
-    // A backfill must not renew an existing version or change its recovery intent.
-    if (!publishCurrent && (await this.readVersion(reference))) return reference;
     // Do not publish partial sources as fresh reusable responses. Preserve them
     // in the inventory, and keep an earlier complete current pointer intact.
     const freshUntil = complete ? fetchedAt + maxAgeMs : fetchedAt;
-    // Journal and parent row are one atomic D1 request before any R2 upload.
-    await this.db.batch([
-      this.requestStatement(key.videoId),
-      this.db.prepare(
+    const journal = this.db.prepare(
         `INSERT INTO video_asset_versions
       (video_id,kind,variant,content_hash,object_key,bytes,fetched_at,fresh_until,complete,coverage_json,state,publish_current)
       VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)
@@ -175,13 +279,8 @@ export class VideoCatalog {
         Number(complete),
         JSON.stringify(coverage),
         Number(publishCurrent),
-      ),
-    ]);
-    // A manifest is written last: reconciliation can only publish fully written media.
-    for (const image of images)
-      await this.bucket.put(image.key, image.bytes, { httpMetadata: { contentType: 'image/jpeg' } });
-    await this.bucket.put(objectKey, payload, { httpMetadata: { contentType: 'application/json' } });
-    await this.publish({
+      );
+    const row: AssetRow = {
       video_id: key.videoId,
       kind: key.kind,
       variant: key.variant,
@@ -192,12 +291,16 @@ export class VideoCatalog {
       complete: Number(complete),
       coverage_json: JSON.stringify(coverage),
       publish_current: Number(publishCurrent),
-    });
-    return { ...key, contentHash: hash };
+    };
+    return { row, reference, images, payload, journal };
   }
 
   private async publish(row: AssetRow): Promise<void> {
-    await this.db.batch([
+    await this.batch(this.publishStatements(row));
+  }
+
+  private publishStatements(row: AssetRow): D1PreparedStatement[] {
+    return [
       ...(row.publish_current === 0
         ? []
         : [
@@ -235,30 +338,32 @@ export class VideoCatalog {
           row.fetched_at,
           row.publish_current ?? 1,
         ),
-    ]);
+    ];
   }
 
   /** Bounded recovery of writes interrupted between R2 and the catalog commit. */
   async reconcile(limit = 50): Promise<number> {
-    const rows = await this.db
+    countVisualWork('catalogD1Statements');
+    const rows = await visualSpan('catalog_d1', () => this.db
       .prepare(
         `SELECT * FROM video_asset_versions
       WHERE state='pending' AND fetched_at<? ORDER BY fetched_at LIMIT ?`,
       )
       .bind(Date.now() - 5 * 60_000, Math.min(100, Math.max(1, limit)))
-      .all<AssetRow>();
+      .all<AssetRow>());
     let recovered = 0;
     for (const row of rows.results) {
-      const object = await this.bucket.get(row.object_key);
+      const object = await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Gets'); return this.bucket.get(row.object_key); });
       if (!object) {
+        countVisualWork('catalogD1Statements');
         // No complete manifest was written. A retry can recreate this journal entry.
-        await this.db
+        await visualSpan('catalog_d1', () => this.db
           .prepare(
             `DELETE FROM video_asset_versions WHERE video_id=? AND kind=? AND variant=?
           AND content_hash=? AND state='pending' AND fetched_at=?`,
           )
           .bind(row.video_id, row.kind, row.variant, row.content_hash, row.fetched_at)
-          .run();
+          .run());
         continue;
       }
       if ((await sha256(await object.text())) !== row.content_hash) continue;
@@ -269,13 +374,14 @@ export class VideoCatalog {
   }
 
   async inventory(videoId: string) {
-    return this.db
+    countVisualWork('catalogD1Statements');
+    return visualSpan('catalog_d1', () => this.db
       .prepare(
         `SELECT kind,variant,content_hash,object_key,fetched_at,fresh_until,complete,coverage_json
       FROM video_assets WHERE video_id=? ORDER BY kind,variant`,
       )
       .bind(videoId)
-      .all<AssetRow>();
+      .all<AssetRow>());
   }
 
   private async dehydrate(value: Json, videoId: string, images: ImageWrite[]): Promise<Json> {
@@ -293,8 +399,8 @@ export class VideoCatalog {
     return out;
   }
 
-  private async hydrate(value: Json, videoId: string): Promise<Json> {
-    if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId)));
+  private async hydrate(value: Json, videoId: string, verifiedImages: VerifiedImage[]): Promise<Json> {
+    if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId, verifiedImages)));
     if (value === null || typeof value !== 'object') return value;
     const out: Record<string, Json> = {};
     await Promise.all(
@@ -307,14 +413,18 @@ export class VideoCatalog {
           typeof item.r2Image === 'string' &&
           item.r2Image.startsWith(`youtube/videos/${videoId}/images/`)
         ) {
-          const object = await this.bucket.get(item.r2Image);
+          const imageKey = item.r2Image;
+          const object = await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Gets'); return this.bucket.get(imageKey); });
           if (!object) throw new MissingVideoImage();
           const bytes = new Uint8Array(await object.arrayBuffer());
+          // Only exact content-addressed bytes can replace a later existence check.
+          if (await videoImageKey(videoId, bytes) === item.r2Image)
+            verifiedImages.push(new VerifiedImage(this.bucket, item.r2Image));
           let binary = '';
           for (let offset = 0; offset < bytes.length; offset += 8192)
             binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
           out[name] = btoa(binary);
-        } else out[name] = await this.hydrate(item, videoId);
+        } else out[name] = await this.hydrate(item, videoId, verifiedImages);
       }),
     );
     return out;

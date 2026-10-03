@@ -60,25 +60,24 @@ describe('storyboard agent tool', () => {
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
   });
-  it.each([false, true])('fetches missing metadata before selecting images (unrelated metadata: %s)', async unrelated => {
+  it.each([false, true])('retrieves missing metadata with images in one call (unrelated metadata: %s)', async unrelated => {
     const ctx = context();
     const packets = ctx.getEvidence!();
     const manifest = packets[0]!.artifacts[0]!.data.manifest;
     ctx.getEvidence = () => unrelated ? packets.map(packet => ({ ...packet, artifacts: packet.artifacts.map(artifact => ({ ...artifact, data: { ...artifact.data, videoId: 'abcdefghijk' } })) })) : [];
     const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>()
-      .mockResolvedValueOnce({ value: storyboardSchema.parse({ ...storyboard, manifest, sheets: [], selection: { mode: 'metadata' } }), cacheStatus: 'miss' })
-      .mockResolvedValueOnce({ value: storyboard, cacheStatus: 'miss' });
+      .mockResolvedValueOnce({ value: { ...storyboard, manifest: storyboardSchema.parse({ ...storyboard, manifest }).manifest }, cacheStatus: 'miss' });
     ctx.provider.storyboard = provider;
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2 }, ctx, 'missing');
-    expect(provider).toHaveBeenNthCalledWith(1, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: true }), expect.any(Function));
-    expect(provider).toHaveBeenNthCalledWith(2, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: false, maxSheets: 2 }), expect.any(Function));
-    expect(packet.usage).toHaveLength(2);
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(provider).toHaveBeenNthCalledWith(1, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: false, maxSheets: 2 }), expect.any(Function));
+    expect(packet.usage).toHaveLength(1);
   });
-  it('validates timestamps against automatically fetched metadata before downloading images', async () => {
+  it('propagates provider validation when the session has no metadata', async () => {
     const ctx = context();
     const manifest = ctx.getEvidence!()[0]!.artifacts[0]!.data.manifest;
     ctx.getEvidence = () => [];
-    ctx.provider.storyboard = vi.fn(async () => ({ value: storyboardSchema.parse({ ...storyboard, manifest, sheets: [], selection: { mode: 'metadata' } }), cacheStatus: 'miss' as const }));
+    ctx.provider.storyboard = vi.fn(async () => { throw new Error('Invalid storyboard timestamp'); });
     await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [60000] }, ctx, 'invalid')).rejects.toThrow('Invalid storyboard timestamp');
     expect(ctx.provider.storyboard).toHaveBeenCalledOnce();
   });
@@ -106,7 +105,7 @@ describe('storyboard agent tool', () => {
     const saveStoryboardPreviews = vi.fn(async () => [preview]);
     const ctx = Object.assign(context(), { saveStoryboardPreviews });
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'preview');
-    expect(saveStoryboardPreviews).toHaveBeenCalledWith(storyboard, expect.any(AbortSignal));
+    expect(saveStoryboardPreviews).toHaveBeenCalledWith(storyboard, expect.any(AbortSignal), undefined);
     expect(ctx.signal.aborted).toBe(false);
     expect(packet.artifacts[0]!.data.previews).toEqual([preview]);
     const { toolTrace } = await import('../src/agents/runtime/run-progress');
@@ -389,9 +388,12 @@ it('keeps timings in the stored result but excludes them from immediate model ou
   expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
   const tool = createGetVideoStoryboardTool(ctx);
   const output = await tool.toModelOutput!({ toolCallId: 'timed', input: { videoId: storyboard.videoId, maxSheets: 1 }, output: packet });
+  expect(packet.artifacts[0]!.data.visualDiagnostics).toMatchObject({ version: 1, scope: 'tool', kind: 'storyboard', outcome: 'success' });
+  expect(JSON.stringify(output)).not.toContain('visualDiagnostics');
   expect(JSON.stringify(output)).not.toContain('timingsMs');
   expect(JSON.stringify(output)).toContain('sampledRanges');
   const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
+  expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('visualDiagnostics');
   expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
   expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
 });
