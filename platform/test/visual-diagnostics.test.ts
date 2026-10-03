@@ -1,5 +1,5 @@
 import { captureVisualWork, countVisualWork, diagnoseVisualTool, linkVisualWork, visualDiagnosticsSchema,
-  visualFailure, visualSpan } from '../src/lib/visual-diagnostics';
+  withVisualFailureCapture, visualSpan, type VisualFailureCapture } from '../src/lib/visual-diagnostics';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -48,16 +48,34 @@ test('concurrent requests isolate counters and link remote work without adding i
 
 test('preserves original failures and bounds diagnostics without URLs or raw errors', async () => {
   const error = new Error('https://private.example/?secret=token');
-  await expect(captureVisualWork('tool', 'storyboard', async () => {
+  const failure: VisualFailureCapture = {};
+  await expect(withVisualFailureCapture(failure, () => captureVisualWork('tool', 'storyboard', async () => {
     for (let i = 0; i < 200; i++) await visualSpan('catalog_lookup', async () => {});
     await visualSpan('extraction', async () => { throw error; });
-  })).rejects.toBe(error);
-  const diagnostics = visualFailure(error)!;
+  }))).rejects.toBe(error);
+  const diagnostics = failure.diagnostics!;
   expect(diagnostics.outcome).toBe('error');
   expect(diagnostics.spans).toHaveLength(192);
   expect(diagnostics.droppedSpans).toBe(9);
   expect(JSON.stringify(diagnostics)).not.toContain('secret');
-  expect(visualFailure(new Error('unrelated'))).toBeUndefined();
+  const unrelated: VisualFailureCapture = {};
+  await expect(withVisualFailureCapture(unrelated, async () => { throw error; })).rejects.toBe(error);
+  expect(unrelated.diagnostics).toBeUndefined();
+});
+
+test('nested coordinator failure captures remain independent from their tool execution', async () => {
+  const tool: VisualFailureCapture = {}, coordinator: VisualFailureCapture = {};
+  const failure = new Error('shared failure');
+  await expect(withVisualFailureCapture(tool, () => captureVisualWork('tool', 'frames', async () => {
+    countVisualWork('requestedImages', 2);
+    await withVisualFailureCapture(coordinator, () => captureVisualWork('coordinator', 'frames', async () => {
+      countVisualWork('containerAttempts');
+      throw failure;
+    }));
+  }))).rejects.toBe(failure);
+  expect(tool.diagnostics).toMatchObject({ scope: 'tool', counters: { requestedImages: 2 } });
+  expect(coordinator.diagnostics).toMatchObject({ scope: 'coordinator', counters: { containerAttempts: 1 } });
+  expect(tool.diagnostics!.operationId).not.toBe(coordinator.diagnostics!.operationId);
 });
 
 test('late work after a deadline cannot mutate the persisted snapshot', async () => {

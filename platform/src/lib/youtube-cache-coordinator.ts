@@ -1,4 +1,4 @@
-import { captureVisualWork, visualFailure, visualSpan, countVisualWork, type VisualDiagnostics } from './visual-diagnostics';
+import { captureVisualWork, withVisualFailureCapture, visualSpan, countVisualWork, type VisualDiagnostics, type VisualFailureCapture } from './visual-diagnostics';
 import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import { YouTubeProcessorError } from './youtube-processor-client';
 import { ApiError, safeErrorLog } from './http';
@@ -108,12 +108,14 @@ export class YouTubeCacheCoordinatorCore {
   private async loadDiagnosed(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
     const kind = request.operation.kind;
     if (kind !== 'frames' && kind !== 'storyboard') return this.load(request);
+    const failure: VisualFailureCapture = {};
     try {
-      const { value, diagnostics } = await captureVisualWork('coordinator', kind, () => this.load(request));
+      const { value, diagnostics } = await withVisualFailureCapture(failure,
+        () => captureVisualWork('coordinator', kind, () => this.load(request)));
       if (!value.ok) diagnostics.outcome = 'error';
       return { ...value, visualDiagnostics: diagnostics };
     } catch (error) {
-      return { ...failureFrom(error), visualDiagnostics: visualFailure(error) };
+      return { ...failureFrom(error), visualDiagnostics: failure.diagnostics };
     }
   }
 

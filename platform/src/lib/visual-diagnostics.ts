@@ -24,7 +24,13 @@ export type VisualDiagnostics = z.infer<typeof visualDiagnosticsSchema>;
 type Span = z.infer<typeof spanSchema>;
 type State = { data: VisualDiagnostics; started: number; closed: boolean };
 const context = new AsyncLocalStorage<{ state: State; parentId?: number }>();
-const failures = new WeakMap<object, VisualDiagnostics>();
+export type VisualFailureCapture = { diagnostics?: VisualDiagnostics };
+const failureContext = new AsyncLocalStorage<VisualFailureCapture>();
+
+/** Each execution owns its snapshot, even when cancellation reuses an Error. */
+export function withVisualFailureCapture<T>(capture: VisualFailureCapture, work: () => PromiseLike<T>): PromiseLike<T> {
+  return failureContext.run(capture, work);
+}
 
 /** Union, not sum: concurrent children share their parent's wall-clock budget. */
 function covered(spans: Span[], start: number, end: number): number {
@@ -65,13 +71,10 @@ export async function captureVisualWork<T>(scope: 'tool' | 'coordinator', kind: 
     return { value, diagnostics: finish() };
   } catch (error) {
     const diagnostics = finish();
-    if (error && typeof error === 'object') failures.set(error, diagnostics);
+    const capture = failureContext.getStore();
+    if (capture) capture.diagnostics = diagnostics;
     throw error;
   }
-}
-
-export function visualFailure(error: unknown): VisualDiagnostics | undefined {
-  return error && typeof error === 'object' ? failures.get(error) : undefined;
 }
 
 export async function visualSpan<T>(name: z.infer<typeof stage>, work: () => Promise<T>): Promise<T> {
