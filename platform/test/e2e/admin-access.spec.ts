@@ -80,7 +80,8 @@ test('admin diagnoses a run using complete nested payloads and downloads its tim
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate('document.documentElement.scrollWidth<=innerWidth')).toBe(true);
   await page.screenshot({path:testInfo.outputPath('admin-tool-trace-mobile.png'),fullPage:true});
-  await page.getByRole('button',{name:'All trace runs'}).click();
+  await page.getByRole('button',{name:'Back to trace runs',exact:true}).click();
+  await expect(page.getByLabel('Run, session or user ID')).toHaveValue(runId);
   await page.getByLabel('Run, session or user ID').fill('not-a-run');
   await page.getByRole('button',{name:'Search traces',exact:true}).click();
   await expect(page.getByText(/No traces found/)).toBeVisible();
