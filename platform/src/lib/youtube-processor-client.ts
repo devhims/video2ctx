@@ -80,6 +80,9 @@ const MAX_INSTANCE_COUNT = 4;
 const DEFAULT_MAX_ATTEMPTS = 4;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRY_BASE_MS = 250;
+// Includes container startup, extraction and response reads. Reserved inside the
+// existing operation budget, never appended as a fresh operation timeout.
+export const DIRECT_FALLBACK_TIMEOUT_MS = 5_000;
 
 export class YouTubeProcessorError extends Error {
   readonly name = 'YouTubeProcessorError';
@@ -251,15 +254,100 @@ async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload
 export async function runYouTubeOperation<T extends YouTubeOperation>(
   env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
-  return visualSpan('extraction', () => runYouTubeOperationImpl(env, operation, onDiagnostic));
+  return visualSpan('extraction', async () => {
+    // Missing or malformed configuration keeps its existing behavior. Direct
+    // fallback is only for an exhausted, explicitly configured proxy pool.
+    if (!normalizedProxyUrls(env)?.length) return runYouTubeOperationImpl(env, operation, onDiagnostic);
+    const worker = String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard';
+    const budget = worker ? boundedInteger(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 300_000) : processorTimeoutMs(env);
+    const deadlineAt = Date.now() + budget;
+    const reserve = Math.min(DIRECT_FALLBACK_TIMEOUT_MS, Math.floor(budget / 2));
+    const proxyDeadline = new AbortController();
+    const timer = setTimeout(() => proxyDeadline.abort(new DOMException('Proxy budget exhausted', 'TimeoutError')), budget - reserve);
+    let previous: ExtractionAttempt | undefined;
+    const record: ExtractionDiagnosticSink = event => {
+      previous = event;
+      emitExtractionDiagnostic(onDiagnostic, event);
+    };
+    try {
+      return await runYouTubeOperationImpl(env, operation, record, proxyDeadline.signal);
+    } catch (error) {
+      if (!canTryDirect(error) || Date.now() >= deadlineAt) throw error;
+      return await runDirectContainerAttempt(env, operation, deadlineAt, previous, onDiagnostic);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function canTryDirect(error: unknown): boolean {
+  if (error instanceof YouTubeProcessorError) return [
+    'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'YOUTUBE_UPSTREAM_ERROR', 'INVALID_RESPONSE', 'PROCESSOR_UNAVAILABLE',
+  ].includes(error.code);
+  return error instanceof Error && error.name !== 'AbortError';
+}
+
+async function runDirectContainerAttempt<T extends YouTubeOperation>(
+  env: Env, operation: T, operationDeadlineAt: number, previous: ExtractionAttempt | undefined, onDiagnostic?: ExtractionDiagnosticSink,
+): Promise<YouTubeOperationResult<T>> {
+  const startedAt = Date.now();
+  const deadlineAt = Math.min(operationDeadlineAt, startedAt + DIRECT_FALLBACK_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException('Direct fallback deadline', 'TimeoutError')), Math.max(0, deadlineAt - startedAt));
+  const signal = controller.signal;
+  const slot = processorSlotOrder(instanceCount(env), randomProcessorSlot(instanceCount(env)))
+    .sort((a, b) => Number((healthFor(env).get(a) ?? 0) > startedAt) - Number((healthFor(env).get(b) ?? 0) > startedAt))[0]!;
+  const extractionId = previous?.extractionId ?? crypto.randomUUID();
+  const attempt = (previous?.attempt ?? 0) + 1;
+  let capture: Pick<ExtractionAttempt, 'capture' | 'events' | 'droppedEvents'> = { capture: 'unavailable', events: [], droppedEvents: 0 };
+  let status: number | undefined;
+  let outcome: ExtractionAttempt['outcome'] = 'failed';
+  let failureKind: ExtractionAttempt['failureKind'];
+  let code: string | undefined;
+  try {
+    countVisualWork('containerAttempts');
+    linkVisualExtraction(extractionId, attempt);
+    const response = await abortableContainerFetch(signal, () => processorContainer(env, slot).fetch(new Request('http://youtube-processor/operations', {
+      method: 'POST', body: JSON.stringify(operation), signal,
+      headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId,
+        'x-processor-egress': 'direct', 'x-extraction-deadline-at': String(deadlineAt) },
+    })));
+    status = response.status;
+    // An older image ignores the new header and would still use a proxy. Never
+    // accept or describe that response as a successful direct extraction.
+    if (response.headers.get('x-processor-egress') !== 'direct') {
+      void response.body?.cancel().catch(() => undefined);
+      throw new YouTubeProcessorError('INVALID_PROCESSOR_RESPONSE', 'The processor did not confirm direct routing.', 503);
+    }
+    const result = await resultFrom<YouTubeOperationResult<T>>(response, signal, payload => { capture = extractionCapture(payload); });
+    if (operation.kind === 'video' && isVideoMetadataBotChallenge(result))
+      throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube challenged direct extraction.', 503);
+    outcome = 'success';
+    return result;
+  } catch (error) {
+    failureKind = extractionFailureKind(error, signal);
+    code = error instanceof YouTubeProcessorError ? error.code : undefined;
+    // Preserve confirmed content restrictions discovered on the final route.
+    if (error instanceof YouTubeProcessorError && ['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'NOT_FOUND'].includes(error.code)) throw error;
+    throw new YouTubeProcessorError('UNAVAILABLE', 'YouTube is not available right now.', 503);
+  } finally {
+    clearTimeout(timer);
+    console.info(JSON.stringify({ event: 'youtube_direct_fallback', extractionId, operation: operation.kind,
+      backend: 'container', egress: 'direct', slot, attempt, outcome, status, code, failureKind, elapsedMs: Date.now() - startedAt }));
+    if (operation.kind === 'transcript' || operation.kind === 'storyboard') emitExtractionDiagnostic(onDiagnostic, {
+      version: 1, kind: operation.kind, videoId: operation.id, extractionId, attempt, slot,
+      backend: 'container', egress: 'direct', recordedAt: Date.now(), elapsedMs: Date.now() - startedAt,
+      outcome, status, failureKind, ...capture,
+    });
+  }
 }
 
 async function runYouTubeOperationImpl<T extends YouTubeOperation>(
-  env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
+  env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink, signal?: AbortSignal,
 ): Promise<YouTubeOperationResult<T>> {
   if (String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard') {
     const { runWorkerYouTubeOperation } = await import('./youtube-worker-extraction');
-    return runWorkerYouTubeOperation(env, operation, onDiagnostic) as Promise<YouTubeOperationResult<T>>;
+    return runWorkerYouTubeOperation(env, operation, onDiagnostic, signal) as Promise<YouTubeOperationResult<T>>;
   }
   const body = JSON.stringify(operation);
   const extractionId = crypto.randomUUID();
@@ -281,7 +369,7 @@ async function runYouTubeOperationImpl<T extends YouTubeOperation>(
   // The processor does not report whether a failure came from the proxy or the video, so only
   // unambiguous signals are recorded: a success clears a cooldown, a rate limit starts one.
   const proxyOutcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
-  const deadline = AbortSignal.timeout(processorTimeoutMs(env));
+  const deadline = signal ?? AbortSignal.timeout(processorTimeoutMs(env));
   let lastFailure: unknown;
   let upstreamFailure: YouTubeProcessorError | undefined;
   for (let index = 0; index < attempts; index += 1) {
@@ -350,6 +438,7 @@ async function runYouTubeOperationImpl<T extends YouTubeOperation>(
         startedAt, reason, extractionId, operationStartedAt, failureKind);
       if (operation.kind === 'storyboard' || operation.kind === 'transcript') emitExtractionDiagnostic(onDiagnostic, {
         version: 1, kind: operation.kind, videoId: operation.id, extractionId, attempt: index + 1, slot,
+        backend: 'container', egress: pool?.length ? 'proxy' : 'direct',
         recordedAt: Date.now(), elapsedMs: Date.now() - startedAt, status,
         outcome, failureKind, ...capture,
       });

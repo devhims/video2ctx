@@ -27,6 +27,8 @@ Each transcript attempt has a 25-second connection budget covering network reque
 
 Health output includes only `proxyConfigured` and the configured connection count. Operation logs include logical slots and extraction IDs. Proxy URLs, credentials, cookies, and signed caption URLs are not logged. Frame extraction uses its separate container and legacy proxy setting; this pool does not route video or audio downloads through residential bandwidth.
 
+After eligible proxy failures, the Worker can request one final direct extraction on an existing processor slot. The private request sets `x-processor-egress: direct` and `x-extraction-deadline-at` to an absolute deadline. The runtime reuses native fetch with one library attempt and a maximum five-second budget. Proxy transports and environment variables remain unchanged. Responses acknowledge the actual route with `x-processor-egress`; timing and failure logs include `egress`. The updated image must be deployed with the Worker. See [Worker extraction](../../reference/engineering/WORKER_EXTRACTION.md#final-direct-attempt) for eligibility and deadline handling.
+
 ### Transcript errors
 
 `all-things-youtube@0.6.3` distinguishes upstream access failures from missing captions. A bot challenge produces retryable `UNAVAILABLE`; upstream throttling remains `RATE_LIMITED`; failed or malformed metadata produces an upstream or invalid-response error. A real login or age restriction produces `AUTH_REQUIRED`. Confirmed playable metadata without any caption tracks produces non-retryable `CAPTIONS_UNAVAILABLE`. A missing requested language or track within an existing caption catalog retains `NOT_FOUND`. A usable catalog from either metadata source can recover the extraction even if another source failed.

@@ -1,11 +1,11 @@
 # Worker YouTube extraction
 
-The Worker can execute core YouTube operations using the shared extraction library. Every attempt uses the configured proxy gateways, including the first attempt. Eligible failures retry through the proxy pool. Decodo selects the exit IP; the Worker still runs the YouTube client and verifies YouTube's TLS certificate.
+The Worker can execute core YouTube operations using the shared extraction library. Initial attempts use the configured proxy gateways. Eligible failures retry through the proxy pool, then receive one direct attempt in an existing processor container. The proxy provider selects the proxy exit IP; the Worker runs the YouTube client and verifies YouTube's TLS certificate on proxied attempts.
 
 The rollout switch defaults to `worker`. `YOUTUBE_EXTRACTION_BACKEND=worker` moves search, browse, video metadata and signals, channels, playlists, comments, caption catalogs, transcripts and end screens into the Worker. Storyboards remain in the processor container, including its image conversion. Exact frames remain in the FFmpeg container. Caching, coalescing, authentication, billing and public result shapes stay at their existing boundaries.
 
 ```mermaid
-%%{init: {'themeVariables': {'sequenceNumberColor': '#ffffff', 'activationBkgColor': '#334155', 'activationBorderColor': '#334155'}}}%%
+%%{init: {'themeVariables': {'sequenceNumberColor': '#ffffff', 'signalColor': '#475569', 'activationBkgColor': '#334155', 'activationBorderColor': '#334155'}}}%%
 sequenceDiagram
     autonumber
     participant Caller
@@ -17,6 +17,12 @@ sequenceDiagram
     Worker->>Decodo: CONNECT tunnel on cache miss
     Decodo->>YouTube: Forward encrypted connection
     YouTube-->>Worker: Transcript or other data through tunnel
+    opt Proxy routes fail with eligible errors
+        Worker->>Media: One direct processor attempt
+        Media->>YouTube: Native fetch, bounded deadline
+        YouTube-->>Media: Result or error
+        Media-->>Worker: Final extraction outcome
+    end
     Worker-->>Caller: Existing result shape
     opt Storyboard or exact frame request
         Worker->>Media: Existing image or FFmpeg operation
@@ -36,7 +42,17 @@ Each operation attempt owns a fresh transport and closes it before the next rout
 
 ## Configuration
 
-Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array of one to four distinct HTTP(S) URLs and takes precedence over the legacy single `OUTBOUND_PROXY_URL`. Do not put credentials in Wrangler vars or commit `.dev.vars`. Invalid configuration fails without echoing the URL. A proxy setting is required. Missing configuration fails with `PROCESSOR_UNAVAILABLE` before any YouTube request; there is no direct fallback.
+Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array of one to four distinct HTTP(S) URLs and takes precedence over the legacy single `OUTBOUND_PROXY_URL`. Do not put credentials in Wrangler vars or commit `.dev.vars`. Invalid configuration fails without echoing the URL. Worker extraction requires a proxy setting. Missing configuration fails with `PROCESSOR_UNAVAILABLE` before any YouTube request. Missing or invalid configuration does not enable direct fallback.
+
+### Final direct attempt
+
+After eligible proxy failures, the operation uses one existing processor slot with a private `x-processor-egress: direct` request. It reuses the container's native-fetch extraction path with library retries limited to one. Concurrent proxy operations retain their own transports. This applies to core data operations and storyboards, including when the primary backend is `container`; exact frames use a separate container and are unchanged.
+
+The fallback gets at most five seconds, including startup and response-body reads. The proxy phase reserves that time inside the existing total operation budget, or half the total for budgets below ten seconds. The container receives an absolute deadline and bounds its own outbound requests too. No new container slot or proxy secret is needed. Confirmed missing captions, region/authentication restrictions, invalid input, and terminal not-found errors do not trigger direct fallback. An availability failure on the direct route becomes `UNAVAILABLE` with "YouTube is not available right now." Specific content restrictions discovered there remain specific.
+
+The container acknowledges the selected route in its response header. An old image that ignores direct routing cannot be accepted as direct recovery. Deploy the updated processor image with the Worker. Direct attempts log `youtube_direct_fallback` and append `backend: container`, `egress: direct` diagnostics using the same extraction ID and the next attempt number. Direct success does not clear proxy cooldowns.
+
+### Operation settings
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -50,7 +66,7 @@ The pool starts at a random slot and visits every configured slot before repeati
 
 Limits are 8 MiB per response and 32 MiB across an attempt. Timeouts cover response reads as well as connection setup. The proxy library has additional per-request timeouts, including a 25-second total; increasing the operation setting does not raise that transport ceiling. Cleanup is attempted even after cancellation, with at most one second spent waiting for it.
 
-Safe attempt logs contain route, slot, outcome, duration, byte count and status, without proxy credentials or signed YouTube URLs. Transcript diagnostics add optional `backend` and `egress` fields and allow five attempts for historical records. New operations have at most four proxy attempts. An earlier upstream transcript failure is retained when a later route reports `NOT_FOUND`.
+Safe attempt logs contain route, slot, outcome, duration, byte count and status, without proxy credentials or signed YouTube URLs. Transcript and storyboard diagnostics include `backend` and `egress` fields. New operations have at most four proxy attempts and one direct container attempt. An earlier upstream transcript failure is retained when a later proxy route reports `NOT_FOUND`.
 
 ## Verification and rollout
 
@@ -58,7 +74,7 @@ Safe attempt logs contain route, slot, outcome, duration, byte count and status,
 
 Local checks include the full platform and container suites, library packed-package tests, auth integration, documentation generation and Worker startup profiling. See `WORKER_EXTRACTION_RESULTS.md` for the deployed checks.
 
-Deploying the merged configuration enables Worker extraction by default. No additional toggle is required. Existing production proxy secrets are reused; local Worker extraction also requires a proxy setting. Watch success rate, latency, proxy usage and CPU for uncached operations after deployment. Sustained load testing and independent review of the new TLS dependency remain follow-up work. Set the switch back to `container` and deploy to roll back core extraction; retain processor bindings and image configuration throughout this rollout. There is no automatic container fallback in Worker mode.
+Deploying the merged configuration enables Worker extraction by default. No additional toggle is required. Existing production proxy secrets are reused; local Worker extraction also requires a proxy setting. Watch success rate, latency, proxy usage and CPU for uncached operations after deployment. Sustained load testing and independent review of the new TLS dependency remain follow-up work. Set the switch back to `container` and deploy to roll back core extraction; retain processor bindings and image configuration throughout this rollout. Both primary backends support the final direct attempt when proxies are configured.
 
 ### Caption availability in video metadata
 
