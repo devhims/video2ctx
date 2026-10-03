@@ -7,9 +7,11 @@ description: "Credits, pagination, metadata, caching, and error behavior."
 
 Provider reads use resource paths such as `/v1/videos/{id}?provider=youtube`. Every provider read requires exactly one `provider` query parameter; resource IDs stay in the path. Missing providers return `PROVIDER_REQUIRED`, and unsupported values return `PROVIDER_NOT_SUPPORTED`.
 
-Project search uses `/v1/projects/{projectId}/search?q=...` and only searches that project's indexed material. The authenticated user must own the project. The project ID belongs in the path, not the query or request body.
+Provider IDs must match exactly, including case, with no surrounding whitespace.
 
-The former `/v1/providers/{provider}/...` routes have been replaced without compatibility aliases. `/v1/search` now searches the selected external provider; private search moved to the project route. Update clients before deploying this contract. Provider identity in monitor and import request bodies remains part of the saved resource definition.
+Project search uses `/v1/projects/{projectId}/search?q=...` and only searches that project's indexed material. The authenticated user must own the project. API keys and CLI sessions require both `data:read` and `account:access` permissions. The project ID belongs in the path, not the query or request body.
+
+Provider identity in monitor and import request bodies remains part of the saved resource definition.
 
 ## Credits
 

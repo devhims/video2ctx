@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from 'all-things-youtube';
 import type { App } from '../../types';
-import { requireDataPrincipal, requireSessionPrincipal, requireUser } from '../../middlewares/authentication';
+import { requireAccountPrincipal, requireDataPrincipal, requireSessionPrincipal, requireUser } from '../../middlewares/authentication';
 import { ApiError, asId, body, text } from '../../lib/http';
 import {
   CREDIT_COSTS,
@@ -49,7 +49,7 @@ dataRoutes.post('/resolve', async (c) => {
   })));
 });
 
-dataRoutes.get('/projects/:projectId/search', async (c) => {
+dataRoutes.get('/projects/:projectId/search', requireAccountPrincipal, async (c) => {
   const query = text(c.req.query('q'), 500);
   if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A search query is required.');
   const user = requireUser(c);

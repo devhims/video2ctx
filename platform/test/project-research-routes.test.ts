@@ -64,15 +64,17 @@ describe('project research routing', () => {
     expect(searchPrivate).not.toHaveBeenCalled();
   });
 
-  test.each(['projectId', 'scope', 'entityId', 'provider'])('rejects body scope override %s', async (field) => {
-    const { env } = environment(true);
-    const response = await app.request('/v1/projects/project-1/answers', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question: 'batteries', [field]: 'another-source' }),
-    }, env);
-    expect(response.status).toBe(422);
-    expect(meterOperation).not.toHaveBeenCalled();
-    expect(searchPrivate).not.toHaveBeenCalled();
+  describe.each(operations.filter(([, method]) => method === 'POST'))('%s request body', (operation, method, body) => {
+    test.each(['projectId', 'scope', 'entityId', 'provider'])('rejects body scope override %s', async (field) => {
+      const { env } = environment(true);
+      const response = await app.request(`/v1/projects/project-1/${operation}`, {
+        method, headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, [field]: 'another-source' }),
+      }, env);
+      expect(response.status).toBe(422);
+      expect(meterOperation).not.toHaveBeenCalled();
+      expect(searchPrivate).not.toHaveBeenCalled();
+    });
   });
 
   test('rejects a query project override', async () => {

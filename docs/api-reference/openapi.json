@@ -1350,7 +1350,7 @@
         ],
         "operationId": "searchPrivateEvidence",
         "summary": "Search a project’s indexed evidence",
-        "description": "Searches indexed material in the specified project. The authenticated user must own the project.",
+        "description": "Searches indexed material in the specified project. The authenticated user must own the project. API keys and CLI sessions require both data:read and account:access permissions.",
         "security": [
           {
             "bearerApiKey": []

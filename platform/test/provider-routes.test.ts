@@ -39,11 +39,13 @@ describe('provider routing', () => {
     });
   });
 
-  test('rejects an unsupported provider with a stable validation code', async () => {
-    const response = await app.request('/v1/videos/video-1?provider=vimeo', {}, {} as Env, executionContext);
+  test.each(['vimeo', ' youtube', 'youtube ', 'YouTube'])('rejects nonmatching provider %j', async (provider) => {
+    vi.mocked(meterOperation).mockClear();
+    const response = await app.request(`/v1/videos/video-1?provider=${encodeURIComponent(provider)}`, {}, {} as Env, executionContext);
 
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({ error: { code: 'PROVIDER_NOT_SUPPORTED' } });
+    expect(meterOperation).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -51,7 +53,7 @@ describe('provider routing', () => {
     '/videos/video-1/transcript', '/videos/video-1/comments', '/videos/video-1/endscreen',
     '/channels/channel-1', '/channels/channel-1/videos', '/channels/channel-1/playlists', '/playlists/playlist-1',
   ])('requires exactly one provider before billing for %s', async (path) => {
-    for (const query of ['', '?provider=', '?provider=youtube&provider=vimeo']) {
+    for (const query of ['', '?provider=', '?provider=%20', '?provider=youtube&provider=vimeo']) {
       vi.mocked(meterOperation).mockClear();
       const response = await app.request(`/v1${path}${query}`, {}, {} as Env, executionContext);
       expect(response.status).toBe(422);

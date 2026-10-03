@@ -33,6 +33,13 @@ describe.each(['answers', 'comparisons', 'reports'])('internal research: %s', (o
     expect(response.status).toBe(401);
   });
 
+  test('denies an unrecognized authentication method by default', async () => {
+    const response = await researchApp('future-credential' as AuthPrincipal['method'])
+      .request(`/v1/projects/project-1/${operation}`, request);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'SESSION_REQUIRED' } });
+  });
+
   test.each(['session', 'demo'] as const)('retains %s access to the handler', async (method) => {
     const response = await researchApp(method).request(`/v1/projects/project-1/${operation}`, request);
     expect(response.status).toBe(422);

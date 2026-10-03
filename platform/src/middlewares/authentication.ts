@@ -145,7 +145,7 @@ export const requireAccountPrincipal: MiddlewareHandler<App> = async (c, next) =
 
 export const requireSessionPrincipal: MiddlewareHandler<App> = async (c, next) => {
   const principal = requirePrincipal(c);
-  if (principal.method === 'api-key' || principal.method === 'cli-session') {
+  if (principal.method !== 'session' && principal.method !== 'demo') {
     throw new ApiError(403, 'SESSION_REQUIRED', 'Sign in with a browser session to continue.');
   }
   await next();

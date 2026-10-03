@@ -333,7 +333,7 @@ export const openApiDocument = {
       'Provider reads use paths such as /v1/videos/{id}?provider=youtube. Private search and analysis are scoped to /v1/projects/{projectId}.',
       'Product routes accept a Better Auth browser session, a device-authorized CLI session, or a personal API key sent as Authorization: Bearer aty_…. X-API-Key remains supported for compatibility.',
       'Every metered response reports the charge and remaining balance in response headers. API keys and browser sessions spend from the same user credit ledger.',
-      'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free. Composite analysis pricing is unchanged.',
+      'Provider data pricing: cached responses cost 1 credit; fresh search and comment requests cost 2 credits; every other fresh provider-data request costs 1 credit. Resolve, provider listing, and usage lookup are free.',
       'Device-authorized CLI sessions and API keys can access normal user-owned data, monitors, notifications, and usage. Key management, billing, connected-account changes, account deletion, and administration require a browser session.',
       'When running locally with ENVIRONMENT other than production, set X-Demo-User to any stable value to create and use an isolated demo account.',
     ].join('\n\n'),
@@ -790,7 +790,7 @@ export const openApiDocument = {
         tags: ['Discovery'],
         operationId: 'searchPrivateEvidence',
         summary: 'Search a project’s indexed evidence',
-        description: 'Searches indexed material in the specified project. The authenticated user must own the project.',
+        description: 'Searches indexed material in the specified project. The authenticated user must own the project. API keys and CLI sessions require both data:read and account:access permissions.',
         security: dataSecurity,
         parameters: [
           queryParameter('q', 'Evidence search query.', { type: 'string', maxLength: 500, example: 'AI agents' }, true),
