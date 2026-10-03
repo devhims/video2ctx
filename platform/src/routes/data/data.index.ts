@@ -227,13 +227,13 @@ dataRoutes.get('/videos/:id/endscreen', async (c) => {
 
 dataRoutes.get('/channels/:id', async (c) => {
   const provider = providerFor(c);
-  const id = asId(c.req.param('id'));
+  const id = provider.parseChannelId(c.req.param('id'));
   return c.json(await cachedRead(c, `${provider.descriptor.id}-channel`, 'channel', provider, () => provider.getChannel(c.env, id)));
 });
 
 dataRoutes.get('/channels/:id/videos', async (c) => {
   const provider = providerFor(c);
-  const id = asId(c.req.param('id'));
+  const id = provider.parseChannelId(c.req.param('id'));
   const catalogSort = channelVideoSort(c.req.query('sort'));
   return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-videos`, 'channelVideos', provider, () =>
     provider.getChannelVideos(c.env, id, c.req.query('continuation'), catalogSort)));
@@ -241,7 +241,7 @@ dataRoutes.get('/channels/:id/videos', async (c) => {
 
 dataRoutes.get('/channels/:id/playlists', async (c) => {
   const provider = providerFor(c);
-  const id = asId(c.req.param('id'));
+  const id = provider.parseChannelId(c.req.param('id'));
   const catalogSort = channelPlaylistSort(c.req.query('sort'));
   return c.json(await cachedRead(c, `${provider.descriptor.id}-channel-playlists`, 'channelPlaylists', provider, () =>
     provider.getChannelPlaylists(c.env, id, c.req.query('continuation'), catalogSort)));

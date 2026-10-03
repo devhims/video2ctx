@@ -19,6 +19,12 @@ Video metadata lookups retry explicit YouTube bot challenges, with up to three p
 
 ## Channels
 
+Use a YouTube channel ID (`UC` followed by 22 letters, digits, underscores, or hyphens) or a handle with its leading `@`, such as `@AltShiftX`. A bare name such as `AltShiftX` returns HTTP `422` with code `INVALID_ID` and a message explaining the accepted formats. Validation runs before any credit reservation or provider request. The same rule applies to channel details, videos, and playlists.
+
+```http
+GET /v1/channels/@AltShiftX?provider=youtube
+```
+
 - `GET /v1/channels/{id}?provider=youtube` — profile, public totals, links, and metadata
 - `GET /v1/channels/{id}/videos?provider=youtube` — paginated video catalog
 - `GET /v1/channels/{id}/playlists?provider=youtube` — paginated playlist catalog

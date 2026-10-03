@@ -1017,7 +1017,7 @@ export const openApiDocument = {
         operationId: 'getChannel',
         summary: 'Inspect a channel',
         security: dataSecurity,
-        parameters: [providerParameter, pathParameter('id', 'Provider channel ID or handle.', '@YouTube')],
+        parameters: [providerParameter, pathParameter('id', 'Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.', '@YouTube')],
         responses: {
           '200': meteredJsonResponse('Normalized channel metadata.', schemaRef('Channel')),
           '401': responseRef('Unauthorized'),
@@ -1036,7 +1036,7 @@ export const openApiDocument = {
         security: dataSecurity,
         parameters: [
           providerParameter,
-          pathParameter('id', 'Provider channel ID or handle.', '@YouTube'),
+          pathParameter('id', 'Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.', '@YouTube'),
           queryParameter('sort', 'YouTube Videos-tab ordering.', { type: 'string', enum: ['latest', 'popular', 'oldest'], default: 'latest' }),
           queryParameter('continuation', 'Opaque token returned by the previous channel videos response.', { type: 'string' }),
         ],
@@ -1058,7 +1058,7 @@ export const openApiDocument = {
         security: dataSecurity,
         parameters: [
           providerParameter,
-          pathParameter('id', 'Provider channel ID or handle.', '@YouTube'),
+          pathParameter('id', 'Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.', '@YouTube'),
           queryParameter('sort', 'YouTube Playlists-tab ordering.', { type: 'string', enum: ['newest', 'last-video-added'], default: 'newest' }),
           queryParameter('continuation', 'Opaque token returned by the previous channel playlists response.', { type: 'string' }),
         ],
