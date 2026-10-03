@@ -2,7 +2,7 @@ import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnosti
 import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
-import { ALL_COMMENTS_MAX_PAGES, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
+import { ALL_COMMENTS_MAX_PAGES, getTranscriptWithCache, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
 import { videoCatalog } from '../../../lib/video-catalog';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
@@ -62,6 +62,7 @@ export interface YouTubeAgentProvider {
 export function createYouTubeAgentProvider(
   env: Env,
   provider: ProviderAdapter = getProvider('youtube'),
+  researchDeadlineAt?: number,
 ): YouTubeAgentProvider {
   return {
     frames: async (request, signal, limits, onDiagnostic) => {
@@ -76,8 +77,8 @@ export function createYouTubeAgentProvider(
       signal?.throwIfAborted();
       const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
       return abortable(videoCatalog(env)
-        ? getVideoResource(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection}, selection.refresh, diagnostic)
-        : runYouTubeOperation(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection}, diagnostic)
+        ? getVideoResource(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection, ...(researchDeadlineAt === undefined ? {} : { deadlineAt: researchDeadlineAt })}, selection.refresh, diagnostic)
+        : runYouTubeOperation(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection, ...(researchDeadlineAt === undefined ? {} : { deadlineAt: researchDeadlineAt })}, diagnostic)
           .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
     },
     search: (query, filters = {}) => provider.search(env, query, filters),
@@ -98,7 +99,9 @@ export function createYouTubeAgentProvider(
       value: await provider.getTracks(env, videoId),
       cacheStatus: 'miss',
     }),
-    transcript: async (videoId, language, options, onDiagnostic) => options?.refresh && videoCatalog(env)
+    transcript: async (videoId, language, options, onDiagnostic) => researchDeadlineAt !== undefined
+      ? getTranscriptWithCache(env, videoId, language, onDiagnostic, options?.refresh, researchDeadlineAt)
+      : options?.refresh && videoCatalog(env)
       ? getVideoResource(env,{kind:'transcript',id:videoId,lang:language,granularity:'word'},true,onDiagnostic)
       : options?.refresh
       ? {value: await runYouTubeOperation(env, {kind:'transcript',id:videoId,lang:language,granularity:'word'}, onDiagnostic),cacheStatus:'miss'}

@@ -110,3 +110,16 @@ describe('YouTube cache coordinator', () => {
     expect(loader).not.toHaveBeenCalled();
   });
 });
+
+test('coalesces matching deadlines but keeps independent research deadlines separate', async () => {
+  const resolvers: Array<(value: unknown) => void> = [];
+  const loader = vi.fn(() => new Promise(resolve => resolvers.push(resolve)));
+  const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }), loader);
+  const first = { ...request, operation: { ...request.operation, deadlineAt: Date.now() + 10_000 } };
+  const second = { ...request, operation: { ...request.operation, deadlineAt: first.operation.deadlineAt + 30_000 } };
+  const pending = [core.getOrLoad(first), core.getOrLoad(first), core.getOrLoad(second)];
+  await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2));
+  resolvers.forEach(resolve => resolve({ id: 'abcdefghijk' }));
+  const results = await Promise.all(pending);
+  expect(results.map(result => result.cacheStatus)).toEqual(['miss', 'coalesced', 'miss']);
+});

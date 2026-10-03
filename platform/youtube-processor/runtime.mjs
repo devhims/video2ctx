@@ -51,7 +51,7 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
     proxyConfigured: proxyUrl.length > 0,
     async run(operation, diagnostics = {}) {
       const controller = singleAttempt ? new AbortController() : undefined;
-      const remaining = singleAttempt ? Math.min(5_000, diagnostics.deadlineAt - Date.now()) : undefined;
+      const remaining = singleAttempt ? diagnostics.deadlineAt - Date.now() : undefined;
       if (singleAttempt && (!Number.isFinite(remaining) || remaining <= 0))
         throw Object.assign(new Error('The direct extraction deadline expired.'), { code: 'UNAVAILABLE', retryable: false });
       const timer = controller ? setTimeout(() => controller.abort(new DOMException('Direct extraction deadline', 'TimeoutError')), remaining) : undefined;
@@ -62,7 +62,8 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
         combined.throwIfAborted();
         return baseFetch(input, { ...init, signal: combined });
       } : baseFetch;
-      const retry = signal ? { ...baseRetry, wait: delay => waitForRetry(delay, signal) } : baseRetry;
+      const retry = signal ? { ...baseRetry, policy: { ...baseRetry.policy, attemptTimeoutMs: remaining },
+        wait: delay => waitForRetry(delay, signal) } : baseRetry;
       const client = singleAttempt ? createYouTubeClient({ fetch: fetchImpl, retry }) : baseClient;
       const options = { fetch: fetchImpl, retry, ...(signal ? { signal } : {}) };
       try {
@@ -114,9 +115,9 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
               try { diagnostics.onDiagnostic?.({ ...event, elapsedMs: Date.now() - startedAt }); } catch { /* Best effort. */ }
             };
             const safeCode = error => ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'].includes(error?.code) ? error.code : 'UNKNOWN';
-            const deadline = AbortSignal.timeout(25_000);
+            const deadline = signal ?? AbortSignal.timeout(25_000);
             try {
-              // Bound each connection attempt so the Worker has time to use another slot.
+              // Proxy attempts leave time for another slot. Direct recovery uses the caller deadline.
               const transcriptFetch = async (input, init = {}) => {
                 const signal = init.signal ? AbortSignal.any([deadline, init.signal]) : deadline;
                 signal.throwIfAborted();
@@ -156,6 +157,7 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
             try {
               return await loadStoryboard(operation.id, getStoryboardWithFallback, { ...options,
                 fetch: storyboardImageFetch(fetchImpl, onDiagnostic), onDiagnostic,
+                ...(singleAttempt ? { timeBudgetMs: Math.max(1, diagnostics.deadlineAt - Date.now()) } : {}),
                 timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets,
                 sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
             } catch (error) {

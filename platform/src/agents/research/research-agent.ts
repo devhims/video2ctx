@@ -180,7 +180,7 @@ export async function executeResearchRun(options: {
   // Slow provider requests must not occupy the slots needed to analyze assets
   // that have already arrived. The research context also limits active models.
   const analysisLimiter = new ConcurrencyLimiter(4);
-  const upstream = createYouTubeAgentProvider(options.env);
+  const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     createAgentModel(options.env, options.sessionAffinity, 'low', {

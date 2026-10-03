@@ -27,7 +27,7 @@ import type {
 import type { YouTubeProcessorContainer } from '../youtube-processor-container';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 
-export type YouTubeOperation =
+export type YouTubeOperation = { deadlineAt?: number } & (
   | { kind: 'search'; query: string; filters?: SearchFilters }
   | { kind: 'browse'; options?: BrowseOptions }
   | { kind: 'video'; id: string }
@@ -41,7 +41,7 @@ export type YouTubeOperation =
   | { kind: 'caption-tracks'; id: string }
   | { kind: 'transcript'; id: string; lang?: string; granularity: 'segment' | 'word' }
   | { kind: 'storyboard'; id: string; timestampsMs?: number[]; maxSheets?: number; sheetIndexes?: number[]; metadataOnly?: boolean }
-  | { kind: 'endscreen'; id: string };
+  | { kind: 'endscreen'; id: string });
 
 export type YouTubeOperationResult<T extends YouTubeOperation> =
   T extends { kind: 'search' } ? SearchResponse :
@@ -81,9 +81,9 @@ const MAX_INSTANCE_COUNT = 4;
 const DEFAULT_MAX_ATTEMPTS = 4;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRY_BASE_MS = 250;
-// Includes container startup, extraction and response reads. Reserved inside the
-// existing operation budget, never appended as a fresh operation timeout.
-export const DIRECT_FALLBACK_TIMEOUT_MS = 5_000;
+// Minimum time reserved for recovery when proxies consume their entire budget.
+// This is not a limit on the direct attempt, which uses all remaining time.
+const DIRECT_FALLBACK_RESERVE_MS = 5_000;
 
 export class YouTubeProcessorError extends Error {
   readonly name = 'YouTubeProcessorError';
@@ -264,10 +264,13 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
       return runYouTubeOperationImpl(env, operation, onDiagnostic);
     const worker = String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard';
     const budget = worker ? boundedInteger(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 300_000) : processorTimeoutMs(env);
-    const deadlineAt = Date.now() + budget;
-    const reserve = Math.min(DIRECT_FALLBACK_TIMEOUT_MS, Math.floor(budget / 2));
+    const deadlineAt = operation.deadlineAt ?? Date.now() + budget;
+    if (deadlineAt <= Date.now()) throw new YouTubeProcessorError(
+      'UNAVAILABLE', 'The extraction deadline expired.', 503, true);
+    const proxyBudget = Math.min(budget, deadlineAt - Date.now());
+    const reserve = Math.min(DIRECT_FALLBACK_RESERVE_MS, Math.floor(proxyBudget / 2));
     const proxyDeadline = new AbortController();
-    const timer = setTimeout(() => proxyDeadline.abort(new DOMException('Proxy budget exhausted', 'TimeoutError')), budget - reserve);
+    const timer = setTimeout(() => proxyDeadline.abort(new DOMException('Proxy budget exhausted', 'TimeoutError')), proxyBudget - reserve);
     let previous: ExtractionAttempt | undefined;
     const record: ExtractionDiagnosticSink = event => {
       previous = event;
@@ -296,7 +299,7 @@ async function runDirectContainerAttempt<T extends YouTubeOperation>(
   proxyError: unknown, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
   const startedAt = Date.now();
-  const deadlineAt = Math.min(operationDeadlineAt, startedAt + DIRECT_FALLBACK_TIMEOUT_MS);
+  const deadlineAt = operationDeadlineAt;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException('Direct fallback deadline', 'TimeoutError')), Math.max(0, deadlineAt - startedAt));
   const signal = controller.signal;

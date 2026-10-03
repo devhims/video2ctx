@@ -64,7 +64,9 @@ export class YouTubeCacheCoordinatorCore {
   ) {}
 
   async getOrLoad(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
-    const flightKey = `${request.cacheKey}:${!!request.refresh}`;
+    // Callers with different deadlines must not inherit an earlier run's cutoff.
+    const deadlineAt = 'deadlineAt' in request.operation ? request.operation.deadlineAt : undefined;
+    const flightKey = `${request.cacheKey}:${!!request.refresh}:${deadlineAt ?? ''}`;
     const active = this.inFlight.get(flightKey);
     if (active) {
       const shared = await active;

@@ -311,15 +311,15 @@ describe('visual evidence presented to synthesis', () => {
   });
 });
 
-it('declines storyboard retrieval when it cannot reserve analysis time', async () => {
+it('declines storyboard retrieval when research time is almost exhausted', async () => {
   const ctx = context();
-  ctx.researchDeadlineAt = Date.now() + 39_000;
+  ctx.researchDeadlineAt = Date.now() + 4_000;
   await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'late'))
     .rejects.toThrow('Not enough research time');
   expect(ctx.provider.storyboard).not.toHaveBeenCalled();
 });
 
-it('bounds a hanging provider and leaves 35 seconds without aborting the research signal', async () => {
+it('allows a hanging retrieval until the research deadline without aborting the parent signal', async () => {
   vi.useFakeTimers();
   try {
     const ctx = context();
@@ -331,9 +331,9 @@ it('bounds a hanging provider and leaves 35 seconds without aborting the researc
     });
     const request = executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'slow');
     const rejected = expect(request).rejects.toThrow('Storyboard retrieval exceeded its budget');
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     await rejected;
-    expect(ctx.researchDeadlineAt - Date.now()).toBe(35_000);
+    expect(ctx.researchDeadlineAt - Date.now()).toBe(0);
     expect(ctx.signal.aborted).toBe(false);
     expect(signal?.aborted).toBe(true);
   } finally { vi.useRealTimers(); }

@@ -47,12 +47,12 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
     execute: () => diagnoseVisualTool('storyboard', async () => {
       context.signal.throwIfAborted();
-      const budget = storyboardRetrievalBudget(context.researchDeadlineAt);
+      const budget = context.researchDeadlineAt === undefined ? storyboardRetrievalBudget() : context.researchDeadlineAt - Date.now();
       if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
-        throw new Error('Not enough research time to retrieve storyboards and leave time for analysis. Analyze saved images or finish with the evidence available.');
+        throw new Error('Not enough research time to retrieve storyboards. Analyze saved images or finish with the evidence available.');
       return withRunDeadline(Date.now() + budget, context.signal,
         signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId),
-        'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
+        'Storyboard retrieval exceeded its budget. The research deadline has been reached.');
     }, { runId: context.runId, toolCallId }),
   });
 }

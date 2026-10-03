@@ -4,6 +4,7 @@ import * as worker from '../src/lib/youtube-worker-extraction';
 import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import { getTranscriptWithCache } from '../src/lib/youtube';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import { createYouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import type { ExtractionAttempt } from '../src/lib/extraction-diagnostics';
 
@@ -101,7 +102,7 @@ test('the direct deadline cancels response-body reads as well as container start
   containerFetch.mockResolvedValue(new Response(new ReadableStream({ cancel: canceled }), { headers: { 'x-processor-egress': 'direct' } }));
   const rejected = expect(runYouTubeOperation(env, operation, record)).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   await vi.waitFor(() => expect(containerFetch).toHaveBeenCalledTimes(1));
-  await vi.advanceTimersByTimeAsync(5_001);
+  await vi.advanceTimersByTimeAsync(120_001);
   await rejected;
   expect(containerFetch).toHaveBeenCalledTimes(1);
   expect(canceled).toHaveBeenCalled();
@@ -208,4 +209,51 @@ test.each(['worker', 'container'] as const)('retains bot classification through 
   });
   expect(diagnostics).toHaveLength(5);
   expect(diagnostics.at(-1)).toMatchObject({ egress: 'direct', outcome: 'failed' });
+});
+
+test.each(['worker', 'container'] as const)('direct %s recovery may take over five seconds and uses the caller deadline', async backend => {
+  vi.useFakeTimers();
+  const { env, containerFetch } = setup(backend);
+  const original = containerFetch.getMockImplementation()!;
+  const deadlineAt = Date.now() + 180_000;
+  let directSignal: AbortSignal | undefined;
+  containerFetch.mockImplementation(async request => {
+    if (request.headers.get('x-processor-egress') === 'direct') {
+      expect(Number(request.headers.get('x-extraction-deadline-at'))).toBe(deadlineAt);
+      directSignal = request.signal;
+      await new Promise(resolve => setTimeout(resolve, 6000));
+    }
+    return original(request);
+  });
+  const result = expect(runYouTubeOperation(env, { ...operation, deadlineAt })).resolves.toMatchObject({ text: 'Recovered' });
+  await vi.waitFor(() => expect(directSignal).toBeDefined());
+  await vi.advanceTimersByTimeAsync(6001);
+  await result;
+  expect(directSignal?.aborted).toBe(false);
+});
+
+test('a research deadline shorter than the configured timeout cancels direct recovery', async () => {
+  vi.useFakeTimers();
+  const { env, containerFetch } = setup();
+  containerFetch.mockImplementation(async () => new Promise(() => {}));
+  const rejected = expect(runYouTubeOperation(env, { ...operation, deadlineAt: Date.now() + 6000 }))
+    .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  await vi.advanceTimersByTimeAsync(6001);
+  await rejected;
+});
+
+test.each(['transcript', 'storyboard'] as const)('agent %s forwards its research deadline to direct recovery', async kind => {
+  const { env, requests } = setup('worker', false);
+  const deadlineAt = Date.now() + 180_000;
+  const coordinator = new YouTubeCacheCoordinatorCore(env, (bindings, input, diagnostic) =>
+    runYouTubeOperation(bindings, input as typeof operation, diagnostic));
+  Object.assign(env, {
+    YOUTUBE_CACHE: { get: vi.fn(async () => null), put: vi.fn() },
+    YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad: async (json: string) =>
+      JSON.stringify(await coordinator.getOrLoad(JSON.parse(json))) }) },
+  });
+  const provider = createYouTubeAgentProvider(env, undefined, deadlineAt);
+  await expect(kind === 'transcript' ? provider.transcript(operation.id) : provider.storyboard!(operation.id))
+    .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(Number(requests.at(-1)!.headers.get('x-extraction-deadline-at'))).toBe(deadlineAt);
 });

@@ -189,3 +189,19 @@ test('the transcript deadline cancels response-body reads', async t => {
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('direct transcript uses its caller deadline instead of the 25-second proxy cutoff', async t => {
+  const timeout = AbortSignal.timeout;
+  const timeouts = [];
+  t.mock.method(AbortSignal, 'timeout', ms => { timeouts.push(ms); return timeout(ms); });
+  t.mock.method(youtube, 'getTranscript', async options => {
+    assert.equal(options.retry.policy.maxAttempts, 1);
+    assert.ok(options.retry.policy.attemptTimeoutMs > 25_000);
+    assert.equal(options.signal.aborted, false);
+    return { text: 'Recovered' };
+  });
+  const result = await createYouTubeRuntime({}).run({ kind: 'transcript', id: 'abcdefghijk' },
+    { egress: 'direct', deadlineAt: Date.now() + 120_000 });
+  assert.equal(result.text, 'Recovered');
+  assert.equal(timeouts.includes(25_000), false);
+});

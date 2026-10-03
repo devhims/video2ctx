@@ -365,9 +365,9 @@ export async function getTranscript(env: Env, id: string, lang?: string): Promis
   return (await getTranscriptWithCache(env, id, lang)).value;
 }
 
-export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false) {
+export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false, deadlineAt?: number) {
   return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
-    kind: 'transcript', id, lang, granularity: 'word',
+    kind: 'transcript', id, lang, granularity: 'word', ...(deadlineAt === undefined ? {} : { deadlineAt }),
   }, onDiagnostic, refresh);
 }
 

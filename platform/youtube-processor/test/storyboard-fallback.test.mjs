@@ -158,7 +158,7 @@ test('real direct storyboard runtime never retries a failed player profile', asy
   assert.equal(logs.filter(event => event.event === 'youtube_retry').length, 0);
 });
 
-for (const deadlineMs of [100, 60_000]) test(`direct storyboard deadline releases the processor slot without later profiles (${deadlineMs}ms requested)`, async t => {
+for (const deadlineMs of [100, 6_000]) test(`direct storyboard deadline releases the processor slot without later profiles (${deadlineMs}ms requested)`, async t => {
   const { createYouTubeRuntime } = await import('../runtime.mjs');
   const { createProcessorApp } = await import('../app.mjs');
   let calls = 0;
@@ -179,11 +179,30 @@ for (const deadlineMs of [100, 60_000]) test(`direct storyboard deadline release
   const response = await request(start + deadlineMs);
   assert.equal(response.status, 503);
   const payload = await response.json();
-  assert.equal(payload.diagnostics.events.filter(event => event.stage === 'player').length, deadlineMs === 100 ? 0 : 1,
+  assert.equal(payload.diagnostics.events.filter(event => event.stage === 'player').length, 0,
     'an aborted helper must exit before recording failures for subsequent profiles');
-  assert.equal(calls, deadlineMs === 100 ? 1 : 2);
-  assert.ok(Date.now() - start < Math.min(deadlineMs, 5000) + 1000, 'direct deadline must bound the entire helper');
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - start >= deadlineMs - 50, 'direct recovery must not stop at a shorter helper timeout');
+  assert.ok(Date.now() - start < deadlineMs + 1000, 'direct deadline must bound the entire helper');
   // The capacity slot must already be released, so a subsequent request is not busy.
   const next = await request(Date.now() - 1);
   assert.equal((await next.json()).error.code, 'UNAVAILABLE');
+});
+
+test('real direct storyboard runtime can recover after five seconds', async t => {
+  const { createYouTubeRuntime } = await import('../runtime.mjs');
+  t.mock.method(console, 'info', () => {});
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    calls++;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 6000);
+      init.signal.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal.reason); }, { once: true });
+    });
+    return Response.json(spec);
+  });
+  const result = await createYouTubeRuntime({}).run({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true },
+    { egress: 'direct', deadlineAt: Date.now() + 15_000 });
+  assert.equal(result.manifest.totalSheets, 1);
+  assert.equal(calls, 1);
 });

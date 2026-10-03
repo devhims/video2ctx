@@ -614,7 +614,7 @@ async function getStoryboardWithFallback(options) {
           }
         }), {
           maxAttempts: Math.min(2, options.retry?.policy?.maxAttempts ?? 2),
-          attemptTimeoutMs: Math.min(4e3, options.retry?.policy?.attemptTimeoutMs ?? 4e3)
+          attemptTimeoutMs: options.retry?.policy?.attemptTimeoutMs ?? 4e3
         });
         status = response.status;
         if (!response.ok) {

@@ -89,7 +89,7 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
                 user: { lockedSafetyMode: false }, request: { useSsl: true } } }) }),
           },
         }), { maxAttempts: Math.min(2, options.retry?.policy?.maxAttempts ?? 2),
-          attemptTimeoutMs: Math.min(4_000, options.retry?.policy?.attemptTimeoutMs ?? 4_000) });
+          attemptTimeoutMs: options.retry?.policy?.attemptTimeoutMs ?? 4_000 });
         status = response.status;
         if (!response.ok) {
           await response.body?.cancel();
