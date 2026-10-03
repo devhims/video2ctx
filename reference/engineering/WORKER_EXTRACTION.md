@@ -48,7 +48,7 @@ Existing `video2ctx` secrets are reused. `OUTBOUND_PROXY_URLS` is a JSON array o
 
 After eligible proxy failures, the operation uses one configured processor slot with a private `x-processor-egress: direct` request. It reuses the container's native-fetch extraction path with library retries limited to one. Concurrent proxy operations retain their own transports. This applies to core data operations and storyboards, including when the primary backend is `container`; exact frames use a separate container and are unchanged.
 
-The fallback gets at most five seconds, including startup and response-body reads. The proxy phase reserves that time inside the existing total operation budget, or half the total for budgets below ten seconds. The container receives an absolute deadline and bounds its own outbound requests too. No new container slot or proxy secret is needed. Confirmed missing captions, region/authentication restrictions, invalid input, and terminal not-found errors do not trigger direct fallback. If the direct attempt fails, the operation rethrows the original proxy error, retaining its code, status, retryability, retry delay, and safe structured reason. Specific content restrictions discovered on the direct route take precedence. The friendly availability message belongs to the agent layer, not public data extraction.
+The fallback gets at most five seconds, including startup and response-body reads. The proxy phase reserves that time inside the existing total operation budget, or half the total for budgets below ten seconds. The container receives an absolute deadline and passes its abort signal through the storyboard helper, including retry waits. The helper respects lower caller retry limits, so direct storyboard extraction makes at most one request per player profile and does not retry a failed profile. No new container slot or proxy secret is needed. Confirmed missing captions, region/authentication restrictions, invalid input, and terminal not-found errors do not trigger direct fallback. If the direct attempt fails, the operation rethrows the original proxy error, retaining its code, status, retryability, retry delay, and safe structured reason. Specific content restrictions discovered on the direct route take precedence. The friendly availability message belongs to the agent layer, not public data extraction.
 
 The container acknowledges the selected route in its response header. An old image that ignores direct routing cannot be accepted as direct recovery. Deploy the updated processor image with the Worker. Direct attempts log `youtube_direct_fallback` and append `backend: container`, `egress: direct` diagnostics using the same extraction ID and the next attempt number. Direct success does not clear proxy cooldowns. The cache forwards all five attempt diagnostics.
 
@@ -157,3 +157,9 @@ remaining time included catalog persistence and session attachment. Tests verify
 bounded overlap, ordering, failure settling, and deletion during frame pinning.
 A cold production run is still required to measure the speedup. This change does
 not promise a ten-second end-to-end result or alter FFmpeg extraction.
+
+### Storage failures and transcript pages
+
+A transcript that was extracted successfully but could not be saved to the video catalog returns `VIDEO_CATALOG_UNAVAILABLE` with HTTP 503. It remains retryable and is not persisted as an exhausted YouTube retrieval. The original storage exception stays in internal logs.
+
+Exhausted transcript failure reuse is scoped to run, video, and language. Changing an evidence page offset cannot restart upstream extraction. Successful evidence pages keep separate cache keys, so their returned excerpts remain distinct.

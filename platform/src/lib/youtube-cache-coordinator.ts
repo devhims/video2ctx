@@ -186,7 +186,7 @@ export class YouTubeCacheCoordinatorCore {
     } catch (error) {
       if (error instanceof VideoCatalogWriteError) {
         logCacheFailure('video_catalog_write_failed',request.resourceType,error.cause);
-        return failureFrom(new YouTubeProcessorError('UNAVAILABLE',error.message,503,true));
+        return withDiagnostics(failureFrom(new ApiError(503, 'VIDEO_CATALOG_UNAVAILABLE', error.message)));
       }
       if (existing && !request.refresh) return withDiagnostics(successFromEntry(existing, 'stale'));
       return withDiagnostics(failureFrom(error));

@@ -13,6 +13,20 @@ export const YOUTUBE_UNAVAILABLE_MESSAGE = 'YouTube is not available right now.'
 const RETRY_GUIDANCE = 'Do not retry this transcript in this run. Use other available evidence or explain the limitation.';
 const AVAILABILITY_CODES = ['UNAVAILABLE', 'RATE_LIMITED', 'UPSTREAM_ERROR'] as const;
 
+// Successful results retain their page key. Failure reuse describes the upstream
+// retrieval, which does not depend on the evidence page offset.
+export function transcriptRetrievalKey(semanticKey: string): string | undefined {
+  const prefix = 'transcript-retrieval:';
+  if (!semanticKey.startsWith(prefix)) return undefined;
+  try {
+    const input: unknown = JSON.parse(semanticKey.slice(prefix.length));
+    if (!input || typeof input !== 'object' || !('videoId' in input) || typeof input.videoId !== 'string') return undefined;
+    const language = 'language' in input ? input.language : undefined;
+    if (language !== undefined && typeof language !== 'string') return undefined;
+    return JSON.stringify({ videoId: input.videoId, language });
+  } catch { return undefined; }
+}
+
 export function youtubeUnavailable(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && AVAILABILITY_CODES.some(code => code === error.code);

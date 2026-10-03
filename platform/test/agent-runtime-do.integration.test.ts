@@ -1,3 +1,5 @@
+import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
+import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
 import { createWorkerExtractionRunner } from '../src/lib/youtube-worker-extraction';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
@@ -746,6 +748,81 @@ test('does not reuse exhausted transcript failures across languages', async () =
     }
     expect(transcript.mock.calls).toHaveLength(2);
     expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`).toHaveLength(2);
+  });
+});
+
+test('retries the same transcript after a catalog save outage recovers', async () => {
+  const { runtime, runId } = await seed('transcript-catalog-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const value = {
+      videoId: 'catalogtest', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+      segments: [{ startMs: 0, endMs: 1000, durationMs: 1000, text: 'Saved after recovery.' }], text: 'Saved after recovery.',
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    };
+    const extraction = vi.fn(async () => value);
+    const coordinator = new YouTubeCacheCoordinatorCore(env as Env, extraction);
+    const bindings = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({
+      getOrLoad: async (json: string) => JSON.stringify(await coordinator.getOrLoad(JSON.parse(json))),
+    }) } } as unknown as Env;
+    const transcript = vi.fn((id: string) => getTranscriptWithCache(bindings, id));
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    const put = vi.spyOn(env.VIDEO_ASSETS, 'put').mockRejectedValueOnce(new Error('Simulated R2 write outage'));
+    try {
+      await expect(executeGetVideoTranscript({ videoId: 'catalogtest' }, context, 'first')).rejects.toMatchObject({
+        code: 'TRANSCRIPT_FETCH_FAILED', cause: { code: 'VIDEO_CATALOG_UNAVAILABLE', status: 503 },
+      });
+      expect(extraction).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledTimes(1);
+      const packet = await executeGetVideoTranscript({ videoId: 'catalogtest' }, context, 'retry');
+      expect(packet.excerpts[0]?.text).toBe('Saved after recovery.');
+      expect(transcript).toHaveBeenCalledTimes(2);
+      expect(extraction).toHaveBeenCalledTimes(2);
+      expect(instance.sql`SELECT status FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript' ORDER BY created_at`).toEqual([{ status: 'failed' }, { status: 'completed' }]);
+    } finally { put.mockRestore(); }
+  });
+});
+
+test('reuses exhausted transcript failures across page offsets without blocking other languages', async () => {
+  const { runtime, runId } = await seed('transcript-offset-failures', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('Unavailable'), { code: 'UNAVAILABLE' }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const [index, input] of [{ language: 'en', offset: 100 }, { language: 'en', offset: 0 }, { language: 'en', offset: 200 }, { language: 'fr', offset: 100 }].entries()) {
+      await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk', ...input }, context, `page-${index}`)).rejects.toMatchObject({ code: 'YOUTUBE_UNAVAILABLE' });
+    }
+    expect(transcript).toHaveBeenCalledTimes(2);
+  });
+});
+
+test('keeps successful transcript pages separate while reusing each page', async () => {
+  const { runtime, runId } = await seed('transcript-success-pages', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => ({ cacheStatus: 'hit' as const, value: {
+      videoId: 'abcdefghijk', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+      segments: ['First passage', 'Second passage'].map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 })),
+      text: 'First passage Second passage', meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }));
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const [index, offset] of [0, 1, 0, 1].entries()) {
+      const packet = await executeGetVideoTranscript({ videoId: 'abcdefghijk', offset }, context, `page-${index}`);
+      expect(packet.excerpts.map(excerpt => excerpt.text)).toEqual(offset ? ['Second passage'] : ['First passage', 'Second passage']);
+    }
+    expect(transcript).toHaveBeenCalledTimes(2);
   });
 });
 

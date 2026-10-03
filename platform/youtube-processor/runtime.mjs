@@ -64,7 +64,7 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
       } : baseFetch;
       const retry = signal ? { ...baseRetry, wait: delay => waitForRetry(delay, signal) } : baseRetry;
       const client = singleAttempt ? createYouTubeClient({ fetch: fetchImpl, retry }) : baseClient;
-      const options = { fetch: fetchImpl, retry };
+      const options = { fetch: fetchImpl, retry, ...(signal ? { signal } : {}) };
       try {
         switch (operation.kind) {
           case 'search':

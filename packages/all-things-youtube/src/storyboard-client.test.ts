@@ -110,3 +110,29 @@ test('marks bot-challenged player responses, but not other sign-in requirements'
   // The reason text itself never leaves the extractor.
   expect(JSON.stringify(events)).not.toContain('not a bot');
 });
+
+
+test.each([1, 2, 5])('honors lower caller retry limits and the supplied wait (%s attempts)', async maxAttempts => {
+  const { getStoryboardWithFallback } = await import('./storyboard-client');
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-retries-'));
+  dirs.push(outputDir);
+  const fetch = vi.fn(async () => new Response('', { status: 503, headers: { 'retry-after': '2' } }));
+  const wait = vi.fn(async () => {});
+  await expect(getStoryboardWithFallback({ videoId: 'abcdefghijk', outputDir, metadataOnly: true,
+    fetch, retry: { policy: { maxAttempts }, wait } })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(fetch).toHaveBeenCalledTimes(4 * Math.min(2, maxAttempts));
+  expect(wait).toHaveBeenCalledTimes(4 * (Math.min(2, maxAttempts) - 1));
+});
+
+test('the top-level signal interrupts even a custom wait that never settles', async () => {
+  const { getStoryboardWithFallback } = await import('./storyboard-client');
+  const outputDir = await mkdtemp(join(tmpdir(), 'storyboard-wait-abort-'));
+  dirs.push(outputDir);
+  const controller = new AbortController();
+  const fetch = vi.fn(async () => new Response('', { status: 503 }));
+  const wait = vi.fn(async () => { controller.abort(); await new Promise<void>(() => {}); });
+  await expect(getStoryboardWithFallback({ videoId: 'abcdefghijk', outputDir, metadataOnly: true,
+    signal: controller.signal, fetch, retry: { wait } })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(wait).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});

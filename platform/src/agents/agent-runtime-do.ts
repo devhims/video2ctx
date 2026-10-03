@@ -1,5 +1,5 @@
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
-import { storedTranscriptFailure } from './providers/youtube/tools/transcript-tool-errors';
+import { storedTranscriptFailure, transcriptRetrievalKey } from './providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { videoCatalog } from '../lib/video-catalog';
@@ -671,12 +671,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // same retrieval in this run must not start another full extraction sequence.
     // Keep this in SQLite so recovery cannot silently restart failed retrievals.
     if (execution.toolName === 'get_video_transcript') {
-      const failed = this.sql<ToolCallRow>`
+      const retrievalKey = transcriptRetrievalKey(execution.semanticKey);
+      const failures = this.sql<ToolCallRow>`
         SELECT * FROM agent_tool_calls
-        WHERE run_id = ${runId} AND semantic_key = ${execution.semanticKey}
+        WHERE run_id = ${runId}
           AND tool_name = 'get_video_transcript' AND status = 'failed'
-        ORDER BY updated_at DESC LIMIT 1
-      `[0];
+          AND error LIKE 'YOUTUBE_UNAVAILABLE: %'
+        ORDER BY updated_at DESC
+      `;
+      const failed = retrievalKey === undefined ? undefined
+        : failures.find(row => transcriptRetrievalKey(row.semantic_key) === retrievalKey);
       const failure = failed?.error ? storedTranscriptFailure(failed.error) : undefined;
       if (failure) return Promise.reject(failure);
     }
