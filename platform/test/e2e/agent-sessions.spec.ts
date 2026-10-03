@@ -560,11 +560,12 @@ for (const failure of [
     })),
   } }));
   let partial = false;
+  let outcome = 'partial';
   const reason = failure.reason;
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
     status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
       run: { sessionId, runId, status: partial ? 'completed' : 'failed',
-        ...(partial ? { result: { outcome: 'partial', answer: `Partial evidence summary\n\n${reason}\n\nA supported finding.`,
+        ...(partial ? { result: { outcome, answer: `Partial evidence summary\n\n${reason}\n\nA supported finding.`,
           sources: [], warnings: [{ code: failure.code, message: reason }] } } : { error: reason }) },
       phase: partial ? 'completed' : 'failed', tools: [],
     })}\n\n`,
@@ -577,9 +578,16 @@ for (const failure of [
   await expect(alert).toContainText(reason);
   partial = true;
   await page.reload();
-  await expect(alert).toContainText('Answer incomplete');
+  await expect(alert).toContainText(failure.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable' : 'Answer incomplete');
   await expect(alert).toContainText(reason);
   await expect(page.locator('.agent-caveats')).not.toHaveAttribute('open');
   await page.reload();
   await expect(alert).toContainText(reason);
+  if (failure.code === 'YOUTUBE_UNAVAILABLE') {
+    outcome = 'answered';
+    await page.reload();
+    await expect(alert).toContainText('Source unavailable');
+    await expect(alert).not.toContainText('Answer incomplete');
+    await expect(alert).toContainText(reason);
+  }
 });

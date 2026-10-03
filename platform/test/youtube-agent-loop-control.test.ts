@@ -345,7 +345,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(prompt).toContain('Correct your previous assumption.');
   });
 
-  it('hands an ordinary research completion to the configured finalizer', async () => {
+  it.each([undefined, 'CAPTIONS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'])('hands an ordinary completion to the finalizer with only availability warnings (%s)', async code => {
     const packet = transcriptAnalysisPacket();
     const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({
       toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
@@ -358,7 +358,11 @@ describe('YouTube AgentCore loop control', () => {
     }) });
     const context = inspectContext();
     await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'Summarize this video',
-      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context, recoveredEvidence: [packet] });
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context, recoveredEvidence: [packet],
+      recoveredToolFailures: code ? [{ toolCallId: 'prior-failure', toolName: 'get_video_transcript', operation: 'transcript', message: `${code}: Unavailable source` }] : [],
+    });
+    expect(vi.mocked(context.finalize).mock.calls[0]![1].warnings).toEqual(code === 'YOUTUBE_UNAVAILABLE'
+      ? [{ code, message: 'YouTube is not available right now.' }] : []);
     expect(finalizer.doGenerateCalls).toHaveLength(1);
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(vi.mocked(context.finalize).mock.calls[0]![1].answer).toContain('Finalizer synthesis.');

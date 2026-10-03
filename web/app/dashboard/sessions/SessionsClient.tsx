@@ -230,7 +230,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {result && <>
         <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
         {result.warnings.filter(warning => ['FINAL_SYNTHESIS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'].includes(warning.code)).map(warning =>
-          <div key={warning.code} role='alert' className='alert error'><strong>Answer incomplete</strong><p>{warning.message}</p></div>)}
+          <div key={warning.code} role='alert' className='alert error'><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable' : 'Answer incomplete'}</strong><p>{warning.message}</p></div>)}
         <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {
           const href = safeSourceUrl(source.url);

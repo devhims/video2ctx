@@ -29,7 +29,7 @@ describe('YouTube agent evidence tools', () => {
     const cause = Object.assign(new Error('upstream detail'), { code });
     const context = toolContext({ transcript: vi.fn(async () => { throw cause; }) });
     await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'failed')).rejects.toMatchObject({
-      code: 'YOUTUBE_UNAVAILABLE', message: 'YOUTUBE_UNAVAILABLE: YouTube is not available right now.', cause,
+      code: 'YOUTUBE_UNAVAILABLE', message: `YOUTUBE_UNAVAILABLE: YouTube is not available right now. Do not retry this transcript in this run. Use other available evidence or explain the limitation. [upstream=${code}]`, cause,
     });
   });
 

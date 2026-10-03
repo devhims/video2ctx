@@ -1,5 +1,5 @@
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
-import { YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
+import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from '../runtime/video-duration-limit';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
@@ -387,7 +387,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
       const warnings = mergeWarnings(input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
-        toolFailureWarnings([...toolFailures.values()]));
+        youtubeAvailabilityWarnings([...toolFailures.values()]));
       if (visualRequired && !hasVisualObservations()) {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
@@ -627,6 +627,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         evidence: [...evidence.values()],
         onEvidence: packets => { for (const packet of packets) evidence.set(packet.packetId,packet); },
         toolFailures: [...toolFailures.values()],
+        researchInterrupted: error !== finalizationHandoff,
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
         onDraft: options.onDraft,
@@ -700,11 +701,15 @@ async function runUnifiedFinalizer(options: {
   context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'session' | 'traceToolCall' | 'currentDate'>;
   evidence: EvidencePacket[];
   toolFailures: EvidenceToolFailure[];
+  researchInterrupted?: boolean;
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
 }): Promise<AgentTurnResult> {
   assertModelCostAvailable(options.modelBudget);
-  const failureWarnings = toolFailureWarnings(options.toolFailures);
+  // The model still sees every provider failure, but a completed answer should
+  // not inherit warnings for candidates it successfully replaced.
+  const failureWarnings = options.researchInterrupted
+    ? toolFailureWarnings(options.toolFailures) : youtubeAvailabilityWarnings(options.toolFailures);
   const comparisonVideoIds = 'comparisonVideoIds' in options.decision ? options.decision.comparisonVideoIds ?? [] : [];
   const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
@@ -1041,7 +1046,7 @@ function isAgentCoreTimeout(error: unknown): boolean {
 }
 
 function summarizeToolFailures(failures: EvidenceToolFailure[]): string {
-  if (failures.some(failure => failure.message.startsWith('YOUTUBE_UNAVAILABLE: ')))
+  if (failures.some(failure => transcriptFailureCode(failure.message) === 'YOUTUBE_UNAVAILABLE'))
     return YOUTUBE_UNAVAILABLE_MESSAGE;
   const details = groupedToolFailures(failures)
     .map((failure) => `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`)
@@ -1060,10 +1065,13 @@ function groupedToolFailures(failures: EvidenceToolFailure[]) {
   return [...groups.values()];
 }
 
-function toolFailureWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
-  const availability: AgentWarning[] = failures.some(failure => failure.message.startsWith('YOUTUBE_UNAVAILABLE: '))
+function youtubeAvailabilityWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
+  return failures.some(failure => transcriptFailureCode(failure.message) === 'YOUTUBE_UNAVAILABLE')
     ? [{ code: 'YOUTUBE_UNAVAILABLE', message: YOUTUBE_UNAVAILABLE_MESSAGE }] : [];
-  return [...availability, ...groupedToolFailures(failures).filter(failure => !failure.message.startsWith('YOUTUBE_UNAVAILABLE: ')).slice(0, 49).map((failure) => ({
+}
+
+function toolFailureWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
+  return [...youtubeAvailabilityWarnings(failures), ...groupedToolFailures(failures).filter(failure => transcriptFailureCode(failure.message) !== 'YOUTUBE_UNAVAILABLE').slice(0, 49).map((failure) => ({
     code: 'EVIDENCE_TOOL_FAILED',
     message: `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`.slice(0, 1_000),
   }))];
