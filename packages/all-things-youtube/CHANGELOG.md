@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Add optional `captionAvailability` to `getVideo` and `getDetails` metadata without downloading transcript bodies. Caption checks can add player and watch-page requests. Desktop discovery overlaps alternate player checks, and metadata retains the first playable profile.
 - Return terminal `REGION_RESTRICTED` instead of `UNAVAILABLE` for confirmed country blocks in transcript retrieval. This adds a `YouTubeErrorCode` member; consumers with exhaustive switches must handle it.
 - Expose `availability.restriction: 'region'` for confirmed blocks. The library currently recognizes explicit English block reasons. Unrecognized localized reasons remain generic `UNAVAILABLE`; configured locale does not establish the proxy exit country.
+- Request channel-only YouTube search results for `type: 'channel'`, including handle resolution.
+- Mark caption and storyboard bot challenges with `reason: 'bot_challenge'` while preserving retryable `UNAVAILABLE` errors.
+- Download storyboard sheets in batches of four, preserving sheet order and waiting for each batch to settle before fallback or cleanup.
+- Keep WebP parsing offsets independent of the storyboard download concurrency setting.
+
+Consumers with exhaustive `YouTubeErrorCode` switches must add `REGION_RESTRICTED`. Video metadata requests may make additional player and watch-page calls to check caption availability. No transcript bodies are downloaded for that check.
 
 ## 0.6.3
 
