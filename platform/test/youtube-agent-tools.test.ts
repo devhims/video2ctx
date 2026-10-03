@@ -25,6 +25,20 @@ async function retrieveAndAnalyzeTranscript(input: Parameters<typeof executeGetV
 }
 
 describe('YouTube agent evidence tools', () => {
+  it.each(['UNAVAILABLE', 'RATE_LIMITED', 'UPSTREAM_ERROR'])('explains exhausted %s transcript retrieval and retains its cause', async code => {
+    const cause = Object.assign(new Error('upstream detail'), { code });
+    const context = toolContext({ transcript: vi.fn(async () => { throw cause; }) });
+    await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'failed')).rejects.toMatchObject({
+      code: 'YOUTUBE_UNAVAILABLE', message: `YOUTUBE_UNAVAILABLE: YouTube is not available right now. Do not retry this transcript in this run. Use other available evidence or explain the limitation. [upstream=${code}]`, cause,
+    });
+  });
+
+  it.each(['AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('does not mislabel %s as a temporary YouTube outage', async code => {
+    const cause = Object.assign(new Error('specific restriction'), { code });
+    const context = toolContext({ transcript: vi.fn(async () => { throw cause; }) });
+    await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'restricted')).rejects.toThrow('specific restriction');
+  });
+
   it('maps one search tool call to one provider request and bounds candidates', async () => {
     const videos = Array.from({ length: 15 }, (_, index) => video(`video0000${String(index).padStart(2, '0')}`.slice(-11), index));
     videos[0]!.isLive = true;

@@ -53,11 +53,15 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
     return fetchImpl(input, { ...init, signal: existing ? combineSignals([signal, existing]) : signal });
   };
   const wait = (delayMs: number) => new Promise<void>((resolve, reject) => {
-    const abort = () => { clearTimeout(waitTimer); reject(signal.reason); };
-    const finish = () => { signal.removeEventListener('abort', abort); resolve(); };
-    const waitTimer = setTimeout(finish, delayMs);
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => { clearTimeout(waitTimer); signal.removeEventListener('abort', abort); };
+    const abort = () => { cleanup(); reject(signal.reason); };
+    const finish = () => { cleanup(); resolve(); };
     signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
+    if (signal.aborted) { abort(); return; }
+    if (options.retry?.wait) {
+      Promise.resolve().then(() => options.retry!.wait!(delayMs)).then(finish, error => { cleanup(); reject(error); });
+    } else waitTimer = setTimeout(finish, delayMs);
   });
   const transport = createYouTubeTransport({ ...options.retry, wait, fetch: boundedFetch });
   let uncertain = false;
@@ -84,7 +88,8 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
                 hl: options.language ?? 'en', gl: options.region ?? 'US', ...profile.context },
                 user: { lockedSafetyMode: false }, request: { useSsl: true } } }) }),
           },
-        }), { maxAttempts: 2, attemptTimeoutMs: 4_000 });
+        }), { maxAttempts: Math.min(2, options.retry?.policy?.maxAttempts ?? 2),
+          attemptTimeoutMs: options.retry?.policy?.attemptTimeoutMs ?? 4_000 });
         status = response.status;
         if (!response.ok) {
           await response.body?.cancel();

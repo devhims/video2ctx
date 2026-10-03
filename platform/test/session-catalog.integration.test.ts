@@ -768,3 +768,28 @@ test('cancellation during frame extraction prevents subsequent session pins', as
     expect(store.brief().assets).toEqual([]);
   });
 });
+
+test('session storyboard metadata and missing sheets retain the caller retrieval deadline', async () => {
+  const id = videoId();
+  const deadlineAt = Date.now() + 45_000;
+  const board = { videoId: id, frameCount: 2, intervalMs: 10000,
+    manifest: { totalSheets: 1, framesPerSheet: 2, tileWidth: 120, tileHeight: 90, columns: 2, rows: 1, lastSampleMs: 10000 },
+    sheets: [], selection: { mode: 'metadata' as const }, meta: { partial: false, warnings: [] } };
+  const images = { ...board, selection: { mode: 'indexes' as const, requestedSheetIndexes: [0] },
+    sheets: [{ firstFrameIndex: 0, frameCount: 2, intervalMs: 10000, tileWidth: 120, tileHeight: 90,
+      columns: 2, rows: 1, imageBase64: '/9j/AA==' }] };
+  const manifestRefs = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, board, Date.now(), 60000);
+  const sheetRefs = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, images, Date.now(), 60000);
+  await within('storyboard-retrieval-deadline', async ({ store }) => {
+    const upstream = vi.fn<NonNullable<YouTubeAgentProvider['storyboard']>>(async (_id, _times, options) => {
+      expect(options?.deadlineAt).toBe(deadlineAt);
+      return options?.metadataOnly
+        ? { value: board, cacheStatus: 'hit', catalogVersions: manifestRefs }
+        : { value: images, cacheStatus: 'hit', catalogVersions: [...manifestRefs, ...sheetRefs] };
+    });
+    const p = sessionProvider({ storyboard: upstream } as unknown as YouTubeAgentProvider, store);
+    await p.storyboard!(id, undefined, { metadataOnly: true, deadlineAt });
+    await p.storyboard!(id, undefined, { sheetIndexes: [0], maxSheets: 1, deadlineAt });
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+});

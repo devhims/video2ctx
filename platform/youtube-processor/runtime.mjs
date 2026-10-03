@@ -26,6 +26,7 @@ export function redactProxyError(error, proxyUrl) {
     code: error.code,
     status: error.status,
     retryable: error.retryable,
+    ...(error.reason === 'bot_challenge' ? { reason: 'bot_challenge' } : {}),
   });
 }
 
@@ -38,18 +39,33 @@ function waitForRetry(delayMs, signal) {
   });
 }
 
-function createConnectionRuntime(proxyUrl) {
-  const fetchImpl = outboundFetch(proxyUrl);
-  const retry = {
-    ...(proxyUrl ? { policy: { maxAttempts: 2 } } : {}),
+function createConnectionRuntime(proxyUrl, singleAttempt = false) {
+  const baseFetch = outboundFetch(proxyUrl);
+  const baseRetry = {
+    ...(singleAttempt ? { policy: { maxAttempts: 1 } } : proxyUrl ? { policy: { maxAttempts: 2 } } : {}),
     onRetry: (event) => console.warn(JSON.stringify({ event: 'youtube_retry', ...event })),
   };
-  const client = createYouTubeClient({ fetch: fetchImpl, retry });
-  const options = { fetch: fetchImpl, retry };
+  const baseClient = createYouTubeClient({ fetch: baseFetch, retry: baseRetry });
 
   return {
     proxyConfigured: proxyUrl.length > 0,
     async run(operation, diagnostics = {}) {
+      const controller = singleAttempt ? new AbortController() : undefined;
+      const remaining = singleAttempt ? diagnostics.deadlineAt - Date.now() : undefined;
+      if (singleAttempt && (!Number.isFinite(remaining) || remaining <= 0))
+        throw Object.assign(new Error('The direct extraction deadline expired.'), { code: 'UNAVAILABLE', retryable: false });
+      const timer = controller ? setTimeout(() => controller.abort(new DOMException('Direct extraction deadline', 'TimeoutError')), remaining) : undefined;
+      const signal = controller ? AbortSignal.any([controller.signal, ...(diagnostics.signal ? [diagnostics.signal] : [])]) : undefined;
+      const fetchImpl = signal ? (input, init = {}) => {
+        const requestSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
+        const combined = requestSignal ? AbortSignal.any([signal, requestSignal]) : signal;
+        combined.throwIfAborted();
+        return baseFetch(input, { ...init, signal: combined });
+      } : baseFetch;
+      const retry = signal ? { ...baseRetry, policy: { ...baseRetry.policy, attemptTimeoutMs: remaining },
+        wait: delay => waitForRetry(delay, signal) } : baseRetry;
+      const client = singleAttempt ? createYouTubeClient({ fetch: fetchImpl, retry }) : baseClient;
+      const options = { fetch: fetchImpl, retry, ...(signal ? { signal } : {}) };
       try {
         switch (operation.kind) {
           case 'search':
@@ -99,9 +115,9 @@ function createConnectionRuntime(proxyUrl) {
               try { diagnostics.onDiagnostic?.({ ...event, elapsedMs: Date.now() - startedAt }); } catch { /* Best effort. */ }
             };
             const safeCode = error => ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED', 'UNAVAILABLE', 'UPSTREAM_ERROR', 'RATE_LIMITED', 'AUTH_REQUIRED'].includes(error?.code) ? error.code : 'UNKNOWN';
-            const deadline = AbortSignal.timeout(25_000);
+            const deadline = signal ?? AbortSignal.timeout(25_000);
             try {
-              // Bound each connection attempt so the Worker has time to use another slot.
+              // Proxy attempts leave time for another slot. Direct recovery uses the caller deadline.
               const transcriptFetch = async (input, init = {}) => {
                 const signal = init.signal ? AbortSignal.any([deadline, init.signal]) : deadline;
                 signal.throwIfAborted();
@@ -141,6 +157,7 @@ function createConnectionRuntime(proxyUrl) {
             try {
               return await loadStoryboard(operation.id, getStoryboardWithFallback, { ...options,
                 fetch: storyboardImageFetch(fetchImpl, onDiagnostic), onDiagnostic,
+                ...(singleAttempt ? { timeBudgetMs: Math.max(1, diagnostics.deadlineAt - Date.now()) } : {}),
                 timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets,
                 sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
             } catch (error) {
@@ -162,6 +179,8 @@ function createConnectionRuntime(proxyUrl) {
         }
       } catch (error) {
         throw redactProxyError(error, proxyUrl);
+      } finally {
+        clearTimeout(timer);
       }
     },
   };
@@ -169,11 +188,15 @@ function createConnectionRuntime(proxyUrl) {
 
 export function createYouTubeRuntime(environment = process.env) {
   const urls = proxyConnections(environment);
-  const connections = (urls.length ? urls : ['']).map(createConnectionRuntime);
+  const connections = (urls.length ? urls : ['']).map(url => createConnectionRuntime(url));
+  // Separate transport and retry policy. A direct request never mutates the
+  // proxy pool, even while another extraction uses it in the same container.
+  const direct = createConnectionRuntime('', true);
   return {
     proxyConfigured: urls.length > 0,
     proxyConnections: urls.length,
     async run(operation, diagnostics = {}) {
+      if (diagnostics.egress === 'direct') return direct.run(operation, diagnostics);
       const slot = diagnostics.egressSlot ?? 0;
       if (!Number.isInteger(slot) || slot < 0 || slot > 3) {
         throw Object.assign(new Error('The processor egress slot is invalid.'), { code: 'INVALID_INPUT', retryable: false });

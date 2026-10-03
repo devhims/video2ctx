@@ -381,7 +381,7 @@ export async function loadVideoResource(
         let metadata: Storyboard | undefined;
         try {
           metadata = storyboardSchema.parse(await runYouTubeOperation(env,
-            { kind: 'storyboard', id: op.id, metadataOnly: true }, diagnostic));
+            { kind: 'storyboard', id: op.id, metadataOnly: true, deadlineAt: op.deadlineAt }, diagnostic));
         } catch { /* Preserve the original rejection if guidance cannot be retrieved. */ }
         if (metadata?.videoId === op.id) storyboardSheetIndexes(metadata, op);
       }

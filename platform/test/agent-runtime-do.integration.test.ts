@@ -1,4 +1,7 @@
+import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
+import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
+import { createWorkerExtractionRunner } from '../src/lib/youtube-worker-extraction';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -643,6 +646,204 @@ test('deduplicates complete transcript retrieval durably across focuses and keep
     expect(calls).toHaveLength(2);
     expect(calls.reduce((sum, call) => sum + call.credits, 0)).toBe(2);
     expect(instance.sql`SELECT * FROM agent_evidence_packets WHERE run_id = ${runId}`).toHaveLength(2);
+  });
+});
+
+test('does not restart an exhausted transcript extraction in the same run', async () => {
+  const { runtime, runId } = await seed('failed-transcript-reuse', 'running');
+  for (const callId of ['first', 'rephrased']) {
+    await runInDurableObject(runtime, async instance => {
+      const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+      const attempt = vi.fn(async () => { throw Object.assign(new Error('Sign in to confirm you are not a bot'), { code: 'UNAVAILABLE', reason: 'bot_challenge' }); });
+      const proxyTransport = vi.fn((_url: string) => ({ fetch: async () => new Response(), close: async () => {} }));
+      const extract = createWorkerExtractionRunner({ execute: attempt, proxyTransport });
+      const transcript = vi.fn(async () => {
+        // The local test bindings omit production-only authentication secrets.
+        await extract({ ...env as Env,
+          OUTBOUND_PROXY_URLS: JSON.stringify([1, 2, 3, 4].map(slot => `http://proxy-${slot}.example:8080`)),
+        }, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' });
+        throw new Error('Expected all four extraction attempts to fail');
+      });
+      const context: AgentToolContext = {
+        runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+        provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+        executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+      };
+      const requests = [executeGetVideoTranscript({ videoId: 'abcdefghijk', focus: callId }, context, callId)];
+      if (callId === 'first') requests.push(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'concurrent'));
+      await Promise.all(requests.map(request => expect(request).rejects.toMatchObject({
+        code: 'YOUTUBE_UNAVAILABLE', message: expect.stringContaining('Do not retry this transcript in this run.'),
+      })));
+      expect(transcript).toHaveBeenCalledTimes(callId === 'first' ? 1 : 0);
+      expect(attempt).toHaveBeenCalledTimes(callId === 'first' ? 4 : 0);
+      expect(new Set(proxyTransport.mock.calls.map(call => call[0])).size).toBe(callId === 'first' ? 4 : 0);
+    });
+  }
+  await runInDurableObject(runtime, async instance => {
+    const calls = instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ status: 'failed', credits: 0, error: expect.stringContaining('[upstream=UNAVAILABLE; reason=bot_challenge]') });
+    const manager = (instance as unknown as { traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager }).traceManager;
+    await manager.publishPending();
+    const traces = await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_name=?')
+      .bind(runId, 'get_video_transcript').all<{ trace_id: string }>();
+    expect(traces.results).toHaveLength(3);
+    for (const trace of traces.results) {
+      expect((await readAdminToolTrace(env, runId, trace.trace_id))?.error).toMatchObject({
+        code: 'YOUTUBE_UNAVAILABLE', message: expect.stringContaining('[upstream=UNAVAILABLE; reason=bot_challenge]'),
+      });
+    }
+  });
+});
+
+test.each(['PROCESSOR_BUSY', 'PROCESSOR_UNAVAILABLE', 'INVALID_RESPONSE', 'YOUTUBE_UPSTREAM_ERROR', undefined])('allows another retrieval after a transient %s failure', async code => {
+  const { runtime, runId } = await seed(`transient-transcript-${code}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('Temporary infrastructure failure'), { code }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const callId of ['first', 'retry']) {
+      await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, callId)).rejects.toMatchObject({ code: 'TRANSCRIPT_FETCH_FAILED' });
+    }
+    expect(transcript).toHaveBeenCalledTimes(2);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`).toHaveLength(2);
+  });
+});
+
+test.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('keeps inspect-mode graceful skips for %s after a persisted failure', async code => {
+  const { runtime, runId } = await seed(`restricted-transcript-${code}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('Specific restriction'), { code }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      transcriptSelection: { allowReplacement: false, attempted: new Set(), unavailable: new Set(), regionRestricted: new Set() },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'first')).rejects.toMatchObject({ code });
+    const skipped = await executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'repeat');
+    expect(skipped.excerpts).toEqual([]);
+    expect(skipped.warnings).toEqual([expect.objectContaining({ code, message: expect.stringMatching(/do not retry/iu) })]);
+    expect(transcript).toHaveBeenCalledTimes(1);
+  });
+});
+
+test('does not reuse exhausted transcript failures across languages', async () => {
+  const { runtime, runId } = await seed('failed-transcript-languages', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('Unavailable'), { code: 'UNAVAILABLE' }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const [index, language] of ['en', 'en', 'fr'].entries()) {
+      await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk', language }, context, `call-${index}`)).rejects.toMatchObject({ code: 'YOUTUBE_UNAVAILABLE' });
+    }
+    expect(transcript.mock.calls).toHaveLength(2);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`).toHaveLength(2);
+  });
+});
+
+test('retries the same transcript after a catalog save outage recovers', async () => {
+  const { runtime, runId } = await seed('transcript-catalog-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const value = {
+      videoId: 'catalogtest', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+      segments: [{ startMs: 0, endMs: 1000, durationMs: 1000, text: 'Saved after recovery.' }], text: 'Saved after recovery.',
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    };
+    const extraction = vi.fn(async () => value);
+    const coordinator = new YouTubeCacheCoordinatorCore(env as Env, extraction);
+    const bindings = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({
+      getOrLoad: async (json: string) => JSON.stringify(await coordinator.getOrLoad(JSON.parse(json))),
+    }) } } as unknown as Env;
+    const transcript = vi.fn((id: string) => getTranscriptWithCache(bindings, id));
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    const put = vi.spyOn(env.VIDEO_ASSETS, 'put').mockRejectedValueOnce(new Error('Simulated R2 write outage'));
+    try {
+      await expect(executeGetVideoTranscript({ videoId: 'catalogtest' }, context, 'first')).rejects.toMatchObject({
+        code: 'TRANSCRIPT_FETCH_FAILED', cause: { code: 'VIDEO_CATALOG_UNAVAILABLE', status: 503 },
+      });
+      expect(extraction).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledTimes(1);
+      const packet = await executeGetVideoTranscript({ videoId: 'catalogtest' }, context, 'retry');
+      expect(packet.excerpts[0]?.text).toBe('Saved after recovery.');
+      expect(transcript).toHaveBeenCalledTimes(2);
+      expect(extraction).toHaveBeenCalledTimes(2);
+      expect(instance.sql`SELECT status FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript' ORDER BY created_at`).toEqual([{ status: 'failed' }, { status: 'completed' }]);
+    } finally { put.mockRestore(); }
+  });
+});
+
+test('reuses exhausted transcript failures across page offsets without blocking other languages', async () => {
+  const { runtime, runId } = await seed('transcript-offset-failures', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('Unavailable'), { code: 'UNAVAILABLE' }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const [index, input] of [{ language: 'en', offset: 100 }, { language: 'en', offset: 0 }, { language: 'en', offset: 200 }, { language: 'fr', offset: 100 }].entries()) {
+      await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk', ...input }, context, `page-${index}`)).rejects.toMatchObject({ code: 'YOUTUBE_UNAVAILABLE' });
+    }
+    expect(transcript).toHaveBeenCalledTimes(2);
+  });
+});
+
+test('keeps successful transcript pages separate while reusing each page', async () => {
+  const { runtime, runId } = await seed('transcript-success-pages', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => ({ cacheStatus: 'hit' as const, value: {
+      videoId: 'abcdefghijk', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+      segments: ['First passage', 'Second passage'].map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 })),
+      text: 'First passage Second passage', meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }));
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    for (const [index, offset] of [0, 1, 0, 1].entries()) {
+      const packet = await executeGetVideoTranscript({ videoId: 'abcdefghijk', offset }, context, `page-${index}`);
+      expect(packet.excerpts.map(excerpt => excerpt.text)).toEqual(offset ? ['Second passage'] : ['First passage', 'Second passage']);
+    }
+    expect(transcript).toHaveBeenCalledTimes(2);
+  });
+});
+
+test('an exhausted transcript can be requested in another run', async () => {
+  const { runtime, runId } = await seed('transcript-fresh-run', 'running');
+  const otherRunId = crypto.randomUUID();
+  await runInDurableObject(runtime, async instance => {
+    // A prior failure for the same semantic request must never poison a new run.
+    instance.sql`INSERT INTO agent_tool_calls
+      (run_id,tool_call_id,semantic_key,tool_name,operation,status,error,credits,created_at,updated_at)
+      VALUES (${otherRunId},'old','transcript-retrieval:{"videoId":"abcdefghijk"}',
+        'get_video_transcript','transcript','failed','YOUTUBE_UNAVAILABLE: YouTube is not available right now.',0,0,0)`;
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('unavailable'), { code: 'UNAVAILABLE' }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'new')).rejects.toMatchObject({ code: 'YOUTUBE_UNAVAILABLE' });
+    expect(transcript).toHaveBeenCalledTimes(1);
   });
 });
 

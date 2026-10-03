@@ -41,7 +41,8 @@ export function normalizeProcessorError(error) {
 
   return {
     responseStatus: statusForCode(code),
-    error: { code, message, status: upstreamStatus, retryable },
+    error: { code, message, status: upstreamStatus, retryable,
+      ...(error?.reason === 'bot_challenge' ? { reason: 'bot_challenge' } : {}) },
   };
 }
 
@@ -107,6 +108,16 @@ export function createProcessorApp(runtime, options = {}) {
       return c.json({ error: { code: 'INVALID_INPUT', message: 'The processor egress slot is invalid.', retryable: false } }, 422);
     }
     const egressSlot = Number(suppliedSlot ?? '0');
+    const egress = c.req.header('x-processor-egress');
+    if (egress !== undefined && egress !== 'direct') {
+      return c.json({ error: { code: 'INVALID_INPUT', message: 'The processor egress mode is invalid.', retryable: false } }, 422);
+    }
+    const deadlineAt = egress === 'direct' ? Number(c.req.header('x-extraction-deadline-at')) : undefined;
+    if (egress === 'direct' && (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)) {
+      return c.json({ error: { code: 'INVALID_INPUT', message: 'A direct extraction deadline is required.', retryable: false } }, 422);
+    }
+    const actualEgress = egress === 'direct' || !runtime.proxyConfigured ? 'direct' : 'proxy';
+    c.header('x-processor-egress', actualEgress);
     const diagnostics = { version: 1, events: [], droppedEvents: 0 };
     const suppliedId = c.req.header('x-extraction-id');
     const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
@@ -122,7 +133,8 @@ export function createProcessorApp(runtime, options = {}) {
     const activeAtStart = activeOperations;
 
     try {
-      return c.json({ value: await runtime.run(operation, { extractionId, egressSlot, onDiagnostic }), ...envelope() });
+      return c.json({ value: await runtime.run(operation, { extractionId, egressSlot, onDiagnostic,
+        ...(egress === 'direct' ? { egress, deadlineAt, signal: c.req.raw.signal } : {}) }), ...envelope() });
     } catch (error) {
       const normalized = normalizeProcessorError(error);
       console.error(JSON.stringify({
@@ -130,6 +142,7 @@ export function createProcessorApp(runtime, options = {}) {
         extractionId,
         operation: operation.kind,
         egressSlot,
+        egress: actualEgress,
         code: normalized.error.code,
         retryable: normalized.error.retryable,
       }));
@@ -145,7 +158,7 @@ export function createProcessorApp(runtime, options = {}) {
         processCpuMs: (cpu.user + cpu.system) / 1000,
         rssBytes: memory.rss, heapUsedBytes: memory.heapUsed,
         processUptimeSeconds: Math.round(process.uptime()), activeAtStart,
-        proxyConfigured: runtime.proxyConfigured === true, egressSlot,
+        proxyConfigured: runtime.proxyConfigured === true, egressSlot, egress: actualEgress,
       }));
     }
   });

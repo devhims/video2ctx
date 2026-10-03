@@ -373,22 +373,28 @@ describe('storyboards', () => {
     expect(reports).toEqual([]);
   });
 
-  test('the egress order puts a cooling proxy last', async () => {
+  test('tries a cooling proxy last before the final direct fallback', async () => {
     const urls = ['http://a.test/', 'http://b.test/', 'http://c.test/', 'http://d.test/'];
     const keys = await proxyKeys(urls);
     const health = fakeHealth({ [keys[0]!]: cooling() });
-    const egress: string[] = [];
+    const egress: Array<{ mode: string | null; slot: string | null }> = [];
     const env = {
       YOUTUBE_PROCESSOR_INSTANCE_COUNT: '2', YOUTUBE_PROCESSOR_VERSION: 'test-v1', YOUTUBE_PROCESSOR_MAX_ATTEMPTS: '4',
       YOUTUBE_PROCESSOR_RETRY_BASE_MS: '0', YOUTUBE_PROCESSOR_TIMEOUT_MS: '5000', OUTBOUND_PROXY_URLS: JSON.stringify(urls), PROXY_HEALTH: health.binding,
       YOUTUBE_PROCESSOR: { idFromName: (name: string) => name, get: () => ({ fetch: async (request: Request) => {
-        egress.push(request.headers.get('x-processor-egress-slot')!);
-        return Response.json({ error: { code: 'UNAVAILABLE', retryable: true } }, { status: 503 });
+        const mode = request.headers.get('x-processor-egress');
+        egress.push({ mode, slot: request.headers.get('x-processor-egress-slot') });
+        return Response.json({ error: { code: 'UNAVAILABLE', retryable: true } }, {
+          status: 503, ...(mode === 'direct' ? { headers: { 'x-processor-egress': 'direct' } } : {}),
+        });
       } }) },
     } as unknown as Env;
     primaryZero();
     await expect(runYouTubeOperation(env, { kind: 'storyboard', id: 'abcdefghijk' } as YouTubeOperation)).rejects.toBeDefined();
-    expect(egress).toEqual(['1', '2', '3', '0']);
+    expect(egress).toEqual([
+      ...['1', '2', '3', '0'].map(slot => ({ mode: null, slot })),
+      { mode: 'direct', slot: null },
+    ]);
     // Ambiguous processor failures are not reported against the proxy.
     expect(health.reports).toEqual([]);
   });

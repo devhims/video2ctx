@@ -1,4 +1,5 @@
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
+import { storedTranscriptFailure, transcriptRetrievalKey } from './providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
 import { SessionEvidenceStore, versionEvidencePacket } from './runtime/session-evidence';
 import { videoCatalog } from '../lib/video-catalog';
@@ -665,6 +666,24 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       LIMIT 1
     `[0];
     if (completedByMeaning?.result_json) return Promise.resolve(evidencePacketSchema.parse(JSON.parse(completedByMeaning.result_json)));
+
+    // The provider already exhausted its bounded route retries. Repeating the
+    // same retrieval in this run must not start another full extraction sequence.
+    // Keep this in SQLite so recovery cannot silently restart failed retrievals.
+    if (execution.toolName === 'get_video_transcript') {
+      const retrievalKey = transcriptRetrievalKey(execution.semanticKey);
+      const failures = this.sql<ToolCallRow>`
+        SELECT * FROM agent_tool_calls
+        WHERE run_id = ${runId}
+          AND tool_name = 'get_video_transcript' AND status = 'failed'
+          AND error LIKE 'YOUTUBE_UNAVAILABLE: %'
+        ORDER BY updated_at DESC
+      `;
+      const failed = retrievalKey === undefined ? undefined
+        : failures.find(row => transcriptRetrievalKey(row.semantic_key) === retrievalKey);
+      const failure = failed?.error ? storedTranscriptFailure(failed.error) : undefined;
+      if (failure) return Promise.reject(failure);
+    }
 
     const inFlightKey = `${runId}:${execution.semanticKey}`;
     const inFlight = this.#inFlightEvidence.get(inFlightKey);

@@ -7,7 +7,7 @@ import { dataOperationCost } from '../../../../lib/metering';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 
-import { regionRestricted, captionsUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
+import { regionRestricted, captionsUnavailable, youtubeUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
 
 export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -90,7 +90,7 @@ export function executeGetVideoTranscript(
           selection?.unavailable.add(parsed.videoId);
           throw new TranscriptToolStageError('CAPTIONS_UNAVAILABLE', error);
         }
-        throw new TranscriptToolStageError('TRANSCRIPT_FETCH_FAILED', error);
+        throw new TranscriptToolStageError(youtubeUnavailable(error) ? 'YOUTUBE_UNAVAILABLE' : 'TRANSCRIPT_FETCH_FAILED', error);
       }
       context.signal.throwIfAborted();
       // Covers runs without a session store, where the session provider's check does not apply.

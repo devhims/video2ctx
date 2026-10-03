@@ -58,7 +58,7 @@ describe('YouTube AgentCore loop control', () => {
       recoveredEvidence: [discovery], decision: { route: 'topic_research', researchVideoCount: 2,
         ...(comparison ? { comparisonVideoIds: ['video000001', 'video000002'] } : {}) } });
     if (expected.length) await run;
-    else await expect(run).rejects.toThrow('Evidence collection failed');
+    else await expect(run).rejects.toThrow(code === 'UPSTREAM_ERROR' ? 'YouTube is not available right now.' : 'Evidence collection failed');
     expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', 'video000002', ...expected]);
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
     expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(expected.length);
@@ -345,7 +345,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(prompt).toContain('Correct your previous assumption.');
   });
 
-  it('hands an ordinary research completion to the configured finalizer', async () => {
+  it.each([undefined, 'CAPTIONS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'])('hands an ordinary completion to the finalizer with only availability warnings (%s)', async code => {
     const packet = transcriptAnalysisPacket();
     const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({
       toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
@@ -358,7 +358,11 @@ describe('YouTube AgentCore loop control', () => {
     }) });
     const context = inspectContext();
     await runResearchAgentWithModel({ model: research, finalizationModel: finalizer, message: 'Summarize this video',
-      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context, recoveredEvidence: [packet] });
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context, recoveredEvidence: [packet],
+      recoveredToolFailures: code ? [{ toolCallId: 'prior-failure', toolName: 'get_video_transcript', operation: 'transcript', message: `${code}: Unavailable source` }] : [],
+    });
+    expect(vi.mocked(context.finalize).mock.calls[0]![1].warnings).toEqual(code === 'YOUTUBE_UNAVAILABLE'
+      ? [{ code, message: 'YouTube is not available right now.' }] : []);
     expect(finalizer.doGenerateCalls).toHaveLength(1);
     expect(context.finalize).toHaveBeenCalledOnce();
     expect(vi.mocked(context.finalize).mock.calls[0]![1].answer).toContain('Finalizer synthesis.');
@@ -1501,6 +1505,29 @@ describe('YouTube AgentCore loop control', () => {
     })).rejects.toThrow(
       'Evidence collection failed. get_video_transcript failed 1 time: TRANSCRIPT_FETCH_FAILED: Caption fetch failed: 429 Too Many Requests',
     );
+  });
+
+  it.each([false, true])('keeps the YouTube availability error visible with partial evidence=%s', async partial => {
+    let generation = 0;
+    const context = inspectContext();
+    context.provider.transcript = vi.fn(async () => { throw new ApiError(503, 'UNAVAILABLE', 'YouTube is temporarily unavailable.'); });
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (generation++ === 0) return modelResult({ toolCallId: 'transcript-unavailable', toolName: 'get_video_transcript',
+        input: JSON.stringify({ videoId: 'abcdefghijk' }) });
+      throw new Error('The operation was aborted due to timeout');
+    } });
+    const run = runResearchAgentWithModel({ model,
+      finalizationModel: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Finalizer unavailable'); } }),
+      message: 'Inspect this video', decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      toolNames: ['get_video_transcript', FINALIZE_ANSWER_TOOL_NAME],
+      recoveredEvidence: partial ? [transcriptAnalysisPacket()] : [],
+    });
+    if (partial) {
+      await run;
+      expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        warnings: expect.arrayContaining([{ code: 'YOUTUBE_UNAVAILABLE', message: 'YouTube is not available right now.' }]),
+      }));
+    } else await expect(run).rejects.toThrow('YouTube is not available right now.');
   });
 
   it('returns an explicit metadata-only fallback when initial metadata succeeds but synthesis fails', async () => {

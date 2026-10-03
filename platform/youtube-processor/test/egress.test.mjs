@@ -80,6 +80,84 @@ test('processor forwards and validates the private egress slot without exposing 
   assert.equal(JSON.stringify(health).includes('password'), false);
 });
 
+test('a direct fallback reuses extraction without changing concurrent proxy traffic', async () => {
+  const original = youtube.getTranscript;
+  const seen = [];
+  const servers = await Promise.all(['direct', 'proxy'].map(async route => {
+    const server = createServer((_request, response) => { seen.push(route); response.end(route); });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    return server;
+  }));
+  const url = `http://127.0.0.1:${servers[0].address().port}/captions`;
+  youtube.getTranscript = async options => {
+    const route = await (await options.fetch(url)).text();
+    assert.equal(options.retry.policy.maxAttempts, route === 'direct' ? 1 : 2);
+    return { text: route, segments: [] };
+  };
+  try {
+    const runtime = createYouTubeRuntime({ OUTBOUND_PROXY_URLS: JSON.stringify([`http://127.0.0.1:${servers[1].address().port}`]) });
+    const app = createProcessorApp(runtime);
+    const request = direct => app.request('/operations', { method: 'POST',
+      headers: { 'content-type': 'application/json', ...(direct ? {
+        'x-processor-egress': 'direct', 'x-extraction-deadline-at': String(Date.now() + 5_000),
+      } : {}) }, body: JSON.stringify({ kind: 'transcript', id: 'AR1Gi3RHanE' }) });
+    const [direct, proxy] = await Promise.all([request(true), request(false)]);
+    assert.equal(direct.headers.get('x-processor-egress'), 'direct');
+    assert.equal(proxy.headers.get('x-processor-egress'), 'proxy');
+    assert.equal((await direct.json()).value.text, 'direct');
+    assert.equal((await proxy.json()).value.text, 'proxy');
+    assert.equal((await (await request(false)).json()).value.text, 'proxy');
+    assert.deepEqual(seen.sort(), ['direct', 'proxy', 'proxy']);
+    assert.equal(runtime.proxyConfigured, true);
+  } finally {
+    youtube.getTranscript = original;
+    for (const server of servers) server.closeAllConnections();
+    await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+  }
+});
+
+test('direct fallback validates its deadline and never starts expired extraction', async () => {
+  const original = youtube.getTranscript;
+  let calls = 0;
+  youtube.getTranscript = async () => { calls++; return { text: 'unexpected' }; };
+  try {
+    const app = createProcessorApp(createYouTubeRuntime({ OUTBOUND_PROXY_URLS: JSON.stringify(urls) }));
+    for (const deadline of [undefined, 'invalid', String(Date.now() - 1)]) {
+      const response = await app.request('/operations', { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-processor-egress': 'direct',
+          ...(deadline ? { 'x-extraction-deadline-at': deadline } : {}) },
+        body: JSON.stringify({ kind: 'transcript', id: 'AR1Gi3RHanE' }) });
+      assert.equal(response.status, deadline && /^\d+$/.test(deadline) ? 503 : 422);
+    }
+    assert.equal(calls, 0);
+  } finally { youtube.getTranscript = original; }
+});
+
+test('direct fallback aborts a stalled body at its per-request deadline', async () => {
+  const original = youtube.getTranscript;
+  let started;
+  const bodyStarted = new Promise(resolve => { started = resolve; });
+  const server = createServer((_request, response) => { response.writeHead(200); response.write('partial'); started(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  youtube.getTranscript = async options => {
+    const response = await options.fetch(`http://127.0.0.1:${server.address().port}/captions`);
+    await response.text();
+  };
+  try {
+    const runtime = createYouTubeRuntime({ OUTBOUND_PROXY_URLS: JSON.stringify(urls) });
+    const pending = runtime.run({ kind: 'transcript', id: 'AR1Gi3RHanE' }, { egress: 'direct', deadlineAt: Date.now() + 200 });
+    const rejected = assert.rejects(pending);
+    await bodyStarted;
+    await rejected;
+  } finally {
+    youtube.getTranscript = original;
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('the transcript deadline cancels response-body reads', async t => {
   const original = youtube.getTranscript;
   const controller = new AbortController();
@@ -110,4 +188,20 @@ test('the transcript deadline cancels response-body reads', async t => {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('direct transcript uses its caller deadline instead of the 25-second proxy cutoff', async t => {
+  const timeout = AbortSignal.timeout;
+  const timeouts = [];
+  t.mock.method(AbortSignal, 'timeout', ms => { timeouts.push(ms); return timeout(ms); });
+  t.mock.method(youtube, 'getTranscript', async options => {
+    assert.equal(options.retry.policy.maxAttempts, 1);
+    assert.ok(options.retry.policy.attemptTimeoutMs > 25_000);
+    assert.equal(options.signal.aborted, false);
+    return { text: 'Recovered' };
+  });
+  const result = await createYouTubeRuntime({}).run({ kind: 'transcript', id: 'abcdefghijk' },
+    { egress: 'direct', deadlineAt: Date.now() + 120_000 });
+  assert.equal(result.text, 'Recovered');
+  assert.equal(timeouts.includes(25_000), false);
 });

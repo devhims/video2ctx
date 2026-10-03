@@ -33,7 +33,7 @@ test('transcript runtime forwards bounded retry diagnostics on success and failu
   } finally { youtube.getTranscript = original; }
 });
 
-test('published extraction library reports bot-blocked metadata as upstream unavailability through the processor', async t => {
+for (const directFallback of [false, true]) test(`published extraction library reports bot-blocked metadata (direct fallback: ${directFallback})`, async t => {
   t.mock.method(Math, 'random', () => 0);
   const requests = [];
   t.mock.method(globalThis, 'fetch', async input => {
@@ -42,8 +42,9 @@ test('published extraction library reports bot-blocked metadata as upstream unav
     const player = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" } };
     return url.includes('/watch?') ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(player)};`) : Response.json(player);
   });
-  const app = createProcessorApp(createYouTubeRuntime({}));
-  const response = await app.request('/operations', { method: 'POST', headers: { 'content-type': 'application/json' },
+  const app = createProcessorApp(createYouTubeRuntime(directFallback ? { OUTBOUND_PROXY_URL: 'http://unused-proxy.example:8080' } : {}));
+  const response = await app.request('/operations', { method: 'POST', headers: { 'content-type': 'application/json',
+    ...(directFallback ? { 'x-processor-egress': 'direct', 'x-extraction-deadline-at': String(Date.now() + 5_000) } : {}) },
     body: JSON.stringify({ kind: 'transcript', id: 'AR1Gi3RHanE', granularity: 'segment' }) });
   const body = await response.json();
   assert.equal(response.status, 503);
@@ -52,6 +53,8 @@ test('published extraction library reports bot-blocked metadata as upstream unav
   assert.equal(body.diagnostics.events.at(-1).code, 'UNAVAILABLE');
   assert.ok(body.diagnostics.events.some(event => event.stage === 'caption_metadata' && event.status === 200));
   assert.ok(requests.every(url => url.includes('/player') || url.includes('/watch?')));
+  if (directFallback) assert.equal(body.diagnostics.events.some(event => event.attempt !== undefined), false,
+    'the final direct attempt must not retry inside the published library');
 });
 
 test('published extraction library reports confirmed missing captions as a terminal processor result', async t => {

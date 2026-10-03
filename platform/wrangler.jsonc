@@ -29,6 +29,8 @@
     "LANDING_DEMO_RATE_LIMIT_MODE": "enforced",
     // Core extraction runs in Workers. Set to container to roll back.
     "YOUTUBE_EXTRACTION_BACKEND": "worker",
+    // Set to off to disable the optional direct route without changing proxies or the image.
+    "YOUTUBE_DIRECT_FALLBACK": "on",
     "YOUTUBE_EXTRACTION_TIMEOUT_MS": "120000",
     "YOUTUBE_PROXY_TIMEOUT_MS": "25000",
     "YOUTUBE_PROXY_MAX_ATTEMPTS": "4",

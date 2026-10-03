@@ -141,3 +141,68 @@ test('invalid video identifiers never enter diagnostic logs', async t => {
   await assert.rejects(createYouTubeRuntime({}).run({ kind: 'storyboard', id: 'https://user:SECRET@host/private' }), { code: 'INVALID_INPUT' });
   assert.doesNotMatch(events.join(''), /SECRET|https:|private/);
 });
+
+
+test('real direct storyboard runtime never retries a failed player profile', async t => {
+  const { createYouTubeRuntime } = await import('../runtime.mjs');
+  const logs = []; let calls = 0;
+  t.mock.method(console, 'warn', value => logs.push(JSON.parse(value)));
+  t.mock.method(console, 'info', () => {});
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response('', { status: 503, headers: { 'retry-after': '0' } });
+  });
+  await assert.rejects(createYouTubeRuntime({}).run({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true },
+    { egress: 'direct', deadlineAt: Date.now() + 5000 }), { code: 'UNAVAILABLE' });
+  assert.equal(calls, 4);
+  assert.equal(logs.filter(event => event.event === 'youtube_retry').length, 0);
+});
+
+for (const deadlineMs of [100, 6_000]) test(`direct storyboard deadline releases the processor slot without later profiles (${deadlineMs}ms requested)`, async t => {
+  const { createYouTubeRuntime } = await import('../runtime.mjs');
+  const { createProcessorApp } = await import('../app.mjs');
+  let calls = 0;
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'info', () => {});
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    calls++;
+    return new Promise((_, reject) => {
+      if (init.signal.aborted) reject(init.signal.reason);
+      else init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    });
+  });
+  const app = createProcessorApp(createYouTubeRuntime({}), { maxConcurrentOperations: 1 });
+  const request = deadline => app.request('/operations', { method: 'POST', headers: {
+    'content-type': 'application/json', 'x-processor-egress': 'direct', 'x-extraction-deadline-at': String(deadline),
+  }, body: JSON.stringify({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true }) });
+  const start = Date.now();
+  const response = await request(start + deadlineMs);
+  assert.equal(response.status, 503);
+  const payload = await response.json();
+  assert.equal(payload.diagnostics.events.filter(event => event.stage === 'player').length, 0,
+    'an aborted helper must exit before recording failures for subsequent profiles');
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - start >= deadlineMs - 50, 'direct recovery must not stop at a shorter helper timeout');
+  assert.ok(Date.now() - start < deadlineMs + 1000, 'direct deadline must bound the entire helper');
+  // The capacity slot must already be released, so a subsequent request is not busy.
+  const next = await request(Date.now() - 1);
+  assert.equal((await next.json()).error.code, 'UNAVAILABLE');
+});
+
+test('real direct storyboard runtime can recover after five seconds', async t => {
+  const { createYouTubeRuntime } = await import('../runtime.mjs');
+  t.mock.method(console, 'info', () => {});
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    calls++;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 6000);
+      init.signal.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal.reason); }, { once: true });
+    });
+    return Response.json(spec);
+  });
+  const result = await createYouTubeRuntime({}).run({ kind: 'storyboard', id: 'abcdefghijk', metadataOnly: true },
+    { egress: 'direct', deadlineAt: Date.now() + 15_000 });
+  assert.equal(result.manifest.totalSheets, 1);
+  assert.equal(calls, 1);
+});

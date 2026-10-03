@@ -28,7 +28,7 @@ export function workerProxyUrls(env: Pick<Env, 'OUTBOUND_PROXY_URLS' | 'OUTBOUND
 
 function safeFailure(error: unknown, signal: AbortSignal): YouTubeProcessorError {
   if (signal.aborted) return new YouTubeProcessorError('UNAVAILABLE', 'YouTube extraction exceeded its time limit or was canceled.', 503, true);
-  const value = error as { code?: unknown; status?: unknown; retryable?: unknown } | null;
+  const value = error as { code?: unknown; status?: unknown; retryable?: unknown; reason?: unknown } | null;
   const code = SAFE_CODES.find(code => code === value?.code);
   if (!code) return new YouTubeProcessorError('UPSTREAM_ERROR', 'The YouTube connection failed.', 503, true);
   const messages: Record<SafeCode, string> = {
@@ -40,7 +40,8 @@ function safeFailure(error: unknown, signal: AbortSignal): YouTubeProcessorError
     AUTH_REQUIRED: 'YouTube requires authorization for this resource.',
   };
   const status = typeof value?.status === 'number' && Number.isInteger(value.status) && value.status >= 100 && value.status <= 599 ? value.status : undefined;
-  return new YouTubeProcessorError(code, messages[code], status, !['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(code) && (value?.retryable === true || ['RATE_LIMITED', 'UPSTREAM_ERROR', 'INVALID_RESPONSE', 'UNAVAILABLE'].includes(code)));
+  return new YouTubeProcessorError(code, messages[code], status, !['INVALID_INPUT', 'AUTH_REQUIRED', 'CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(code) && (value?.retryable === true || ['RATE_LIMITED', 'UPSTREAM_ERROR', 'INVALID_RESPONSE', 'UNAVAILABLE'].includes(code)),
+    0, value?.reason === 'bot_challenge' ? 'bot_challenge' : undefined);
 }
 
 /** Stop waiting even if an underlying adapter does not implement cancellation. */

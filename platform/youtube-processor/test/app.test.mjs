@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createProcessorApp, OPERATION_KINDS } from '../app.mjs';
+import { createProcessorApp, normalizeProcessorError, OPERATION_KINDS } from '../app.mjs';
 import { createYouTubeRuntime, redactProxyError } from '../runtime.mjs';
 
 test('returns bounded storyboard diagnostics on success and error', async () => {
@@ -86,6 +86,11 @@ test('redacts the configured proxy URL from processing errors', () => {
   assert.equal(redacted.message.includes(proxy), false);
   assert.equal(redacted.message.includes('password'), false);
   assert.equal(redacted.code, 'UPSTREAM_ERROR');
+  const challenge = redactProxyError(Object.assign(new Error(`Challenged through ${proxy}`), {
+    code: 'UNAVAILABLE', reason: 'bot_challenge', retryable: true,
+  }), proxy);
+  assert.equal(challenge.reason, 'bot_challenge');
+  assert.equal(challenge.message.includes('password'), false);
 });
 
 test('normalizes classified processing failures', async () => {
@@ -199,4 +204,14 @@ test('a storyboard failure keeps the upstream 429 status on its terminal request
     assert.equal(terminal.outcome, 'error');
     assert.equal(terminal.status, 429);
   } finally { globalThis.fetch = original; }
+});
+
+
+test('preserves only the safe structured bot challenge reason', () => {
+  for (const reason of ['bot_challenge', 'SECRET upstream text']) {
+    const result = normalizeProcessorError(Object.assign(new Error('Unavailable'), { code: 'UNAVAILABLE', reason }));
+    assert.equal(result.error.reason, reason === 'bot_challenge' ? reason : undefined);
+    assert.equal(result.error.retryable, true);
+    assert.ok(!JSON.stringify(result).includes('SECRET'));
+  }
 });

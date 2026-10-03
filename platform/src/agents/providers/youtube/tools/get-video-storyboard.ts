@@ -50,15 +50,16 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       const budget = storyboardRetrievalBudget(context.researchDeadlineAt);
       if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
         throw new Error('Not enough research time to retrieve storyboards and leave time for analysis. Analyze saved images or finish with the evidence available.');
-      return withRunDeadline(Date.now() + budget, context.signal,
-        signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId),
+      const deadlineAt = Date.now() + budget;
+      return withRunDeadline(deadlineAt, context.signal,
+        signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId, deadlineAt),
         'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
     }, { runId: context.runId, toolCallId }),
   });
 }
 
 /** A selection retrieves its manifest and images in a single provider request. */
-async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
+async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string, deadlineAt: number): Promise<EvidencePacket> {
   const startedAt = Date.now();
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
   context.signal.throwIfAborted();
@@ -68,7 +69,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
   }
   const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
-    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal,
+    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal, deadlineAt,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);

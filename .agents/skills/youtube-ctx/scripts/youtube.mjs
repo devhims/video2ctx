@@ -19571,17 +19571,30 @@ async function getStoryboardWithFallback(options) {
     return fetchImpl(input, { ...init, signal: existing ? combineSignals([signal, existing]) : signal });
   };
   const wait = (delayMs) => new Promise((resolve2, reject) => {
-    const abort = () => {
+    let waitTimer;
+    const cleanup = () => {
       clearTimeout(waitTimer);
+      signal.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      cleanup();
       reject(signal.reason);
     };
     const finish = () => {
-      signal.removeEventListener("abort", abort);
+      cleanup();
       resolve2();
     };
-    const waitTimer = setTimeout(finish, delayMs);
     signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    if (options.retry?.wait) {
+      Promise.resolve().then(() => options.retry.wait(delayMs)).then(finish, (error) => {
+        cleanup();
+        reject(error);
+      });
+    } else waitTimer = setTimeout(finish, delayMs);
   });
   const transport = createYouTubeTransport({ ...options.retry, wait, fetch: boundedFetch });
   let uncertain = false;
@@ -19627,7 +19640,10 @@ async function getStoryboardWithFallback(options) {
               }
             }) }
           }
-        }), { maxAttempts: 2, attemptTimeoutMs: 4e3 });
+        }), {
+          maxAttempts: Math.min(2, options.retry?.policy?.maxAttempts ?? 2),
+          attemptTimeoutMs: options.retry?.policy?.attemptTimeoutMs ?? 4e3
+        });
         status = response.status;
         if (!response.ok) {
           await response.body?.cancel();
