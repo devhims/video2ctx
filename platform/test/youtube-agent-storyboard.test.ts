@@ -134,29 +134,67 @@ describe('storyboard agent tool', () => {
     ctx.saveStoryboardPreviews = async () => { controller.abort(); return []; };
     await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1, focus: 'Diagram' }, ctx, 'cancel-save')).rejects.toThrow();
   });
-  it('exposes metadata to the research model before downloading or analyzing images', async () => {
+  it('retrieves three overview sheets with metadata by default, without a preliminary call', async () => {
     const ctx = context();
     const manifest = { totalSheets: 6, framesPerSheet: 2, tileWidth: 100, tileHeight: 100,
       columns: 2, rows: 1, lastSampleMs: 55000 };
+    const sheets = [0, 6, 10].map(firstFrameIndex => ({ ...storyboard.sheets[0]!, firstFrameIndex }));
+    ctx.getEvidence = () => [];
     ctx.provider.storyboard = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
-      ...storyboard, selection: { mode: 'metadata' as const }, manifest, sheets: [], meta: { partial: false, warnings: [] },
+      ...storyboard, selection: { mode: 'spread' as const }, manifest, sheets,
     } }));
     ctx.analyzeStoryboard = vi.fn();
-    ctx.saveStoryboardPreviews = vi.fn();
-    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata');
-    expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+    ctx.saveStoryboardPreviews = vi.fn(async () => []);
+    const execute = vi.fn(ctx.executeEvidenceTool);
+    ctx.executeEvidenceTool = execute;
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'overview');
+    expect(ctx.provider.storyboard).toHaveBeenCalledExactlyOnceWith(storyboard.videoId, undefined,
+      { metadataOnly: false, maxSheets: 3, sheetIndexes: undefined, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+    expect(execute.mock.calls[0]![0].input).toEqual({ videoId: storyboard.videoId, maxSheets: 3 });
+    expect(execute.mock.calls[0]![0].semanticKey).not.toBe(`storyboard:${JSON.stringify({ videoId: storyboard.videoId })}`);
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
-    expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
+    expect(ctx.saveStoryboardPreviews).toHaveBeenCalledOnce();
     expect(packet.excerpts).toEqual([]);
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
-    expect(evidencePacketForModel(packet).visualCoverage).toMatchObject({ manifest, sampledFrames: 0 });
+    expect(evidencePacketForModel(packet).visualCoverage).toMatchObject({ manifest, sampledFrames: 6 });
     expect(JSON.stringify(packet)).not.toContain('/9j/');
+    expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'SAMPLED_VISUAL_EVIDENCE' }));
     const { toolTrace } = await import('../src/agents/runtime/run-progress');
-    expect(toolTrace({ tool_call_id: 'metadata', tool_name: 'get_video_storyboard', operation: 'storyboard',
-      semantic_key: `storyboard:${JSON.stringify({ videoId: storyboard.videoId })}`, status: 'completed',
+    expect(toolTrace({ tool_call_id: 'overview', tool_name: 'get_video_storyboard', operation: 'storyboard',
+      semantic_key: execute.mock.calls[0]![0].semanticKey, status: 'completed',
       created_at: 100, updated_at: 200, result_json: JSON.stringify(packet) }, true).output?.storyboard)
-      .toEqual({ mode: 'metadata', sheets: [] });
+      .toEqual({ mode: 'inspection', sheets: [] });
+  });
+  it.each([
+    { sheetIndexes: [0, 1, 2, 3] }, { timestampsMs: [0, 15000, 30000, 45000] },
+    { maxSheets: 4, sheetIndexes: [0, 1, 2, 3] },
+  ])('preserves the input and saved key for explicit selections: %j', async selection => {
+    const ctx = context();
+    const execute = vi.fn(ctx.executeEvidenceTool);
+    ctx.executeEvidenceTool = execute;
+    const input = { videoId: storyboard.videoId, ...selection };
+    await executeGetVideoStoryboard(input, ctx, 'selection');
+    expect(execute.mock.calls[0]![0].input).toEqual(input);
+    expect(execute.mock.calls[0]![0].semanticKey).toBe(`storyboard:${JSON.stringify(input)}`);
+    expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId,
+      'timestampsMs' in selection ? selection.timestampsMs : undefined,
+      expect.objectContaining({ maxSheets: selection.maxSheets ?? 20, metadataOnly: false }), expect.any(Function));
+  });
+  it('uses the same saved key for default and explicit three-sheet overviews', async () => {
+    const ctx = context();
+    const execute = vi.fn(ctx.executeEvidenceTool);
+    ctx.executeEvidenceTool = execute;
+    await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'default');
+    await executeGetVideoStoryboard({ maxSheets: 3, videoId: storyboard.videoId }, ctx, 'explicit');
+    expect(execute.mock.calls[0]![0].semanticKey).toBe(execute.mock.calls[1]![0].semanticKey);
+  });
+  it('rejects a metadata-only provider response to an image request', async () => {
+    const ctx = context();
+    const manifest = ctx.getEvidence!()[0]!.artifacts[0]!.data.manifest;
+    ctx.provider.storyboard = vi.fn(async () => ({ cacheStatus: 'miss' as const,
+      value: storyboardSchema.parse({ ...storyboard, manifest, sheets: [], selection: { mode: 'metadata' } }) }));
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata-response'))
+      .rejects.toThrow('Storyboard response does not match');
   });
   it('passes the agent-selected sheets through scope and retains all coverage', async () => {
     const ctx = context();

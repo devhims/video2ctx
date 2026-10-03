@@ -91,3 +91,18 @@ test('an API rate-limit rejection is retryable but not an unconfirmed submission
   t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code: 'RATE_LIMITED', message: 'Wait before sending again.' } }, { status: 429 }));
   await assert.rejects(sendAgentMessage('Hello'), (error: unknown) => error instanceof AgentSendError && error.retryable && !error.unconfirmed && error.status === 429 && error.code === 'RATE_LIMITED');
 });
+
+test('future tool statuses preserve the progress snapshot without inventing failure', async () => {
+  const { agentProgressSchema } = await import('./agent-sessions.ts');
+  const snapshot = { run: { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8',
+    runId: 'f1611a8b-cb84-4305-a365-328bd06bedac', status: 'completed' }, phase: 'completed',
+    tools: [{ toolCallId: 't1', name: 'get_video_storyboard', operation: 'storyboard',
+      status: 'provider_waiting', startedAt: 1, input: { videoId: 'abcdefghijk', maxSheets: 3 } }] };
+  const parsed = agentProgressSchema.parse(snapshot);
+  assert.equal(parsed.tools[0].status, 'unknown');
+  assert.deepEqual(parsed.run, snapshot.run);
+  for (const status of ['running', 'completed', 'failed', 'interrupted']) {
+    assert.equal(agentProgressSchema.parse({ ...snapshot, tools: [{ ...snapshot.tools[0], status }] }).tools[0].status, status);
+  }
+  assert.equal(agentProgressSchema.safeParse({ ...snapshot, tools: [{ ...snapshot.tools[0], status: null }] }).success, false);
+});

@@ -279,6 +279,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
   initialState: AgentRuntimeState = { version: 1 };
   #deleted = false;
+  readonly #activeRunFibers = new Map<string, string>();
   readonly #activeRuns = new Set<Promise<void>>();
   readonly #inFlightEvidence = new Map<string, Promise<EvidencePacket>>();
 
@@ -490,7 +491,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${timestamp}
       WHERE id = ${runId} AND status NOT IN ('completed', 'failed', 'cancelled')
     `;
-    await this.cancelFiber(runId, 'Cancelled by caller.');
+    await this.cancelRunFiber(runId, 'Cancelled by caller.');
     this.traceManager.syncRun(runId);
     await this.settleRun(runId);
     this.recordEvent(runId, 'run.failed', { code: 'RUN_CANCELLED', message: 'Run cancelled by caller.' });
@@ -513,19 +514,33 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!runId) return { status: 'error', error: 'Recovered agent fiber has no run identifier.' };
 
     try {
-      await this.runFiber(`${FIBER_NAME}-recovery`, async (fiber) => {
+      // The SDK calls recovery inside its startup concurrency gate. Persist
+      // a successor, then release that gate before waiting for model/provider I/O.
+      // A repeated recovery of the same fiber must reuse the same successor.
+      const successor = await this.startFiber(`${FIBER_NAME}-recovery`, async (fiber) => {
         await this.executeRun(runId, fiber);
-      });
-      return { status: 'completed', snapshot: { runId, phase: 'finalizing' } };
+      }, { fiberId: `recovery:${context.id}`, metadata: { runId }, waitForCompletion: false });
+      return { status: 'completed', snapshot: context.snapshot, metadata: { runId, successorFiberId: successor.fiberId } };
     } catch (error) {
       return { status: 'error', error, snapshot: context.snapshot };
     }
   }
 
   private async executeRun(runId: string, fiber: FiberContext): Promise<void> {
+    // Older recovery attempts can coexist in the SDK ledger after a reset.
+    // Register synchronously before yielding so the next callback sees this run.
+    if (this.#activeRunFibers.has(runId)) return;
+    this.#activeRunFibers.set(runId, fiber.id);
     const work = this.performRun(runId, fiber);
     this.#activeRuns.add(work);
-    try { await work; } finally { this.#activeRuns.delete(work); }
+    try { await work; } finally {
+      this.#activeRuns.delete(work);
+      this.#activeRunFibers.delete(runId);
+    }
+  }
+
+  private cancelRunFiber(runId: string, reason: string) {
+    return this.cancelFiber(this.#activeRunFibers.get(runId) ?? runId, reason);
   }
 
   private async performRun(runId: string, fiber: FiberContext): Promise<void> {
@@ -910,7 +925,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         this.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed', draft_json = null,
           error = 'Agent run did not finish before its deadline.', updated_at = ${Date.now()}
           WHERE id = ${runId}`;
-        await this.cancelFiber(runId, 'Agent deadline reached.');
+        await this.cancelRunFiber(runId, 'Agent deadline reached.');
       }
       await this.settleRun(runId);
       this.traceManager.syncRun(runId);
@@ -927,7 +942,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
     // Cancel every fiber before touching D1, even if settlement is unavailable.
     await Promise.all(runs.filter(run => !isTerminal(run.status))
-      .map(run => this.cancelFiber(run.id, 'Account deleted.')));
+      .map(run => this.cancelRunFiber(run.id, 'Account deleted.')));
     await Promise.allSettled([...this.#activeRuns]);
     for (const run of runs) await this.settleRun(run.id);
     // Abort propagates to provider and model calls. Drain tool promises before

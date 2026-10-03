@@ -18,5 +18,8 @@ test('trace includes safe arguments and evidence counts, excludes private payloa
 test('old or incomplete tool rows remain readable without reporting success', () => {
   const row = { tool_call_id: 'tool', tool_name: 'get_video', operation: 'video', semantic_key: 'legacy-key', status: 'running' as const, created_at: 100, updated_at: 200, result_json: 'invalid' };
   expect(toolTrace(row, false)).toMatchObject({ status: 'running', input: {} });
-  expect(toolTrace(row, true)).toMatchObject({ status: 'failed', finishedAt: 200 });
+  expect(toolTrace(row, true)).toMatchObject({ status: 'interrupted', input: {} });
+  expect(toolTrace(row, true)).not.toHaveProperty('finishedAt');
+  expect(toolTrace({ ...row, updated_at: row.created_at }, true)).not.toHaveProperty('finishedAt');
+  expect(toolTrace({ ...row, status: 'failed' }, true)).toMatchObject({ status: 'failed', finishedAt: 200 });
 });

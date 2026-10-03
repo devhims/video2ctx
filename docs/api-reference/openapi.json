@@ -8977,7 +8977,8 @@
                   "enum": [
                     "running",
                     "completed",
-                    "failed"
+                    "failed",
+                    "interrupted"
                   ]
                 },
                 "startedAt": {

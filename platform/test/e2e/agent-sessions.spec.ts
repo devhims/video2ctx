@@ -417,10 +417,10 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Storyboard metadata', { exact: true }).click();
+  await latest.getByText('Metadata only', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
   await expect(latest.locator('details').filter({ hasText: 'Metadata only. No images were downloaded or inspected.' }).locator('img')).toHaveCount(0);
-  await latest.getByText('get video storyboard', { exact: true }).click();
+  await latest.getByText('Images', { exact: true }).click();
   const first = latest.getByRole('button', { name: 'Open sheet at 0:00 to 0:55', exact: true });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await expect(latest.getByRole('button', { name: 'Open sheet at 2:00 to 2:55', exact: true })).toBeDisabled();
@@ -438,7 +438,7 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await expect(first).toBeFocused();
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('get video storyboard', { exact: true }).click();
+  await latest.getByText('Images', { exact: true }).click();
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await page.setViewportSize({ width: 390, height: 844 });
   await first.click();
@@ -449,9 +449,9 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   legacy = true;
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Storyboard metadata', { exact: true }).click();
+  await latest.getByText('Metadata only', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
-  await latest.getByText('get video storyboard', { exact: true }).click();
+  await latest.getByText('Images', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
@@ -590,4 +590,45 @@ for (const failure of [
     await expect(alert).not.toContainText('Answer incomplete');
     await expect(alert).toContainText(reason);
   }
+});
+
+
+test('storyboard activity distinguishes instant failures from interrupted calls', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
+    status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+      run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed',
+        result: { outcome: 'answered', answer: 'Recovered using saved images.', sources: [], warnings: [] } },
+      phase: 'completed', tools: [
+        { toolCallId: 'wrong-id', name: 'get_video_storyboard', operation: 'storyboard', status: 'failed',
+          startedAt: 100, finishedAt: 100, input: { videoId: 'K48wislK7zg' } },
+        { toolCallId: 'metadata', name: 'get_video_storyboard', operation: 'storyboard', status: 'completed',
+          startedAt: 200, finishedAt: 8139, input: { videoId: 'K48wIslK7zg' },
+          output: { sourceCount: 1, excerptCount: 0, sources: [], warningCodes: [], storyboard: { mode: 'metadata', sheets: [] } } },
+        { toolCallId: 'images', name: 'get_video_storyboard', operation: 'storyboard', status: 'interrupted',
+          startedAt: 9000, input: { videoId: 'K48wIslK7zg', maxSheets: 7 } },
+        { toolCallId: 'future-status', name: 'search_context', operation: 'context', status: 'provider_waiting',
+          startedAt: 10000, input: {} },
+      ],
+    })}\n\n`,
+  }));
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const latest = page.locator('.agent-assistant-message').last();
+  await latest.getByRole('button', { name: /^Tool activity/ }).click();
+  await expect(latest.getByText('get video storyboard', { exact: true })).toHaveCount(3);
+  const failed = latest.locator('details').filter({ hasText: /K48wislK7zg/ });
+  await expect(failed.locator('summary')).toContainText('<0.1s');
+  const interrupted = latest.locator('details').filter({ has: page.getByText('Images', { exact: true }) });
+  await expect(interrupted.locator('summary')).toContainText('Interrupted');
+  await expect(interrupted.locator('summary')).not.toContainText('0.0s');
+  await interrupted.locator('summary').click();
+  await expect(interrupted).toContainText('The run ended without a recorded result');
+  await expect(interrupted).toContainText('Duration is unavailable.');
+  await expect(interrupted).not.toContainText('did not complete successfully');
+  await expect(latest.getByRole('button', { name: /^Tool activity/ })).toContainText('1 completed');
+  const unknown = latest.locator('details').filter({ has: page.getByText('Unknown status', { exact: true }) });
+  await unknown.locator('summary').click();
+  await expect(unknown).toContainText('does not recognize the tool status');
+  await expect(unknown).not.toContainText('did not complete successfully');
+  await page.screenshot({ path: testInfo.outputPath('storyboard-interrupted.png') });
 });

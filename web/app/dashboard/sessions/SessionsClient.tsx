@@ -340,10 +340,13 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
       }}>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
-        <span className='agent-tool-name'>{isStoryboardMetadata(tool) ? 'Storyboard metadata' : tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
+        <span className='agent-tool-name'>{tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
+        {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Metadata only' : 'Images'}</span>}
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>
-        {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{Math.max(0, (tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s</span>}
+        {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{tool.finishedAt - tool.startedAt < 100 ? '<0.1s' : `${((tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s`}</span>}
+        {tool.status === 'interrupted' && <span className='agent-tool-duration'>Interrupted</span>}
+        {tool.status === 'unknown' && <span className='agent-tool-duration'>Unknown status</span>}
         <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
@@ -355,6 +358,8 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
             <ul>{tool.output.sources.map((source, index) => <li key={index}>{source.title ?? source.videoId ?? source.channelId ?? 'YouTube source'}</li>)}</ul>
             {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}
           {tool.status === 'failed' && <p>This tool did not complete successfully. Check the answer's source notes for any effect on coverage.</p>}
+          {tool.status === 'interrupted' && <p>The run ended without a recorded result for this call. Some work may have been saved before it was interrupted. Duration is unavailable.</p>}
+          {tool.status === 'unknown' && <p>This dashboard does not recognize the tool status. Refresh to load the latest version.</p>}
           {tool.status === 'running' && <p>Waiting for the tool result…</p>}
         </div>
       </details>
