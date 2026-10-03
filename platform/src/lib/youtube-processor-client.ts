@@ -59,10 +59,7 @@ export type YouTubeOperationResult<T extends YouTubeOperation> =
   T extends { kind: 'endscreen' } ? EndscreenElement[] :
   never;
 
-// REGION_RESTRICTED bridges the installed 0.6.3 YouTubeErrorCode until the next release.
 export type ProcessorErrorCode = YouTubeErrorCode
-  | 'CAPTIONS_UNAVAILABLE'
-  | 'REGION_RESTRICTED'
   | 'PROCESSOR_BUSY'
   | 'PROCESSOR_UNAVAILABLE'
   | 'INVALID_PROCESSOR_RESPONSE'

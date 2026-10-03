@@ -28,8 +28,7 @@ import type { CachedResult } from '../../../lib/youtube';
 import type { TrendReport } from '../../../lib/trends';
 import { getProvider, type ProviderAdapter } from '../../../providers';
 
-// Optional additions bridge the installed 0.6.3 types until the next library release.
-export type AgentVideo = Video & { availability: Video['availability'] & { restriction?: 'region' }; captionAvailability?: { status: 'available' | 'unavailable' | 'unknown'; languages: string[]; checkedAt: string }; signals?: VideoSignals & { freshness?: Record<string, unknown> } };
+export type AgentVideo = Video & { signals?: VideoSignals & { freshness?: Record<string, unknown> } };
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,

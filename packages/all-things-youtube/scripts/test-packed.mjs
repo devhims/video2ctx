@@ -88,9 +88,23 @@ try {
         return String(input).includes('/watch?')
           ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(player)};`) : Response.json(player);
       },
-    }), { code: 'UNAVAILABLE', retryable: true });
+    }), { code: 'UNAVAILABLE', retryable: true, reason: 'bot_challenge' });
   }
   console.log(JSON.stringify({ test: 'packed-caption-availability', commonjs: true, esm: true, passed: true }));
+
+  for (const api of [commonjs, esm]) {
+    const player = { playabilityStatus: { status: 'UNPLAYABLE', reason: 'The uploader has not made this video available in your country' } };
+    const fetch = async input => String(input).includes('/watch?')
+      ? new Response(`var ytInitialPlayerResponse = ${JSON.stringify(player)};`) : Response.json(player);
+    await assert.rejects(api.getTranscript({ videoId: 'AR1Gi3RHanE', fetch,
+      retry: { policy: { maxAttempts: 1 } },
+    }), { code: 'REGION_RESTRICTED', retryable: false });
+    const video = await api.getDetails({ videoId: 'AR1Gi3RHanE', fetch });
+    assert.equal(video.availability.restriction, 'region');
+    assert.equal(video.captionAvailability.status, 'unknown');
+    assert.deepEqual(video.captionAvailability.languages, []);
+  }
+  console.log(JSON.stringify({ test: 'packed-region-restriction', commonjs: true, esm: true, passed: true }));
 
   if (process.argv.includes('--live')) {
     const requests = [];

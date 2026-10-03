@@ -343,6 +343,8 @@ console.log(video.availability);
 
 The `Video` result includes description, channel, thumbnails, duration, publish and view information, live/caption flags, keywords, canonical URL, and playability. Tracks, transcripts, comments, and end-screen elements remain separate calls so you only pay for what you request.
 
+Since 0.7.0, `captionAvailability` reports `available`, `unavailable`, or `unknown`, along with caption language codes and a `checkedAt` timestamp. This check can make additional player and watch-page requests, but does not download transcript bodies. A failed or restricted lookup leaves caption availability `unknown`. Confirmed country blocks also set `availability.restriction` to `region`.
+
 `availability.isPrivate` is `true` only when YouTube explicitly identifies the video as private. A `false` value does not prove the video is public; also check `availability.status`, `availability.reason`, and `meta.partial`.
 
 ### `getEndscreen(options)`
@@ -568,6 +570,8 @@ try {
 | ------------------ | ----------------------------------------------------------------------------- |
 | `INVALID_INPUT`    | A required ID or option is invalid, or a requested translation is unavailable |
 | `NOT_FOUND`        | The resource or caption track was not found                                   |
+| `CAPTIONS_UNAVAILABLE` | Playable metadata confirms that no caption tracks exist                   |
+| `REGION_RESTRICTED` | The uploader blocks access from the request's country                       |
 | `UNAVAILABLE`      | The resource exists but cannot be accessed or played                          |
 | `AUTH_REQUIRED`    | The resource requires a signed-in account                                     |
 | `RATE_LIMITED`     | Upstream rate limiting remained after retries                                 |
@@ -575,6 +579,8 @@ try {
 | `INVALID_RESPONSE` | The upstream response could not be parsed safely                              |
 
 When every network attempt fails, the library rejects with a retryable `UPSTREAM_ERROR` and preserves the original network error as `cause`.
+
+Caption and storyboard bot challenges return retryable `UNAVAILABLE` errors with `reason: 'bot_challenge'`. Confirmed region restrictions are non-retryable. Region detection currently recognizes explicit English block reasons; unrecognized localized messages remain `UNAVAILABLE`. Consumers upgrading to 0.7.0 must include `REGION_RESTRICTED` in exhaustive error-code switches.
 
 ## Using the library vs hosting an API
 

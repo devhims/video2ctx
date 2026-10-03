@@ -113,7 +113,7 @@ async function readBoundedBytes(response, maxBytes) {
 }
 function isWebP(bytes) {
   if (bytes.length < 20) return false;
-  const fourCC = (offset2) => String.fromCharCode(...bytes.subarray(offset2, offset2 + STORYBOARD_DOWNLOAD_CONCURRENCY));
+  const fourCC = (offset2) => String.fromCharCode(...bytes.subarray(offset2, offset2 + 4));
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (fourCC(0) !== "RIFF" || fourCC(8) !== "WEBP" || view.getUint32(4, true) !== bytes.length - 8 || !["VP8 ", "VP8L", "VP8X"].includes(fourCC(12))) return false;
   let hasImage = false;
@@ -121,7 +121,7 @@ function isWebP(bytes) {
   while (offset < bytes.length) {
     if (offset + 8 > bytes.length) return false;
     const kind = fourCC(offset);
-    const size = view.getUint32(offset + STORYBOARD_DOWNLOAD_CONCURRENCY, true);
+    const size = view.getUint32(offset + 4, true);
     const start = offset + 8;
     const end = start + size;
     const paddedEnd = end + size % 2;
