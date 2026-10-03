@@ -7,7 +7,7 @@ import { packetStoryboardPreviews, storyboardTraceSchema } from './storyboard-pr
 const inputValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.number()), z.array(z.string().max(64))]);
 export const agentToolTraceSchema = z.object({
   toolCallId: z.string(), name: z.string(), operation: z.string(),
-  status: z.enum(['running', 'completed', 'failed']),
+  status: z.enum(['running', 'completed', 'failed', 'interrupted']),
   startedAt: z.number(), finishedAt: z.number().optional(),
   input: z.record(z.string(), inputValue),
   output: z.object({
@@ -53,10 +53,12 @@ export function toolTrace(row: {
   } catch { /* Older runs may have a non-JSON semantic key. */ }
   let packet;
   try { packet = evidencePacketSchema.safeParse(JSON.parse(row.result_json ?? 'null')); } catch { /* A legacy trace can still display its status. */ }
-  const status = terminal && row.status === 'running' ? 'failed' : row.status;
+  // A reset can leave assets saved without a terminal tool result. Do not
+  // turn that missing result into a failure or use updated_at as a finish time.
+  const status = terminal && row.status === 'running' ? 'interrupted' : row.status;
   return agentToolTraceSchema.parse({
     toolCallId: row.tool_call_id, name: row.tool_name, operation: row.operation,
-    status, startedAt: row.created_at, ...(status !== 'running' ? { finishedAt: row.updated_at } : {}), input,
+    status, startedAt: row.created_at, ...(row.status !== 'running' ? { finishedAt: row.updated_at } : {}), input,
     ...(packet?.success ? { output: {
       sourceCount: packet.data.sources.length, excerptCount: packet.data.excerpts.length,
       sources: packet.data.sources.map(({ title, videoId, channelId }) => ({ title, videoId, channelId })),

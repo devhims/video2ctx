@@ -1557,3 +1557,67 @@ test('concurrent visual traces retain their own diagnostics after a shared abort
     expect(operationIds.size).toBe(2);
   });
 });
+
+test('recovery hands off a durable successor without waiting for research and deduplicates replays', async () => {
+  const { runtime, runId } = await seed('nonblocking-fiber-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    let release!: () => void;
+    let started!: () => void;
+    const work = new Promise<void>(resolve => { release = resolve; });
+    const running = new Promise<void>(resolve => { started = resolve; });
+    const executor = instance as unknown as { performRun(runId: string, fiber: import('agents').FiberContext): Promise<void> };
+    const perform = vi.spyOn(executor, 'performRun').mockImplementation(async () => { started(); await work; });
+    const context = { id: runId, name: 'agent-runtime-run', snapshot: { runId, phase: 'executing' },
+      createdAt: Date.now(), recoveryReason: 'interrupted' as const };
+    try {
+      const handoff = await instance.onFiberRecovered(context);
+      expect(handoff).toMatchObject({ status: 'completed', metadata: { runId, successorFiberId: `recovery:${runId}` } });
+      await running;
+      expect(await instance.inspectFiber(`recovery:${runId}`)).toMatchObject({ status: 'running', metadata: { runId } });
+      expect(instance.sql`SELECT status FROM agent_runs WHERE id=${runId}`[0]!.status).toBe('running');
+      await instance.onFiberRecovered(context);
+      expect(perform).toHaveBeenCalledTimes(1);
+      // A pre-existing legacy recovery can describe the same run under another
+      // fiber ID. It must not start a second concurrent research loop.
+      await instance.onFiberRecovered({ ...context, id: `${runId}:legacy`, name: 'youtube-agent-run-recovery' });
+      await instance.startFiber('agent-runtime-run-recovery', async () => {},
+        { fiberId: `recovery:${runId}:legacy`, waitForCompletion: true });
+      expect(perform).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await instance.startFiber('agent-runtime-run-recovery', async () => {}, { fiberId: `recovery:${runId}`, waitForCompletion: true });
+      perform.mockRestore();
+    }
+  });
+});
+
+test('cancelling a recovered run aborts its active successor fiber', async () => {
+  const { runtime, runId } = await seed('cancel-recovered-fiber', 'running');
+  await runInDurableObject(runtime, async instance => {
+    let started!: () => void;
+    let release!: () => void;
+    const running = new Promise<void>(resolve => { started = resolve; });
+    let signal: AbortSignal | undefined;
+    const executor = instance as unknown as { performRun(runId: string, fiber: import('agents').FiberContext): Promise<void> };
+    const perform = vi.spyOn(executor, 'performRun').mockImplementation(async (_id, fiber) => {
+      signal = fiber.signal;
+      started();
+      await new Promise<void>(resolve => {
+        release = resolve;
+        fiber.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    try {
+      await instance.onFiberRecovered({ id: runId, name: 'agent-runtime-run', snapshot: null,
+        metadata: { runId }, createdAt: Date.now(), recoveryReason: 'interrupted' });
+      await running;
+      expect(await instance.cancelRun(runId)).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(await instance.inspectFiber(`recovery:${runId}`)).toMatchObject({ status: 'aborted' });
+    } finally {
+      release?.();
+      await instance.startFiber('agent-runtime-run-recovery', async () => {}, { fiberId: `recovery:${runId}`, waitForCompletion: true });
+      perform.mockRestore();
+    }
+  });
+});
