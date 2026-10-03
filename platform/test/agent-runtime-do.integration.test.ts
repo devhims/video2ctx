@@ -1284,3 +1284,75 @@ test('a run stores the client time zone and older runs fall back to UTC', async 
     fiber.mockRestore();
   });
 });
+
+
+test('visual latency survives successful and failed trace publication', async () => {
+  const {runtime,runId}=await seed('trace-visual-latency','running');
+  await runInDurableObject(runtime, async instance => {
+    const {diagnoseVisualTool, visualSpan, countVisualWork}=await import('../src/lib/visual-diagnostics');
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    for (const fail of [false,true]) {
+      const toolCallId=fail?'visual-failure':'visual-success';
+      const failure=new Error('extraction failed');
+      const result=manager.track(runId,{toolCallId,name:'get_video_frames',operation:'frames',input:{},
+        execute:()=>diagnoseVisualTool('frames',()=>visualSpan('retrieval',async()=>{
+          countVisualWork('requestedImages',2);
+          if(fail) throw failure;
+          return {artifacts:[{data:{}}]};
+        }))});
+      if(fail) await expect(result).rejects.toBe(failure); else await result;
+      await manager.publishPending();
+      const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?')
+        .bind(runId,toolCallId).first<{trace_id:string}>();
+      const detail=await readAdminToolTrace(env,runId,row!.trace_id);
+      const diagnostics=fail?detail?.error?.visualDiagnostics
+        :(detail?.output as {artifacts:{data:{visualDiagnostics:unknown}}[]}).artifacts[0]!.data.visualDiagnostics;
+      expect(diagnostics).toMatchObject({version:1,scope:'tool',kind:'frames',outcome:fail?'error':'success',counters:{requestedImages:2}});
+      expect(detail?.payloadState).toBe('complete');
+    }
+  });
+});
+
+test('concurrent visual traces retain their own diagnostics after a shared abort', async () => {
+  const {runtime,runId}=await seed('trace-shared-visual-abort','running');
+  await runInDurableObject(runtime, async instance => {
+    const {diagnoseVisualTool,countVisualWork}=await import('../src/lib/visual-diagnostics');
+    const {withRunDeadline}=await import('../src/agents/runtime/deadline');
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    const controller=new AbortController();
+    const failure=new Error('shared run cancellation');
+    let started=0,ready!:()=>void;
+    const bothStarted=new Promise<void>(resolve=>{ready=resolve;});
+    const calls=[1,2].map(count=>manager.track(runId,{
+      toolCallId:`shared-abort-${count}`,name:'get_video_storyboard',operation:'storyboard',input:{},
+      execute:()=>diagnoseVisualTool('storyboard',async()=>{
+        countVisualWork('requestedImages',count);
+        return withRunDeadline(Date.now()+60_000,controller.signal,async signal=>{
+          if(++started===2) ready();
+          return new Promise<{artifacts:[]}>( (_,reject)=>{
+            signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+          });
+        });
+      },{runId,toolCallId:`shared-abort-${count}`}),
+    }));
+    const settled=Promise.allSettled(calls);
+    await bothStarted;
+    controller.abort(failure);
+    for(const result of await settled) {
+      expect(result.status).toBe('rejected');
+      if(result.status==='rejected') expect(result.reason).toBe(failure);
+    }
+    await manager.publishPending();
+    const operationIds=new Set<string>();
+    for(const count of [1,2]) {
+      const row=await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=? AND tool_call_id=?')
+        .bind(runId,`shared-abort-${count}`).first<{trace_id:string}>();
+      const detail=await readAdminToolTrace(env,runId,row!.trace_id);
+      expect(detail?.payloadState).toBe('complete');
+      expect(detail?.error?.visualDiagnostics).toMatchObject({scope:'tool',kind:'storyboard',outcome:'error',
+        counters:{requestedImages:count}});
+      operationIds.add(detail!.error!.visualDiagnostics!.operationId);
+    }
+    expect(operationIds.size).toBe(2);
+  });
+});

@@ -1,9 +1,10 @@
+import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
 import { mapInBatches } from '../../lib/map-in-batches';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
-import { storyboardSchema, type Storyboard } from '../providers/youtube/storyboard';
+import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, type Storyboard } from '../providers/youtube/storyboard';
 import { SessionEvidenceStore } from './session-evidence';
 import { assertTranscriptWithinLimit } from './video-duration-limit';
 
@@ -99,12 +100,20 @@ export function sessionProvider(
             const generation = store.generation();
             const manifestKey = `storyboard:${id}:manifest`;
             const fresh = (refresh && !refreshed.has(manifestKey)) || !!options.refresh;
+            let prefetched: CachedResult<Storyboard> | undefined;
             const metadata = await store.retrieve(
               `storyboard:${id}:manifest`,
               'storyboard_manifest',
               id,
               fresh,
-              () => provider.storyboard!(id, undefined, { metadataOnly: true, ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic),
+              async () => {
+                if (options.metadataOnly) return provider.storyboard!(id, undefined,
+                  { metadataOnly: true, ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                prefetched = await provider.storyboard!(id, timestamps,
+                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                return { ...prefetched, value: storyboardMetadata(prefetched.value),
+                  catalogVersions: prefetched.catalogVersions?.filter(asset => asset.kind === 'storyboard_manifest') };
+              },
               (value) => ({
                 totalSheets: value.manifest?.totalSheets,
                 totalFrames: value.frameCount,
@@ -119,28 +128,7 @@ export function sessionProvider(
             if (options.metadataOnly) return metadata;
             const manifest = metadata.value.manifest;
             if (!manifest) throw new Error('Storyboard manifest unavailable.');
-            const count = options.maxSheets ?? 20;
-            const indexes =
-              options.sheetIndexes ??
-              (timestamps
-                ? [
-                    ...new Set(
-                      timestamps.map((time) =>
-                        Math.floor(time / (manifest.framesPerSheet * metadata.value.intervalMs)),
-                      ),
-                    ),
-                  ]
-                : Array.from({ length: Math.min(count, manifest.totalSheets) }, (_, i) =>
-                    Math.min(count, manifest.totalSheets) === 1
-                      ? 0
-                      : Math.round((i * (manifest.totalSheets - 1)) / (Math.min(count, manifest.totalSheets) - 1)),
-                  ));
-            if (
-              indexes.length > count ||
-              indexes.some((i) => i < 0 || i >= manifest.totalSheets) ||
-              timestamps?.some((t) => t < 0 || t > manifest.lastSampleMs + metadata.value.intervalMs - 1)
-            )
-              throw new Error('Invalid storyboard selection. Retrieve metadata and select available sheets.');
+            const indexes = storyboardSheetIndexes(metadata.value, { ...options, timestampsMs: timestamps });
             const manifestVersion = metadata.assetVersions![0]!;
             const results: CachedResult<Storyboard>[] = [];
             const missing: number[] = [];
@@ -149,7 +137,7 @@ export function sessionProvider(
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const key = `storyboard:${id}:${manifestVersion}:${index}`;
               const hit =
-                !(refresh && !refreshed.has(key)) && !options.refresh && (await store.lookup<Storyboard>(key));
+                !prefetched && !(refresh && !refreshed.has(key)) && !options.refresh && (await store.lookup<Storyboard>(key));
               return { index, hit };
             }));
             for (const { index, hit } of cached) {
@@ -158,7 +146,7 @@ export function sessionProvider(
             }
             options.signal?.throwIfAborted();
             if (missing.length) {
-              const fetched = await provider.storyboard!(
+              const fetched = prefetched ?? await provider.storyboard!(
                 id,
                 undefined,
                 { sheetIndexes: missing, maxSheets: missing.length, ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
@@ -221,6 +209,7 @@ export function sessionProvider(
                 : results.some(result=>result.cacheStatus==='miss') ? 'miss'
                 : results.some(result=>result.cacheStatus==='coalesced') ? 'coalesced' : 'hit',
               sessionReused: missing.length === 0,
+              verifiedImages: results.flatMap(result => result.verifiedImages ?? []),
               assetVersions: [manifestVersion, ...results.flatMap((r) => r.assetVersions ?? [])],
             };
           })
@@ -228,21 +217,24 @@ export function sessionProvider(
     frames: provider.frames
       ? (request, signal, limits, diagnostic) =>
           serial(async () => {
+            signal?.throwIfAborted();
             const generation = store.generation();
             const maxWidth = request.maxWidth ?? 1920;
             const times = [...new Set(request.timestampsMs)].sort((a, b) => a - b);
             const hits: CachedResult<VideoFrames>[] = [];
             const missing: number[] = [];
             const lookupStarted = Date.now();
-            const cached = await mapInBatches(times, async time => {
+            const cached = await visualSpan('session_lookup', () => mapInBatches(times, async time => {
               const key = `frame:${request.videoId}:${maxWidth}:${time}`;
-              const hit = !(refresh && !refreshed.has(key)) && (await store.lookup<VideoFrames>(key));
+              signal?.throwIfAborted();
+              const hit = !(refresh && !refreshed.has(key)) && !limits?.refresh && (await store.lookup<VideoFrames>(key));
               return { time, hit };
-            });
+            }));
             const frameTimingsMs = { sessionLookup: Date.now() - lookupStarted, retrieval: 0, sessionPin: 0 };
             for (const { time, hit } of cached) {
               if (hit) hits.push(hit); else missing.push(time);
             }
+            signal?.throwIfAborted();
             let fetched: CachedResult<VideoFrames> | undefined;
             if (missing.length) {
               // Batch misses once; successful images survive even if other timestamps fail.
@@ -250,10 +242,12 @@ export function sessionProvider(
               fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
                 refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic);
               frameTimingsMs.retrieval = Date.now() - retrievalStarted;
+              signal?.throwIfAborted();
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const pinStarted = Date.now();
               const fetchedResult = fetched;
-              const pinned = await mapInBatches(fetchedResult.value.frames, async frame => {
+              const pinned = await visualSpan('session_pin', () => mapInBatches(fetchedResult.value.frames, async frame => {
+                signal?.throwIfAborted();
                 if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
                 const value: VideoFrames = {
                   ...fetchedResult.value,
@@ -261,12 +255,11 @@ export function sessionProvider(
                   failures: [],
                   meta: { ...fetchedResult.value.meta, partial: false },
                 };
-                refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
-                return store.retrieve(
+                const result = await store.retrieve(
                   `frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`,
                   'frame',
                   request.videoId,
-                  refresh,
+                  true,
                   async () => ({
                     value,
                     cacheStatus: fetchedResult.cacheStatus,
@@ -281,13 +274,20 @@ export function sessionProvider(
                     height: frame.height,
                     maxWidth,
                   }),
+                  undefined,
+                  signal,
                 );
-              });
+                refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
+                return result;
+              }));
+              signal?.throwIfAborted();
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               hits.push(...pinned);
               frameTimingsMs.sessionPin = Date.now() - pinStarted;
             }
+            signal?.throwIfAborted();
             return {
+              verifiedImages: hits.flatMap(result => result.verifiedImages ?? []),
               frameTimingsMs,
               value: framesSchema.parse({
                 videoId: request.videoId,

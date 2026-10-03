@@ -1,3 +1,4 @@
+import { withVisualFailureCapture, visualDiagnosticsSchema, type VisualFailureCapture } from '../../lib/visual-diagnostics';
 import type { ToolSet, ToolCallRepairFunction } from 'ai';
 import { z } from 'zod';
 import { storedExtractionDiagnosticSchema } from '../../lib/extraction-diagnostics';
@@ -10,6 +11,7 @@ export const toolCallDetailSchema = z.object({
   startedAt: z.number(), finishedAt: z.number().optional(),
   input: z.unknown(), output: z.unknown().optional(),
   error: z.object({ name: z.string(), message: z.string(), code: z.string().optional(),
+    visualDiagnostics: visualDiagnosticsSchema.optional(),
     extractionDiagnostics: z.array(storedExtractionDiagnosticSchema).max(64).optional() }).optional(),
   captureError: z.string().optional(),
   payloadState: z.enum(['complete', 'legacy', 'deleted', 'unavailable']),
@@ -106,8 +108,9 @@ export class ToolCallTraceManager {
       traceId,this.nextSequence(runId),runId,call.toolCallId,call.name,call.operation,source,startedAt,revision);
     this.snapshot(traceId, 'input', call.input);
     this.requestPublish(runId);
+    const visualFailure: VisualFailureCapture = {};
     try {
-      const result = await call.execute();
+      const result = await withVisualFailureCapture(visualFailure, () => call.execute());
       this.snapshot(traceId, 'output', result);
       this.finish(traceId, runId, 'completed');
       this.requestPublish(runId);
@@ -121,6 +124,7 @@ export class ToolCallTraceManager {
       } catch { /* Diagnostics must not replace the original tool failure. */ }
       // SDK headers, execution context and raw response bodies are excluded.
       this.snapshot(traceId, 'error', {
+        visualDiagnostics: visualFailure.diagnostics,
         name: error instanceof Error ? error.name : 'Error',
         message: error instanceof Error ? error.message : 'Tool execution failed.',
         ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? { code: error.code } : {}),

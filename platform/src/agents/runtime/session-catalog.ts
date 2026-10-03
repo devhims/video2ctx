@@ -1,3 +1,4 @@
+import type { VerifiedImage } from '../../lib/verified-image';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
 import type { Storyboard } from '../providers/youtube/storyboard';
@@ -68,6 +69,7 @@ export class SessionCatalog {
     value: unknown,
     collectedAt: number,
     versions?: VideoAssetReference[],
+    onVerifiedImages?: (images: VerifiedImage[]) => void,
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -76,9 +78,10 @@ export class SessionCatalog {
       if (versions.length !== 1 || !compatible(versions[0]!))
         throw new Error('Invalid shared session asset reference.');
       const asset = versions[0]!;
-      const stored = await this.catalog.readVersion(asset);
+      const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);
       const overlay = stored && projection(stored.value, value);
       if (!overlay) throw new Error('Session payload does not match its shared asset version.');
+      onVerifiedImages?.(stored?.verifiedImages ?? []);
       return { asset, ...overlay };
     }
 
@@ -86,14 +89,18 @@ export class SessionCatalog {
     // Reuse matching current bytes, or retain the historical source without
     // changing the public current pointer or marking old evidence freshly fetched.
     const key = await sourceKey(kind, videoId, resourceKey, value);
-    const current = await this.catalog.read(key);
+    const current = await this.catalog.read(key, !!onVerifiedImages);
     const overlay = current && projection(current.value, value);
-    if (overlay && current.catalogVersions?.[0]) return { asset: current.catalogVersions[0], ...overlay };
+    if (overlay && current.catalogVersions?.[0]) {
+      onVerifiedImages?.(current.verifiedImages ?? []);
+      return { asset: current.catalogVersions[0], ...overlay };
+    }
     const source = publicSource(kind, videoId, value);
     const asset = await this.catalog.save(key, source, collectedAt, 0, true, {}, false);
-    const verified = await this.catalog.readVersion(asset);
+    const verified = await this.catalog.readVersion(asset, !!onVerifiedImages);
     const savedOverlay = verified && projection(verified.value, value);
     if (!savedOverlay) throw new Error('Historical source could not be verified.');
+    onVerifiedImages?.(verified?.verifiedImages ?? []);
     return { asset, ...savedOverlay };
   }
 }

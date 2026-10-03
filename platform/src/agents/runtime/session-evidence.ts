@@ -1,3 +1,5 @@
+import { visualSpan } from '../../lib/visual-diagnostics';
+import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
 import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
@@ -523,6 +525,9 @@ export class SessionEvidenceStore implements SessionAccess {
       this.alias(row.resource_key, version);
   }
   async lookup<T>(key: string): Promise<CachedResult<T> | undefined> {
+    return visualSpan('session_asset_lookup', () => this.lookupValue<T>(key));
+  }
+  private async lookupValue<T>(key: string): Promise<CachedResult<T> | undefined> {
     const row = this.sql
       .exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key)
       .toArray()[0];
@@ -575,69 +580,73 @@ export class SessionEvidenceStore implements SessionAccess {
     const result = await load();
     signal?.throwIfAborted();
     if (!accept(result.value)) return result;
-    const payload = JSON.stringify(result.value);
-    const version = await sha256(`${kind}:${videoId}:${payload}`);
-    signal?.throwIfAborted();
-    if (generation !== this.generation())
-      throw new Error('Session assets changed during retrieval. Retry the request.');
-    if (this.has(version)) {
-      this.alias(key, version);
-      return { ...result, assetVersions: [version] };
-    }
-    if (this.catalog) {
-      const reference = await this.catalog.pin(
-        kind,
-        videoId,
-        key,
-        result.value,
-        Date.now(),
-        result.catalogVersions,
-      );
+    return visualSpan('session_asset_pin', async () => {
+      const payload = JSON.stringify(result.value);
+      const version = await sha256(`${kind}:${videoId}:${payload}`);
       signal?.throwIfAborted();
       if (generation !== this.generation())
         throw new Error('Session assets changed during retrieval. Retry the request.');
-      this.atomic!(() => {
-        this.sql.exec(
-          'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
-          version,
-          key,
+      if (this.has(version)) {
+        this.alias(key, version);
+        return { ...result, assetVersions: [version] };
+      }
+      if (this.catalog) {
+        let verifiedImages: VerifiedImage[] = [];
+        const reference = await this.catalog.pin(
           kind,
           videoId,
-          '',
-          JSON.stringify(describe(result.value)),
+          key,
+          result.value,
           Date.now(),
+          result.catalogVersions,
+          images => { verifiedImages = images; },
         );
-        this.linkCatalog(version, reference);
-        if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
-        this.alias(key, version);
-      });
+        signal?.throwIfAborted();
+        if (generation !== this.generation())
+          throw new Error('Session assets changed during retrieval. Retry the request.');
+        this.atomic!(() => {
+          this.sql.exec(
+            'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
+            version,
+            key,
+            kind,
+            videoId,
+            '',
+            JSON.stringify(describe(result.value)),
+            Date.now(),
+          );
+          this.linkCatalog(version, reference);
+          if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
+          this.alias(key, version);
+        });
+        return { ...result, verifiedImages, assetVersions: [version] };
+      }
+      const blobKey = `${this.prefix}${generation}/${version}-${crypto.randomUUID()}.json`;
+      // A crash between the R2 write and SQLite commit must not leave an orphan.
+      this.queueCleanup([blobKey]);
+      await this.bucket.put(blobKey, payload, { httpMetadata: { contentType: 'application/json' } });
+      if (generation !== this.generation() || signal?.aborted) {
+        await this.bucket.delete(blobKey);
+        signal?.throwIfAborted();
+        throw new Error('Session assets changed during retrieval. Retry the request.');
+      }
+      this.sql.exec(
+        'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
+        version,
+        key,
+        kind,
+        videoId,
+        blobKey,
+        JSON.stringify(describe(result.value)),
+        Date.now(),
+      );
+      const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
+      if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
+      this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
+      if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
+      this.alias(key, version);
       return { ...result, assetVersions: [version] };
-    }
-    const blobKey = `${this.prefix}${generation}/${version}-${crypto.randomUUID()}.json`;
-    // A crash between the R2 write and SQLite commit must not leave an orphan.
-    this.queueCleanup([blobKey]);
-    await this.bucket.put(blobKey, payload, { httpMetadata: { contentType: 'application/json' } });
-    if (generation !== this.generation() || signal?.aborted) {
-      await this.bucket.delete(blobKey);
-      signal?.throwIfAborted();
-      throw new Error('Session assets changed during retrieval. Retry the request.');
-    }
-    this.sql.exec(
-      'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
-      version,
-      key,
-      kind,
-      videoId,
-      blobKey,
-      JSON.stringify(describe(result.value)),
-      Date.now(),
-    );
-    const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
-    if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
-    this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
-    if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
-    this.alias(key, version);
-    return { ...result, assetVersions: [version] };
+    });
   }
   beginRun(runId: string) {
     this.sql.exec('INSERT OR IGNORE INTO session_run_generations VALUES (?, ?)', runId, this.generation());

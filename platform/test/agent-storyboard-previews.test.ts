@@ -118,3 +118,29 @@ test('a failed upload cannot trigger rollback before another upload finishes', a
   await rejected;
   expect(storage.remove).toHaveBeenCalledWith(storage.put.mock.calls.map(call => call[0]));
 });
+
+test('verified image reads remove preview HEAD calls only for matching bytes and bucket', async () => {
+  const { VerifiedImage } = await import('../src/lib/verified-image');
+  const { videoImageKey } = await import('../src/lib/video-catalog');
+  const key=await videoImageKey(storyboard.videoId,new Uint8Array([255,216,255,217]));
+  const head=vi.fn(async()=>({}));
+  const shared={head} as unknown as R2Bucket;
+  const other={head:vi.fn()} as unknown as R2Bucket;
+  for (const [images,expected] of [
+    [[new VerifiedImage(shared,key)],0],
+    [[new VerifiedImage(other,key)],2],
+    [[new VerifiedImage(shared,key+'wrong')],2],
+    [[JSON.parse(JSON.stringify(new VerifiedImage(shared,key)))],2],
+  ] as const) {
+    head.mockClear();
+    const storage=bucket();
+    const previews=await saveStoryboardPreviews(storage.value,'owner',storyboard,new AbortController().signal,shared,[...images]);
+    expect(head).toHaveBeenCalledTimes(expected);
+    expect(previews).toHaveLength(2);
+    expect(storage.put).toHaveBeenCalledTimes(2);
+    expect(storage.put.mock.calls.every(call=>JSON.parse(call[1]).sharedImageKey===key)).toBe(true);
+  }
+  head.mockResolvedValue(null as never);
+  await expect(saveStoryboardPreviews(bucket().value,'owner',storyboard,new AbortController().signal,shared,[]))
+    .rejects.toThrow('Shared preview image is unavailable');
+});

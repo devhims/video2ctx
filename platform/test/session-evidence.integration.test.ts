@@ -293,27 +293,26 @@ test('storyboard selections batch missing sheets and reuse overlapping sheets ac
     await sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [0, 1], maxSheets: 2 });
     await sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [1, 2], maxSheets: 2 });
     expect(storyboard.mock.calls.map((call) => call[2])).toEqual([
-      { metadataOnly: true },
       { sheetIndexes: [0, 1], maxSheets: 2 },
       { sheetIndexes: [2], maxSheets: 1 },
     ]);
     await expect(sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [3] })).rejects.toThrow(
       'Invalid storyboard selection',
     );
-    expect(storyboard).toHaveBeenCalledTimes(3);
+    expect(storyboard).toHaveBeenCalledTimes(2);
     expect(store.brief().assets.filter((asset) => asset.kind === 'storyboard_sheet')).toHaveLength(3);
     const restored = reopen();
     const ctx = context(restored, p);
     ctx.analyzeStoryboard = vi.fn(async () => ({findings:[{observation:'A chart is shown.',frameIndexes:[2]}],warnings:[]}));
     const versions = restored.brief().assets.filter(asset => asset.kind === 'storyboard_sheet').map(asset => asset.version);
     const result = await executeAnalyzeVideoStoryboard({assetVersions:versions,focus:'Describe the chart.'},ctx,'analyze-sheets');
-    expect(storyboard).toHaveBeenCalledTimes(3);
+    expect(storyboard).toHaveBeenCalledTimes(2);
     expect(result.usage).toEqual([]);
     expect(result.excerpts[0]!.startMs).toBe(10000);
     expect(ctx.analyzeStoryboard).toHaveBeenCalledOnce();
     await restored.delete(versions[0]);
     await expect(executeAnalyzeVideoStoryboard({assetVersions:versions,focus:'Read the title.'},ctx,'deleted')).rejects.toThrow('unavailable or deleted');
-    expect(storyboard).toHaveBeenCalledTimes(3);
+    expect(storyboard).toHaveBeenCalledTimes(2);
     expect(ctx.analyzeStoryboard).toHaveBeenCalledOnce();
 
   }));
@@ -894,4 +893,30 @@ test('long transcript matches cannot crowd short-video matches out of the top 20
     const found = await limited.search.searchEvidence(limited, 'gold medal');
     expect(videos(found.packets)).toContain(shortId);
     expect(videos(found.packets)).not.toContain(longId);
+  }));
+
+test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
+  within('storyboard-single-middle', async (store, reopen) => {
+    const value = { videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 3, framesPerSheet: 2, tileWidth: 100, tileHeight: 100,
+        columns: 2, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'spread' as const },
+      sheets: [{ firstFrameIndex: 2, frameCount: 2, tileWidth: 100, tileHeight: 100,
+        columns: 2, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' }],
+      meta: { partial: false, warnings: [] } };
+    const storyboard = vi.fn(async () => ({ cacheStatus: 'miss' as const, value }));
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    const { captureVisualWork } = await import('../src/lib/visual-diagnostics');
+    const cold = await captureVisualWork('tool', 'storyboard', () => sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 1 }));
+    const warm = await captureVisualWork('tool', 'storyboard', () => sessionProvider(p, reopen()).storyboard!(id, undefined, { maxSheets: 1 }));
+    expect(cold.value.value.sheets).toEqual(value.sheets);
+    expect(warm.value.value.sheets).toEqual(value.sheets);
+    expect(warm.value.sessionReused).toBe(true);
+    expect(storyboard).toHaveBeenCalledOnce();
+    for (const { diagnostics } of [cold, warm]) {
+      for (const span of diagnostics.spans) {
+        const parent = diagnostics.spans.find(candidate => candidate.id === span.parentId);
+        if (parent) expect(parent.stage).not.toBe(span.stage);
+      }
+    }
   }));

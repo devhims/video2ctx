@@ -71,7 +71,7 @@ describe('agent frame tool', () => {
     const previews = [{ assetId: 'a'.repeat(64), collectionId: 'b'.repeat(64), timestampMs: 1234, width: 1920, height: 1080 }];
     ctx.saveFramePreviews = vi.fn(async () => previews);
     const result = await executeGetVideoFrames(input, ctx, 'saved-call');
-    expect(ctx.saveFramePreviews).toHaveBeenCalledWith(frames, ctx.signal);
+    expect(ctx.saveFramePreviews).toHaveBeenCalledWith(frames, ctx.signal, undefined);
     expect(result.artifacts[0]!.data.previews).toEqual(previews);
     expect(JSON.stringify(result)).not.toContain('/9j/');
     expect(JSON.stringify(evidencePacketForModel(result))).not.toContain('assetId');
@@ -132,9 +132,23 @@ test('stores frame timings and diagnostics without sending them to the model', a
   expect(packet.artifacts[0]!.data.timingsMs).toMatchObject({ sessionLookup: 2, retrieval: 10, sessionPin: 3 });
   expect(packet.artifacts[0]!.data.extractionDiagnostics).toHaveLength(1);
   const output = await createGetVideoFramesTool(ctx).toModelOutput!({ toolCallId: 'timings', input: { ...input, maxWidth: 1920 }, output: packet });
+  expect(packet.artifacts[0]!.data.visualDiagnostics).toMatchObject({ version: 1, scope: 'tool', kind: 'frames', outcome: 'success' });
+  expect(JSON.stringify(output)).not.toContain('visualDiagnostics');
   expect(JSON.stringify(output)).not.toContain('timingsMs');
   expect(JSON.stringify(output)).not.toContain('extractionDiagnostics');
   expect(JSON.stringify(output)).toContain('requestedTimestampsMs');
+  expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('visualDiagnostics');
   expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
   expect(packet.artifacts[0]!.data.extractionDiagnostics).toHaveLength(1);
+});
+
+test('frame tool forwards request-local image verification to previews without persisting it', async()=>{
+  const {VerifiedImage}=await import('../src/lib/verified-image');
+  const ctx=context();
+  const verifiedImages=[new VerifiedImage({} as R2Bucket,'test-image')];
+  ctx.provider.frames=async()=>({value:frames,cacheStatus:'miss',verifiedImages});
+  ctx.saveFramePreviews=vi.fn(async()=>[]);
+  const result=await executeGetVideoFrames(input,ctx,'verified-preview');
+  expect(ctx.saveFramePreviews).toHaveBeenCalledWith(frames,ctx.signal,verifiedImages);
+  expect(JSON.stringify(result)).not.toContain('verifiedImages');
 });

@@ -1,9 +1,11 @@
+import { captureVisualWork, withVisualFailureCapture, visualSpan, countVisualWork, type VisualDiagnostics, type VisualFailureCapture } from './visual-diagnostics';
 import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import { YouTubeProcessorError } from './youtube-processor-client';
 import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
+import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
-import { loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
+import { isVisualSelection, readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
@@ -25,6 +27,7 @@ export interface YouTubeCacheRequest {
 }
 
 export interface YouTubeCacheResponse {
+  visualDiagnostics?: VisualDiagnostics;
   catalogVersions?: VideoAssetReference[];
   diagnostics?: ExtractionAttempt[];
   ok: boolean;
@@ -40,7 +43,7 @@ export interface YouTubeCacheResponse {
   };
 }
 
-type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean, onVersions?: (references: VideoAssetReference[]) => void) => Promise<unknown>;
+type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean, onVersions?: (references: VideoAssetReference[]) => void, visualLookup?: VisualLookup) => Promise<unknown>;
 
 const CACHE_READ_TTL_SECONDS = 60;
 const MINIMUM_CACHE_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -74,7 +77,7 @@ export class YouTubeCacheCoordinatorCore {
       return successFromEntry(recent.entry, 'hit');
     }
 
-    const promise = this.load(request);
+    const promise = this.loadDiagnosed(request);
     this.inFlight.set(flightKey,promise);
     try {
       const response = await promise;
@@ -102,15 +105,40 @@ export class YouTubeCacheCoordinatorCore {
     }
   }
 
+  private async loadDiagnosed(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
+    const kind = request.operation.kind;
+    if (kind !== 'frames' && kind !== 'storyboard') return this.load(request);
+    const failure: VisualFailureCapture = {};
+    try {
+      const { value, diagnostics } = await withVisualFailureCapture(failure,
+        () => captureVisualWork('coordinator', kind, () => this.load(request)));
+      if (!value.ok) diagnostics.outcome = 'error';
+      return { ...value, visualDiagnostics: diagnostics };
+    } catch (error) {
+      return { ...failureFrom(error), visualDiagnostics: failure.diagnostics };
+    }
+  }
+
   private async load(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
     const catalog = videoCatalog(this.env);
     const resource = videoResourceKey(request.operation);
-    const stored = catalog && resource ? await readVideoResource(this.env,request.operation) : null;
+    const selection = catalog && isVisualSelection(request.operation)
+      ? request.operation : undefined;
+    const lookup = selection && !request.refresh
+      ? selection.kind === 'frames' ? await readFrameSelection(this.env, selection) : await readStoryboardSelection(this.env, selection) : undefined;
+    const stored = lookup ? lookup.stored : selection ? null
+      : catalog && resource ? await readVideoResource(this.env,request.operation) : null;
     const existing = stored ? {version:1 as const,...stored} : await readYouTubeCacheEntry(this.env, request.legacyCacheKey ?? request.cacheKey, request.resourceType);
     const timestamp = Date.now();
     if (!request.refresh && existing && reusableVideoResource(request.operation, existing, timestamp)) {
       // Promote pre-catalog KV hits without pretending they were freshly fetched.
-      if (catalog && resource && !stored) existing.catalogVersions = await saveVideoResource(this.env,request.operation,existing.value,existing.fetchedAt,request.maxAgeMs);
+      if (catalog && resource && !stored) {
+        const metadataVersions = selection?.kind === 'storyboard' ? await saveVideoResource(this.env,
+          {kind: 'storyboard', id: selection.id, metadataOnly: true},
+          storyboardMetadata(storyboardSchema.parse(existing.value)), existing.fetchedAt, request.maxAgeMs) : [];
+        existing.catalogVersions = [...metadataVersions,
+          ...await saveVideoResource(this.env,request.operation,existing.value,existing.fetchedAt,request.maxAgeMs)];
+      }
       return successFromEntry(existing, 'hit');
     }
 
@@ -124,7 +152,7 @@ export class YouTubeCacheCoordinatorCore {
       diagnostics.length ? { ...response, diagnostics } : response;
     try {
       let catalogVersions: VideoAssetReference[] | undefined;
-      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh, versions=>{catalogVersions=versions;});
+      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh, versions=>{catalogVersions=versions;}, lookup);
       // Defense in depth: a resolved provider response can still be a failed
       // lookup. Preserve the last good value instead of overwriting it.
       if (request.operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {
@@ -146,9 +174,10 @@ export class YouTubeCacheCoordinatorCore {
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
       try {
-        await this.env.YOUTUBE_CACHE.put(request.cacheKey, JSON.stringify(entry), {
+        countVisualWork('legacyKvPuts');
+        await visualSpan('legacy_cache', () => this.env.YOUTUBE_CACHE.put(request.cacheKey, JSON.stringify(entry), {
           expirationTtl: cacheRetentionSeconds(request.maxAgeMs),
-        });
+        }));
       } catch (error) {
         logCacheFailure('youtube_cache_write_failed', request.resourceType, error);
       }
@@ -170,10 +199,11 @@ export async function readYouTubeCacheEntry<T>(
   resourceType: string,
 ): Promise<YouTubeCacheEntry<T> | null> {
   try {
-    const value = await env.YOUTUBE_CACHE.get<YouTubeCacheEntry<T>>(cacheKey, {
+    countVisualWork('legacyKvGets');
+    const value = await visualSpan('legacy_cache', () => env.YOUTUBE_CACHE.get<YouTubeCacheEntry<T>>(cacheKey, {
       type: 'json',
       cacheTtl: CACHE_READ_TTL_SECONDS,
-    });
+    }));
     if (!isCacheEntry<T>(value)) return null;
     // Also invalidate bot challenges written by older deployments. Both the
     // edge cache fast path and the coordinator use this reader.

@@ -1,3 +1,4 @@
+import type { VerifiedImage } from '../../lib/verified-image';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
 import { storyboardSchema, type Storyboard } from '../providers/youtube/storyboard';
@@ -15,7 +16,7 @@ export const storyboardPreviewSchema = storyboardPreviewObjectSchema.refine(shee
 { message: 'Invalid storyboard preview mapping.' });
 export const storyboardPreviewsSchema = z.array(storyboardPreviewSchema).max(20);
 export type StoryboardPreview = z.infer<typeof storyboardPreviewSchema>;
-export type SaveStoryboardPreviews = (storyboard: Storyboard, signal: AbortSignal) => Promise<StoryboardPreview[]>;
+export type SaveStoryboardPreviews = (storyboard: Storyboard, signal: AbortSignal, verifiedImages?: VerifiedImage[]) => Promise<StoryboardPreview[]>;
 export const storyboardTraceSchema = z.object({
   mode: z.enum(['metadata', 'inspection']), sheets: storyboardPreviewsSchema,
 });
@@ -28,7 +29,7 @@ export function packetStoryboardPreviews(packet: EvidencePacket): z.infer<typeof
   return { mode, sheets: mode === 'inspection' && previews.success ? previews.data : [] };
 }
 
-export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, value: Storyboard, signal: AbortSignal, sharedBucket?: R2Bucket): Promise<StoryboardPreview[]> {
+export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, value: Storyboard, signal: AbortSignal, sharedBucket?: R2Bucket, verifiedImages?: VerifiedImage[]): Promise<StoryboardPreview[]> {
   signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(value);
   const images = storyboard.sheets.map(sheet => ({ imageBase64: sheet.imageBase64, metadata: {
@@ -44,5 +45,5 @@ export async function saveStoryboardPreviews(bucket: R2Bucket, userId: string, v
   if (totalBytes > 8 * 1024 * 1024) {
     throw new Error('Storyboard previews exceed the 8 MiB image limit.');
   }
-  return saveImagePreviews(bucket, userId, images, signal, sharedBucket ? {bucket:sharedBucket,videoId:value.videoId} : undefined);
+  return saveImagePreviews(bucket, userId, images, signal, sharedBucket ? {bucket:sharedBucket,videoId:value.videoId,verifiedImages} : undefined);
 }

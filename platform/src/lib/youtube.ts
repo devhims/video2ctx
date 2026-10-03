@@ -1,3 +1,5 @@
+import { visualSpan, linkVisualWork } from './visual-diagnostics';
+import type { VerifiedImage } from './verified-image';
 import { emitExtractionDiagnostic, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import type {
   BrowseOptions,
@@ -9,7 +11,7 @@ import type {
 } from 'all-things-youtube';
 import { browseDestination } from './youtube-client';
 import { videoCatalog, type VideoAssetReference } from './video-catalog';
-import { readVideoResource, videoResourceKey, reusableVideoResource, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
+import { readVideoResource, isVisualSelection, videoResourceKey, reusableVideoResource, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
 import type { VideoFrames } from './youtube-frames-contract';
 import {
   normalizeBrowseLanguage,
@@ -38,6 +40,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  verifiedImages?: VerifiedImage[];
   frameTimingsMs?: { sessionLookup: number; retrieval: number; sessionPin: number };
   catalogVersions?: VideoAssetReference[];
   sessionReused?: boolean;
@@ -124,7 +127,8 @@ async function cached<T extends VideoResourceOperation>(
   const catalog = videoCatalog(env);
   const resource = videoResourceKey(operation);
   const cacheKey = catalog && resource ? `video-resource:v1:${await hash(JSON.stringify(resource))}` : legacyCacheKey;
-  const stored = catalog && resource && !refresh ? await readVideoResource(env,operation) : null;
+  // Visual selections are checked once inside the coalescing coordinator.
+  const stored = catalog && resource && !refresh && !isVisualSelection(operation) ? await readVideoResource(env,operation) : null;
   const existing = stored ? {version:1 as const,...stored,value:stored.value as ResourceResult<T>}
     : catalog && resource ? null : await readYouTubeCacheEntry<ResourceResult<T>>(env, cacheKey, type);
 
@@ -135,17 +139,26 @@ async function cached<T extends VideoResourceOperation>(
 
   let response;
   try {
-    const wireResponse = await env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey).getOrLoad(JSON.stringify({
-      cacheKey,
-      legacyCacheKey,
-      resourceType: type,
-      maxAgeMs,
-      operation,
-      refresh,
-    }));
-    response = parseCoordinatorResponse(wireResponse);
+    response = await visualSpan('coordinator_wait', async () => {
+      const wireResponse = await env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey).getOrLoad(JSON.stringify({
+        cacheKey,
+        legacyCacheKey,
+        resourceType: type,
+        maxAgeMs,
+        operation,
+        refresh,
+      }));
+      const parsed = parseCoordinatorResponse(wireResponse);
+      linkVisualWork(parsed.visualDiagnostics, parsed.cacheStatus);
+      return parsed;
+    });
   } catch (error) {
     if (existing && !refresh) return cachedValue(existing, 'stale', !!resource);
+    if (catalog && resource && !refresh && isVisualSelection(operation)) {
+      const fallback = await readVideoResource(env, operation);
+      if (fallback && reusableVideoResource(operation, fallback))
+        return cachedValue({ version: 1, ...fallback, value: fallback.value as ResourceResult<T> }, 'stale', true);
+    }
     throw new ApiError(
       503,
       'CACHE_COORDINATOR_UNAVAILABLE',

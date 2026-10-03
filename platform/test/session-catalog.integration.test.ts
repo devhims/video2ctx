@@ -393,7 +393,7 @@ test('frame and storyboard batches link each selected image once and reuse it af
     );
     expect((await restored.storyboard!(id, undefined, { sheetIndexes: [1] })).sessionReused).toBe(true);
     expect(upstream.frames).toHaveBeenCalledTimes(1);
-    expect(upstream.storyboard).toHaveBeenCalledTimes(2);
+    expect(upstream.storyboard).toHaveBeenCalledTimes(1);
     await store.delete();
     expect((await env.RESEARCH.list({ prefix })).objects).toEqual([]);
   });
@@ -611,7 +611,7 @@ test.each(['delete', 'cancel'])('%s during concurrent storyboard pinning drains 
     });
     const p = { storyboard: async (_id: string, _times: unknown, options: { metadataOnly?: boolean }) => ({
       value: options.metadataOnly ? board : sheets, cacheStatus: 'hit' as const,
-      catalogVersions: options.metadataOnly ? manifestRefs : sheetRefs,
+      catalogVersions: options.metadataOnly ? manifestRefs : [...manifestRefs, ...sheetRefs],
     }) } as unknown as YouTubeAgentProvider;
     const controller = new AbortController();
     const request = sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 9, signal: controller.signal });
@@ -625,5 +625,146 @@ test.each(['delete', 'cancel'])('%s during concurrent storyboard pinning drains 
     expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toEqual([]);
     expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toHaveLength(mode === 'delete' ? 0 : 1);
     expect(await catalog().readVersion(sheetRefs[0]!)).not.toBeNull();
+  });
+});
+
+test.each([false, true])('combined cold storyboard pins exact shared versions and reuses them, partial=%s', async partial => {
+  const id = videoId();
+  const { storyboardMetadata } = await import('../src/agents/providers/youtube/storyboard');
+  const board = { videoId:id, frameCount:16, intervalMs:10000,
+    manifest:{totalSheets:8,framesPerSheet:2,tileWidth:120,tileHeight:90,columns:2,rows:1,lastSampleMs:150000},
+    selection:{mode:'spread' as const}, meta:{partial,warnings:partial ? ['One sheet unavailable'] : []},
+    sheets:Array.from({length:partial ? 7 : 8}, (_,index) => ({firstFrameIndex:index*2,frameCount:2,
+      intervalMs:10000,tileWidth:120,tileHeight:90,columns:2,rows:1,imageBase64:'/9j/AA=='}))};
+  const manifestRefs = await saveVideoResource(env, {kind:'storyboard',id,metadataOnly:true}, storyboardMetadata(board), Date.now(), 60000);
+  const sheetRefs = await saveVideoResource(env, {kind:'storyboard',id,maxSheets:12}, board, Date.now(), 60000);
+  await within(`combined-cold-${partial}`, async ({store,reopen,sql}) => {
+    const upstream = vi.fn(async () => ({value:board,cacheStatus:'miss' as const,catalogVersions:[...manifestRefs,...sheetRefs]}));
+    const p = {storyboard:upstream} as unknown as YouTubeAgentProvider;
+    const first = await sessionProvider(p,store).storyboard!(id, undefined, {maxSheets:12});
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(first.assetVersions).toHaveLength(board.sheets.length+1);
+    expect(first.value.meta.partial).toBe(partial);
+    const { saveStoryboardPreviews } = await import('../src/agents/runtime/storyboard-previews');
+    const head = vi.spyOn(env.VIDEO_ASSETS, 'head');
+    try {
+      expect(first.verifiedImages).toHaveLength(board.sheets.length);
+      const previews = await saveStoryboardPreviews(env.RESEARCH, 'verified-owner', first.value,
+        new AbortController().signal, env.VIDEO_ASSETS, first.verifiedImages);
+      expect(previews).toHaveLength(board.sheets.length);
+      expect(head).not.toHaveBeenCalled();
+    } finally { head.mockRestore(); }
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toHaveLength(board.sheets.length+1);
+    const second = await sessionProvider(p,reopen()).storyboard!(id,undefined,{sheetIndexes:[0,1],maxSheets:2});
+    expect(second.value.sheets).toHaveLength(2);
+    expect(second.sessionReused).toBe(true);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    const savedManifest = await reopen().read(first.assetVersions![0]!);
+    expect(savedManifest).toEqual(storyboardMetadata(board));
+  });
+});
+
+test.each(['delete','cancel'])('%s during combined extraction cannot attach a late manifest or images', async mode => {
+  const id = videoId();
+  await within(`combined-fetch-${mode}`, async ({store,sql}) => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => {enter=resolve;});
+    const gate = new Promise<void>(resolve => {release=resolve;});
+    const controller = new AbortController();
+    const p = {storyboard:async () => {
+      enter();
+      await gate;
+      return {cacheStatus:'miss' as const, value:{videoId:id,frameCount:1,intervalMs:10000,
+        manifest:{totalSheets:1,framesPerSheet:1,tileWidth:120,tileHeight:90,columns:1,rows:1,lastSampleMs:0},
+        selection:{mode:'spread' as const},meta:{partial:false,warnings:[]},
+        sheets:[{firstFrameIndex:0,frameCount:1,intervalMs:10000,tileWidth:120,tileHeight:90,columns:1,rows:1,imageBase64:'/9j/AA=='}]}};
+    }} as unknown as YouTubeAgentProvider;
+    const pending = sessionProvider(p,store).storyboard!(id,undefined,{maxSheets:1,signal:controller.signal});
+    const rejected = expect(pending).rejects.toThrow(mode==='delete' ? 'Session assets changed' : 'cancelled');
+    await entered;
+    if (mode==='delete') await store.delete(); else controller.abort(new Error('cancelled'));
+    release();
+    await rejected;
+    expect(store.brief().assets).toEqual([]);
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+  });
+});
+
+test('six-frame session pinning reuses verification for previews and explicit refresh bypasses session hits', async () => {
+  const id=videoId();
+  const times=[1000,2000,3000,4000,5000,6000];
+  const frames={videoId:id,frames:times.map(timestampMs=>({timestampMs,width:640,height:360,
+    mimeType:'image/jpeg' as const,imageBase64:'/9j/AA=='})),failures:[],meta:{partial:false,warnings:[]}};
+  const refs=await saveVideoResource(env,{kind:'frames',id,timestampsMs:times,maxWidth:640,extractionTimeoutMs:5000},frames,Date.now(),60000);
+  await within('frames-optimized',async({store,reopen})=>{
+    const upstream=vi.fn(async()=>({value:frames,cacheStatus:'miss' as const,catalogVersions:refs}));
+    const p={frames:upstream} as unknown as YouTubeAgentProvider;
+    const request={videoId:id,timestampsMs:times,maxWidth:640};
+    const first=await sessionProvider(p,store).frames!(request);
+    expect(first.assetVersions).toHaveLength(6);
+    expect(first.verifiedImages).toHaveLength(6);
+    const {saveFramePreviews}=await import('../src/agents/runtime/frame-previews');
+    const head=vi.spyOn(env.VIDEO_ASSETS,'head');
+    try {
+      const previews=await saveFramePreviews(env.RESEARCH,'frame-owner',first.value,new AbortController().signal,env.VIDEO_ASSETS,first.verifiedImages);
+      expect(previews).toHaveLength(6);
+      expect(head).not.toHaveBeenCalled();
+    } finally {head.mockRestore();}
+    const restored=sessionProvider(p,reopen());
+    expect((await restored.frames!(request)).sessionReused).toBe(true);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect((await restored.frames!(request,undefined,{refresh:true,extractionTimeoutMs:5000})).sessionReused).toBe(false);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(upstream).toHaveBeenLastCalledWith(request,undefined,{refresh:true,extractionTimeoutMs:5000},undefined);
+  });
+});
+
+test.each(['cancel','delete'])('%s during frame pinning drains four started pins without late session attachments', async mode=>{
+  const id=videoId();
+  const times=[1000,2000,3000,4000,5000,6000];
+  const frames={videoId:id,frames:times.map(timestampMs=>({timestampMs,width:640,height:360,
+    mimeType:'image/jpeg' as const,imageBase64:'/9j/AA=='})),failures:[],meta:{partial:false,warnings:[]}};
+  const refs=await saveVideoResource(env,{kind:'frames',id,timestampsMs:times,maxWidth:640,extractionTimeoutMs:5000},frames,Date.now(),60000);
+  await within(`frames-pin-${mode}`,async({store,backend,sql})=>{
+    const original=backend.pin.bind(backend);
+    let started=0;
+    let release!:()=>void;
+    let ready!:()=>void;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const entered=new Promise<void>(resolve=>{ready=resolve;});
+    vi.spyOn(backend,'pin').mockImplementation(async(...args)=>{
+      if (++started===4) ready();
+      await gate;
+      return original(...args);
+    });
+    const p={frames:async()=>({value:frames,cacheStatus:'miss',catalogVersions:refs})} as unknown as YouTubeAgentProvider;
+    const controller=new AbortController();
+    const pending=sessionProvider(p,store).frames!({videoId:id,timestampsMs:times,maxWidth:640},controller.signal);
+    const rejected=expect(pending).rejects.toThrow(mode==='cancel'?'cancelled':'Session assets changed');
+    await entered;
+    if(mode==='cancel') controller.abort(new Error('cancelled')); else await store.delete();
+    release();
+    await rejected;
+    expect(started).toBe(4);
+    expect(store.brief().assets).toEqual([]);
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    expect(await catalog().readVersion(refs[0]!)).not.toBeNull();
+  });
+});
+
+test('cancellation during frame extraction prevents subsequent session pins', async()=>{
+  const id=videoId();
+  await within('frames-extraction-cancel',async({store,backend})=>{
+    const controller=new AbortController();
+    const pin=vi.spyOn(backend,'pin');
+    const p={frames:async()=>{
+      controller.abort(new Error('cancelled'));
+      return {value:{videoId:id,frames:[{timestampMs:1000,width:640,height:360,mimeType:'image/jpeg',imageBase64:'/9j/AA=='}],
+        failures:[],meta:{partial:false,warnings:[]}},cacheStatus:'miss'};
+    }} as unknown as YouTubeAgentProvider;
+    await expect(sessionProvider(p,store).frames!({videoId:id,timestampsMs:[1000],maxWidth:640},controller.signal)).rejects.toThrow('cancelled');
+    expect(pin).not.toHaveBeenCalled();
+    expect(store.brief().assets).toEqual([]);
   });
 });

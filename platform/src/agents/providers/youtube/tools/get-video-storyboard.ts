@@ -1,3 +1,4 @@
+import { diagnoseVisualTool, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { withRunDeadline } from '../../../runtime/deadline';
 import { storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../../../runtime/storyboard-budget';
 import { timeStoryboardStage } from '../../../../lib/storyboard-timing';
@@ -5,22 +6,22 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
-import { storyboardManifestSchema, storyboardSchema } from '../storyboard';
+import { storyboardManifestSchema, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS } from '../storyboard';
 import { storyboardPreviewsSchema } from '../../../runtime/storyboard-previews';
 import { safeIdPart, videoIdSchema, youtubeVideoUrl, meteredCredits } from './provider-evidence';
 
 const retrievalInput = z.object({
   videoId: videoIdSchema,
   focus: z.string().trim().min(1).max(1_000).optional(),
-  maxSheets: z.number().int().min(1).max(20).optional()
+  maxSheets: z.number().int().min(1).max(MAX_STORYBOARD_SHEETS).optional()
     .describe('Choose the number of sheets for a spread overview, up to 20 per call. Image payload limit is 8 MiB. Larger selections take more processing time.'),
-  sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(20).refine(indexes => new Set(indexes).size === indexes.length, 'Select distinct sheet indexes.').optional()
+  sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(MAX_STORYBOARD_SHEETS).refine(indexes => new Set(indexes).size === indexes.length, 'Select distinct sheet indexes.').optional()
     .describe('Select zero-based source sheet indexes using the manifest. Choose these or timestampsMs, not both.'),
-  timestampsMs: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).min(1).max(20).optional()
+  timestampsMs: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).min(1).max(MAX_STORYBOARD_SHEETS).optional()
     .describe('Select sheets containing these sampled timestamps in milliseconds. Nearby targets share one sheet. These are not exact video frames.'),
 });
 function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementCtx) {
-  if (input.sheetIndexes && input.sheetIndexes.length > (input.maxSheets ?? 20)) ctx.addIssue({ code: 'custom', message: 'Selected sheet indexes exceed maxSheets.' });
+  if (input.sheetIndexes && input.sheetIndexes.length > (input.maxSheets ?? MAX_STORYBOARD_SHEETS)) ctx.addIssue({ code: 'custom', message: 'Selected sheet indexes exceed maxSheets.' });
   if (input.sheetIndexes && input.timestampsMs) ctx.addIssue({ code: 'custom', message: 'Choose sheetIndexes or timestampsMs, not both.' });
 }
 export const getVideoStoryboardInputSchema = retrievalInput.superRefine(validateInput);
@@ -31,7 +32,7 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
     outputSchema: evidencePacketSchema,
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { timingsMs: _timings, ...data } = artifact.data;
+        const { visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -44,7 +45,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
-    execute: async () => {
+    execute: () => diagnoseVisualTool('storyboard', async () => {
       context.signal.throwIfAborted();
       const budget = storyboardRetrievalBudget(context.researchDeadlineAt);
       if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
@@ -52,30 +53,28 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       return withRunDeadline(Date.now() + budget, context.signal,
         signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId),
         'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
-    },
+    }, { runId: context.runId, toolCallId }),
   });
 }
 
-/** Missing metadata is fetched inside the same tool call, so it shares its metering and trace. */
+/** A selection retrieves its manifest and images in a single provider request. */
 async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string): Promise<EvidencePacket> {
   const startedAt = Date.now();
   const metadataOnly = parsed.maxSheets === undefined && parsed.sheetIndexes === undefined && parsed.timestampsMs === undefined;
-  let metadata: EvidencePacket | undefined;
   context.signal.throwIfAborted();
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   if (!metadataOnly) {
-    let evidence = context.getEvidence?.() ?? [];
-    if (!findStoryboardMetadata(parsed.videoId, evidence)) {
-      metadata = await retrieveVideoStoryboard({ videoId: parsed.videoId }, context, toolCallId);
-      evidence = [...evidence, metadata];
-    }
-    validateStoryboardSelection(parsed, evidence);
+    const evidence = context.getEvidence?.() ?? [];
+    if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
   }
   const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
-    maxSheets: parsed.maxSheets ?? 20, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal,
+    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly, signal: context.signal,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);
+  if (metadataOnly || storyboard.manifest)
+    countVisualWork('requestedImages', metadataOnly ? 0 : storyboardSheetIndexes(storyboard, parsed).length);
+  countVisualWork('returnedImages', storyboard.sheets.length);
   if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
   if (metadataOnly !== (storyboard.selection?.mode === 'metadata')) throw new Error('Storyboard response does not match the requested operation.');
   const timingsMs = { retrieval: Date.now() - startedAt, previews: 0, total: 0 };
@@ -96,14 +95,14 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
         : [{ code: 'SAMPLED_VISUAL_EVIDENCE', message: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.' }]),
       ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
     ],
-    assetVersions: [...new Set([...(metadata?.assetVersions ?? []), ...(response.assetVersions ?? [])])],
-    usage: [...(metadata?.usage ?? []), { operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+    assetVersions: [...new Set(response.assetVersions ?? [])],
+    usage: [{ operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
   });
   if (!metadataOnly && context.saveStoryboardPreviews) {
     const previewStartedAt = Date.now();
     try {
       packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
-        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal), { runId: context.runId, toolCallId }),
+        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal, response.verifiedImages), { runId: context.runId, toolCallId }),
       );
     } catch {
       context.signal.throwIfAborted();
@@ -132,13 +131,5 @@ function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePack
 function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
   const metadata = findStoryboardMetadata(input.videoId, evidence);
   if (!metadata) throw new Error('Storyboard metadata is unavailable.');
-  const { manifest, intervalMs } = metadata;
-  const endMs = manifest.lastSampleMs + intervalMs;
-  const guidance = `Available sheet indexes are 0 through ${manifest.totalSheets - 1}; timestamps must be below ${endMs} ms. Choose only available sheets or timestamps.`;
-  if (input.sheetIndexes?.some(index => index >= manifest.totalSheets)) throw new Error(`Invalid storyboard selection. ${guidance}`);
-  if (input.timestampsMs?.some(timestamp => timestamp >= endMs)) throw new Error(`Invalid storyboard timestamp. ${guidance}`);
-  if (input.timestampsMs) {
-    const selected = new Set(input.timestampsMs.map(timestamp => Math.floor(timestamp / (manifest.framesPerSheet * intervalMs))));
-    if (selected.size > (input.maxSheets ?? 20)) throw new Error(`Selected timestamps require ${selected.size} sheets, exceeding maxSheets=${input.maxSheets}. ${guidance}`);
-  }
+  storyboardSheetIndexes(metadata, input);
 }

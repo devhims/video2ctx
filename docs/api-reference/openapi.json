@@ -6962,6 +6962,375 @@
               "code": {
                 "type": "string"
               },
+              "visualDiagnostics": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "enum": [
+                      1
+                    ]
+                  },
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "tool",
+                      "coordinator"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "storyboard",
+                      "frames"
+                    ]
+                  },
+                  "startedAt": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "elapsedMs": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "unaccountedMs": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "success",
+                      "error"
+                    ]
+                  },
+                  "spans": {
+                    "maxItems": 192,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "parentId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "stage": {
+                          "type": "string",
+                          "enum": [
+                            "retrieval",
+                            "session_lookup",
+                            "session_pin",
+                            "session_asset_lookup",
+                            "session_asset_pin",
+                            "catalog_lookup",
+                            "catalog_write",
+                            "coordinator_wait",
+                            "extraction",
+                            "previews",
+                            "catalog_d1",
+                            "catalog_r2",
+                            "preview_r2",
+                            "legacy_cache"
+                          ]
+                        },
+                        "startMs": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "endMs": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "exclusiveMs": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "error",
+                            "pending"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "stage",
+                        "startMs",
+                        "endMs",
+                        "exclusiveMs",
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "counters": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "droppedSpans": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "extractions": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "extractionId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 5
+                        }
+                      },
+                      "required": [
+                        "extractionId",
+                        "attempt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "linked": {
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "waitSpanId": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "cacheStatus": {
+                          "type": "string",
+                          "enum": [
+                            "hit",
+                            "miss",
+                            "coalesced",
+                            "stale"
+                          ]
+                        },
+                        "work": {
+                          "type": "object",
+                          "properties": {
+                            "version": {
+                              "type": "number",
+                              "enum": [
+                                1
+                              ]
+                            },
+                            "operationId": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "scope": {
+                              "type": "string",
+                              "enum": [
+                                "tool",
+                                "coordinator"
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "storyboard",
+                                "frames"
+                              ]
+                            },
+                            "startedAt": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "elapsedMs": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "unaccountedMs": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": [
+                                "success",
+                                "error"
+                              ]
+                            },
+                            "spans": {
+                              "maxItems": 192,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "exclusiveMinimum": true,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "parentId": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "exclusiveMinimum": true,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "stage": {
+                                    "type": "string",
+                                    "enum": [
+                                      "retrieval",
+                                      "session_lookup",
+                                      "session_pin",
+                                      "session_asset_lookup",
+                                      "session_asset_pin",
+                                      "catalog_lookup",
+                                      "catalog_write",
+                                      "coordinator_wait",
+                                      "extraction",
+                                      "previews",
+                                      "catalog_d1",
+                                      "catalog_r2",
+                                      "preview_r2",
+                                      "legacy_cache"
+                                    ]
+                                  },
+                                  "startMs": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "endMs": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "exclusiveMs": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": [
+                                      "success",
+                                      "error",
+                                      "pending"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "stage",
+                                  "startMs",
+                                  "endMs",
+                                  "exclusiveMs",
+                                  "outcome"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "counters": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "droppedSpans": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "extractions": {
+                              "maxItems": 8,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "extractionId": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "attempt": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 5
+                                  }
+                                },
+                                "required": [
+                                  "extractionId",
+                                  "attempt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "version",
+                            "operationId",
+                            "scope",
+                            "kind",
+                            "startedAt",
+                            "elapsedMs",
+                            "unaccountedMs",
+                            "outcome",
+                            "spans",
+                            "counters",
+                            "droppedSpans",
+                            "extractions"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "work"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "version",
+                  "operationId",
+                  "scope",
+                  "kind",
+                  "startedAt",
+                  "elapsedMs",
+                  "unaccountedMs",
+                  "outcome",
+                  "spans",
+                  "counters",
+                  "droppedSpans",
+                  "extractions",
+                  "linked"
+                ],
+                "additionalProperties": false
+              },
               "extractionDiagnostics": {
                 "maxItems": 64,
                 "type": "array",

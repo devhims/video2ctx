@@ -1,3 +1,4 @@
+import { visualSpan, countVisualWork, linkVisualExtraction } from './visual-diagnostics';
 import { boundedContainerJson } from './bounded-container-json';
 import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import { getContainer } from '@cloudflare/containers';
@@ -71,6 +72,11 @@ async function withTransportDeadline<T>(timeoutMs: number, signal: AbortSignal |
 
 export async function getVideoFrames(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
   limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
+  return visualSpan('extraction', () => getVideoFramesImpl(env, request, signal, limits, onDiagnostic));
+}
+
+async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
+  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
   const parsed = frameRequestSchema.safeParse(request);
   if (!parsed.success) throw new ApiError(422, 'INVALID_INPUT', 'Provide a video ID, 1 to 6 integer timestampsMs, and maxWidth from 320 to 1920.');
   const extractionTimeoutMs = z.number().int().min(5_000).max(45_000).parse(limits?.extractionTimeoutMs ?? 45_000);
@@ -109,6 +115,8 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
             status: responseStatus, outcome: override ?? outcome, failureKind, ...capture });
         };
         try {
+          countVisualWork('containerAttempts');
+          linkVisualExtraction(extractionId, attempt + 1);
           const response = await getContainer<YouTubeFramesContainer>(env.YOUTUBE_FRAMES, `v1-${(slot + attempt) % 2}`).fetch(
             new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId,
               ...(proxyPlan ? { 'x-proxy-order': proxyPlan.order.join(',') } : {}) },
