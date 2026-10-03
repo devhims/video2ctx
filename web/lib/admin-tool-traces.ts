@@ -9,7 +9,11 @@ export const adminTraceCallSchema=z.object({
 });
 export const adminTraceDetailSchema=adminTraceCallSchema.extend({
   input:z.unknown(),output:z.unknown().optional(),
-  error:z.object({name:z.string(),message:z.string(),code:z.string().optional()}).optional(),
+  error:z.object({name:z.string(),message:z.string(),code:z.string().optional(),
+    // The API validates these diagnostics. Preserve their nested fields for inspection and copying.
+    extractionDiagnostics:z.array(z.record(z.string(),z.unknown())).optional(),
+    visualDiagnostics:z.record(z.string(),z.unknown()).optional(),
+  }).optional(),
 });
 export const adminTraceRunSchema=z.object({runId:z.string().uuid(),userId:z.string(),sessionId:z.string().uuid(),status:z.string(),calls:z.array(adminTraceCallSchema)});
 export const adminTraceListSchema=z.object({runs:z.array(z.object({
