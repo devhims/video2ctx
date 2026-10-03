@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowLeftIcon } from '@phosphor-icons/react';
 import {
   fetchAdminTrace,adminTraceListSchema,adminTraceRunSchema,adminTraceDetailSchema,
   type AdminTraceList,type AdminTraceRun,type AdminTraceDetail,
@@ -38,6 +39,7 @@ export default function AdminTraceInspector() {
   },[runId,traceId,search,status,offset,revision]);
   function submit(event:FormEvent) {event.preventDefault();setSearch(query.trim());setOffset(0);setRevision(value=>value+1);}
   function openRun(id:string) {setRun(undefined);setDetail(undefined);setTraceId('');setRunId(id);}
+  function backToRuns() {setRunId('');setRun(undefined);setTraceId('');setDetail(undefined);}
   async function downloadTrace() {
     setExporting(true);setError('');
     try {
@@ -52,6 +54,9 @@ export default function AdminTraceInspector() {
     finally {setExporting(false);}
   }
   return <section className={styles.inspector} aria-label='Agent tool traces'>
+    {runId && <button type='button' className={styles.back} onClick={backToRuns}>
+      <ArrowLeftIcon size={16} aria-hidden='true' />Back to trace runs
+    </button>}
     <header className={styles.header}><div><h2>Agent tool traces</h2><p>Inspect tool arguments, results and failed attempts across agent runs.</p></div>
       <button onClick={()=>setRevision(value=>value+1)} disabled={loading}>Refresh traces</button></header>
     {error && <p role='alert' className='alert error'>{error}</p>}
@@ -71,7 +76,7 @@ export default function AdminTraceInspector() {
       <nav className={styles.actions} aria-label='Trace pages'><button disabled={loading || offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>Previous</button>
         <button disabled={loading || page?.nextOffset==null} onClick={()=>setOffset(page!.nextOffset!)}>Next</button></nav>
     </> : <>
-      <div className={styles.actions}><button onClick={()=>{setRunId('');setRun(undefined);setTraceId('');}}>All trace runs</button>
+      <div className={styles.actions}>
         <button onClick={downloadTrace} disabled={exporting}>{exporting ? 'Downloading…' : 'Download timeline JSONL'}</button></div>
       <h3 className={styles.identifier}>Run {runId}</h3>
       {run && <p className={styles.metadata}>User {run.userId} · Session {run.sessionId} · {run.status}</p>}
