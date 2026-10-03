@@ -607,6 +607,8 @@ test('storyboard activity distinguishes instant failures from interrupted calls'
           output: { sourceCount: 1, excerptCount: 0, sources: [], warningCodes: [], storyboard: { mode: 'metadata', sheets: [] } } },
         { toolCallId: 'images', name: 'get_video_storyboard', operation: 'storyboard', status: 'interrupted',
           startedAt: 9000, input: { videoId: 'K48wIslK7zg', maxSheets: 7 } },
+        { toolCallId: 'future-status', name: 'search_context', operation: 'context', status: 'provider_waiting',
+          startedAt: 10000, input: {} },
       ],
     })}\n\n`,
   }));
@@ -624,5 +626,9 @@ test('storyboard activity distinguishes instant failures from interrupted calls'
   await expect(interrupted).toContainText('Duration is unavailable.');
   await expect(interrupted).not.toContainText('did not complete successfully');
   await expect(latest.getByRole('button', { name: /^Tool activity/ })).toContainText('1 completed');
+  const unknown = latest.locator('details').filter({ has: page.getByText('Unknown status', { exact: true }) });
+  await unknown.locator('summary').click();
+  await expect(unknown).toContainText('does not recognize the tool status');
+  await expect(unknown).not.toContainText('did not complete successfully');
   await page.screenshot({ path: testInfo.outputPath('storyboard-interrupted.png') });
 });

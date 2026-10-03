@@ -165,11 +165,28 @@ describe('storyboard agent tool', () => {
       created_at: 100, updated_at: 200, result_json: JSON.stringify(packet) }, true).output?.storyboard)
       .toEqual({ mode: 'inspection', sheets: [] });
   });
-  it('does not apply the overview default to an explicit selection', async () => {
+  it.each([
+    { sheetIndexes: [0, 1, 2, 3] }, { timestampsMs: [0, 15000, 30000, 45000] },
+    { maxSheets: 4, sheetIndexes: [0, 1, 2, 3] },
+  ])('preserves the input and saved key for explicit selections: %j', async selection => {
     const ctx = context();
-    await executeGetVideoStoryboard({ videoId: storyboard.videoId, sheetIndexes: [0, 1, 2, 3] }, ctx, 'selection');
-    expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      expect.objectContaining({ maxSheets: 20, sheetIndexes: [0, 1, 2, 3], metadataOnly: false }), expect.any(Function));
+    const execute = vi.fn(ctx.executeEvidenceTool);
+    ctx.executeEvidenceTool = execute;
+    const input = { videoId: storyboard.videoId, ...selection };
+    await executeGetVideoStoryboard(input, ctx, 'selection');
+    expect(execute.mock.calls[0]![0].input).toEqual(input);
+    expect(execute.mock.calls[0]![0].semanticKey).toBe(`storyboard:${JSON.stringify(input)}`);
+    expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId,
+      'timestampsMs' in selection ? selection.timestampsMs : undefined,
+      expect.objectContaining({ maxSheets: selection.maxSheets ?? 20, metadataOnly: false }), expect.any(Function));
+  });
+  it('uses the same saved key for default and explicit three-sheet overviews', async () => {
+    const ctx = context();
+    const execute = vi.fn(ctx.executeEvidenceTool);
+    ctx.executeEvidenceTool = execute;
+    await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'default');
+    await executeGetVideoStoryboard({ maxSheets: 3, videoId: storyboard.videoId }, ctx, 'explicit');
+    expect(execute.mock.calls[0]![0].semanticKey).toBe(execute.mock.calls[1]![0].semanticKey);
   });
   it('rejects a metadata-only provider response to an image request', async () => {
     const ctx = context();

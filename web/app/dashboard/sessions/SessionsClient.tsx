@@ -346,6 +346,7 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
         <span className='sr-only'>{tool.status}</span>
         {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{tool.finishedAt - tool.startedAt < 100 ? '<0.1s' : `${((tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s`}</span>}
         {tool.status === 'interrupted' && <span className='agent-tool-duration'>Interrupted</span>}
+        {tool.status === 'unknown' && <span className='agent-tool-duration'>Unknown status</span>}
         <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
@@ -358,6 +359,7 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
             {!!tool.output.warningCodes.length && <p>Notes: {tool.output.warningCodes.join(', ')}</p>}</>}
           {tool.status === 'failed' && <p>This tool did not complete successfully. Check the answer's source notes for any effect on coverage.</p>}
           {tool.status === 'interrupted' && <p>The run ended without a recorded result for this call. Some work may have been saved before it was interrupted. Duration is unavailable.</p>}
+          {tool.status === 'unknown' && <p>This dashboard does not recognize the tool status. Refresh to load the latest version.</p>}
           {tool.status === 'running' && <p>Waiting for the tool result…</p>}
         </div>
       </details>

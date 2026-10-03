@@ -1621,3 +1621,46 @@ test('cancelling a recovered run aborts its active successor fiber', async () =>
     }
   });
 });
+
+test('recovers an interrupted successor once and cancels the newest successor', async () => {
+  const { runtime, runId } = await seed('second-fiber-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const signals: AbortSignal[] = [];
+    const releases: (() => void)[] = [];
+    const executor = instance as unknown as { performRun(runId: string, fiber: import('agents').FiberContext): Promise<void> };
+    const perform = vi.spyOn(executor, 'performRun').mockImplementation(async (_id, fiber) => {
+      signals.push(fiber.signal);
+      await new Promise<void>(resolve => {
+        releases.push(resolve);
+        fiber.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    const firstId = `recovery:${runId}`;
+    const secondId = `recovery:${firstId}`;
+    try {
+      await instance.onFiberRecovered({ id: runId, name: 'agent-runtime-run', snapshot: null,
+        metadata: { runId }, createdAt: Date.now(), recoveryReason: 'interrupted' });
+      await vi.waitFor(() => expect(signals).toHaveLength(1));
+      // Stop execution and restore the ledger state left by a reset, while
+      // preserving the application's running row and saved recovery metadata.
+      await instance.cancelFiber(firstId, 'Simulated runtime reset.');
+      await vi.waitFor(() => expect(instance.sql`SELECT id FROM cf_agents_runs WHERE id=${firstId}`).toHaveLength(0));
+      instance.sql`UPDATE cf_agents_fibers SET status='interrupted' WHERE fiber_id=${firstId}`;
+      const interrupted = (await instance.inspectFiber(firstId))!;
+      const context = { id: firstId, name: interrupted.name, snapshot: interrupted.snapshot ?? null,
+        metadata: interrupted.metadata, createdAt: interrupted.createdAt, recoveryReason: 'interrupted' as const };
+      await instance.onFiberRecovered(context);
+      await vi.waitFor(() => expect(signals).toHaveLength(2));
+      await instance.onFiberRecovered(context);
+      expect(perform).toHaveBeenCalledTimes(2); // One execution per recovery generation.
+      expect(await instance.inspectFiber(secondId)).toMatchObject({ status: 'running', metadata: { runId } });
+      expect(await instance.cancelRun(runId)).toBe(true);
+      expect(signals[1]!.aborted).toBe(true);
+      expect(await instance.inspectFiber(secondId)).toMatchObject({ status: 'aborted' });
+    } finally {
+      releases.forEach(release => release());
+      await vi.waitFor(() => expect(instance.sql`SELECT id FROM cf_agents_runs WHERE id=${firstId} OR id=${secondId}`).toHaveLength(0));
+      perform.mockRestore();
+    }
+  });
+});

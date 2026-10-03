@@ -43,10 +43,11 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
 }
 export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string) {
   const requested = getVideoStoryboardInputSchema.parse(input);
-  // Persist the effective selection so a legacy metadata-only result cannot
-  // satisfy this image request through semantic reuse after recovery.
-  const parsed = { ...requested, maxSheets: requested.maxSheets
-    ?? (requested.sheetIndexes || requested.timestampsMs ? MAX_STORYBOARD_SHEETS : DEFAULT_STORYBOARD_SHEETS) };
+  // Only the old metadata-only shape needs a new key. Preserve existing keys
+  // for explicit selections, and use schema order for the default overview.
+  const parsed = requested.maxSheets === undefined && !requested.sheetIndexes && !requested.timestampsMs
+    ? getVideoStoryboardInputSchema.parse({ ...requested, maxSheets: DEFAULT_STORYBOARD_SHEETS })
+    : requested;
   return context.executeEvidenceTool({
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',

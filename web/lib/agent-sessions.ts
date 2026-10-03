@@ -35,7 +35,8 @@ export const agentProgressSchema = z.object({
   draft: z.object({ answer: z.string().max(20_000), state: z.enum(['streaming', 'revising']) }).optional(),
   tools: z.array(z.object({
     toolCallId: z.string(), name: z.string(), operation: z.string(),
-    status: z.enum(['running', 'completed', 'failed', 'interrupted']), startedAt: z.number(), finishedAt: z.number().optional(),
+    // Keep a future tool status from discarding the entire progress snapshot.
+    status: z.string().pipe(z.enum(['running', 'completed', 'failed', 'interrupted', 'unknown']).catch('unknown')), startedAt: z.number(), finishedAt: z.number().optional(),
     input: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number()), z.array(z.string().max(64))])),
     output: z.object({ sourceCount: z.number(), excerptCount: z.number(),
       sources: z.array(z.object({ title: z.string().optional(), videoId: z.string().optional(), channelId: z.string().optional() })),

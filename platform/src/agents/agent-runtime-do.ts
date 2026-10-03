@@ -528,6 +528,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   private async executeRun(runId: string, fiber: FiberContext): Promise<void> {
     // Older recovery attempts can coexist in the SDK ledger after a reset.
+    // Register synchronously before yielding so the next callback sees this run.
     if (this.#activeRunFibers.has(runId)) return;
     this.#activeRunFibers.set(runId, fiber.id);
     const work = this.performRun(runId, fiber);

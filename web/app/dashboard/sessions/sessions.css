@@ -210,5 +210,5 @@
 .agent-asset-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .agent-asset-text { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.agent-tool-icon.status-interrupted { color: var(--color-dashboard-warning); }
-.agent-tool-mode { font-size: 0.75rem; color: var(--color-dashboard-muted); }
+.agent-tool-icon.status-interrupted, .agent-tool-icon.status-unknown { color: var(--color-dashboard-warning); }
+.agent-tool-mode { font-size: 10px; color: var(--color-dashboard-muted); }
