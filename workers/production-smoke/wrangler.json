@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-production-smoke",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-08-08",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "triggers": { "crons": [] },
+  "vars": { "CHECKS_ENABLED": "false" },
+  "durable_objects": { "bindings": [{ "name": "SMOKE_GUARD", "class_name": "SmokeGuard" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SmokeGuard"] }],
+  "observability": { "enabled": true },
+  "limits": { "cpu_ms": 10000 }
+}

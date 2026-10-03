@@ -1,0 +1,21 @@
+{
+  "name": "video2ctx-production-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/checks.mjs && node --check src/index.mjs && npm test",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test:runtime": "npm run build && node scripts/runtime-check.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.120.0",
+    "miniflare": "5.20260801.1-alpha"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
