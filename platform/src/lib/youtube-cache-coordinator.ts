@@ -1,6 +1,6 @@
 import { captureVisualWork, withVisualFailureCapture, visualSpan, countVisualWork, type VisualDiagnostics, type VisualFailureCapture } from './visual-diagnostics';
 import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
-import { YouTubeProcessorError } from './youtube-processor-client';
+import { YouTubeProcessorError, youtubeOperationTimeoutMs } from './youtube-processor-client';
 import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
@@ -54,8 +54,27 @@ interface RecentResult {
   entry: YouTubeCacheEntry;
 }
 
+interface ExtractionFlight {
+  deadlineAt?: number;
+  effectiveDeadlineAt: number;
+  promise: Promise<YouTubeCacheResponse>;
+}
+
+// Stop only this waiter. The shared extraction can still serve other callers.
+async function waitForExtraction(promise: Promise<YouTubeCacheResponse>, deadlineAt?: number): Promise<YouTubeCacheResponse> {
+  if (deadlineAt === undefined) return promise;
+  const expired = () => failureFrom(new ApiError(503, 'EXTRACTION_DEADLINE_EXCEEDED', 'The extraction deadline expired.'));
+  if (deadlineAt <= Date.now()) return expired();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<YouTubeCacheResponse>(resolve => {
+      timer = setTimeout(() => resolve(expired()), deadlineAt - Date.now());
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 export class YouTubeCacheCoordinatorCore {
-  private readonly inFlight = new Map<string, Promise<YouTubeCacheResponse>>();
+  private readonly inFlight = new Map<string, Set<ExtractionFlight>>();
   private recent?: RecentResult;
 
   constructor(
@@ -64,48 +83,65 @@ export class YouTubeCacheCoordinatorCore {
   ) {}
 
   async getOrLoad(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
-    // Callers with different deadlines must not inherit an earlier run's cutoff.
     const deadlineAt = 'deadlineAt' in request.operation ? request.operation.deadlineAt : undefined;
-    const flightKey = `${request.cacheKey}:${!!request.refresh}:${deadlineAt ?? ''}`;
-    const active = this.inFlight.get(flightKey);
+    const effectiveDeadlineAt = deadlineAt ?? (request.operation.kind === 'frames' ? Infinity
+      : Date.now() + youtubeOperationTimeoutMs(this.env, request.operation));
+    const flightKey = `${request.cacheKey}:${!!request.refresh}`;
+    const flights = this.inFlight.get(flightKey);
+    // Deadline-free callers retain their existing coalescing policy. Explicit
+    // deadlines can share only when the leader has at least that much time.
+    const active = [...(flights ?? [])].find(flight => flight.effectiveDeadlineAt > Date.now()
+      && ((deadlineAt === undefined && flight.deadlineAt === undefined)
+        || flight.effectiveDeadlineAt >= effectiveDeadlineAt));
     if (active) {
-      const shared = await active;
+      const shared = await waitForExtraction(active.promise, deadlineAt
+        ?? (active.deadlineAt === undefined ? undefined : effectiveDeadlineAt));
       return shared.ok && shared.cacheStatus === 'miss'
         ? { ...shared, cacheStatus: 'coalesced' }
         : shared;
     }
+    if (deadlineAt !== undefined && deadlineAt <= Date.now())
+      return failureFrom(new ApiError(503, 'EXTRACTION_DEADLINE_EXCEEDED', 'The extraction deadline expired.'));
 
     const recent = this.recent;
     if (!request.refresh && !videoCatalog(this.env) && recent?.cacheKey === request.cacheKey && recent.entry.freshUntil > Date.now()) {
       return successFromEntry(recent.entry, 'hit');
     }
 
-    const promise = this.loadDiagnosed(request);
-    this.inFlight.set(flightKey,promise);
-    try {
-      const response = await promise;
-      if (
-        !videoCatalog(this.env)
-        && response.ok
-        && response.cacheStatus !== 'stale'
-        && response.value !== undefined
-        && response.fetchedAt !== undefined
-        && resourceComplete(request.operation,response.value)
-      ) {
-        this.recent = {
-          cacheKey: request.cacheKey,
-          entry: {
-            version: 1,
-            value: response.value,
-            fetchedAt: response.fetchedAt,
-            freshUntil: response.fetchedAt + request.maxAgeMs,
-          },
-        };
-      }
-      return response;
-    } finally {
-      if (this.inFlight.get(flightKey) === promise) this.inFlight.delete(flightKey);
+    const promise = this.loadAndRemember(request);
+    const flight = { deadlineAt, effectiveDeadlineAt, promise };
+    const group = flights ?? new Set<ExtractionFlight>();
+    group.add(flight);
+    this.inFlight.set(flightKey, group);
+    const remove = () => {
+      group.delete(flight);
+      if (!group.size && this.inFlight.get(flightKey) === group) this.inFlight.delete(flightKey);
+    };
+    void promise.then(remove, remove);
+    return waitForExtraction(promise, deadlineAt);
+  }
+
+  private async loadAndRemember(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
+    const response = await this.loadDiagnosed(request);
+    if (
+      !videoCatalog(this.env)
+      && response.ok
+      && response.cacheStatus !== 'stale'
+      && response.value !== undefined
+      && response.fetchedAt !== undefined
+      && resourceComplete(request.operation, response.value)
+    ) {
+      this.recent = {
+        cacheKey: request.cacheKey,
+        entry: {
+          version: 1,
+          value: response.value,
+          fetchedAt: response.fetchedAt,
+          freshUntil: response.fetchedAt + request.maxAgeMs,
+        },
+      };
     }
+    return response;
   }
 
   private async loadDiagnosed(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {

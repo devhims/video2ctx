@@ -111,15 +111,54 @@ describe('YouTube cache coordinator', () => {
   });
 });
 
-test('coalesces matching deadlines but keeps independent research deadlines separate', async () => {
+test('coalesces matching or shorter deadlines but gives later callers their own extraction', async () => {
   const resolvers: Array<(value: unknown) => void> = [];
   const loader = vi.fn(() => new Promise(resolve => resolvers.push(resolve)));
   const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }), loader);
   const first = { ...request, operation: { ...request.operation, deadlineAt: Date.now() + 10_000 } };
   const second = { ...request, operation: { ...request.operation, deadlineAt: first.operation.deadlineAt + 30_000 } };
-  const pending = [core.getOrLoad(first), core.getOrLoad(first), core.getOrLoad(second)];
+  const shorter = { ...first, operation: { ...first.operation, deadlineAt: first.operation.deadlineAt - 5000 } };
+  const pending = [core.getOrLoad(first), core.getOrLoad(first), core.getOrLoad(shorter), core.getOrLoad(second)];
   await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2));
   resolvers.forEach(resolve => resolve({ id: 'abcdefghijk' }));
   const results = await Promise.all(pending);
-  expect(results.map(result => result.cacheStatus)).toEqual(['miss', 'coalesced', 'miss']);
+  expect(results.map(result => result.cacheStatus)).toEqual(['miss', 'coalesced', 'coalesced', 'miss']);
+});
+
+test.each([
+  [undefined, 60_000, 1],
+  [180_000, undefined, 1],
+  [30_000, undefined, 2],
+] as const)('shares public and agent work only when the leader has enough time (%s, %s)', async (leaderMs, followerMs, calls) => {
+  const resolvers: Array<(value: unknown) => void> = [];
+  const loader = vi.fn(() => new Promise(resolve => resolvers.push(resolve)));
+  const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }), loader);
+  const input = (ms?: number) => ({ ...request, operation: { ...request.operation,
+    ...(ms === undefined ? {} : { deadlineAt: Date.now() + ms }) } });
+  const leader = core.getOrLoad(input(leaderMs));
+  await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+  const follower = core.getOrLoad(input(followerMs));
+  await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(calls));
+  resolvers.forEach(resolve => resolve({ id: 'abcdefghijk' }));
+  expect((await Promise.all([leader, follower])).map(result => result.cacheStatus))
+    .toEqual(['miss', calls === 1 ? 'coalesced' : 'miss']);
+});
+
+test('an expired follower stops waiting without cancelling or removing the shared extraction', async () => {
+  vi.useFakeTimers();
+  try {
+    let complete!: (value: unknown) => void;
+    const loader = vi.fn(() => new Promise(resolve => { complete = resolve; }));
+    const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }), loader);
+    const input = (ms: number) => ({ ...request, operation: { ...request.operation, deadlineAt: Date.now() + ms } });
+    const leader = core.getOrLoad(input(60_000));
+    await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+    const follower = core.getOrLoad(input(1000));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(await follower).toMatchObject({ ok: false, error: { code: 'EXTRACTION_DEADLINE_EXCEEDED', retryable: true } });
+    const next = core.getOrLoad(input(10_000));
+    complete({ id: 'abcdefghijk' });
+    expect((await Promise.all([leader, next])).map(result => result.cacheStatus)).toEqual(['miss', 'coalesced']);
+    expect(loader).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
 });

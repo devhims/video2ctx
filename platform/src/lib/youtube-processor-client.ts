@@ -254,6 +254,14 @@ async function resultFrom<T>(response: Response, signal?: AbortSignal, onPayload
   return payload.value as T;
 }
 
+// Shared with the cache coordinator when deciding whether a running extraction
+// has enough time left to serve another caller.
+export function youtubeOperationTimeoutMs(env: Env, operation: YouTubeOperation): number {
+  return String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard'
+    ? boundedInteger(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 300_000)
+    : processorTimeoutMs(env);
+}
+
 export async function runYouTubeOperation<T extends YouTubeOperation>(
   env: Env, operation: T, onDiagnostic?: ExtractionDiagnosticSink,
 ): Promise<YouTubeOperationResult<T>> {
@@ -262,8 +270,7 @@ export async function runYouTubeOperation<T extends YouTubeOperation>(
     // fallback is only for an exhausted, explicitly configured proxy pool.
     if (String(env.YOUTUBE_DIRECT_FALLBACK).trim().toLowerCase() === 'off' || !normalizedProxyUrls(env)?.length)
       return runYouTubeOperationImpl(env, operation, onDiagnostic);
-    const worker = String(env.YOUTUBE_EXTRACTION_BACKEND) === 'worker' && operation.kind !== 'storyboard';
-    const budget = worker ? boundedInteger(env.YOUTUBE_EXTRACTION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 300_000) : processorTimeoutMs(env);
+    const budget = youtubeOperationTimeoutMs(env, operation);
     const deadlineAt = operation.deadlineAt ?? Date.now() + budget;
     if (deadlineAt <= Date.now()) throw new YouTubeProcessorError(
       'UNAVAILABLE', 'The extraction deadline expired.', 503, true);

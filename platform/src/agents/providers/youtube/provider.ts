@@ -73,12 +73,16 @@ export function createYouTubeAgentProvider(
       limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}),signal);
     },
     storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => {
-      const { signal, ...selection } = options;
+      const { signal, deadlineAt: requestedDeadlineAt, ...selection } = options;
+      const deadlineAt = requestedDeadlineAt === undefined ? researchDeadlineAt
+        : Math.min(requestedDeadlineAt, researchDeadlineAt ?? Infinity);
+      const operation = { kind: 'storyboard' as const, id: videoId, timestampsMs, ...selection,
+        ...(deadlineAt === undefined ? {} : { deadlineAt }) };
       signal?.throwIfAborted();
       const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
       return abortable(videoCatalog(env)
-        ? getVideoResource(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection, ...(researchDeadlineAt === undefined ? {} : { deadlineAt: researchDeadlineAt })}, selection.refresh, diagnostic)
-        : runYouTubeOperation(env, {kind:'storyboard', id:videoId, timestampsMs, ...selection, ...(researchDeadlineAt === undefined ? {} : { deadlineAt: researchDeadlineAt })}, diagnostic)
+        ? getVideoResource(env, operation, selection.refresh, diagnostic)
+        : runYouTubeOperation(env, operation, diagnostic)
           .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
     },
     search: (query, filters = {}) => provider.search(env, query, filters),

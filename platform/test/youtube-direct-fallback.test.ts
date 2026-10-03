@@ -4,6 +4,7 @@ import * as worker from '../src/lib/youtube-worker-extraction';
 import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import { getTranscriptWithCache } from '../src/lib/youtube';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import { executeGetVideoStoryboard } from '../src/agents/providers/youtube/tools/get-video-storyboard';
 import { createYouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import type { ExtractionAttempt } from '../src/lib/extraction-diagnostics';
@@ -256,4 +257,32 @@ test.each(['transcript', 'storyboard'] as const)('agent %s forwards its research
   await expect(kind === 'transcript' ? provider.transcript(operation.id) : provider.storyboard!(operation.id))
     .rejects.toMatchObject({ code: 'UNAVAILABLE' });
   expect(Number(requests.at(-1)!.headers.get('x-extraction-deadline-at'))).toBe(deadlineAt);
+});
+
+test('storyboard tool sends its retrieval deadline to direct recovery and preserves analysis time', async () => {
+  vi.useFakeTimers();
+  const { env, containerFetch, requests } = setup();
+  const normalFetch = containerFetch.getMockImplementation()!;
+  const researchDeadlineAt = Date.now() + 80_000;
+  let directRequest: Request | undefined;
+  containerFetch.mockImplementation(async request => {
+    if (request.headers.get('x-processor-egress') !== 'direct') return normalFetch(request);
+    directRequest = request;
+    return new Promise(() => {});
+  });
+  const context = {
+    runId: 'storyboard-budget', researchDeadlineAt, signal: new AbortController().signal,
+    provider: createYouTubeAgentProvider(env, undefined, researchDeadlineAt),
+    executeEvidenceTool: execution => execution.execute(),
+  } as AgentToolContext;
+  const rejected = expect(executeGetVideoStoryboard({ videoId: operation.id }, context, 'storyboard'))
+    .rejects.toThrow('Storyboard retrieval exceeded its budget');
+  await vi.waitFor(() => expect(directRequest).toBeDefined());
+  const retrievalDeadline = Number(directRequest!.headers.get('x-extraction-deadline-at'));
+  expect(retrievalDeadline).toBe(researchDeadlineAt - 35_000);
+  await vi.advanceTimersByTimeAsync(retrievalDeadline - Date.now());
+  await rejected;
+  expect(directRequest!.signal.aborted).toBe(true);
+  expect(researchDeadlineAt - Date.now()).toBe(35_000);
+  expect(requests).toHaveLength(4);
 });

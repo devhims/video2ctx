@@ -10,6 +10,7 @@ export const storyboardManifestSchema = z.object({
   lastSampleMs: z.number().int().nonnegative(),
 });
 export interface StoryboardSelectionOptions {
+  deadlineAt?: number;
   signal?: AbortSignal;
   refresh?: boolean;
   maxSheets?: number;

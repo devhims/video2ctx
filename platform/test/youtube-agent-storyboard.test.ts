@@ -145,7 +145,7 @@ describe('storyboard agent tool', () => {
     ctx.saveStoryboardPreviews = vi.fn();
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'metadata');
     expect(ctx.provider.storyboard).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined, signal: expect.any(AbortSignal) }, expect.any(Function));
+      { metadataOnly: true, maxSheets: 20, sheetIndexes: undefined, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
     expect(packet.excerpts).toEqual([]);
@@ -170,7 +170,7 @@ describe('storyboard agent tool', () => {
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Charts',
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, signal: expect.any(AbortSignal) }, expect.any(Function));
+      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
@@ -189,7 +189,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [50000] }, ctx, 'first');
     const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [55000] }, ctx, 'second');
-    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, signal: expect.any(AbortSignal) }, expect.any(Function));
+    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(keys[0]).not.toBe(keys[1]);
     expect(result.artifacts[0]!.data).toMatchObject({ sampledRanges: [{ startMs: 50000, endMs: 55000 }] });
   });
@@ -311,15 +311,15 @@ describe('visual evidence presented to synthesis', () => {
   });
 });
 
-it('declines storyboard retrieval when research time is almost exhausted', async () => {
+it('declines storyboard retrieval when it cannot reserve analysis time', async () => {
   const ctx = context();
-  ctx.researchDeadlineAt = Date.now() + 4_000;
+  ctx.researchDeadlineAt = Date.now() + 39_000;
   await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'late'))
     .rejects.toThrow('Not enough research time');
   expect(ctx.provider.storyboard).not.toHaveBeenCalled();
 });
 
-it('allows a hanging retrieval until the research deadline without aborting the parent signal', async () => {
+it('bounds a hanging retrieval and preserves 35 seconds for analysis', async () => {
   vi.useFakeTimers();
   try {
     const ctx = context();
@@ -331,9 +331,9 @@ it('allows a hanging retrieval until the research deadline without aborting the 
     });
     const request = executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 12 }, ctx, 'slow');
     const rejected = expect(request).rejects.toThrow('Storyboard retrieval exceeded its budget');
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     await rejected;
-    expect(ctx.researchDeadlineAt - Date.now()).toBe(0);
+    expect(ctx.researchDeadlineAt - Date.now()).toBe(35_000);
     expect(ctx.signal.aborted).toBe(false);
     expect(signal?.aborted).toBe(true);
   } finally { vi.useRealTimers(); }
@@ -417,4 +417,24 @@ it('splits a twelve-sheet tool selection and reports only successfully analyzed 
   expect(result.artifacts[0]!.data).toMatchObject({requestedSheetCount:12,analyzedSheetCount:6,sampledFrames:150});
   expect((result.artifacts[0]!.data.sampledRanges as Array<{startMs:number}>)[0]!.startMs).toBe(750000);
   expect(result.warnings.some(w=>w.message.includes('batch 1 failed'))).toBe(true);
+});
+
+it('retrieves and analyzes a slow storyboard within the reserved research time', async () => {
+  vi.useFakeTimers();
+  try {
+    const ctx = context();
+    ctx.researchDeadlineAt = Date.now() + 60_000;
+    const fetchStoryboard = ctx.provider.storyboard!;
+    ctx.provider.storyboard = vi.fn(async (...args: Parameters<typeof fetchStoryboard>) => {
+      expect(args[2]?.deadlineAt).toBe(ctx.researchDeadlineAt! - 35_000);
+      await new Promise(resolve => setTimeout(resolve, 20_000));
+      return fetchStoryboard(...args);
+    });
+    const pending = retrieveAndAnalyze({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram' }, ctx, 'reserved');
+    await vi.waitFor(() => expect(ctx.provider.storyboard).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(20_000);
+    const packet = await pending;
+    expect(packet.excerpts.length).toBeGreaterThan(0);
+    expect(ctx.researchDeadlineAt - Date.now()).toBeGreaterThanOrEqual(35_000);
+  } finally { vi.useRealTimers(); }
 });

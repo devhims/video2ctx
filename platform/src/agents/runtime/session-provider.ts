@@ -108,7 +108,7 @@ export function sessionProvider(
               fresh,
               async () => {
                 if (options.metadataOnly) return provider.storyboard!(id, undefined,
-                  { metadataOnly: true, ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                  { metadataOnly: true, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
                 prefetched = await provider.storyboard!(id, timestamps,
                   { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic);
                 return { ...prefetched, value: storyboardMetadata(prefetched.value),
@@ -149,7 +149,7 @@ export function sessionProvider(
               const fetched = prefetched ?? await provider.storyboard!(
                 id,
                 undefined,
-                { sheetIndexes: missing, maxSheets: missing.length, ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
+                { sheetIndexes: missing, maxSheets: missing.length, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
               );
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
