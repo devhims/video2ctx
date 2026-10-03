@@ -80,6 +80,14 @@ function validId(value: string, max = 64): string {
   return value;
 }
 
+export function parseChannelId(value: string): string {
+  const id = value.trim();
+  if (id.length > 200 || !/^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$/.test(id)) {
+    throw new ApiError(422, 'INVALID_ID', 'Provide a YouTube channel ID (UC followed by 22 characters) or a handle starting with @.');
+  }
+  return id;
+}
+
 export function withYouTubeMetadata<T>(value: T): T {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;

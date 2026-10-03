@@ -2620,7 +2620,7 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "description": "Provider channel ID or handle.",
+            "description": "Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2708,7 +2708,7 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "description": "Provider channel ID or handle.",
+            "description": "Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2820,7 +2820,7 @@
             "name": "id",
             "in": "path",
             "required": true,
-            "description": "Provider channel ID or handle.",
+            "description": "Provider channel ID or handle. For YouTube, use UC followed by 22 letters, digits, underscores, or hyphens, or a handle starting with @. Bare names return 422 INVALID_ID before billing.",
             "schema": {
               "type": "string",
               "minLength": 1,

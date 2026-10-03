@@ -28,6 +28,7 @@ export interface ProviderAdapter {
   getComments: typeof youtube.getCommentsWithCache;
   getAllComments: typeof youtube.getAllCommentsWithCache;
   getEndscreen: typeof youtube.getEndscreen;
+  parseChannelId: typeof youtube.parseChannelId;
   getChannel: typeof youtube.getChannelWithCache;
   getChannelVideos: typeof youtube.getChannelVideosWithCache;
   getChannelPlaylists: typeof youtube.getChannelPlaylistsWithCache;
@@ -46,6 +47,7 @@ const youtubeProvider = {
   getComments: youtube.getCommentsWithCache,
   getAllComments: youtube.getAllCommentsWithCache,
   getEndscreen: youtube.getEndscreen,
+  parseChannelId: youtube.parseChannelId,
   getChannel: youtube.getChannelWithCache,
   getChannelVideos: youtube.getChannelVideosWithCache,
   getChannelPlaylists: youtube.getChannelPlaylistsWithCache,
