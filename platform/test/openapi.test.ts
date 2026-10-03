@@ -2,11 +2,45 @@ import { readFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import { documentationApp } from '../src/docs';
 import { openApiDocument } from '../src/openapi';
+import { OPENAPI_OPERATION_AUDIENCE } from '../src/openapi-audience';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head']);
 const mountedApp = new Hono().route('/', documentationApp);
 
 describe('OpenAPI and Scalar documentation', () => {
+  test('requires provider in the query and project identity in the path', () => {
+    const operations = Object.entries(openApiDocument.paths);
+    expect(operations.some(([path]) => path.startsWith('/v1/providers/'))).toBe(false);
+    for (const [path, item] of operations) {
+      const operation = 'get' in item ? item.get : undefined;
+      if (operation && /^\/v1\/(search|browse|trends|videos|channels|playlists)(\/|$)/.test(path)) {
+        expect(operation).toHaveProperty('parameters', expect.arrayContaining([
+          expect.objectContaining({ name: 'provider', in: 'query', required: true }),
+        ]));
+      }
+    }
+    expect(openApiDocument.paths['/v1/projects/{projectId}/search'].get.parameters).toContainEqual(
+      expect.objectContaining({ name: 'projectId', in: 'path', required: true }),
+    );
+  });
+
+  test('serves the same consumer operations as Mintlify, excluding internal research', async () => {
+    const response = await mountedApp.request('/openapi.json');
+    const document = await response.json() as { paths: Record<string, Record<string, { operationId: string }>>; servers: unknown };
+    const generated = JSON.parse(readFileSync(new URL('../../docs/api-reference/openapi.json', import.meta.url), 'utf8'));
+    expect(document).toEqual({ ...generated, servers: document.servers });
+    for (const pathItem of Object.values(document.paths)) {
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (HTTP_METHODS.has(method)) expect(OPENAPI_OPERATION_AUDIENCE[operation.operationId]).toBe('consumer');
+      }
+    }
+    for (const path of ['/v1/projects/{projectId}/answers', '/v1/projects/{projectId}/comparisons', '/v1/projects/{projectId}/reports']) {
+      expect(document.paths[path]).toBeUndefined();
+    }
+    expect(document.paths['/v1/agent']).toBeDefined();
+    expect(document.paths['/v1/search']).toBeDefined();
+  });
+
   test('serves the OpenAPI 3.1 document', async () => {
     const response = await mountedApp.request('/openapi.json');
 
@@ -120,10 +154,9 @@ describe('OpenAPI and Scalar documentation', () => {
     const paths = openApiDocument.paths as Record<string, Record<string, any>>;
     const dataOperations = [
       paths['/v1/search']!.get,
-      paths['/v1/providers/{provider}/browse']!.get,
-      paths['/v1/providers/{provider}/videos/{id}']!.get,
+      paths['/v1/browse']!.get,
+      paths['/v1/videos/{id}']!.get,
       paths['/v1/usage']!.get,
-      paths['/v1/answers']!.post,
     ];
 
     expect(components.securitySchemes.apiKey).toMatchObject({
@@ -165,7 +198,7 @@ describe('OpenAPI and Scalar documentation', () => {
 
   test('documents categorized and paginated provider search responses', () => {
     const searchOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
-      ['/v1/providers/{provider}/search']!.get;
+      ['/v1/search']!.get;
     const parameterNames = searchOperation.parameters.map((parameter: { name: string }) => parameter.name);
     const searchSchema = (openApiDocument.components.schemas as Record<string, any>).SearchResponse;
 
@@ -182,14 +215,14 @@ describe('OpenAPI and Scalar documentation', () => {
   test('documents tracks and transcript auto-translation', () => {
     const schemas = openApiDocument.components.schemas as Record<string, any>;
     const paths = openApiDocument.paths as Record<string, Record<string, any>>;
-    const tracksOperation = paths['/v1/providers/{provider}/videos/{id}/tracks']!.get;
+    const tracksOperation = paths['/v1/videos/{id}/tracks']!.get;
     const transcriptOperation = (openApiDocument.paths as Record<string, Record<string, any>>)
-      ['/v1/providers/{provider}/videos/{id}/transcript']!.get;
+      ['/v1/videos/{id}/transcript']!.get;
     const parameterNames = transcriptOperation.parameters.map((parameter: { name: string }) => parameter.name);
 
     expect(tracksOperation.operationId).toBe('getVideoTracks');
     expect(tracksOperation.deprecated).not.toBe(true);
-    expect(paths['/v1/providers/{provider}/videos/{id}/captions']).toBeUndefined();
+    expect(paths['/v1/videos/{id}/captions']).toBeUndefined();
     expect(parameterNames).toContain('lang');
     expect(parameterNames).toContain('format');
     expect(parameterNames).not.toContain('translateTo');
@@ -220,9 +253,9 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(schemas.ChannelMoreInfo.properties.businessEmailAvailable.type).toBe('boolean');
     expect(schemas.ChannelVideos.required).toEqual(['channelId', 'sort', 'videos', 'meta']);
     expect(schemas.ChannelPlaylists.required).toEqual(['channelId', 'sort', 'playlists', 'meta']);
-    expect(paths['/v1/providers/{provider}/channels/{id}/videos']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+    expect(paths['/v1/channels/{id}/videos']!.get.parameters.map((parameter: { name: string }) => parameter.name))
       .toContain('continuation');
-    expect(paths['/v1/providers/{provider}/channels/{id}/playlists']!.get.parameters.map((parameter: { name: string }) => parameter.name))
+    expect(paths['/v1/channels/{id}/playlists']!.get.parameters.map((parameter: { name: string }) => parameter.name))
       .toContain('continuation');
   });
 

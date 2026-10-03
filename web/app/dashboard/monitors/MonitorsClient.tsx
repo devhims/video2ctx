@@ -37,7 +37,7 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
       legacy.map(async (m) => {
         try {
           const channel = await api<ChannelInfo>(
-            `/v1/providers/${m.provider}/channels/${encodeURIComponent(m.target)}`,
+            `/v1/channels/${encodeURIComponent(m.target)}?provider=${encodeURIComponent(m.provider)}`,
           );
           const query = { label: channel.name, handle: channel.handle };
           await api(`/v1/monitors/${m.id}`, { method: 'PATCH', body: JSON.stringify({ query }) });

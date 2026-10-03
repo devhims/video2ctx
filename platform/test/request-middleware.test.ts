@@ -12,10 +12,10 @@ describe('request middleware', () => {
     try {
       const middlewareApp = new Hono<App>();
       middlewareApp.use('*', requestContext);
-      middlewareApp.get('/v1/providers/youtube/videos/:id', async c => c.json(
+      middlewareApp.get('/v1/videos/:id', async c => c.json(
         await timeDataRequest(c, 'data_read', async () => ({ title: 'private-test-payload' })),
       ));
-      const response = await middlewareApp.request('/v1/providers/youtube/videos/abcdefghijk?secret=query-secret', {
+      const response = await middlewareApp.request('/v1/videos/abcdefghijk?provider=youtube&secret=query-secret', {
         headers: { authorization: 'Bearer credential-secret' },
       }, {} as Env);
       expect(response.headers.get('Server-Timing')).toMatch(/^data_read;dur=\d+, total;dur=\d+$/);
@@ -26,7 +26,7 @@ describe('request middleware', () => {
   });
 
   test('failed video authentication still reports its duration', async () => {
-    const response = await app.request('/v1/providers/youtube/videos/abcdefghijk', {}, {
+    const response = await app.request('/v1/videos/abcdefghijk?provider=youtube', {}, {
       APP_ORIGIN: 'https://app.example.com',
     } as unknown as Env);
     expect(response.status).toBe(401);

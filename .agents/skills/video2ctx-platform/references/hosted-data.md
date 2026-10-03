@@ -16,21 +16,21 @@ For other operations, percent-encode query values and replace brace placeholders
 
 | Need | Command |
 | --- | --- |
-| Search | `video2ctx api GET '/v1/providers/youtube/search?q=<encoded>' --include-meta` |
-| Browse | `video2ctx api GET '/v1/providers/youtube/browse' --include-meta` |
-| Video details | `video2ctx api GET '/v1/providers/youtube/videos/{id}' --include-meta` |
-| Caption tracks | `video2ctx api GET '/v1/providers/youtube/videos/{id}/tracks' --include-meta` |
-| Transcript | `video2ctx api GET '/v1/providers/youtube/videos/{id}/transcript?format=text' --include-meta` |
-| Comments | `video2ctx api GET '/v1/providers/youtube/videos/{id}/comments' --include-meta` |
-| End screen | `video2ctx api GET '/v1/providers/youtube/videos/{id}/endscreen' --include-meta` |
-| Channel details | `video2ctx api GET '/v1/providers/youtube/channels/{id}' --include-meta` |
-| Channel videos | `video2ctx api GET '/v1/providers/youtube/channels/{id}/videos' --include-meta` |
-| Channel playlists | `video2ctx api GET '/v1/providers/youtube/channels/{id}/playlists' --include-meta` |
-| Playlist | `video2ctx api GET '/v1/providers/youtube/playlists/{id}' --include-meta` |
+| Search | `video2ctx api GET '/v1/search?provider=youtube&q=<encoded>' --include-meta` |
+| Browse | `video2ctx api GET '/v1/browse?provider=youtube' --include-meta` |
+| Video details | `video2ctx api GET '/v1/videos/{id}?provider=youtube' --include-meta` |
+| Caption tracks | `video2ctx api GET '/v1/videos/{id}/tracks?provider=youtube' --include-meta` |
+| Transcript | `video2ctx api GET '/v1/videos/{id}/transcript?provider=youtube&format=text' --include-meta` |
+| Comments | `video2ctx api GET '/v1/videos/{id}/comments?provider=youtube' --include-meta` |
+| End screen | `video2ctx api GET '/v1/videos/{id}/endscreen?provider=youtube' --include-meta` |
+| Channel details | `video2ctx api GET '/v1/channels/{id}?provider=youtube' --include-meta` |
+| Channel videos | `video2ctx api GET '/v1/channels/{id}/videos?provider=youtube' --include-meta` |
+| Channel playlists | `video2ctx api GET '/v1/channels/{id}/playlists?provider=youtube' --include-meta` |
+| Playlist | `video2ctx api GET '/v1/playlists/{id}?provider=youtube' --include-meta` |
 | Usage and balance | `video2ctx api GET '/v1/usage' --include-meta` |
 | Account identity | `video2ctx whoami --json` |
 
-The provider for known YouTube resources is `youtube`; do not spend a request discovering it through `/v1/providers`. Provider listing and usage are free. Most provider reads cost 1 credit; a fresh search or comments request costs 2 credits. `--include-meta` exposes settled credit and request metadata.
+Every provider read requires `provider=youtube` in the query; do not spend a request discovering it through `/v1/providers`. Provider listing and usage are free. Most provider reads cost 1 credit; a fresh search or comments request costs 2 credits. `--include-meta` exposes settled credit and request metadata.
 
 ## Bound the workflow
 

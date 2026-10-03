@@ -3,9 +3,13 @@ title: "API conventions"
 description: "Credits, pagination, metadata, caching, and error behavior."
 ---
 
-## Provider paths
+## Resource paths
 
-Provider-owned resources use explicit paths such as `/v1/providers/youtube/videos/{id}`. User-owned projects, research, monitors, and notifications remain provider-neutral.
+Provider reads use resource paths such as `/v1/videos/{id}?provider=youtube`. Every provider read requires exactly one `provider` query parameter; resource IDs stay in the path. Missing providers return `PROVIDER_REQUIRED`, and unsupported values return `PROVIDER_NOT_SUPPORTED`.
+
+Project search uses `/v1/projects/{projectId}/search?q=...` and only searches that project's indexed material. The authenticated user must own the project. The project ID belongs in the path, not the query or request body.
+
+The former `/v1/providers/{provider}/...` routes have been replaced without compatibility aliases. `/v1/search` now searches the selected external provider; private search moved to the project route. Update clients before deploying this contract. Provider identity in monitor and import request bodies remains part of the saved resource definition.
 
 ## Credits
 
@@ -16,7 +20,7 @@ Metered responses include:
 | `X-Credits-Charged` | Credits settled for the completed operation |
 | `X-Credits-Remaining` | Account balance after settlement |
 
-Cached provider responses cost 1 credit. Fresh search and comment requests cost 2 credits; other fresh provider-data requests cost 1 credit. Composite analysis operations expose their charge through the same headers.
+A request that fails with `402` returns `X-Credits-Charged: 0`. Each operation holds a reserve before it runs, so a `402` can happen when your balance would cover the final charge. See [credits](/api/credits) for per-operation prices and reserves.
 
 ## Pagination
 

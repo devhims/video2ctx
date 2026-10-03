@@ -202,11 +202,11 @@ async function transcript(
   if (!['text', 'segments', 'words'].includes(format)) {
     throw inputError('--format must be text, segments, or words.');
   }
-  const query = new URLSearchParams({ format });
+  const query = new URLSearchParams({ provider: 'youtube', format });
   const language = option(args, '--lang');
   if (language) query.set('lang', language);
   return authenticatedRead(
-    `/v1/providers/youtube/videos/${encodeURIComponent(videoId)}/transcript?${query}`,
+    `/v1/videos/${encodeURIComponent(videoId)}/transcript?${query}`,
     args,
     dependencies,
     profile,

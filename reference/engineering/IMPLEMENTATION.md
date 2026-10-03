@@ -60,10 +60,10 @@ Important routes:
 | Area | Routes |
 | --- | --- |
 | UI helpers | `POST /v1/resolve` (first-party universal-input routing) |
-| Providers | `GET /v1/providers`; provider data is scoped below `/v1/providers/:provider` |
-| Discovery | `GET /v1/providers/:provider/search`, `GET /v1/providers/:provider/browse`, `GET /v1/providers/:provider/trends`; `GET /v1/search` searches private indexed evidence |
-| Entities | `/v1/providers/:provider/videos/:id`, `/tracks`, `/transcript`, `/comments`, `/endscreen`; `/channels/:id`, `/channels/:id/videos`, `/channels/:id/playlists`; `/playlists/:id` |
-| Research | `/v1/projects`, `/v1/projects/:id/items`, `/v1/answers`, `/v1/comparisons`, `/v1/reports` |
+| Providers | `GET /v1/providers`; provider reads require `?provider=youtube` |
+| Discovery | `GET /v1/search?provider=youtube`, `GET /v1/browse?provider=youtube`, `GET /v1/trends?provider=youtube`; `GET /v1/projects/{projectId}/search` searches private indexed evidence |
+| Entities | `/v1/videos/:id?provider=youtube`, `/tracks`, `/transcript`, `/comments`, `/endscreen`; `/channels/:id`, `/channels/:id/videos`, `/channels/:id/playlists`; `/playlists/:id` |
+| Research | `/v1/projects`, `/v1/projects/:id/items`, `/v1/projects/{projectId}/answers`, `/v1/projects/{projectId}/comparisons`, `/v1/projects/{projectId}/reports` |
 | Agents | `POST /v1/agent`, `GET /v1/agent/:sessionId/runs/:runId` |
 | Jobs | `POST /v1/imports`, `GET /v1/jobs/:id` |
 | Exports | `POST /v1/projects/:id/exports`, `GET /v1/exports/:id/download` |
@@ -100,11 +100,11 @@ Content-Type: application/json
 Inspect caption tracks and fetch the transcript:
 
 ```http
-GET http://localhost:8787/v1/providers/youtube/videos/abcdefghijk/tracks
+GET http://localhost:8787/v1/videos/abcdefghijk/tracks?provider=youtube
 
-GET http://localhost:8787/v1/providers/youtube/videos/abcdefghijk/transcript
+GET http://localhost:8787/v1/videos/abcdefghijk/transcript?provider=youtube
 
-GET http://localhost:8787/v1/providers/youtube/videos/abcdefghijk/transcript?lang=hi
+GET http://localhost:8787/v1/videos/abcdefghijk/transcript?provider=youtube&lang=hi
 ```
 
 The tracks response exposes both the legacy `tracks` / `translationLanguages` fields and the clearer
@@ -119,7 +119,7 @@ refresh the signed caption URL and anonymous visitor session. Permanent client e
 Fetch every available top-level comment and reply (up to the explicit crawl safety limit):
 
 ```http
-GET http://localhost:8787/v1/providers/youtube/videos/abcdefghijk/comments?all=true
+GET http://localhost:8787/v1/videos/abcdefghijk/comments?provider=youtube&all=true
 ```
 
 The response reports `complete`, `topLevelCount`, `replyCount`, `pagesFetched`, and `remainingContinuations`. Without `all=true`, the endpoint returns one correctly classified top-level page and an opaque continuation.
@@ -127,7 +127,7 @@ The response reports `complete`, `topLevelCount`, `replyCount`, `pagesFetched`, 
 Search YouTube:
 
 ```http
-GET http://localhost:8787/v1/providers/youtube/search?q=AI%20research&type=video&duration=medium&captions=true&sort=views
+GET http://localhost:8787/v1/search?provider=youtube&q=AI%20research&type=video&duration=medium&captions=true&sort=views
 ```
 
 Create an import job:

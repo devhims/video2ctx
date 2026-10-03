@@ -16,7 +16,7 @@ test('channel names use channel-only search and discard videos and duplicate res
 test('handles resolve to canonical channel IDs and preserve cancellation signals', async () => {
   const signal = new AbortController().signal;
   const channels = await findMonitorChannels('@science', async (path, options) => {
-    assert.equal(path, '/v1/providers/youtube/channels/%40science');
+    assert.equal(path, '/v1/channels/%40science?provider=youtube');
     assert.equal(options?.signal, signal);
     return { id, name: 'Science', handle: '@science' };
   }, signal);
@@ -33,7 +33,7 @@ test('channel URLs resolve before channel lookup', async () => {
     }
     return { id, name: 'Science' };
   });
-  assert.deepEqual(paths, ['/v1/resolve', '/v1/providers/youtube/channels/%40science']);
+  assert.deepEqual(paths, ['/v1/resolve', '/v1/channels/%40science?provider=youtube']);
 });
 
 test('video and playlist URLs cannot become channel monitors', async () => {

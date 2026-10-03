@@ -6,7 +6,6 @@ import {useDashboardDraft} from './DashboardDataProvider';
 import {Icon} from './DashboardSidebar';
 import pageStyles from './DashboardPages.module.css';
 import type {TrendReport,AiTrendPlan} from './research-types';
-const YOUTUBE_API='/v1/providers/youtube';
 const TREND_SAMPLE_SIZE=10;
 export default function TrendLab() {
  const router=useRouter();
@@ -30,7 +29,7 @@ export default function TrendLab() {
     const controller = new AbortController(); requestController.current = controller;
     setTopic(nextTopic); setLoading(true); setError(''); setAiPlan(null); setAiError('');
     try {
-      setReport(await api<TrendReport>(`${YOUTUBE_API}/trends?q=${encodeURIComponent(nextTopic)}&limit=${TREND_SAMPLE_SIZE}&insights=deterministic`, { signal: controller.signal }));
+      setReport(await api<TrendReport>(`/v1/trends?provider=youtube&q=${encodeURIComponent(nextTopic)}&limit=${TREND_SAMPLE_SIZE}&insights=deterministic`, { signal: controller.signal }));
     } catch (cause) {
       if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not research this topic.');
     } finally {

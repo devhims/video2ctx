@@ -13,12 +13,12 @@ export async function findMonitorChannels(input: string, request: Request, signa
     id = resolved.id;
   }
   if (id) {
-    const channel = await request(`/v1/providers/youtube/channels/${encodeURIComponent(id)}`, { signal }) as MonitorChannel;
+    const channel = await request(`/v1/channels/${encodeURIComponent(id)}?provider=youtube`, { signal }) as MonitorChannel;
     if (!CHANNEL_ID.test(channel.id)) throw new Error('Could not resolve this channel. Try its YouTube channel URL.');
     return [{ id: channel.id, name: channel.name || channel.id, handle: channel.handle }];
   }
   const query = new URLSearchParams({ q: value, type: 'channel' });
-  const response = await request(`/v1/providers/youtube/search?${query}`, { signal }) as {
+  const response = await request(`/v1/search?provider=youtube&${query}`, { signal }) as {
     results: Array<{ type: string; id: string; name?: string; title?: string; handle?: string }>;
   };
   return response.results.filter(item => item.type === 'channel' && CHANNEL_ID.test(item.id))

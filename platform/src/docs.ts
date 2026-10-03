@@ -1,5 +1,6 @@
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
+import { buildPublicDocument } from './openapi-public';
 import { video2ctxFavicon } from './generated/brand';
 
 export const documentationApp = new Hono()
@@ -8,7 +9,7 @@ export const documentationApp = new Hono()
     const forwardedPrefix = c.req.header('x-forwarded-prefix');
     const basePath = forwardedPrefix?.startsWith('/') ? forwardedPrefix.replace(/\/$/, '') : '/';
     return c.json({
-      ...openApiDocument,
+      ...buildPublicDocument(openApiDocument),
       servers: [{ url: basePath, description: basePath === '/' ? 'Direct platform Worker' : 'Next.js platform proxy' }],
     });
   })

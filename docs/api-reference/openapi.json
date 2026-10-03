@@ -1343,14 +1343,14 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/search": {
+    "/v1/projects/{projectId}/search": {
       "get": {
         "tags": [
           "Discovery"
         ],
         "operationId": "searchPrivateEvidence",
-        "summary": "Search the user’s private indexed evidence",
-        "description": "Searches material previously saved or imported into the current user’s private research index.",
+        "summary": "Search a project’s indexed evidence",
+        "description": "Searches indexed material in the specified project. The authenticated user must own the project.",
         "security": [
           {
             "bearerApiKey": []
@@ -1382,11 +1382,12 @@
           },
           {
             "name": "projectId",
-            "in": "query",
-            "required": false,
-            "description": "Restrict private retrieval to a project.",
+            "in": "path",
+            "required": true,
+            "description": "Project owned by the authenticated user.",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             }
           }
         ],
@@ -1418,6 +1419,9 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
             "$ref": "#/components/responses/ValidationError"
           },
@@ -1441,7 +1445,7 @@
         ],
         "operationId": "listProviders",
         "summary": "List supported video providers",
-        "description": "Returns the provider identifiers accepted in provider-scoped paths and the capabilities currently implemented for each provider.",
+        "description": "Returns the provider identifiers accepted by the required provider query parameter and the capabilities currently implemented for each provider.",
         "security": [
           {
             "bearerApiKey": []
@@ -1503,7 +1507,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/search": {
+    "/v1/search": {
       "get": {
         "tags": [
           "Discovery"
@@ -1531,7 +1535,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -1694,7 +1698,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/browse": {
+    "/v1/browse": {
       "get": {
         "tags": [
           "Discovery"
@@ -1722,7 +1726,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -1833,7 +1837,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/trends": {
+    "/v1/trends": {
       "get": {
         "tags": [
           "Discovery"
@@ -1861,7 +1865,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2041,7 +2045,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/videos/{id}": {
+    "/v1/videos/{id}": {
       "get": {
         "tags": [
           "Videos"
@@ -2069,7 +2073,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2150,7 +2154,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/videos/{id}/tracks": {
+    "/v1/videos/{id}/tracks": {
       "get": {
         "tags": [
           "Videos"
@@ -2178,7 +2182,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2239,7 +2243,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/videos/{id}/transcript": {
+    "/v1/videos/{id}/transcript": {
       "get": {
         "tags": [
           "Videos"
@@ -2266,7 +2270,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2372,7 +2376,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/videos/{id}/comments": {
+    "/v1/videos/{id}/comments": {
       "get": {
         "tags": [
           "Videos"
@@ -2399,7 +2403,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2489,7 +2493,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/videos/{id}/endscreen": {
+    "/v1/videos/{id}/endscreen": {
       "get": {
         "tags": [
           "Videos"
@@ -2516,7 +2520,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2574,7 +2578,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/channels/{id}": {
+    "/v1/channels/{id}": {
       "get": {
         "tags": [
           "Channels"
@@ -2601,7 +2605,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2662,7 +2666,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/channels/{id}/videos": {
+    "/v1/channels/{id}/videos": {
       "get": {
         "tags": [
           "Channels"
@@ -2689,7 +2693,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2774,7 +2778,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/channels/{id}/playlists": {
+    "/v1/channels/{id}/playlists": {
       "get": {
         "tags": [
           "Channels"
@@ -2801,7 +2805,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -2885,7 +2889,7 @@
         "x-video2ctx-audience": "consumer"
       }
     },
-    "/v1/providers/{provider}/playlists/{id}": {
+    "/v1/playlists/{id}": {
       "get": {
         "tags": [
           "Playlists"
@@ -2912,7 +2916,7 @@
         "parameters": [
           {
             "name": "provider",
-            "in": "path",
+            "in": "query",
             "required": true,
             "description": "External video provider.",
             "schema": {
@@ -3441,240 +3445,6 @@
           },
           "500": {
             "$ref": "#/components/responses/ServerError"
-          }
-        },
-        "x-video2ctx-audience": "consumer"
-      }
-    },
-    "/v1/answers": {
-      "post": {
-        "tags": [
-          "Research"
-        ],
-        "operationId": "createAnswer",
-        "summary": "Generate a cited answer",
-        "security": [
-          {
-            "bearerApiKey": []
-          },
-          {
-            "sessionCookie": []
-          },
-          {
-            "cliSession": []
-          },
-          {
-            "apiKey": []
-          },
-          {
-            "demoUser": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AnswerRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Evidence-grounded answer.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CitedAnswer"
-                }
-              }
-            },
-            "headers": {
-              "X-Credits-Charged": {
-                "$ref": "#/components/headers/CreditsCharged"
-              },
-              "X-Credits-Remaining": {
-                "$ref": "#/components/headers/CreditsRemaining"
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "402": {
-            "$ref": "#/components/responses/InsufficientCredits"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "422": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          },
-          "500": {
-            "$ref": "#/components/responses/ServerError"
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          }
-        },
-        "x-video2ctx-audience": "consumer"
-      }
-    },
-    "/v1/comparisons": {
-      "post": {
-        "tags": [
-          "Research"
-        ],
-        "operationId": "createComparison",
-        "summary": "Compare private research sources",
-        "security": [
-          {
-            "bearerApiKey": []
-          },
-          {
-            "sessionCookie": []
-          },
-          {
-            "cliSession": []
-          },
-          {
-            "apiKey": []
-          },
-          {
-            "demoUser": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ComparisonRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Evidence-grounded comparison.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CitedAnswer"
-                }
-              }
-            },
-            "headers": {
-              "X-Credits-Charged": {
-                "$ref": "#/components/headers/CreditsCharged"
-              },
-              "X-Credits-Remaining": {
-                "$ref": "#/components/headers/CreditsRemaining"
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "402": {
-            "$ref": "#/components/responses/InsufficientCredits"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "422": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          },
-          "500": {
-            "$ref": "#/components/responses/ServerError"
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
-          }
-        },
-        "x-video2ctx-audience": "consumer"
-      }
-    },
-    "/v1/reports": {
-      "post": {
-        "tags": [
-          "Research"
-        ],
-        "operationId": "createReport",
-        "summary": "Generate an evidence-first report",
-        "security": [
-          {
-            "bearerApiKey": []
-          },
-          {
-            "sessionCookie": []
-          },
-          {
-            "cliSession": []
-          },
-          {
-            "apiKey": []
-          },
-          {
-            "demoUser": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReportRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Evidence-grounded report.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CitedAnswer"
-                }
-              }
-            },
-            "headers": {
-              "X-Credits-Charged": {
-                "$ref": "#/components/headers/CreditsCharged"
-              },
-              "X-Credits-Remaining": {
-                "$ref": "#/components/headers/CreditsRemaining"
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "402": {
-            "$ref": "#/components/responses/InsufficientCredits"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "422": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          },
-          "500": {
-            "$ref": "#/components/responses/ServerError"
-          },
-          "503": {
-            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "x-video2ctx-audience": "consumer"
@@ -11478,6 +11248,7 @@
       },
       "AnswerRequest": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "question"
         ],
@@ -11486,52 +11257,26 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 2000
-          },
-          "projectId": {
-            "type": "string"
-          },
-          "provider": {
-            "$ref": "#/components/schemas/ProviderId"
-          },
-          "entityId": {
-            "type": "string"
-          },
-          "scope": {
-            "type": "string",
-            "enum": [
-              "private",
-              "public"
-            ],
-            "default": "private"
           }
-        },
-        "dependentRequired": {
-          "entityId": [
-            "provider"
-          ]
         }
       },
       "ComparisonRequest": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "question": {
             "type": "string",
             "maxLength": 2000
-          },
-          "projectId": {
-            "type": "string"
           }
         }
       },
       "ReportRequest": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "prompt": {
             "type": "string",
             "maxLength": 2000
-          },
-          "projectId": {
-            "type": "string"
           }
         }
       },

@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from 'all-things-youtube';
 import type { App } from '../../types';
-import { requireDataPrincipal, requireUser } from '../../middlewares/authentication';
+import { requireDataPrincipal, requireSessionPrincipal, requireUser } from '../../middlewares/authentication';
 import { ApiError, asId, body, text } from '../../lib/http';
 import {
   CREDIT_COSTS,
@@ -12,9 +12,8 @@ import {
   type DataOperation,
 } from '../../lib/metering';
 import { routeInput, type CacheStatus } from '../../lib/youtube';
-import { requireEvidence, searchPrivate, searchPublic } from '../../lib/search';
+import { requireEvidence, searchPrivate } from '../../lib/search';
 import { citedAnswer } from '../../lib/analysis';
-import { transcriptEvidence } from '../../lib/evidence';
 import { parseTranscriptFormat, projectTranscript } from '../../lib/transcript-projection';
 import { generateTrendPlan, normalizeTrendPlanSignals } from '../../lib/trend-plan';
 import { creditBalance, entitlements } from '../../lib/entitlements';
@@ -26,11 +25,16 @@ export const DATA_ROUTE_PATTERNS = [
   '/resolve',
   '/search',
   '/providers',
-  '/providers/*',
+  '/browse',
+  '/trends',
+  '/videos/*',
+  '/channels/*',
+  '/playlists/*',
+  '/projects/:projectId/search',
+  '/projects/:projectId/answers',
+  '/projects/:projectId/comparisons',
+  '/projects/:projectId/reports',
   '/trends/*',
-  '/answers',
-  '/comparisons',
-  '/reports',
   '/usage',
 ] as const;
 
@@ -45,12 +49,13 @@ dataRoutes.post('/resolve', async (c) => {
   })));
 });
 
-dataRoutes.get('/search', async (c) => {
+dataRoutes.get('/projects/:projectId/search', async (c) => {
   const query = text(c.req.query('q'), 500);
   if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A search query is required.');
   const user = requireUser(c);
+  const projectId = await projectFor(c);
   const payload = await meterOperation(c, { operation: 'private-search', reservedCredits: CREDIT_COSTS.privateSearch }, async () => ({
-    value: { query, results: await searchPrivate(c.env, user.id, query, c.req.query('projectId')) },
+    value: { query, results: await searchPrivate(c.env, user.id, query, projectId) },
     actualCredits: CREDIT_COSTS.privateSearch,
   }));
   return c.json(payload);
@@ -64,7 +69,7 @@ dataRoutes.get('/providers', async (c) => c.json(await meterOperation(c, {
   actualCredits: CREDIT_COSTS.free,
 }))));
 
-dataRoutes.get('/providers/:provider/search', async (c) => {
+dataRoutes.get('/search', async (c) => {
   const provider = providerFor(c);
   const query = text(c.req.query('q'), 500);
   if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A search query is required.');
@@ -101,7 +106,7 @@ dataRoutes.get('/providers/:provider/search', async (c) => {
   return c.json(payload);
 });
 
-dataRoutes.get('/providers/:provider/browse', async (c) => {
+dataRoutes.get('/browse', async (c) => {
   const provider = providerFor(c);
   await enforceTrafficRate(c);
   const options = provider.normalizeBrowseOptions({
@@ -120,7 +125,7 @@ dataRoutes.get('/providers/:provider/browse', async (c) => {
   }));
 });
 
-dataRoutes.get('/providers/:provider/trends', async (c) => {
+dataRoutes.get('/trends', async (c) => {
   const provider = providerFor(c);
   await enforceTrafficRate(c);
   const query = text(c.req.query('q'), 200);
@@ -154,14 +159,14 @@ dataRoutes.post('/trends/plan', async (c) => {
   }));
 });
 
-dataRoutes.get('/providers/:provider/videos/:id', async (c) => {
+dataRoutes.get('/videos/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const refresh = refreshRequested(c);
   return c.json(await cachedRead(c, `${provider.descriptor.id}-video`, 'video', provider, () => provider.getVideo(c.env, id, refresh)));
 });
 
-dataRoutes.get('/providers/:provider/videos/:id/tracks', async (c) => {
+dataRoutes.get('/videos/:id/tracks', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   return c.json(await meterOperation(c, {
@@ -173,7 +178,7 @@ dataRoutes.get('/providers/:provider/videos/:id/tracks', async (c) => {
   })));
 });
 
-dataRoutes.get('/providers/:provider/videos/:id/transcript', async (c) => {
+dataRoutes.get('/videos/:id/transcript', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const desiredLanguage = text(c.req.query('lang'), 20) || undefined;
@@ -184,7 +189,7 @@ dataRoutes.get('/providers/:provider/videos/:id/transcript', async (c) => {
   return c.json(projectTranscript(transcript, format));
 });
 
-dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {
+dataRoutes.get('/videos/:id/comments', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const all = c.req.query('all') === 'true';
@@ -207,7 +212,7 @@ dataRoutes.get('/providers/:provider/videos/:id/comments', async (c) => {
     provider.getComments(c.env, id, c.req.query('continuation'), refresh)));
 });
 
-dataRoutes.get('/providers/:provider/videos/:id/endscreen', async (c) => {
+dataRoutes.get('/videos/:id/endscreen', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   return c.json(await meterOperation(c, {
@@ -220,13 +225,13 @@ dataRoutes.get('/providers/:provider/videos/:id/endscreen', async (c) => {
   })));
 });
 
-dataRoutes.get('/providers/:provider/channels/:id', async (c) => {
+dataRoutes.get('/channels/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   return c.json(await cachedRead(c, `${provider.descriptor.id}-channel`, 'channel', provider, () => provider.getChannel(c.env, id)));
 });
 
-dataRoutes.get('/providers/:provider/channels/:id/videos', async (c) => {
+dataRoutes.get('/channels/:id/videos', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const catalogSort = channelVideoSort(c.req.query('sort'));
@@ -234,7 +239,7 @@ dataRoutes.get('/providers/:provider/channels/:id/videos', async (c) => {
     provider.getChannelVideos(c.env, id, c.req.query('continuation'), catalogSort)));
 });
 
-dataRoutes.get('/providers/:provider/channels/:id/playlists', async (c) => {
+dataRoutes.get('/channels/:id/playlists', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const catalogSort = channelPlaylistSort(c.req.query('sort'));
@@ -242,49 +247,55 @@ dataRoutes.get('/providers/:provider/channels/:id/playlists', async (c) => {
     provider.getChannelPlaylists(c.env, id, c.req.query('continuation'), catalogSort)));
 });
 
-dataRoutes.get('/providers/:provider/playlists/:id', async (c) => {
+dataRoutes.get('/playlists/:id', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   return c.json(await cachedRead(c, `${provider.descriptor.id}-playlist`, 'playlist', provider, () => provider.getPlaylist(c.env, id)));
 });
 
-dataRoutes.post('/answers', async (c) => {
-  const user = requireUser(c);
-  const input = await body<{
-    question?: string;
-    projectId?: string;
-    provider?: string;
-    entityId?: string;
-    scope?: 'private' | 'public';
-  }>(c.req.raw);
+dataRoutes.post('/projects/:projectId/answers', requireSessionPrincipal, async (c) => {
+  const input = await projectResearchInput(c, 'question');
   const question = text(input.question, 2000);
   if (!question) throw new ApiError(422, 'QUESTION_REQUIRED', 'A question is required.');
-  const entityId = input.entityId ? asId(input.entityId) : undefined;
-  const providerId = text(input.provider, 40);
-  if (entityId && !providerId) throw new ApiError(422, 'PROVIDER_REQUIRED', 'provider is required with entityId.');
-  const provider = entityId ? getProvider(providerId) : undefined;
-  return c.json(await runAnalysis(c, question, async () => requireEvidence(entityId
-    ? transcriptEvidence(entityId, (await provider!.getTranscript(c.env, entityId)).value.segments, question)
-    : input.scope === 'public'
-      ? await searchPublic(c.env, question)
-      : await searchPrivate(c.env, user.id, question, input.projectId)), 'answer'));
-});
-
-dataRoutes.post('/comparisons', async (c) => {
-  const user = requireUser(c);
-  const input = await body<{ question?: string; projectId?: string }>(c.req.raw);
-  const question = text(input.question, 2000) || 'Compare the selected sources, highlighting agreements, contradictions, and changes over time.';
+  const projectId = await projectFor(c);
   return c.json(await runAnalysis(c, question, async () =>
-    requireEvidence(await searchPrivate(c.env, user.id, question, input.projectId)), 'comparison'));
+    requireEvidence(await searchPrivate(c.env, requireUser(c).id, question, projectId)), 'answer'));
 });
 
-dataRoutes.post('/reports', async (c) => {
-  const user = requireUser(c);
-  const input = await body<{ prompt?: string; projectId?: string }>(c.req.raw);
-  const prompt = text(input.prompt, 2000) || 'Create an evidence-first research report with claims, supporting evidence, notable quotes, resources, action items, and content gaps.';
-  return c.json(await runAnalysis(c, prompt, async () =>
-    requireEvidence(await searchPrivate(c.env, user.id, prompt, input.projectId)), 'report'));
+dataRoutes.post('/projects/:projectId/comparisons', requireSessionPrincipal, async (c) => {
+  const input = await projectResearchInput(c, 'question');
+  const question = text(input.question, 2000) || 'Compare the selected sources, highlighting agreements, contradictions, and changes over time.';
+  const projectId = await projectFor(c);
+  return c.json(await runAnalysis(c, question, async () =>
+    requireEvidence(await searchPrivate(c.env, requireUser(c).id, question, projectId)), 'comparison'));
 });
+
+dataRoutes.post('/projects/:projectId/reports', requireSessionPrincipal, async (c) => {
+  const input = await projectResearchInput(c, 'prompt');
+  const prompt = text(input.prompt, 2000) || 'Create an evidence-first research report with claims, supporting evidence, notable quotes, resources, action items, and content gaps.';
+  const projectId = await projectFor(c);
+  return c.json(await runAnalysis(c, prompt, async () =>
+    requireEvidence(await searchPrivate(c.env, requireUser(c).id, prompt, projectId)), 'report'));
+});
+
+async function projectFor(c: Context<App>): Promise<string> {
+  const projectId = asId(c.req.param('projectId'));
+  if (c.req.query('projectId') !== undefined) {
+    throw new ApiError(422, 'INVALID_INPUT', 'Use the project ID in the path, not the query.');
+  }
+  const project = await c.env.DB.prepare('SELECT 1 FROM projects WHERE id=? AND user_id=?')
+    .bind(projectId, requireUser(c).id).first();
+  if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+  return projectId;
+}
+
+async function projectResearchInput(c: Context<App>, field: 'question' | 'prompt'): Promise<Record<string, unknown>> {
+  const input = await body<unknown>(c.req.raw);
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== field)) {
+    throw new ApiError(422, 'INVALID_INPUT', `Only ${field} is accepted in the body; the project is selected by the path.`);
+  }
+  return input as Record<string, unknown>;
+}
 
 dataRoutes.get('/usage', async (c) => {
   const user = requireUser(c);
@@ -316,7 +327,12 @@ async function cachedRead<T>(
 }
 
 function providerFor(c: Context<App>): ProviderAdapter {
-  return getProvider(c.req.param('provider') ?? '');
+  const values = c.req.queries('provider');
+  if (!values?.length || !values[0]?.trim()) {
+    throw new ApiError(422, 'PROVIDER_REQUIRED', 'The provider query parameter is required.');
+  }
+  if (values.length !== 1) throw new ApiError(422, 'INVALID_INPUT', 'Specify exactly one provider.');
+  return getProvider(values[0]);
 }
 
 async function runAnalysis(

@@ -19,21 +19,20 @@ import { SOURCES_HOME_EVENT } from './dashboard-routes';
 
 import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, Inspector, RecentSource, SourceSnapshot } from './research-types';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
-const YOUTUBE_API = '/v1/providers/youtube';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
   transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
   comments: { shortLabel: 'Comments', description: 'Paginated public comments and replies' },
   channel: { shortLabel: 'Channel info', description: 'Full creator profile, links, and totals' },
 };
 async function fetchSourceData(inspector: Inspector, option: SourceDataOption, signal: AbortSignal, refresh = false) {
-  const providerApi = `/v1/providers/${inspector.provider}`;
+  const providerQuery = `provider=${encodeURIComponent(inspector.provider)}`;
   const result = await loadSourceData(async () => {
-    if (option === 'transcript') inspector.transcript = await api<Transcript>(`${providerApi}/videos/${inspector.id}/transcript${refresh ? '?refresh=true' : ''}`, { signal });
-    if (option === 'comments') inspector.comments = await api<CommentPage>(`${providerApi}/videos/${inspector.id}/comments?refresh=true`, { signal });
+    if (option === 'transcript') inspector.transcript = await api<Transcript>(`/v1/videos/${encodeURIComponent(inspector.id)}/transcript?${providerQuery}${refresh ? '&refresh=true' : ''}`, { signal });
+    if (option === 'comments') inspector.comments = await api<CommentPage>(`/v1/videos/${encodeURIComponent(inspector.id)}/comments?${providerQuery}&refresh=true`, { signal });
     if (option === 'channel') {
       const channelId = String((inspector.data.channel as { id?: string } | undefined)?.id ?? '');
       if (!channelId) throw new Error('The video response did not include a channel ID.');
-      inspector.channel = await api<ChannelInfo>(`${providerApi}/channels/${encodeURIComponent(channelId)}`, { signal });
+      inspector.channel = await api<ChannelInfo>(`/v1/channels/${encodeURIComponent(channelId)}?${providerQuery}`, { signal });
     }
   });
   if (result.error !== undefined) inspector.dataErrors[option] = result.error;
@@ -210,7 +209,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       }
       setOperationLabel('Searching YouTube videos…');
       const params = new URLSearchParams({ q: resolved.query ?? query, type: 'video' });
-      const data = await api<{ results: SearchItem[] }>(`${YOUTUBE_API}/search?${params}`, { signal: controller.signal });
+      const data = await api<{ results: SearchItem[] }>(`/v1/search?provider=youtube&${params}`, { signal: controller.signal });
       const results = data.results.filter((item) => item.type === 'video').map((item) => ({ ...item, provider: 'youtube' as const }));
       setItems(results);
       await rememberSource(input, { kind: 'search', selectedData: [...selectedData], items: results });
@@ -239,7 +238,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       }
     };
     const metadata = datasets.includes('metadata') ? load('metadata', async () => {
-      const result = await loadSourceData(() => api<Record<string, unknown>>(`/v1/providers/${next.provider}/videos/${encodeURIComponent(next.id)}${next.refreshData?.includes('metadata') ? '?refresh=true' : ''}`, { signal: controller.signal }));
+      const result = await loadSourceData(() => api<Record<string, unknown>>(`/v1/videos/${encodeURIComponent(next.id)}?provider=${encodeURIComponent(next.provider)}${next.refreshData?.includes('metadata') ? '&refresh=true' : ''}`, { signal: controller.signal }));
       if (result.error !== undefined) next.dataErrors.metadata = result.error;
       else { next.data = result.value; delete next.dataErrors.metadata; }
     }) : Promise.resolve();
@@ -271,7 +270,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         await loadVideoData(next, ['metadata', ...requestedData], controller);
       } else {
         const plural = type === 'channel' ? 'channels' : 'playlists';
-        const data = await api<Record<string, unknown>>(`/v1/providers/${provider}/${plural}/${encodeURIComponent(id)}`, { signal: controller.signal });
+        const data = await api<Record<string, unknown>>(`/v1/${plural}/${encodeURIComponent(id)}?provider=${encodeURIComponent(provider)}`, { signal: controller.signal });
         if (!controller.signal.aborted) {
           const next: Inspector = { provider, type, id, data, requestedData: [], dataErrors: {} };
           setInspector(next);
@@ -537,7 +536,7 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
     setCommentsError('');
     try {
       const params = new URLSearchParams({ continuation, refresh: 'true' });
-      const page = await api<CommentPage>(`/v1/providers/${inspector.provider}/videos/${encodeURIComponent(inspector.id)}/comments?${params}`);
+      const page = await api<CommentPage>(`/v1/videos/${encodeURIComponent(inspector.id)}/comments?provider=${encodeURIComponent(inspector.provider)}&${params}`);
       setCommentPage((current) => {
         if (!current) return page;
         const comments = new Map(current.comments.map((comment) => [comment.id, comment]));
@@ -639,7 +638,7 @@ function PlaylistInspector({ inspector, onClose, onSave, onOpenVideo }: { inspec
 
     <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide playlist-api-guide'>
       <div><p>Playlist details include a video page and a continuation token for more results.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
-      <div className='source-api-endpoints'><div data-selected='true'><span>Playlist details and videos<b>selected</b></span><code>GET /v1/providers/youtube/playlists/{inspector.id}</code></div><div><span>Then open a video</span><code>GET /v1/providers/youtube/videos/{'{videoId}'}</code></div></div>
+      <div className='source-api-endpoints'><div data-selected='true'><span>Playlist details and videos<b>selected</b></span><code>GET /v1/playlists/{inspector.id}?provider=youtube</code></div><div><span>Then open a video</span><code>GET /v1/videos/{'{videoId}'}?provider=youtube</code></div></div>
     </div></details>
   </section>;
 }
@@ -721,10 +720,10 @@ function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, on
 
 function SourceApiGuide({ inspector, channelId }: { inspector: Inspector; channelId?: string }) {
   const endpoints = [
-    { option: null, label: 'Video details', path: `/v1/providers/youtube/videos/${inspector.id}` },
-    { option: 'transcript' as const, label: 'Full transcript', path: `/v1/providers/youtube/videos/${inspector.id}/transcript` },
-    { option: 'comments' as const, label: 'Paginated comments', path: `/v1/providers/youtube/videos/${inspector.id}/comments` },
-    ...(channelId ? [{ option: 'channel' as const, label: 'Channel About data', path: `/v1/providers/youtube/channels/${channelId}` }] : []),
+    { option: null, label: 'Video details', path: `/v1/videos/${inspector.id}?provider=${encodeURIComponent(inspector.provider)}` },
+    { option: 'transcript' as const, label: 'Full transcript', path: `/v1/videos/${inspector.id}/transcript?provider=${encodeURIComponent(inspector.provider)}` },
+    { option: 'comments' as const, label: 'Paginated comments', path: `/v1/videos/${inspector.id}/comments?provider=${encodeURIComponent(inspector.provider)}` },
+    ...(channelId ? [{ option: 'channel' as const, label: 'Channel About data', path: `/v1/channels/${channelId}?provider=${encodeURIComponent(inspector.provider)}` }] : []),
   ];
   return <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide'>
     <div><p>Comments use continuation tokens for pagination. Transcript and channel endpoints return complete responses.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>

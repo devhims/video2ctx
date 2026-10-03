@@ -38,7 +38,7 @@ describe('transcript route', () => {
   test('treats lang as the desired output language and leaves source selection to the backend', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const response = await app.request(
-      '/v1/providers/youtube/videos/abcdefghijk/transcript?lang=hi',
+      '/v1/videos/abcdefghijk/transcript?provider=youtube&lang=hi',
       {},
       {} as Env,
       { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,
@@ -51,7 +51,7 @@ describe('transcript route', () => {
 
   test('returns compact text when requested without changing the cached upstream shape', async () => {
     const response = await app.request(
-      '/v1/providers/youtube/videos/abcdefghijk/transcript?format=text',
+      '/v1/videos/abcdefghijk/transcript?provider=youtube&format=text',
       {},
       {} as Env,
       { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,
@@ -72,7 +72,7 @@ describe('transcript route', () => {
   test('rejects an unsupported transcript format before loading data', async () => {
     const calls = vi.mocked(getTranscriptWithCache).mock.calls.length;
     const response = await app.request(
-      '/v1/providers/youtube/videos/abcdefghijk/transcript?format=srt',
+      '/v1/videos/abcdefghijk/transcript?provider=youtube&format=srt',
       {},
       {} as Env,
       { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext,

@@ -32,14 +32,14 @@ The UI loads these requests concurrently:
 
 1. `GET /v1/projects`
 2. `GET /v1/monitors`
-3. `GET /v1/providers/youtube/browse`
-4. `GET /v1/providers/youtube/trends?q=AI%20agents&limit=20` from the default Trend Lab view
+3. `GET /v1/browse?provider=youtube`
+4. `GET /v1/trends?provider=youtube&q=AI%20agents&limit=20` from the default Trend Lab view
 
 ### Search and inspection
 
 1. The search box sends its value to `POST /v1/resolve`.
 2. A recognized YouTube URL or video ID opens the matching entity endpoint directly.
-3. Provider discovery uses `GET /v1/providers/youtube/search`; private evidence uses `GET /v1/search`; cited questions use `POST /v1/answers`.
+3. Provider discovery uses `GET /v1/search?provider=youtube`; private evidence uses `GET /v1/projects/{projectId}/search`; cited questions use `POST /v1/projects/{projectId}/answers`.
 4. Opening a video loads its entity record, transcript, and comments. Transcript or comment failure does not prevent the main video record from opening.
 
 ### Saving a source
@@ -50,7 +50,7 @@ The UI loads these requests concurrently:
 
 ### Trend planning
 
-1. `GET /v1/providers/youtube/trends` calculates topic signals from public YouTube data, stores metric snapshots, and adds evidence-grounded GLM insights by default.
+1. `GET /v1/trends?provider=youtube` calculates topic signals from public YouTube data, stores metric snapshots, and adds evidence-grounded GLM insights by default.
 2. The user can explicitly call `POST /v1/trends/plan` to turn those signals into a Kimi-generated plan. A normal topic scan does not consume user AI credits.
 
 ## API summary
@@ -64,21 +64,21 @@ The UI loads these requests concurrently:
 | `GET` | `/v1/monitors` | Load monitor view and counts | Private |
 | `POST` | `/v1/monitors` | Monitor the inspected channel or topic | Private |
 | `GET` | `/v1/providers` | List supported providers and capabilities | Authenticated |
-| `GET` | `/v1/providers/youtube/browse` | Seed the source inbox | Authenticated, rate-limited |
+| `GET` | `/v1/browse?provider=youtube` | Seed the source inbox | Authenticated, rate-limited |
 | `POST` | `/v1/resolve` | Internal universal-input routing helper | First-party UI, protected |
 | `POST` | `/v1/demo/youtube/inspect` | Bounded video, transcript, and comments preview | Public landing page, IP quota |
-| `GET` | `/v1/providers/youtube/search` | Search YouTube | Authenticated, rate-limited |
-| `GET` | `/v1/search` | Search private indexed evidence | Authenticated |
-| `GET` | `/v1/providers/youtube/videos/:id` | Inspect a video | Authenticated |
-| `GET` | `/v1/providers/youtube/channels/:id` | Inspect a channel | Authenticated |
-| `GET` | `/v1/providers/youtube/channels/:id/videos` | Load a channel's videos | Authenticated |
-| `GET` | `/v1/providers/youtube/channels/:id/playlists` | Load a channel's playlists | Authenticated |
-| `GET` | `/v1/providers/youtube/playlists/:id` | Inspect a playlist | Authenticated |
-| `GET` | `/v1/providers/youtube/videos/:id/transcript` | Load timed transcript evidence | Authenticated |
-| `GET` | `/v1/providers/youtube/videos/:id/comments` | Load audience comments | Authenticated |
+| `GET` | `/v1/search?provider=youtube` | Search YouTube | Authenticated, rate-limited |
+| `GET` | `/v1/projects/{projectId}/search` | Search private indexed evidence | Authenticated |
+| `GET` | `/v1/videos/:id?provider=youtube` | Inspect a video | Authenticated |
+| `GET` | `/v1/channels/:id?provider=youtube` | Inspect a channel | Authenticated |
+| `GET` | `/v1/channels/:id/videos?provider=youtube` | Load a channel's videos | Authenticated |
+| `GET` | `/v1/channels/:id/playlists?provider=youtube` | Load a channel's playlists | Authenticated |
+| `GET` | `/v1/playlists/:id?provider=youtube` | Inspect a playlist | Authenticated |
+| `GET` | `/v1/videos/:id/transcript?provider=youtube` | Load timed transcript evidence | Authenticated |
+| `GET` | `/v1/videos/:id/comments?provider=youtube` | Load audience comments | Authenticated |
 | `POST` | `/v1/imports` | Start durable ingestion and indexing | Private |
-| `POST` | `/v1/answers` | Generate a cited answer for an inspected source | Private, metered |
-| `GET` | `/v1/providers/youtube/trends` | Calculate topic momentum and patterns | Authenticated, rate-limited |
+| `POST` | `/v1/projects/{projectId}/answers` | Generate a cited answer from project evidence | Browser-session only, metered |
+| `GET` | `/v1/trends?provider=youtube` | Calculate topic momentum and patterns | Authenticated, rate-limited |
 | `POST` | `/v1/trends/plan` | Generate an evidence-grounded video plan | Private, metered |
 
 ## Authentication APIs
@@ -157,7 +157,7 @@ How it works:
 
 ## Discovery APIs
 
-### `GET /v1/providers/:provider/browse`
+### `GET /v1/browse?provider=youtube`
 
 Seeds the source inbox with a normalized public YouTube discovery feed.
 
@@ -177,7 +177,7 @@ How it works:
 - Caches each option set in Workers KV for five minutes.
 - Returns a stale cached snapshot if the upstream call fails and a previous snapshot exists.
 
-### `GET /v1/providers/:provider/search`
+### `GET /v1/search?provider=youtube`
 
 Searches one external video provider. The current supported value for `provider` is `youtube`.
 
@@ -203,36 +203,36 @@ How it works:
 - Caches the query/filter combination in Workers KV for five minutes with stale fallback.
 - The UI currently exposes type, duration, and captions filters.
 
-### `GET /v1/search`
+### `GET /v1/projects/{projectId}/search`
 
 Searches transcript and research content previously saved by the user.
 
 Parameters:
 
 - `q`: required query
-- `projectId`: optional private-project restriction
+- `projectId`: required owned project ID in the path
 
 How it works:
 
-- Requires a session.
+- Verifies that the authenticated user owns the project.
 - Queries the user’s isolated Cloudflare AI Search instance.
 - Uses hybrid keyword/vector retrieval, reciprocal-rank fusion, and BGE reranking.
-- Can filter to one project and returns up to 12 evidence chunks with scores, source IDs, and timestamps.
+- Always filters to the path project and returns up to 12 evidence chunks with scores, source IDs, and timestamps.
 
-### `POST /v1/answers`
+### `POST /v1/projects/{projectId}/answers`
 
-Answers the query using the user’s indexed evidence.
+Internal, browser-session-only operation that answers using the selected project’s indexed evidence.
 
 How it works:
 
-- Runs the same private retrieval used by `inside` mode.
+- Checks project ownership before metering and retrieves only that project’s indexed evidence.
 - Sends the retrieved excerpts to Workers AI using `@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
 - Requires bracketed evidence citations and rejects an answer with no valid citations.
 - Reserves AI credits before inference and settles or releases them afterward.
 
 ## Entity APIs
 
-### `GET /v1/providers/:provider/videos/:id`
+### `GET /v1/videos/:id?provider=youtube`
 
 Returns core normalized video metadata: title, channel, description, thumbnails, duration, views, keywords, availability, and URL.
 
@@ -243,7 +243,7 @@ How it works:
 - Track metadata and endscreen elements are available from their dedicated video subresources.
 - Does not fetch the desktop caption catalog or expose media-format data, raw renderer data, tracking data, signed URLs, or ads.
 
-### `GET /v1/providers/:provider/channels/:id`
+### `GET /v1/channels/:id?provider=youtube`
 
 Returns channel identity plus an `about` object aligned to YouTube's About UI:
 
@@ -260,7 +260,7 @@ How it works:
 - The protected business email is not accessed. Public email addresses written into the description remain part of the description.
 - Results are cached in Workers KV for one hour.
 
-### `GET /v1/providers/:provider/channels/:id/videos`
+### `GET /v1/channels/:id/videos?provider=youtube`
 
 Returns one page of normalized video summaries from the channel's Videos tab.
 
@@ -270,7 +270,7 @@ Returns one page of normalized video summaries from the channel's Videos tab.
 - Each video carries the UI card data: title, thumbnail, duration, views, published age, caption state, and canonical watch URL.
 - Pages are cached in Workers KV for 15 minutes.
 
-### `GET /v1/providers/:provider/channels/:id/playlists`
+### `GET /v1/channels/:id/playlists?provider=youtube`
 
 Returns one page of normalized playlist summaries from the channel's Playlists tab.
 
@@ -281,7 +281,7 @@ Returns one page of normalized playlist summaries from the channel's Playlists t
   `isPodcast`, canonical playlist URL, and the optional `playUrl` used by the card itself.
 - Pages are cached in Workers KV for 15 minutes.
 
-### `GET /v1/providers/:provider/playlists/:id`
+### `GET /v1/playlists/:id?provider=youtube`
 
 Returns playlist metadata, videos, and a continuation when more items are available.
 
@@ -290,7 +290,7 @@ How it works:
 - Uses the platform's normalized YouTube playlist adapter.
 - Normalizes the catalog and caches it in Workers KV for one hour.
 
-### `GET /v1/providers/:provider/videos/:id/tracks`
+### `GET /v1/videos/:id/tracks?provider=youtube`
 
 Returns the video's actual source caption tracks and available auto-translation targets.
 
@@ -300,7 +300,7 @@ How it works:
 - Merges the desktop player catalog used by Chrome so `translationLanguages` and `autoTranslationTargets` contain the complete auto-translation target list exposed for the video.
 - Does not expose signed caption URLs or caption text.
 
-### `GET /v1/providers/:provider/videos/:id/transcript`
+### `GET /v1/videos/:id/transcript?provider=youtube`
 
 Returns the synchronized transcript displayed beside the video.
 
@@ -317,7 +317,7 @@ How it works:
 - Returns the source `track` plus `translatedTo` when auto-translation was requested.
 - Caches transcripts in Workers KV for seven days.
 
-### `GET /v1/providers/:provider/videos/:id/comments`
+### `GET /v1/videos/:id/comments?provider=youtube`
 
 Returns comments for the audience-evidence panel.
 
@@ -419,29 +419,19 @@ How it works:
 
 ## Research and planning APIs
 
-### `POST /v1/answers`
+### `POST /v1/projects/{projectId}/answers`
 
-Generates the cited brief and source answers shown by the UI.
+Internal project research implementation; no dashboard caller is wired yet. API keys and CLI sessions are rejected.
 
 ```json
 {
-  "question": "What are the main claims?",
-  "entityId": "VIDEO_ID"
+  "question": "What are the main claims across this project?"
 }
 ```
 
-How it works for the current UI:
+The path selects the project. The handler checks ownership, retrieves project-filtered evidence, and generates a cited answer. Body fields that try to select another project, a single video, or the public corpus are rejected. Comparisons and reports use the same project boundary at `/v1/projects/{projectId}/comparisons` and `/v1/projects/{projectId}/reports`.
 
-- Fetches the video transcript.
-- Selects transcript segments that match important question terms, with an early-segment fallback.
-- Sends only those segments to the Workers AI answer model.
-- Treats transcript text as untrusted evidence and requires citations such as `[1]` on substantive claims.
-- Returns the answer plus only the evidence records actually cited.
-- Uses AI Gateway retries/caching when configured and a direct Workers AI fallback when the gateway is unavailable.
-
-The endpoint can also search private project evidence when `entityId` is omitted, or the public corpus when `scope` is `public`.
-
-### `GET /v1/providers/:provider/trends`
+### `GET /v1/trends?provider=youtube`
 
 Builds the Trend Lab dashboard for a topic.
 
@@ -527,15 +517,15 @@ How it works:
 These platform contracts exist, but no current UI action calls them:
 
 - `GET /health`
-- `GET /v1/providers/:provider/videos/:id/tracks`
-- `GET /v1/providers/:provider/videos/:id/endscreen`
-- `GET /v1/providers/:provider/channels/:id/videos`
-- `GET /v1/providers/:provider/channels/:id/playlists`
+- `GET /v1/videos/:id/tracks?provider=youtube`
+- `GET /v1/videos/:id/endscreen?provider=youtube`
+- `GET /v1/channels/:id/videos?provider=youtube`
+- `GET /v1/channels/:id/playlists?provider=youtube`
 - `GET /v1/projects/:id`
 - `DELETE /v1/projects/:id`
 - `GET /v1/jobs/:id`
-- `POST /v1/comparisons`
-- `POST /v1/reports`
+- `POST /v1/projects/{projectId}/comparisons`
+- `POST /v1/projects/{projectId}/reports`
 - `POST /v1/projects/:id/exports`
 - `GET /v1/exports/:id/download`
 - `DELETE /v1/monitors/:id`

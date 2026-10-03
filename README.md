@@ -91,7 +91,7 @@ export VIDEO2CTX_API_KEY='aty_…'
 
 curl \
   --header "Authorization: Bearer $VIDEO2CTX_API_KEY" \
-  https://api.video2ctx.dev/v1/providers/youtube/videos/dQw4w9WgXcQ
+  'https://api.video2ctx.dev/v1/videos/dQw4w9WgXcQ?provider=youtube'
 ```
 
 API keys, device-authorized CLI sessions, and browser sessions use the same account and credit balance. Metered responses include `X-Credits-Charged` and `X-Credits-Remaining` headers. `X-API-Key` remains supported for compatibility, but bearer authentication is preferred.
@@ -208,7 +208,7 @@ For direct private API calls, provide any stable local-only demo identity:
 ```bash
 curl \
   --header 'X-Demo-User: readme-local' \
-  'http://localhost:8787/v1/providers/youtube/search?q=video%20research'
+  'http://localhost:8787/v1/search?provider=youtube&q=video%20research'
 ```
 
 `X-Demo-User` is rejected in production.
