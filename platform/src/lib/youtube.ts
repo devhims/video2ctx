@@ -11,7 +11,7 @@ import type {
 } from 'all-things-youtube';
 import { browseDestination } from './youtube-client';
 import { videoCatalog, type VideoAssetReference } from './video-catalog';
-import { readVideoResource, videoResourceKey, reusableVideoResource, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
+import { readVideoResource, isVisualSelection, videoResourceKey, reusableVideoResource, VIDEO_MAX_AGE, type VideoResourceOperation, type FrameOperation } from './video-resources';
 import type { VideoFrames } from './youtube-frames-contract';
 import {
   normalizeBrowseLanguage,
@@ -128,7 +128,7 @@ async function cached<T extends VideoResourceOperation>(
   const resource = videoResourceKey(operation);
   const cacheKey = catalog && resource ? `video-resource:v1:${await hash(JSON.stringify(resource))}` : legacyCacheKey;
   // Visual selections are checked once inside the coalescing coordinator.
-  const stored = catalog && resource && !refresh && operation.kind !== 'storyboard' && operation.kind !== 'frames' ? await readVideoResource(env,operation) : null;
+  const stored = catalog && resource && !refresh && !isVisualSelection(operation) ? await readVideoResource(env,operation) : null;
   const existing = stored ? {version:1 as const,...stored,value:stored.value as ResourceResult<T>}
     : catalog && resource ? null : await readYouTubeCacheEntry<ResourceResult<T>>(env, cacheKey, type);
 
@@ -154,6 +154,11 @@ async function cached<T extends VideoResourceOperation>(
     });
   } catch (error) {
     if (existing && !refresh) return cachedValue(existing, 'stale', !!resource);
+    if (catalog && resource && !refresh && isVisualSelection(operation)) {
+      const fallback = await readVideoResource(env, operation);
+      if (fallback && reusableVideoResource(operation, fallback))
+        return cachedValue({ version: 1, ...fallback, value: fallback.value as ResourceResult<T> }, 'stale', true);
+    }
     throw new ApiError(
       503,
       'CACHE_COORDINATOR_UNAVAILABLE',

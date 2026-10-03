@@ -525,7 +525,7 @@ export class SessionEvidenceStore implements SessionAccess {
       this.alias(row.resource_key, version);
   }
   async lookup<T>(key: string): Promise<CachedResult<T> | undefined> {
-    return visualSpan('session_lookup', () => this.lookupValue<T>(key));
+    return visualSpan('session_asset_lookup', () => this.lookupValue<T>(key));
   }
   private async lookupValue<T>(key: string): Promise<CachedResult<T> | undefined> {
     const row = this.sql
@@ -580,7 +580,7 @@ export class SessionEvidenceStore implements SessionAccess {
     const result = await load();
     signal?.throwIfAborted();
     if (!accept(result.value)) return result;
-    return visualSpan('session_pin', async () => {
+    return visualSpan('session_asset_pin', async () => {
       const payload = JSON.stringify(result.value);
       const version = await sha256(`${kind}:${videoId}:${payload}`);
       signal?.throwIfAborted();

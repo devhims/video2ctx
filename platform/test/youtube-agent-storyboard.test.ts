@@ -72,6 +72,7 @@ describe('storyboard agent tool', () => {
     expect(provider).toHaveBeenCalledTimes(1);
     expect(provider).toHaveBeenNthCalledWith(1, storyboard.videoId, undefined, expect.objectContaining({ metadataOnly: false, maxSheets: 2 }), expect.any(Function));
     expect(packet.usage).toHaveLength(1);
+    expect(packet.artifacts[0]!.data.visualDiagnostics).toMatchObject({ counters: { requestedImages: 2, returnedImages: 1 } });
   });
   it('propagates provider validation when the session has no metadata', async () => {
     const ctx = context();

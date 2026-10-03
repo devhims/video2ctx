@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 
-const stage = z.enum(['retrieval', 'session_lookup', 'session_pin', 'catalog_lookup', 'catalog_write',
+const stage = z.enum(['retrieval', 'session_lookup', 'session_pin', 'session_asset_lookup', 'session_asset_pin', 'catalog_lookup', 'catalog_write',
   'coordinator_wait', 'extraction', 'previews', 'catalog_d1', 'catalog_r2', 'preview_r2', 'legacy_cache']);
 const counter = z.enum(['catalogLookupPasses', 'catalogHits', 'catalogMisses', 'catalogD1Statements',
   'catalogD1Batches', 'catalogR2Gets', 'catalogR2Puts', 'previewR2Heads', 'previewR2Puts',
@@ -52,10 +52,10 @@ export async function captureVisualWork<T>(scope: 'tool' | 'coordinator', kind: 
       - covered(data.spans.filter(child => child.parentId === span.id), span.startMs, span.endMs));
     data.unaccountedMs = Math.max(0, data.elapsedMs - covered(data.spans.filter(span => !span.parentId), 0, data.elapsedMs));
     try {
-      console.info({ event: 'visual_work_timing', operationId: data.operationId, scope, kind,
+      console.info(JSON.stringify({ event: 'visual_work_timing', operationId: data.operationId, scope, kind,
         runId: correlation?.runId, toolCallId: correlation?.toolCallId,
         elapsedMs: data.elapsedMs, counters: data.counters,
-        linkedOperationIds: data.linked.map(link => link.work.operationId), droppedSpans: data.droppedSpans });
+        linkedOperationIds: data.linked.map(link => link.work.operationId), droppedSpans: data.droppedSpans }));
     } catch { /* Logging cannot change a tool result or its original failure. */ }
     return data;
   };

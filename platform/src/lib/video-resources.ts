@@ -1,10 +1,10 @@
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { timeStoryboardStage } from './storyboard-timing';
 import { mapInBatches } from './map-in-batches';
-import { storyboardMetadata, storyboardSchema, type Storyboard } from '../agents/providers/youtube/storyboard';
+import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS, type Storyboard } from '../agents/providers/youtube/storyboard';
 import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-frames-contract';
 import { getVideoFrames } from './youtube-frames';
-import { runYouTubeOperation, type YouTubeOperation } from './youtube-processor-client';
+import { runYouTubeOperation, YouTubeProcessorError, type YouTubeOperation } from './youtube-processor-client';
 import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
 import {
   videoCatalog,
@@ -52,7 +52,7 @@ export function videoResourceKey(op: VideoResourceOperation): VideoAssetKey | un
     case 'storyboard':
       variant = {
         metadataOnly: !!op.metadataOnly,
-        maxSheets: op.maxSheets ?? 20,
+        maxSheets: op.maxSheets ?? MAX_STORYBOARD_SHEETS,
         indexes: op.sheetIndexes ? [...op.sheetIndexes].sort((a, b) => a - b) : null,
         timestamps: op.timestampsMs ? [...new Set(op.timestampsMs)].sort((a, b) => a - b) : null,
       };
@@ -97,37 +97,9 @@ export async function sheetKey(board: Storyboard, index: number): Promise<VideoA
 export function frameKey(op: FrameOperation, time: number): VideoAssetKey {
   return { videoId: op.id, kind: 'frame', variant: `v1:${op.maxWidth}:${time}` };
 }
-function sheetIndexes(board: Storyboard, op: Extract<YouTubeOperation, { kind: 'storyboard' }>): number[] {
-  const manifest = board.manifest;
-  if (!manifest) throw new Error('Storyboard manifest unavailable.');
-  const count = op.maxSheets ?? 20;
-  const indexes =
-    op.sheetIndexes ??
-    (op.timestampsMs
-      ? [
-          ...new Set(
-            op.timestampsMs.map((time) => Math.floor(time / (manifest.framesPerSheet * board.intervalMs))),
-          ),
-        ]
-      : Array.from({ length: Math.min(count, manifest.totalSheets) }, (_, i) =>
-          Math.min(count, manifest.totalSheets) === 1
-            ? 0
-            : Math.round((i * (manifest.totalSheets - 1)) / (Math.min(count, manifest.totalSheets) - 1)),
-        ));
-  if (
-    !Number.isInteger(count) ||
-    count < 1 ||
-    count > 20 ||
-    indexes.length > count ||
-    new Set(indexes).size !== indexes.length ||
-    indexes.some((index) => !Number.isInteger(index) || index < 0 || index >= manifest.totalSheets) ||
-    op.timestampsMs?.some(
-      (time) =>
-        !Number.isSafeInteger(time) || time < 0 || time > manifest.lastSampleMs + board.intervalMs - 1,
-    )
-  )
-    throw new ApiError(422, 'INVALID_INPUT', 'Invalid storyboard selection.');
-  return indexes;
+/** Visual selections share a coordinator lookup; metadata reads keep their fast path. */
+export function isVisualSelection(op: VideoResourceOperation): op is FrameOperation | Extract<YouTubeOperation, { kind: 'storyboard' }> {
+  return op.kind === 'frames' || (op.kind === 'storyboard' && !op.metadataOnly);
 }
 
 function combined<T>(value: T, assets: StoredVideoAsset[]): StoredVideoAsset<T> {
@@ -176,15 +148,14 @@ export async function readStoryboardSelection(
     const store = videoCatalog(env);
     const metadata = store ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
     if (!metadata?.complete) {
-      countVisualWork('catalogMisses');
       return { kind: 'storyboard', metadata: null, hits: [], missing: [], stored: null };
     }
-    const indexes = sheetIndexes(metadata.value, op);
+    const indexes = storyboardSheetIndexes(metadata.value, op);
     const keys = await Promise.all(indexes.map(index => sheetKey(metadata.value, index)));
     const saved = await store!.readSavedMany<Storyboard>(keys);
     const hits = saved.filter((asset): asset is StoredVideoAsset<Storyboard> => !!asset?.complete);
     const missing = indexes.filter((_, index) => !saved[index]?.complete);
-    countVisualWork('catalogHits', hits.length + 1);
+    countVisualWork('catalogHits', hits.length);
     countVisualWork('catalogMisses', missing.length);
     return { kind: 'storyboard', metadata, hits, missing, stored: missing.length ? null : combined(
       boardWithSheets(metadata.value, op, hits.map(asset => asset.value)), [metadata, ...hits]) };
@@ -260,8 +231,8 @@ export async function saveVideoResource(
     if (board.videoId !== op.id) throw new Error('Storyboard video mismatch.');
     if (board.manifest) {
       if (!op.metadataOnly) {
-        // Metadata was loaded separately; saving images must not renew its freshness.
-        const expected = sheetIndexes(board, op);
+        // Saving images must not renew the independently stored manifest freshness.
+        const expected = storyboardSheetIndexes(board, op);
         const framesPerSheet = board.manifest.framesPerSheet;
         const writes = await Promise.all(board.sheets.map(async (sheet) => {
           const index = sheet.firstFrameIndex / framesPerSheet;
@@ -399,9 +370,25 @@ export async function loadVideoResource(
     // A cold or refreshed selection discovers the manifest and downloads images in
     // one container invocation. No second startup or repeated YouTube discovery.
     const fetchedAt = Date.now();
-    const fetched = storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
+    let fetched: Storyboard;
+    try {
+      fetched = storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
+    } catch (error) {
+      // Only a rejected selection needs a metadata recovery request. Successful
+      // cold selections retain the single invocation path.
+      if (error instanceof YouTubeProcessorError && error.code === 'INVALID_INPUT'
+        && (op.sheetIndexes || op.timestampsMs)) {
+        let metadata: Storyboard | undefined;
+        try {
+          metadata = storyboardSchema.parse(await runYouTubeOperation(env,
+            { kind: 'storyboard', id: op.id, metadataOnly: true }, diagnostic));
+        } catch { /* Preserve the original rejection if guidance cannot be retrieved. */ }
+        if (metadata?.videoId === op.id) storyboardSheetIndexes(metadata, op);
+      }
+      throw error;
+    }
     if (fetched.videoId !== op.id) throw new Error('Storyboard video mismatch.');
-    sheetIndexes(fetched, op);
+    countVisualWork('catalogMisses', storyboardSheetIndexes(fetched, op).length);
     const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
     // Independent assets share no publication dependency. Drain both on failure.
     const versions = await mapInBatches([

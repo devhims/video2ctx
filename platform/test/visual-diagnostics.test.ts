@@ -79,3 +79,10 @@ test('logging failure cannot replace a successful packet', async () => {
   const packet = await diagnoseVisualTool('frames', async () => ({ artifacts: [{ data: {} as Record<string, unknown> }] }));
   expect(visualDiagnosticsSchema.safeParse(packet.artifacts[0]!.data.visualDiagnostics).success).toBe(true);
 });
+
+test('timing logs emit structured JSON with correlation fields', async () => {
+  const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+  await captureVisualWork('tool', 'storyboard', async () => {}, { runId: 'run', toolCallId: 'call' });
+  expect(info).toHaveBeenCalledOnce();
+  expect(JSON.parse(info.mock.calls[0]![0])).toMatchObject({ event: 'visual_work_timing', runId: 'run', toolCallId: 'call' });
+});

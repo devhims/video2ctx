@@ -894,3 +894,29 @@ test('long transcript matches cannot crowd short-video matches out of the top 20
     expect(videos(found.packets)).toContain(shortId);
     expect(videos(found.packets)).not.toContain(longId);
   }));
+
+test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
+  within('storyboard-single-middle', async (store, reopen) => {
+    const value = { videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 3, framesPerSheet: 2, tileWidth: 100, tileHeight: 100,
+        columns: 2, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'spread' as const },
+      sheets: [{ firstFrameIndex: 2, frameCount: 2, tileWidth: 100, tileHeight: 100,
+        columns: 2, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' }],
+      meta: { partial: false, warnings: [] } };
+    const storyboard = vi.fn(async () => ({ cacheStatus: 'miss' as const, value }));
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    const { captureVisualWork } = await import('../src/lib/visual-diagnostics');
+    const cold = await captureVisualWork('tool', 'storyboard', () => sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 1 }));
+    const warm = await captureVisualWork('tool', 'storyboard', () => sessionProvider(p, reopen()).storyboard!(id, undefined, { maxSheets: 1 }));
+    expect(cold.value.value.sheets).toEqual(value.sheets);
+    expect(warm.value.value.sheets).toEqual(value.sheets);
+    expect(warm.value.sessionReused).toBe(true);
+    expect(storyboard).toHaveBeenCalledOnce();
+    for (const { diagnostics } of [cold, warm]) {
+      for (const span of diagnostics.spans) {
+        const parent = diagnostics.spans.find(candidate => candidate.id === span.parentId);
+        if (parent) expect(parent.stage).not.toBe(span.stage);
+      }
+    }
+  }));

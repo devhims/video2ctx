@@ -72,10 +72,10 @@ test('a live batch publishes separate assets with verified image references on a
   const { videoImageKey } = await import('../src/lib/video-catalog');
   const imageKey=await videoImageKey('batchedsave',new Uint8Array([255,216,255,0]));
   for (const ref of refs) {
-    const saved=await store.readVersion<{index:number;imageBase64:string}>(ref);
+    const saved=await store.readVersion<{index:number;imageBase64:string}>(ref, true);
     expect(saved?.value).toEqual(inputs[Number(ref.variant)]!.value);
     expect(saved?.verifiedImages?.[0]?.matches(bindings.VIDEO_ASSETS,imageKey)).toBe(true);
   }
   await bindings.VIDEO_ASSETS.put(imageKey,new Uint8Array([0,1,2]));
-  expect((await store.readVersion(refs[0]!))?.verifiedImages).toEqual([]);
+  expect((await store.readVersion(refs[0]!, true))?.verifiedImages).toEqual([]);
 });

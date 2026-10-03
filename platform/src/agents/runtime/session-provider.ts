@@ -4,7 +4,7 @@ import { mapInBatches } from '../../lib/map-in-batches';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
-import { storyboardMetadata, storyboardSchema, type Storyboard } from '../providers/youtube/storyboard';
+import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, type Storyboard } from '../providers/youtube/storyboard';
 import { SessionEvidenceStore } from './session-evidence';
 import { assertTranscriptWithinLimit } from './video-duration-limit';
 
@@ -128,28 +128,7 @@ export function sessionProvider(
             if (options.metadataOnly) return metadata;
             const manifest = metadata.value.manifest;
             if (!manifest) throw new Error('Storyboard manifest unavailable.');
-            const count = options.maxSheets ?? 20;
-            const indexes =
-              options.sheetIndexes ??
-              (timestamps
-                ? [
-                    ...new Set(
-                      timestamps.map((time) =>
-                        Math.floor(time / (manifest.framesPerSheet * metadata.value.intervalMs)),
-                      ),
-                    ),
-                  ]
-                : Array.from({ length: Math.min(count, manifest.totalSheets) }, (_, i) =>
-                    Math.min(count, manifest.totalSheets) === 1
-                      ? 0
-                      : Math.round((i * (manifest.totalSheets - 1)) / (Math.min(count, manifest.totalSheets) - 1)),
-                  ));
-            if (
-              indexes.length > count ||
-              indexes.some((i) => i < 0 || i >= manifest.totalSheets) ||
-              timestamps?.some((t) => t < 0 || t > manifest.lastSampleMs + metadata.value.intervalMs - 1)
-            )
-              throw new Error('Invalid storyboard selection. Retrieve metadata and select available sheets.');
+            const indexes = storyboardSheetIndexes(metadata.value, { ...options, timestampsMs: timestamps });
             const manifestVersion = metadata.assetVersions![0]!;
             const results: CachedResult<Storyboard>[] = [];
             const missing: number[] = [];

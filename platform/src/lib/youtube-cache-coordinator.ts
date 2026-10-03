@@ -5,7 +5,7 @@ import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
-import { readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
+import { isVisualSelection, readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
 
@@ -120,7 +120,7 @@ export class YouTubeCacheCoordinatorCore {
   private async load(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
     const catalog = videoCatalog(this.env);
     const resource = videoResourceKey(request.operation);
-    const selection = catalog && (request.operation.kind === 'frames' || (request.operation.kind === 'storyboard' && !request.operation.metadataOnly))
+    const selection = catalog && isVisualSelection(request.operation)
       ? request.operation : undefined;
     const lookup = selection && !request.refresh
       ? selection.kind === 'frames' ? await readFrameSelection(this.env, selection) : await readStoryboardSelection(this.env, selection) : undefined;

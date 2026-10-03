@@ -977,3 +977,102 @@ test('frame refresh bypasses saved lookup, preserves its budget and cannot retur
     expect(await core.getOrLoad(request)).toMatchObject({ok:false});
   } finally {lookup.mockRestore();}
 });
+
+test('single-sheet cold, warm, and refreshed storyboards select the processor middle sheet', async () => {
+  const f = fixture();
+  const core = new YouTubeCacheCoordinatorCore(f.env);
+  f.env.YOUTUBE_REQUEST_COORDINATOR = { getByName: () => ({
+    getOrLoad: async (wire: string) => JSON.stringify(await core.getOrLoad(JSON.parse(wire))),
+  }) } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  vi.mocked(runYouTubeOperation).mockResolvedValue(storyboard([1]));
+  const op = { kind: 'storyboard', id, maxSheets: 1 } as const;
+  for (const refresh of [false, false, true]) {
+    const result = await getVideoResource(f.env, op, refresh);
+    expect(result.value.sheets.map(sheet => sheet.firstFrameIndex)).toEqual([2]);
+    expect(result.catalogVersions).toHaveLength(2);
+  }
+  expect(runYouTubeOperation).toHaveBeenCalledTimes(2);
+});
+
+test.each(['storyboard', 'frames'] as const)('complete %s catalog hits survive coordinator RPC failure, but refresh does not', async kind => {
+  const f = fixture();
+  const operation = kind === 'storyboard' ? { kind, id, maxSheets: 1 }
+    : { kind, id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 };
+  if (kind === 'storyboard') await saveVideoResource(f.env, { kind, id, metadataOnly: true }, storyboard(), 123, 60000);
+  const value = kind === 'storyboard' ? storyboard([1])
+    : { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  await saveVideoResource(f.env, operation, value, 123, 60000);
+  const getOrLoad = vi.fn(async () => { throw new Error('coordinator offline'); });
+  f.env.YOUTUBE_REQUEST_COORDINATOR = { getByName: () => ({ getOrLoad }) } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  const fallback = await getVideoResource(f.env, operation);
+  expect(fallback).toMatchObject({ cacheStatus: 'stale', value: {
+    freshness: { state: 'stale', fetchedAt: 123 } }, catalogVersions: expect.any(Array) });
+  expect('sheets' in fallback.value ? fallback.value.sheets : fallback.value.frames)
+    .toEqual(kind === 'storyboard' ? storyboard([1]).sheets : [frame(1000)]);
+  await expect(getVideoResource(f.env, operation, true)).rejects.toMatchObject({ status: 503, code: 'CACHE_COORDINATOR_UNAVAILABLE' });
+  expect(runYouTubeOperation).not.toHaveBeenCalled();
+  expect(getVideoFrames).not.toHaveBeenCalled();
+  const missing = kind === 'storyboard' ? { kind, id, sheetIndexes: [2] }
+    : { kind, id, timestampsMs: [2000], maxWidth: 640, extractionTimeoutMs: 5000 };
+  await expect(getVideoResource(f.env, missing)).rejects.toMatchObject({ status: 503, code: 'CACHE_COORDINATOR_UNAVAILABLE' });
+});
+
+test('storyboard metadata-only hit bypasses the coordinator', async () => {
+  const f = fixture();
+  const op = { kind: 'storyboard', id, metadataOnly: true } as const;
+  await saveVideoResource(f.env, op, storyboard(), 123, 60000);
+  const getByName = vi.fn();
+  f.env.YOUTUBE_REQUEST_COORDINATOR = { getByName } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+  expect(await getVideoResource(f.env, op)).toMatchObject({ cacheStatus: 'hit', value: { manifest: { totalSheets: 3 } } });
+  expect(getByName).not.toHaveBeenCalled();
+});
+
+test.each([{ sheetIndexes: [3] }, { timestampsMs: [60000] }, { timestampsMs: [0, 40000], maxSheets: 1 }])(
+  'invalid cold storyboard selection returns ranges after one metadata recovery: %j', async selection => {
+    const { YouTubeProcessorError } = await import('../src/lib/youtube-processor-client');
+    const f = fixture();
+    const core = new YouTubeCacheCoordinatorCore(f.env);
+    vi.mocked(runYouTubeOperation).mockRejectedValueOnce(new YouTubeProcessorError('INVALID_INPUT', 'Selection out of range.'))
+      .mockResolvedValueOnce(storyboard());
+    const result = await core.getOrLoad({ ...request, operation: { kind: 'storyboard', id, ...selection } });
+    expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT', apiStatus: 422, retryable: false,
+      message: expect.stringContaining('Available sheet indexes are 0 through 2; timestamps must be below 60000 ms') } });
+    expect(runYouTubeOperation).toHaveBeenCalledTimes(2);
+    expect(runYouTubeOperation).toHaveBeenLastCalledWith(f.env, { kind: 'storyboard', id, metadataOnly: true }, expect.any(Function));
+  });
+
+test('warm invalid storyboard selection returns guidance without container calls', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, storyboard(), 123, 60000);
+  const result = await new YouTubeCacheCoordinatorCore(f.env).getOrLoad({ ...request,
+    operation: { kind: 'storyboard', id, sheetIndexes: [3] } });
+  expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT', apiStatus: 422,
+    message: expect.stringContaining('Available sheet indexes are 0 through 2') } });
+  expect(runYouTubeOperation).not.toHaveBeenCalled();
+});
+
+test('storyboard counters count images rather than the manifest', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, storyboard(), 123, 60000);
+  await saveVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [0] }, storyboard([0]), 123, 60000);
+  vi.mocked(runYouTubeOperation).mockResolvedValue(storyboard([1, 2]));
+  const result = await new YouTubeCacheCoordinatorCore(f.env).getOrLoad({ ...request,
+    operation: { kind: 'storyboard', id, maxSheets: 3 } });
+  expect(result.visualDiagnostics?.counters).toMatchObject({ catalogHits: 1, catalogMisses: 2 });
+});
+
+test('image verification hashing is opt-in and still rejects proof for mismatched bytes', async () => {
+  const f = fixture();
+  const [reference] = await saveVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [1] }, storyboard([1]), 123, 60000);
+  const digest = vi.spyOn(crypto.subtle, 'digest');
+  try {
+    expect((await f.store.readVersion(reference!))?.verifiedImages).toBeUndefined();
+    expect(digest).toHaveBeenCalledTimes(1); // JSON integrity only.
+    digest.mockClear();
+    expect((await f.store.readVersion(reference!, true))?.verifiedImages).toHaveLength(1);
+    expect(digest).toHaveBeenCalledTimes(2); // JSON and the image proof.
+    const key = [...f.objects.keys()].find(key => key.endsWith('.jpg'))!;
+    f.objects.set(key, new Uint8Array([255, 216, 255, 1]));
+    expect((await f.store.readVersion(reference!, true))?.verifiedImages).toEqual([]);
+  } finally { digest.mockRestore(); }
+});

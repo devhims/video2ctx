@@ -22,10 +22,12 @@ Concurrent identical misses still coalesce. Batched D1 reads check current point
 in one call and missing historical versions in a second call, sharing one activity
 update per video. R2 reads remain bounded to four concurrent assets.
 Shared-cache hits now pass through the coordinator RPC, so warm latency also needs
-checking after rollout. Reuse of already pinned session assets stays local to the
-session path.
+checking after rollout. On an RPC failure, the Worker reads the catalog and serves
+a complete saved selection as stale; missing selections and explicit refresh still
+fail. Metadata-only hits keep the Worker fast path. Reuse of already pinned session
+assets stays local to the session path.
 
-Cold and explicit-refresh selections use one container invocation. Existing
+Successful cold and explicit-refresh selections use one container invocation. Existing
 metadata lets the loader request only missing sheets. Legacy KV promotion includes
 both manifest and sheet references with their original timestamps. Saved JPEGs,
 JSON manifests, write journals, publication ordering, session reference verification,
@@ -138,3 +140,27 @@ Simulations confirm removal of duplicate work, not production elapsed time. The
 remaining container startup, YouTube latency, source writes, session verification,
 and previews must be measured after deployment. Do not add earlier isolated timing
 samples and present their sum as a measured end-to-end improvement.
+
+## Review corrections
+
+The Worker catalog and session provider share one selection function. A one-sheet
+spread selects the middle sheet, matching the deployed processor. Invalid selections
+include available sheet indexes and timestamp bounds. A cold selection rejected by
+the processor makes one metadata-only recovery request for that guidance; it does
+not download images again, and preserves the original error if metadata fails.
+
+Catalog hit/miss counters count images, excluding the manifest. Storyboard tools
+record requested image counts once metadata is available. Batch session spans and
+per-asset spans have distinct names; use exclusive durations for aggregation across
+nested stages. Image hashing for preview proofs is opt-in during session pinning.
+Normal catalog reads still verify JSON integrity without computing unused image proofs.
+
+Diagnostics stay out of shared KV/catalog content and model output. Private tool
+traces and session evidence packets retain them.
+
+Review validation: 1,110 platform unit checks passed, including the regenerated
+OpenAPI check; 147 local Cloudflare integration tests, 39 processor tests, 45 frame
+container tests, and TypeScript compilation passed. The new simulations cover
+single-sheet cold/warm/refresh retrieval, restored-session reuse, coordinator outage
+fallback, range guidance, and opt-in image verification. Production replay remains
+required after deployment.

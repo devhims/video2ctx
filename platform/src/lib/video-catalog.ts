@@ -1,3 +1,4 @@
+import { MAX_STORYBOARD_SHEETS } from '../agents/providers/youtube/storyboard';
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { VerifiedImage } from './verified-image';
 import { sha256 } from './http';
@@ -83,7 +84,7 @@ export class VideoCatalog {
       .bind(videoId, at, at, REQUEST_RESOLUTION_MS);
   }
 
-  async read<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
+  async read<T>(key: VideoAssetKey, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
     countVisualWork('catalogD1Statements');
     const row = await visualSpan('catalog_d1', () => this.db
       .prepare(
@@ -95,10 +96,10 @@ export class VideoCatalog {
     if (!row || Date.now() - (row.last_requested_at ?? 0) > REQUEST_RESOLUTION_MS)
       await this.requested(key.videoId);
     if (!row) return null;
-    return this.readRow<T>(row);
+    return this.readRow<T>(row, verifyImages);
   }
 
-  async readVersion<T>(reference: VideoAssetReference): Promise<StoredVideoAsset<T> | null> {
+  async readVersion<T>(reference: VideoAssetReference, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
     countVisualWork('catalogD1Statements');
     const row = await visualSpan('catalog_d1', () => this.db
       .prepare(
@@ -107,23 +108,23 @@ export class VideoCatalog {
       )
       .bind(reference.videoId, reference.kind, reference.variant, reference.contentHash)
       .first<AssetRow>());
-    return row ? this.readRow<T>(row) : null;
+    return row ? this.readRow<T>(row, verifyImages) : null;
   }
 
   /** Reuse a historical import when no current public source is available. */
-  async readSaved<T>(key: VideoAssetKey): Promise<StoredVideoAsset<T> | null> {
-    const current = await this.read<T>(key);
+  async readSaved<T>(key: VideoAssetKey, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
+    const current = await this.read<T>(key, verifyImages);
     if (current) return current;
     countVisualWork('catalogD1Statements');
     const row = await visualSpan('catalog_d1', () => this.db.prepare(`SELECT * FROM video_asset_versions
       WHERE video_id=? AND kind=? AND variant=? AND state='ready' AND complete=1
       ORDER BY fetched_at DESC, content_hash LIMIT 1`)
       .bind(key.videoId, key.kind, key.variant).first<AssetRow>());
-    return row ? this.readRow<T>(row) : null;
+    return row ? this.readRow<T>(row, verifyImages) : null;
   }
 
   /** One current-pointer round trip, then one fallback/activity batch if needed. */
-  async readSavedMany<T>(keys: VideoAssetKey[]): Promise<(StoredVideoAsset<T> | null)[]> {
+  async readSavedMany<T>(keys: VideoAssetKey[], verifyImages = false): Promise<(StoredVideoAsset<T> | null)[]> {
     if (!keys.length) return [];
     const rows = await this.batch<AssetRow>(keys.map(key => this.db.prepare(
       `SELECT a.*, v.last_requested_at FROM video_assets a
@@ -134,7 +135,7 @@ export class VideoCatalog {
       const row = result.results[0];
       if (!row || Date.now() - (row.last_requested_at ?? 0) > REQUEST_RESOLUTION_MS)
         activity.add(keys[index]!.videoId);
-      return row ? this.readRow<T>(row) : null;
+      return row ? this.readRow<T>(row, verifyImages) : null;
     });
     const missing = keys.flatMap((key, index) => values[index] ? [] : [{ key, index }]);
     const statements = [
@@ -147,22 +148,22 @@ export class VideoCatalog {
       const fallback = await this.batch<AssetRow>(statements);
       await mapInBatches(missing, async ({index}, offset) => {
         const row = fallback[activity.size + offset]!.results[0];
-        values[index] = row ? await this.readRow<T>(row) : null;
+        values[index] = row ? await this.readRow<T>(row, verifyImages) : null;
       });
     }
     return values;
   }
 
-  private async readRow<T>(row: AssetRow): Promise<StoredVideoAsset<T> | null> {
+  private async readRow<T>(row: AssetRow, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
     const object = await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Gets'); return this.bucket.get(row.object_key); });
     if (!object) return null;
     const payload = await object.text();
     if ((await sha256(payload)) !== row.content_hash) return null;
     try {
-      const verifiedImages: VerifiedImage[] = [];
+      const verifiedImages: VerifiedImage[] | undefined = verifyImages ? [] : undefined;
       const value = await this.hydrate(JSON.parse(payload) as Json, row.video_id, verifiedImages);
       return {
-        verifiedImages,
+        ...(verifiedImages ? { verifiedImages } : {}),
         value: value as T,
         fetchedAt: row.fetched_at,
         freshUntil: row.fresh_until,
@@ -193,11 +194,11 @@ export class VideoCatalog {
     }
   }
 
-  /** Publish up to twenty independent live assets using shared D1 round trips. */
+  /** Publish a bounded selection of independent live assets using shared D1 round trips. */
   async saveMany(inputs: VideoAssetWrite[]): Promise<VideoAssetReference[]> {
     if (!inputs.length) return [];
     try {
-      if (inputs.length > 20) throw new Error('Too many assets in a catalog write batch.');
+      if (inputs.length > MAX_STORYBOARD_SHEETS) throw new Error('Too many assets in a catalog write batch.');
       const writes = await mapInBatches(inputs, input => this.prepareWrite(input.key, input.value,
         input.fetchedAt, input.maxAgeMs, input.complete, input.coverage ?? {}, true));
       const videoIds = [...new Set(inputs.map(input => input.key.videoId))];
@@ -399,7 +400,7 @@ export class VideoCatalog {
     return out;
   }
 
-  private async hydrate(value: Json, videoId: string, verifiedImages: VerifiedImage[]): Promise<Json> {
+  private async hydrate(value: Json, videoId: string, verifiedImages?: VerifiedImage[]): Promise<Json> {
     if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId, verifiedImages)));
     if (value === null || typeof value !== 'object') return value;
     const out: Record<string, Json> = {};
@@ -418,7 +419,7 @@ export class VideoCatalog {
           if (!object) throw new MissingVideoImage();
           const bytes = new Uint8Array(await object.arrayBuffer());
           // Only exact content-addressed bytes can replace a later existence check.
-          if (await videoImageKey(videoId, bytes) === item.r2Image)
+          if (verifiedImages && await videoImageKey(videoId, bytes) === item.r2Image)
             verifiedImages.push(new VerifiedImage(this.bucket, item.r2Image));
           let binary = '';
           for (let offset = 0; offset < bytes.length; offset += 8192)
