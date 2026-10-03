@@ -541,7 +541,10 @@ test('views stored session evidence and deletes assets with their dependent memo
   await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
 });
 
-test('finalization failure reasons stay visible after refresh for failed and partial runs', async ({ page, context }) => {
+for (const failure of [
+  { code: 'FINAL_SYNTHESIS_UNAVAILABLE', reason: 'The answer reached its output limit, and the repair attempt timed out. Any successfully saved evidence remains available in this session. Retry the question to use it again.' },
+  { code: 'YOUTUBE_UNAVAILABLE', reason: 'YouTube is not available right now.' },
+]) test(`${failure.code} reasons stay visible after refresh for failed and partial runs`, async ({ page, context }) => {
   await login(context, 'allowed');
   // A session and a follow-up run have different IDs. Keep this fixture local
   // so earlier tests that submit follow-ups cannot change the run under test.
@@ -557,12 +560,12 @@ test('finalization failure reasons stay visible after refresh for failed and par
     })),
   } }));
   let partial = false;
-  const reason = 'The answer reached its output limit, and the repair attempt timed out. Any successfully saved evidence remains available in this session. Retry the question to use it again.';
+  const reason = failure.reason;
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
     status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
       run: { sessionId, runId, status: partial ? 'completed' : 'failed',
         ...(partial ? { result: { outcome: 'partial', answer: `Partial evidence summary\n\n${reason}\n\nA supported finding.`,
-          sources: [], warnings: [{ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: reason }] } } : { error: reason }) },
+          sources: [], warnings: [{ code: failure.code, message: reason }] } } : { error: reason }) },
       phase: partial ? 'completed' : 'failed', tools: [],
     })}\n\n`,
   }));

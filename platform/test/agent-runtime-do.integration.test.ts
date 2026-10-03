@@ -1,4 +1,5 @@
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
+import { createWorkerExtractionRunner } from '../src/lib/youtube-worker-extraction';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -643,6 +644,64 @@ test('deduplicates complete transcript retrieval durably across focuses and keep
     expect(calls).toHaveLength(2);
     expect(calls.reduce((sum, call) => sum + call.credits, 0)).toBe(2);
     expect(instance.sql`SELECT * FROM agent_evidence_packets WHERE run_id = ${runId}`).toHaveLength(2);
+  });
+});
+
+test('does not restart an exhausted transcript extraction in the same run', async () => {
+  const { runtime, runId } = await seed('failed-transcript-reuse', 'running');
+  for (const callId of ['first', 'rephrased']) {
+    await runInDurableObject(runtime, async instance => {
+      const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+      const attempt = vi.fn(async () => { throw Object.assign(new Error('Sign in to confirm you are not a bot'), { code: 'UNAVAILABLE', reason: 'bot_challenge' }); });
+      const proxyTransport = vi.fn((_url: string) => ({ fetch: async () => new Response(), close: async () => {} }));
+      const extract = createWorkerExtractionRunner({ execute: attempt, proxyTransport });
+      const transcript = vi.fn(async () => {
+        // The local test bindings omit production-only authentication secrets.
+        await extract({ ...env as Env,
+          OUTBOUND_PROXY_URLS: JSON.stringify([1, 2, 3, 4].map(slot => `http://proxy-${slot}.example:8080`)),
+        }, { kind: 'transcript', id: 'abcdefghijk', granularity: 'word' });
+        throw new Error('Expected all four extraction attempts to fail');
+      });
+      const context: AgentToolContext = {
+        runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+        provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+        executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+      };
+      const requests = [executeGetVideoTranscript({ videoId: 'abcdefghijk', focus: callId }, context, callId)];
+      if (callId === 'first') requests.push(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'concurrent'));
+      await Promise.all(requests.map(request => expect(request).rejects.toMatchObject({
+        code: 'YOUTUBE_UNAVAILABLE', message: 'YOUTUBE_UNAVAILABLE: YouTube is not available right now.',
+      })));
+      expect(transcript).toHaveBeenCalledTimes(callId === 'first' ? 1 : 0);
+      expect(attempt).toHaveBeenCalledTimes(callId === 'first' ? 4 : 0);
+      expect(new Set(proxyTransport.mock.calls.map(call => call[0])).size).toBe(callId === 'first' ? 4 : 0);
+    });
+  }
+  await runInDurableObject(runtime, async instance => {
+    const calls = instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ status: 'failed', credits: 0 });
+  });
+});
+
+test('an exhausted transcript can be requested in another run', async () => {
+  const { runtime, runId } = await seed('transcript-fresh-run', 'running');
+  const otherRunId = crypto.randomUUID();
+  await runInDurableObject(runtime, async instance => {
+    // A prior failure for the same semantic request must never poison a new run.
+    instance.sql`INSERT INTO agent_tool_calls
+      (run_id,tool_call_id,semantic_key,tool_name,operation,status,error,credits,created_at,updated_at)
+      VALUES (${otherRunId},'old','transcript-retrieval:{"videoId":"abcdefghijk"}',
+        'get_video_transcript','transcript','failed','YOUTUBE_UNAVAILABLE: YouTube is not available right now.',0,0,0)`;
+    const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
+    const transcript = vi.fn(async () => { throw Object.assign(new Error('unavailable'), { code: 'UNAVAILABLE' }); });
+    const context: AgentToolContext = {
+      runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
+      executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
+    };
+    await expect(executeGetVideoTranscript({ videoId: 'abcdefghijk' }, context, 'new')).rejects.toMatchObject({ code: 'YOUTUBE_UNAVAILABLE' });
+    expect(transcript).toHaveBeenCalledTimes(1);
   });
 });
 

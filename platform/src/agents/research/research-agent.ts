@@ -1,4 +1,5 @@
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
+import { YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from '../runtime/video-duration-limit';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
@@ -385,7 +386,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       ).flatMap(packet => packet.sources.flatMap(source => source.videoId && (!options.decision.comparisonVideoIds || options.decision.comparisonVideoIds.includes(source.videoId)) ? [source.videoId] : [])));
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
-      const warnings = input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL');
+      const warnings = mergeWarnings(input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
+        toolFailureWarnings([...toolFailures.values()]));
       if (visualRequired && !hasVisualObservations()) {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
@@ -1039,6 +1041,8 @@ function isAgentCoreTimeout(error: unknown): boolean {
 }
 
 function summarizeToolFailures(failures: EvidenceToolFailure[]): string {
+  if (failures.some(failure => failure.message.startsWith('YOUTUBE_UNAVAILABLE: ')))
+    return YOUTUBE_UNAVAILABLE_MESSAGE;
   const details = groupedToolFailures(failures)
     .map((failure) => `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`)
     .join('; ');
@@ -1057,10 +1061,12 @@ function groupedToolFailures(failures: EvidenceToolFailure[]) {
 }
 
 function toolFailureWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
-  return groupedToolFailures(failures).slice(0, 50).map((failure) => ({
+  const availability: AgentWarning[] = failures.some(failure => failure.message.startsWith('YOUTUBE_UNAVAILABLE: '))
+    ? [{ code: 'YOUTUBE_UNAVAILABLE', message: YOUTUBE_UNAVAILABLE_MESSAGE }] : [];
+  return [...availability, ...groupedToolFailures(failures).filter(failure => !failure.message.startsWith('YOUTUBE_UNAVAILABLE: ')).slice(0, 49).map((failure) => ({
     code: 'EVIDENCE_TOOL_FAILED',
     message: `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`.slice(0, 1_000),
-  }));
+  }))];
 }
 
 function mergeWarnings(modelWarnings: AgentWarning[], failureWarnings: AgentWarning[]): AgentWarning[] {
