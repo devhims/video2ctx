@@ -802,7 +802,7 @@ test('a completed coordinator save attaches frames without downloading them agai
     mimeType:'image/jpeg' as const,imageBase64:'/9j/AA=='})),failures:[],meta:{partial:false,warnings:[]}};
   let published = false;
   const getOrLoad = vi.fn(async () => {
-    const versions = await saveVideoResource(env,{kind:'frames',id,...request,extractionTimeoutMs:5000},value,Date.now(),60000);
+    const versions = await saveVideoResource(configured,{kind:'frames',id,...request,extractionTimeoutMs:5000},value,Date.now(),60000);
     published = true;
     return JSON.stringify({ok:true,value,cacheStatus:'miss',catalogVersions:versions,fetchedAt:Date.now()});
   });
@@ -818,6 +818,19 @@ test('a completed coordinator save attaches frames without downloading them agai
       const restored = await store.lookup(`frame:${id}:640:1000`);
       expect(restored?.value).toMatchObject({frames:[value.frames[0]]});
       expect(read).toHaveBeenCalledOnce();
+      expect(restored?.verifiedImages).toHaveLength(1);
+      const { saveFramePreviews, framePreviewKey } = await import('../src/agents/runtime/frame-previews');
+      const { agentFramePreviewRoutes } = await import('../src/routes/agent/frame-previews');
+      const preview = (await saveFramePreviews(env.RESEARCH, 'inline-owner', result.value, new AbortController().signal, env.VIDEO_ASSETS, result.verifiedImages))[0]!;
+      const previewPath = `/agent/frames/${preview.collectionId}/${preview.assetId}`;
+      expect((await agentFramePreviewRoutes.request(previewPath, {}, env)).status).toBe(200);
+      const repeated = await sessionProvider(createYouTubeAgentProvider(configured),store).frames!(request);
+      expect(repeated.sessionReused).toBe(true);
+      const reusedPreview = (await saveFramePreviews(env.RESEARCH, 'inline-owner', repeated.value, new AbortController().signal, env.VIDEO_ASSETS, repeated.verifiedImages))[0]!;
+      expect((await agentFramePreviewRoutes.request(`/agent/frames/${reusedPreview.collectionId}/${reusedPreview.assetId}`, {}, env)).status).toBe(200);
+      await env.RESEARCH.delete(framePreviewKey(preview.collectionId,preview.assetId));
+      expect((await env.RESEARCH.get(framePreviewKey(preview.collectionId,preview.assetId)))).toBeNull();
+      expect(getOrLoad).toHaveBeenCalledOnce();
     } finally { read.mockRestore(); }
   });
 });

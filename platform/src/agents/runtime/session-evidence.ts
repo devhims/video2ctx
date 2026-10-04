@@ -534,7 +534,8 @@ export class SessionEvidenceStore implements SessionAccess {
     if (!row) return;
     const value = await this.read(row.version);
     if (value !== null)
-      return { value: value as T, cacheStatus: 'hit', sessionReused: true, assetVersions: [row.version] };
+      return { value: value as T, verifiedImages: this.catalog?.verifiedImages?.(value),
+        cacheStatus: 'hit', sessionReused: true, assetVersions: [row.version] };
   }
   async retrieve<T>(
     key: string,

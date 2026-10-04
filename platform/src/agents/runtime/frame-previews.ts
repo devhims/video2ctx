@@ -65,10 +65,10 @@ export async function saveImagePreviews<T extends { width: number; height: numbe
       const bytes = Uint8Array.from(atob(image.imageBase64), value => value.charCodeAt(0));
       if (shared) {
         const sharedImageKey = await videoImageKey(shared.videoId,bytes);
-        const verified = shared.verifiedImages?.some(image => image instanceof VerifiedImage && image.matches(shared.bucket, sharedImageKey));
+        const verified = shared.verifiedImages?.find(image => image instanceof VerifiedImage && image.matches(shared.bucket, sharedImageKey));
         if (!verified && !await visualSpan('preview_r2', () => { countVisualWork('previewR2Heads'); return shared.bucket.head(sharedImageKey); })) throw new Error('Shared preview image is unavailable.');
         // This private capability can be revoked without deleting the source JPEG.
-        await visualSpan('preview_r2', () => { countVisualWork('previewR2Puts'); return bucket.put(key,JSON.stringify({sharedImageKey}),{
+        await visualSpan('preview_r2', () => { countVisualWork('previewR2Puts'); return bucket.put(key,JSON.stringify(verified?.previewReference() ?? {sharedImageKey}),{
           httpMetadata:{contentType:'application/json',cacheControl:'no-store'},
         }); });
       } else {

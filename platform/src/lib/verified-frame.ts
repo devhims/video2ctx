@@ -16,12 +16,12 @@ export class VerifiedFrame {
   readonly #videoId: string;
   readonly #frames: string;
   readonly #image: VerifiedImage;
-  constructor(bucket: R2Bucket, reference: VideoAssetReference, frame: VideoFrames['frames'][number], imageKey: string) {
+  constructor(bucket: R2Bucket, reference: VideoAssetReference, frame: VideoFrames['frames'][number], imageKey: string, frameKey?: string) {
     this.#bucket = bucket;
     this.#reference = canonical(reference)!;
     this.#videoId = reference.videoId;
     this.#frames = canonical([frame])!;
-    this.#image = new VerifiedImage(bucket, imageKey);
+    this.#image = new VerifiedImage(bucket, imageKey, frameKey);
   }
 
   match(bucket: R2Bucket, reference: VideoAssetReference, value: unknown): VerifiedImage | undefined {

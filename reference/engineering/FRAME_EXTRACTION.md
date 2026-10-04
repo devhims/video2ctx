@@ -19,8 +19,10 @@ still use precise bounded range reads.
 
 Completed Media frames begin catalog publication while the remaining frames decode.
 Every started write is drained, and failures prevent a successful tool response.
-Each write retains the pending journal, image-before-manifest ordering, and final
-catalog publication. Frame storage, session attachment, and preview writes admit
+Each write retains the pending journal and final catalog publication. New Media
+frame records keep the JPEG base64 and metadata in one immutable JSON object,
+removing a second R2 write. This adds about one third to image storage size. Old
+split-image records remain readable; storyboards retain separate deduplicated JPEGs. Frame storage, session attachment, and preview writes admit
 six images together; storyboard I/O remains bounded to four.
 
 After the private coordinator confirms successful publication, the agent provider
@@ -30,6 +32,10 @@ downloading the newly saved images again. Receipts cannot be serialized or suppl
 by tool input. Missing, mismatched, cache-hit, and stale receipts use the existing
 catalog verification path. Later session reads still load the immutable stored
 version. Session generation checks, cancellation, and preview revocation are retained.
+Preview references can resolve either a shared JPEG or the JPEG inside a frame
+object. They remain private, individually revocable R2 records. Roll back decoding
+with the backend flag while retaining this compatible reader; older Worker builds
+cannot serve the new preview-reference format.
 
 The existing shared frame cache, session storage, image validation, preview paths,
 credits, and caller-facing frame contract remain in place. Cache hits do not invoke

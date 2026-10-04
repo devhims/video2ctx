@@ -77,13 +77,13 @@ youtube/videos/abcdefghijk/
   images/<image-hash>.jpg
 ```
 
-A manifest references binary JPEG objects. Reads reconstruct the provider response expected by existing callers. Byte-identical payloads share a content hash. New snapshots remain available in the version inventory.
+Storyboard manifests and older frame manifests reference binary JPEG objects. New frame writes with the Media backend store the JPEG base64 inside the immutable frame JSON object. One atomic R2 write replaces separate image and manifest writes, at roughly 33% more storage for image bytes. Reads accept both layouts and reconstruct the provider response expected by existing callers. Byte-identical payloads share a content hash. New snapshots remain available in the version inventory.
 
 `video_metadata` means the get-video-details response, not a video file. Migration `0002_video_metadata_kind.sql` renames existing D1 asset and version records. Their R2 object keys stay unchanged, so historical objects under `video/` remain readable; new writes use `video_metadata/`. Reads also accept the legacy kind during rollout. The processor operation remains `video` for compatibility with its existing contract.
 
 ## Consistency and recovery
 
-D1 and R2 have no cross-service transaction. The pending version is written first, followed by all images and then the manifest. A D1 batch publishes the pointer and marks the version ready. The hourly task reconciles up to 50 pending versions older than five minutes, independently of monitor reconciliation.
+D1 and R2 have no cross-service transaction. The pending version is written first. Split-image records write all images and then the manifest; inline frame records write one complete JSON object. A D1 batch publishes the pointer and marks the version ready. The hourly task reconciles up to 50 pending versions older than five minutes, independently of monitor reconciliation.
 
 Missing objects and manifests with mismatched hashes cause a cache miss. Failed persistence returns an error instead of pretending the new evidence was saved. A normal upstream failure may serve existing evidence with `cacheStatus: stale`; an explicit refresh reports upstream failure. Partial sources are saved but never treated as fresh complete hits.
 

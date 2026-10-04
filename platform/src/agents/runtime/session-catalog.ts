@@ -49,6 +49,7 @@ function projection(source: unknown, value: unknown): Omit<SessionCatalogReferen
 /** Public source persistence only. No session IDs, prompts, analyses or citations. */
 export class SessionCatalog {
   private readonly catalog;
+  private readonly readImages = new WeakMap<object, VerifiedImage[]>();
   constructor(private readonly env: Env) {
     const catalog = videoCatalog(env);
     if (!catalog) throw new Error('Shared video catalog bindings are required.');
@@ -56,11 +57,16 @@ export class SessionCatalog {
   }
 
   async read(reference: SessionCatalogReference): Promise<unknown | null> {
-    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset);
+    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset, reference.asset.kind === 'frame');
     if (!stored) return null;
     const value = { ...stored.value, ...reference.overrides };
     for (const field of reference.omitted) delete value[field];
+    if (stored.verifiedImages) this.readImages.set(value, stored.verifiedImages);
     return value;
+  }
+
+  verifiedImages(value: unknown): VerifiedImage[] | undefined {
+    return value && typeof value === 'object' ? this.readImages.get(value) : undefined;
   }
 
   async pin(

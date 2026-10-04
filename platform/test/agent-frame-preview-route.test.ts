@@ -66,3 +66,34 @@ test('rejects malformed shared preview references without reading arbitrary R2 k
   expect((await app.request(path,{}, {...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env,executionContext)).status).toBe(404);
   expect(sharedGet).not.toHaveBeenCalled();
 });
+
+test('serves an inline frame through a revocable private capability', async () => {
+  const sharedFrameKey=`youtube/videos/abcdefghijk/frame/${'c'.repeat(64)}/${'d'.repeat(64)}.json`;
+  const value={videoId:'abcdefghijk',frames:[{timestampMs:1000,width:640,height:360,mimeType:'image/jpeg',imageBase64:'/9j/AA=='}],
+    failures:[],meta:{partial:false,warnings:[]}};
+  const sharedGet=vi.fn(async()=>({json:async()=>value}));
+  const sharedEnv={...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env;
+  get.mockResolvedValue({httpMetadata:{contentType:'application/json'},json:async()=>({sharedFrameKey})});
+  const response=await app.request(path,{},sharedEnv,executionContext);
+  expect(response.status).toBe(200);
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([255,216,255,0]));
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(response.headers.get('Content-Type')).toBe('image/jpeg');
+  get.mockResolvedValue(null); sharedGet.mockClear();
+  expect((await app.request(path,{},sharedEnv,executionContext)).status).toBe(404);
+  expect(sharedGet).not.toHaveBeenCalled();
+});
+
+test.each(['private/analysis.json',`youtube/videos/abcdefghijk/transcript/${'c'.repeat(64)}/${'d'.repeat(64)}.json`])('rejects inline references outside frame storage: %s',async sharedFrameKey=>{
+  const sharedGet=vi.fn();
+  get.mockResolvedValue({httpMetadata:{contentType:'application/json'},json:async()=>({sharedFrameKey})});
+  expect((await app.request(path,{}, {...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env,executionContext)).status).toBe(404);
+  expect(sharedGet).not.toHaveBeenCalled();
+});
+
+test.each([null,{}, {videoId:'abcdefghijk',frames:[{timestampMs:1000,width:640,height:360,mimeType:'image/jpeg',imageBase64:'/9j/A'}],failures:[],meta:{partial:false,warnings:[]}}])('rejects a missing or corrupt inline frame',async value=>{
+  const sharedFrameKey=`youtube/videos/abcdefghijk/frame/${'c'.repeat(64)}/${'d'.repeat(64)}.json`;
+  const sharedGet=vi.fn(async()=>value===null?null:{json:async()=>value});
+  get.mockResolvedValue({httpMetadata:{contentType:'application/json'},json:async()=>({sharedFrameKey})});
+  expect((await app.request(path,{}, {...env,VIDEO_ASSETS:{get:sharedGet}} as unknown as Env,executionContext)).status).toBe(404);
+});

@@ -1143,3 +1143,14 @@ test('publishes only remaining fallback frames after progressive Media results',
   expect(versions.mock.calls[0]![0]).toHaveLength(2);
   save.mockRestore();
 });
+
+test('stores a Media frame atomically with one R2 write and no separate image object', async () => {
+  const f = fixture(); f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  const value = {videoId:id,frames:[frame(1000)],failures:[],meta:{partial:false,warnings:[]}};
+  const versions=await saveVideoResource(f.env,{kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000},value,Date.now(),60000);
+  expect(f.bucket.put).toHaveBeenCalledOnce();
+  expect(versions[0]).toMatchObject({imageStorage:'inline'});
+  const restored=await f.store.readVersion(versions[0]!,true);
+  expect(restored?.value).toEqual(value);
+  expect(restored?.verifiedImages?.[0]?.previewReference()).toEqual({sharedFrameKey:vi.mocked(f.bucket.put).mock.calls[0]![0]});
+});
