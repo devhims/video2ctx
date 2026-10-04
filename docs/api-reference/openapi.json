@@ -7383,7 +7383,8 @@
                       "type": "string",
                       "enum": [
                         "worker",
-                        "container"
+                        "container",
+                        "media"
                       ]
                     },
                     "egress": {
@@ -7463,7 +7464,10 @@
                               "ffmpeg",
                               "ffmpeg_success",
                               "job",
-                              "proxy"
+                              "proxy",
+                              "media_decode",
+                              "media_admission",
+                              "media_source"
                             ]
                           },
                           "failureReason": {
@@ -8582,7 +8586,8 @@
                           "type": "string",
                           "enum": [
                             "worker",
-                            "container"
+                            "container",
+                            "media"
                           ]
                         },
                         "egress": {
@@ -8662,7 +8667,10 @@
                                   "ffmpeg",
                                   "ffmpeg_success",
                                   "job",
-                                  "proxy"
+                                  "proxy",
+                                  "media_decode",
+                                  "media_admission",
+                                  "media_source"
                                 ]
                               },
                               "failureReason": {
@@ -10093,7 +10101,8 @@
                       "type": "string",
                       "enum": [
                         "worker",
-                        "container"
+                        "container",
+                        "media"
                       ]
                     },
                     "egress": {
@@ -10173,7 +10182,10 @@
                               "ffmpeg",
                               "ffmpeg_success",
                               "job",
-                              "proxy"
+                              "proxy",
+                              "media_decode",
+                              "media_admission",
+                              "media_source"
                             ]
                           },
                           "failureReason": {
@@ -11015,7 +11027,8 @@
                       "type": "string",
                       "enum": [
                         "worker",
-                        "container"
+                        "container",
+                        "media"
                       ]
                     },
                     "egress": {
@@ -11095,7 +11108,10 @@
                               "ffmpeg",
                               "ffmpeg_success",
                               "job",
-                              "proxy"
+                              "proxy",
+                              "media_decode",
+                              "media_admission",
+                              "media_source"
                             ]
                           },
                           "failureReason": {

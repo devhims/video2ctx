@@ -2,6 +2,83 @@
 
 An agent uses storyboards to find relevant moments, then asks for individual video frames when it needs to read text, a chart, code, or a specific interface state. Frame extraction does not analyze the whole video or prove motion between images.
 
+## Managed decoding with FFmpeg recovery
+
+`YOUTUBE_FRAMES_BACKEND=media` selects Cloudflare Media Transformations for supported
+indexed H.264 MP4 inputs. `container` restores the original FFmpeg-only path. The
+Worker resolves source metadata and byte ranges through the configured proxy pool,
+reads the MP4 index once, and packages a short independently decodable clip for each
+requested timestamp. Cloudflare decodes that clip into a JPEG. The original video
+can exceed Media's input duration limit because only the short clip is submitted.
+
+The existing shared frame cache, session storage, image validation, preview paths,
+credits, and caller-facing frame contract remain in place. Cache hits do not invoke
+either decoder. Signed media URLs, proxy credentials, and clip bytes are never saved
+in diagnostics. This path creates no public frame endpoint.
+
+```mermaid
+%%{init: {'themeVariables': {'actorBkg': '#e2e8f0', 'actorTextColor': '#0f172a', 'signalColor': '#64748b', 'sequenceNumberColor': '#ffffff'}}}%%
+sequenceDiagram
+    autonumber
+    participant App as Platform Worker
+    participant Capacity as Shared admission
+    participant Source as YouTube through proxy
+    participant Media as Cloudflare Media
+    participant FF as Existing FFmpeg containers
+    App->>Capacity: Admit bounded batch
+    App->>Source: Read metadata, index, and selected ranges
+    App->>App: Package short MP4 clips
+    App->>Capacity: Admit each Media call
+    App->>Media: Decode clip at relative timestamp
+    Media-->>App: JPEG or failure
+    opt Missing frames and remaining budget
+        App->>Capacity: Admit FFmpeg recovery
+        App->>FF: Extract only missing timestamps
+        FF-->>App: Frames and explicit failures
+    end
+```
+
+The `MediaFrameCapacity` Durable Object stores only random lease IDs, start times,
+and cooldowns. One shared account quota allows four Media batches, eight active
+Media calls, and at most 24 Media call starts in any 15-second window. These are
+our conservative rollout settings, not Cloudflare's published quota. Each batch
+prepares and decodes at most two frames simultaneously. Admission waits at most
+two seconds. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
+FFmpeg recovery has a separate two-job limit, matching the existing container pool.
+Completed or failed calls retain their rate accounting. Leases expire after 90
+seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
+Admission RPC failure never bypasses the limit.
+
+Media gets at most 20 seconds of the existing extraction budget and leaves at
+least ten seconds for recovery when that budget permits. Short-budget calls go
+directly to FFmpeg recovery. Fallback uses only missing timestamps and the remaining
+time; it does not restart the budget or discard completed Media frames. Combined
+output retains the 8 MiB image limit. If recovery fails, usable frames return with
+explicit partial coverage. Caller cancellation prevents fallback.
+
+The first supported format is indexed, non-fragmented H.264 with a simple edit
+list, an identity display matrix, and an IDR keyframe at the clip start. Other
+formats and uncertain broadcasts use the existing container path. Parser work is
+bounded to a 2 MiB index and 50,000 declared samples across tracks. This can send
+longer progressive videos to FFmpeg, especially when they contain audio tracks.
+Selected media ranges are limited to 4 MiB, keyframe groups to 1,000 samples and 30
+seconds, and aggregate source reads to 40 MiB per Media attempt. Sources must honor
+exact HTTP byte ranges; full-file HTTP 200 responses are rejected without reading
+their bodies. Input limits are deliberate recovery triggers, not user-facing video
+limits. The original library and container behavior is retained.
+
+Deployment requires the new `MEDIA` binding and SQLite-backed `MediaFrameCapacity`
+namespace (migration `v8`) in the Worker. No D1 data migration, container image
+change, or capacity increase is required. The existing images remain the rollback
+path. Production validation was explicitly authorized before PR review. Local development can set
+`YOUTUBE_FRAMES_BACKEND:container`; Media decoding requires Cloudflare's remote
+binding. Safe extraction diagnostics identify `backend: media` and admission,
+source preparation, and decode stages separately from container attempts.
+
+PR #139 is independent: it admits two visual retrievals per session while keeping
+only one frame batch active. Its storyboard latency improvement does not require
+Media, and Media does not remove the need to bound work across sessions.
+
 ## Existing local skill
 
 The skill is `youtube-ctx`. Its visual entry point is `watch.mjs`, generated from `packages/youtube-skills/src/watch/`. The published instructions are in `.agents/skills/youtube-ctx/references/visual.md`.
@@ -21,7 +98,7 @@ There is no full-video file download or staging step. FFmpeg streams media throu
 
 ## Hosted flow
 
-The platform Worker's existing agent API owns authentication, permissions, admission limits, credits, input validation, and the agent response. The new private `YouTubeFramesContainer` owns frame-related YouTube traffic, the loopback range proxy, FFmpeg, and temporary files. The existing processor continues to handle storyboards and other provider reads. No YouTube media requests originate in the Worker.
+The platform Worker's existing agent API owns authentication, permissions, admission limits, credits, input validation, and the agent response. The diagram below describes the retained container backend. Its private `YouTubeFramesContainer` owns the loopback range proxy, FFmpeg, and temporary files. The managed backend above instead reads media through the Worker's required proxy transport. The existing processor continues to handle storyboards.
 
 ```mermaid
 %%{init: {'themeVariables': {'sequenceNumberColor': '#ffffff', 'actorBkg': '#e5e7eb', 'actorTextColor': '#111827', 'actorBorder': '#374151', 'signalColor': '#6b7280'}}}%%

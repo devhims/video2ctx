@@ -1,3 +1,6 @@
+import { getYouTubeMediaFrames } from './youtube-media-frames';
+import { acquireFrameLease } from './frame-media-admission';
+import { Buffer } from 'node:buffer';
 import { visualSpan, countVisualWork, linkVisualExtraction } from './visual-diagnostics';
 import { boundedContainerJson } from './bounded-container-json';
 import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
@@ -72,11 +75,13 @@ async function withTransportDeadline<T>(timeoutMs: number, signal: AbortSignal |
 
 export async function getVideoFrames(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
   limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
-  return visualSpan('extraction', () => getVideoFramesImpl(env, request, signal, limits, onDiagnostic));
+  return visualSpan('extraction', () => env.YOUTUBE_FRAMES_BACKEND === 'media'
+    ? getFramesWithMedia(env, request, signal, limits, onDiagnostic)
+    : getVideoFramesImpl(env, request, signal, limits, onDiagnostic));
 }
 
 async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
+  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink, onTransportSettled?: (settled: boolean) => void): Promise<VideoFrames> {
   const parsed = frameRequestSchema.safeParse(request);
   if (!parsed.success) throw new ApiError(422, 'INVALID_INPUT', 'Provide a video ID, 1 to 6 integer timestampsMs, and maxWidth from 320 to 1920.');
   const extractionTimeoutMs = z.number().int().min(5_000).max(45_000).parse(limits?.extractionTimeoutMs ?? 45_000);
@@ -115,6 +120,7 @@ async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequest
             status: responseStatus, outcome: override ?? outcome, failureKind, ...capture });
         };
         try {
+          onTransportSettled?.(false);
           countVisualWork('containerAttempts');
           linkVisualExtraction(extractionId, attempt + 1);
           const response = await getContainer<YouTubeFramesContainer>(env.YOUTUBE_FRAMES, `v1-${(slot + attempt) % 2}`).fetch(
@@ -124,6 +130,7 @@ async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequest
           responseStatus = response.status;
           stage = 'container_response';
           const payload = await boundedContainerJson(response, deadline);
+          onTransportSettled?.(true);
           capture = extractionCapture(payload);
           outcome = 'failed';
           if (response.ok || response.status !== 503 || !isBusy(payload)) {
@@ -171,4 +178,65 @@ function errorCode(payload: unknown): string | undefined {
 
 function isBusy(payload: unknown): boolean {
   return errorCode(payload) === 'PROCESSOR_BUSY';
+}
+
+
+/** Both backends share one budget. Never fetch completed Media timestamps again. */
+async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
+  limits?: { extractionTimeoutMs: number }, diagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
+  const parsed = frameRequestSchema.safeParse(request);
+  if (!parsed.success) throw new ApiError(422, 'INVALID_INPUT', 'Provide a video ID, 1 to 6 integer timestampsMs, and maxWidth from 320 to 1920.');
+  const input = { ...parsed.data, timestampsMs: [...new Set(parsed.data.timestampsMs)].sort((a, b) => a - b) };
+  const budget = z.number().int().min(5000).max(45000).parse(limits?.extractionTimeoutMs ?? 45000);
+  const started = Date.now();
+  return withTransportDeadline(budget + 5000, signal, async deadline => {
+    let frames: VideoFrames['frames'] = [];
+    // Reserve at least ten extraction seconds for FFmpeg recovery.
+    const mediaBudget = Math.min(20000, budget - 10000);
+    if (mediaBudget >= 5000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new DOMException('Media deadline', 'TimeoutError')), mediaBudget);
+      try {
+        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), diagnostic);
+        frames = result.frames;
+      } finally { clearTimeout(timer); controller.abort(); }
+    }
+    deadline.throwIfAborted();
+    const missing = input.timestampsMs.filter(time => !frames.some(frame => frame.timestampMs === time));
+    let failures: VideoFrames['failures'] = [];
+    let fallbackError: unknown;
+    if (missing.length) {
+      let lease: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
+      let finished = false, dispatched = false;
+      try {
+        lease = await acquireFrameLease(env, 'ffmpeg-job', deadline);
+        const remaining = budget - (Date.now() - started);
+        if (remaining < 5000) throw new ApiError(503, 'FRAME_TIMEOUT', 'Frame extraction exhausted its allotted time.');
+        dispatched = true;
+        const fallback = await getVideoFramesImpl(env, { ...input, timestampsMs: missing }, deadline,
+          { extractionTimeoutMs: Math.min(45000, remaining) }, diagnostic, settled => { finished = settled; });
+        finished = true;
+        let bytes = frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.imageBase64, 'base64'), 0);
+        for (const frame of fallback.frames) {
+          const size = Buffer.byteLength(frame.imageBase64, 'base64');
+          if (bytes + size <= 8 * 1024 * 1024) { frames.push(frame); bytes += size; }
+        }
+        failures = fallback.failures;
+      } catch (error) { fallbackError = error; }
+      finally {
+        // Keep uncertain timeouts leased until expiry; otherwise an abandoned process could exceed admission.
+        if (lease && (!dispatched || finished)) await lease.release();
+      }
+    }
+    deadline.throwIfAborted();
+    if (!frames.length) throw fallbackError instanceof ApiError ? fallbackError
+      : new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.');
+    const uncovered = input.timestampsMs.filter(time => !frames.some(frame => frame.timestampMs === time));
+    failures = uncovered.map(timestampMs => failures.find(failure => failure.timestampMs === timestampMs) ?? {
+      timestampMs, code: 'FRAME_EXTRACTION_FAILED', message: 'The requested frame could not be extracted within the request limits.', retryable: true,
+    });
+    return validateFrameResponse(input, { videoId: input.videoId, frames: frames.sort((a, b) => a.timestampMs - b.timestampMs), failures,
+      meta: { partial: failures.length > 0, warnings: failures.length ? ['Some requested frames could not be extracted.'] : [],
+        fetchedAt: new Date().toISOString(), source: 'video2ctx' } });
+  });
 }

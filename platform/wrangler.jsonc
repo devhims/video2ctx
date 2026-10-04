@@ -7,6 +7,7 @@
   // Some backing Cloudflare resources retain their pre-video2ctx deployment
   // names. Changing those identifiers requires a separately planned data and
   // traffic migration; they are not product-facing brand names.
+  "media": { "binding": "MEDIA" },
   "vars": {
     "ENVIRONMENT": "production",
     "APP_ORIGIN": "https://www.video2ctx.dev",
@@ -29,6 +30,8 @@
     "LANDING_DEMO_RATE_LIMIT_MODE": "enforced",
     // Core extraction runs in Workers. Set to container to roll back.
     "YOUTUBE_EXTRACTION_BACKEND": "worker",
+    // Roll back frame decoding with container; both routes preserve the existing frame contract.
+    "YOUTUBE_FRAMES_BACKEND": "media",
     // Set to off to disable the optional direct route without changing proxies or the image.
     "YOUTUBE_DIRECT_FALLBACK": "on",
     "YOUTUBE_EXTRACTION_TIMEOUT_MS": "120000",
@@ -94,6 +97,7 @@
         "class_name": "UserAccountDO",
       },
       { "name": "PROXY_HEALTH", "class_name": "ProxyHealth" },
+      { "name": "MEDIA_FRAME_CAPACITY", "class_name": "MediaFrameCapacity" },
     ],
   },
   "migrations": [
@@ -119,6 +123,7 @@
     },
     { "tag": "v6", "new_sqlite_classes": ["YouTubeFramesContainer"] },
     { "tag": "v7", "new_sqlite_classes": ["ProxyHealth"] },
+    { "tag": "v8", "new_sqlite_classes": ["MediaFrameCapacity"] },
   ],
   "d1_databases": [
     {

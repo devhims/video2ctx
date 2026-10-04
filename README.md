@@ -79,7 +79,7 @@ After installation, an agent should use `youtube-ctx` for personal, low-to-moder
 
 ## Under development
 
-- **Hosted visual context:** The agent can inspect storyboards and request individual frames through a dedicated FFmpeg container. The frame tool is available only inside the agent API and returns timestamped visual observations. See [frame extraction](./reference/engineering/FRAME_EXTRACTION.md) for the contract and deployment status.
+- **Hosted visual context:** The agent can inspect storyboards and request individual frames through managed Media decoding with a dedicated FFmpeg container fallback. The frame tool is available only inside the agent API and returns timestamped visual observations. See [frame extraction](./reference/engineering/FRAME_EXTRACTION.md) for the contract and deployment status.
 - **Hosted agent tools:** Continue expanding the hosted data and monitoring branches while keeping authentication revocable and local to the user's machine.
 
 ## Hosted API quick start
