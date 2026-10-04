@@ -5,6 +5,7 @@ import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
+import { saveSourceResponse } from './source-response-storage';
 import { isVisualSelection, readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
@@ -211,6 +212,14 @@ export class YouTubeCacheCoordinatorCore {
         if (request.operation.kind !== 'frames' && (request.operation.kind !== 'storyboard' || request.operation.metadataOnly))
           entry.catalogVersions = await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
         return withDiagnostics(successFromEntry(entry,'miss'));
+      }
+      // Await the best-effort copy so history can read it before KV catches up.
+      // Match the cache key's serialization, which drops undefined filters.
+      const operation = request.operation;
+      if (operation.kind !== 'search'
+        || JSON.stringify(operation.filters ?? {}) === '{"type":"video"}') {
+        await saveSourceResponse(this.env, request.cacheKey, request.resourceType, entry,
+          cacheRetentionSeconds(request.maxAgeMs) * 1000);
       }
       try {
         countVisualWork('legacyKvPuts');

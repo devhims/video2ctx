@@ -10,6 +10,8 @@ import { Hono } from 'hono';
 import { sessionRoutes } from '../src/routes/session/session.index';
 import type { App, AuthPrincipal } from '../src/types';
 import { userAccountInstanceName } from '../src/agents/runtime/identity';
+import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
+import { getChannelWithCache } from '../src/lib/youtube';
 const env = workerEnv as Env;
 
 function sourceApp(userId: string, method: AuthPrincipal['method'] = 'session') {
@@ -27,6 +29,31 @@ const CONVERSATION_B = 'e665d2a1-f9f9-4b7f-8b7c-0bf0a1393c3b';
 const CONVERSATION_C = 'cfb5309a-954f-4e4a-9b0e-2d673c708f20';
 
 describe('UserAccountDO', () => {
+  test('a completed video with channel info saves and restores while KV retains a negative lookup', async () => {
+    const id = 'U-V7IfBwN1I', channelId = 'UCB_qr75-ydFVKSF9Dmo6izg';
+    await saveVideoResource(env, { kind: 'video', id }, { id, title: 'Race Highlights', channel: { id: channelId } }, Date.now(), 60_000);
+    const channel = { id: channelId, name: 'FORMULA 1', thumbnails: [], url: `https://youtube.com/channel/${channelId}`,
+      about: { links: [], moreInfo: {} }, meta: { source: 'youtube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } };
+    const configured = { ...env, YOUTUBE_CACHE: { get: async () => null, put: async () => {} } } as unknown as Env;
+    const core = new YouTubeCacheCoordinatorCore(configured, async () => channel);
+    configured.YOUTUBE_REQUEST_COORDINATOR = { getByName: () => ({
+      getOrLoad: async (wire: string) => JSON.stringify(await core.getOrLoad(JSON.parse(wire))),
+    }) } as unknown as Env['YOUTUBE_REQUEST_COORDINATOR'];
+    expect((await getChannelWithCache(configured, channelId)).value.name).toBe('FORMULA 1');
+    const app = sourceApp('history-kv-propagation');
+    const saved = await app.request('/sources/recent', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: `https://youtu.be/${id}`, snapshot: { kind: 'inspection', inspector: {
+        provider: 'youtube', type: 'video', id, requestedData: ['channel'], dataErrors: {}, loadedData: ['metadata', 'channel'],
+      } } }),
+    }, configured);
+    expect(saved.status).toBe(201);
+    const { source } = await saved.json() as { source: { id: string } };
+    const restored = await app.request(`/sources/recent/${source.id}`, {}, configured);
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toMatchObject({ snapshot: { inspector: {
+      data: { id, title: 'Race Highlights' }, channel: { id: channelId, name: 'FORMULA 1' },
+    } } });
+  });
   test('recent source routes enforce ownership and browser authentication and restore playlist data', async () => {
     const playlist = { id: 'PLhistory', title: 'Saved playlist', videos: [] };
     const key = `youtube:v1:${await sha256(JSON.stringify(['playlist-v2', playlist.id]))}`;
