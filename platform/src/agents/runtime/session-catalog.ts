@@ -2,6 +2,7 @@ import { projectSessionPayload as projection } from '../../lib/session-payload';
 export { canonicalJson as canonicalSessionPayload } from '../../lib/canonical-json';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { VerifiedStoryboardSheet } from '../../lib/verified-storyboard';
+import { VerifiedTextSource } from '../../lib/verified-text-source';
 import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
@@ -12,6 +13,12 @@ export interface SessionCatalogReference {
   asset: VideoAssetReference;
   overrides: Record<string, unknown>;
   omitted: string[];
+}
+
+export interface SessionCatalogReceipts {
+  frames?: VerifiedFrame[];
+  storyboards?: VerifiedStoryboardSheet[];
+  text?: VerifiedTextSource;
 }
 
 /** Public source persistence only. No session IDs, prompts, analyses or citations. */
@@ -45,8 +52,7 @@ export class SessionCatalog {
     collectedAt: number,
     versions?: VideoAssetReference[],
     onVerifiedImages?: (images: VerifiedImage[]) => void,
-    verifiedFrames?: VerifiedFrame[],
-    verifiedStoryboards?: VerifiedStoryboardSheet[],
+    receipts: SessionCatalogReceipts = {},
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -56,7 +62,7 @@ export class SessionCatalog {
         throw new Error('Invalid shared session asset reference.');
       const asset = versions[0]!;
       if (kind === 'frame') {
-        const image = verifiedFrames?.flatMap(receipt => receipt instanceof VerifiedFrame
+        const image = receipts.frames?.flatMap(receipt => receipt instanceof VerifiedFrame
           ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
         if (image) {
           const payload = value as Record<string, unknown>;
@@ -71,12 +77,16 @@ export class SessionCatalog {
         }
       }
       if (kind === 'storyboard_sheet') {
-        const verified = verifiedStoryboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
+        const verified = receipts.storyboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
           ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
         if (verified) {
           onVerifiedImages?.([verified.image]);
           return { asset, ...verified.projection };
         }
+      }
+      if ((kind === 'transcript' || kind === 'comments') && receipts.text instanceof VerifiedTextSource) {
+        const verified = receipts.text.match(this.env.VIDEO_ASSETS, asset, value);
+        if (verified) return { asset, ...verified };
       }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);
       const overlay = stored && projection(stored.value, value);

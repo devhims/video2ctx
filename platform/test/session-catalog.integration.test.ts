@@ -848,7 +848,7 @@ test.each(['serialized','changed-bytes','changed-version','different-bucket'])('
   const refs = mode==='changed-version' ? [{...versions[0]!,contentHash:'a'.repeat(64)}] : versions;
   const read = vi.spyOn(VideoCatalog.prototype,'readVersion');
   try {
-    const pin = new SessionCatalog(env).pin('frame',id,`frame:${id}:640:1000`,changed,Date.now(),refs,undefined,[supplied]);
+    const pin = new SessionCatalog(env).pin('frame',id,`frame:${id}:640:1000`,changed,Date.now(),refs,undefined,{ frames: [supplied] });
     if (mode==='changed-bytes'||mode==='changed-version') await expect(pin).rejects.toThrow('does not match');
     else await expect(pin).resolves.toMatchObject({asset:versions[0]});
     expect(read).toHaveBeenCalledOnce();
@@ -962,7 +962,7 @@ test.each(['serialized', 'changed-bytes', 'changed-version', 'different-bucket',
     const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
     try {
       const pending = new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', value, Date.now(), versions,
-        undefined, undefined, [supplied]);
+        undefined, { storyboards: [supplied] });
       if (mode === 'serialized' || mode === 'different-bucket') await expect(pending).resolves.toBeDefined();
       else await expect(pending).rejects.toThrow('does not match');
       expect(read).toHaveBeenCalledOnce();
@@ -978,13 +978,13 @@ test('storyboard receipts allow envelope changes but keep images and mapping out
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     const backend = new SessionCatalog(env);
-    const reference = await backend.pin('storyboard_sheet', id, 'unused', value, Date.now(), versions, undefined, undefined, [receipt]);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', value, Date.now(), versions, undefined, { storyboards: [receipt] });
     expect(read).not.toHaveBeenCalled();
     expect(reference.overrides).toEqual({ meta: value.meta, freshness: value.freshness });
     expect(reference.omitted).toEqual(['selection']);
     expect(await backend.read(reference)).toEqual(value);
     await expect(backend.pin('storyboard_sheet', id, 'unused', { ...value, meta: { warnings: ['x'.repeat(32001)] } },
-      Date.now(), versions, undefined, undefined, [receipt])).rejects.toThrow('does not match');
+      Date.now(), versions, undefined, { storyboards: [receipt] })).rejects.toThrow('does not match');
   } finally { read.mockRestore(); }
 });
 
@@ -1049,7 +1049,7 @@ test('a coordinator payload must match its stored hash before it can receive a s
   const result = await createYouTubeAgentProvider(configured).storyboard!(id);
   expect(result.verifiedStoryboards ?? []).toHaveLength(0);
   await expect(new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', result.value, Date.now(), versions,
-    undefined, undefined, result.verifiedStoryboards)).rejects.toThrow('does not match');
+    undefined, { storyboards: result.verifiedStoryboards })).rejects.toThrow('does not match');
 });
 
 test.each(['storyboard', 'frame'] as const)('large unchanged %s metadata must remain attachable with a receipt', async kind => {
@@ -1068,7 +1068,7 @@ test.each(['storyboard', 'frame'] as const)('large unchanged %s metadata must re
     : new VerifiedFrame(env.VIDEO_ASSETS, versions[0]!, frame, 'unused');
   const backend = new SessionCatalog(env);
   const reference = await backend.pin(kind === 'storyboard' ? 'storyboard_sheet' : 'frame', id, 'unused', value, Date.now(), versions,
-    undefined, receipt instanceof VerifiedFrame ? [receipt] : undefined, receipt instanceof VerifiedStoryboardSheet ? [receipt] : undefined);
+    undefined, { frames: receipt instanceof VerifiedFrame ? [receipt] : undefined, storyboards: receipt instanceof VerifiedStoryboardSheet ? [receipt] : undefined });
   expect(reference.overrides).toEqual({});
   expect(await backend.read(reference)).toEqual(value);
 });
@@ -1087,7 +1087,7 @@ test('provider normalization drops unknown storyboard content while preserving f
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     const backend = new SessionCatalog(env);
-    const reference = await backend.pin('storyboard_sheet', id, 'unused', result.value, at, versions, undefined, undefined, result.verifiedStoryboards);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', result.value, at, versions, undefined, { storyboards: result.verifiedStoryboards });
     expect(read).not.toHaveBeenCalled();
     expect(await backend.read(reference)).toEqual(result.value);
   } finally { read.mockRestore(); }
@@ -1151,7 +1151,7 @@ test('storyboard receipt fallback can accept a large envelope identical to the s
   const receipt = new VerifiedStoryboardSheet(env.VIDEO_ASSETS, versions[0]!, { ...board, meta: { partial: false, warnings: [] } }, 'unused');
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
-    const reference = await new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', board, Date.now(), versions, undefined, undefined, [receipt]);
+    const reference = await new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', board, Date.now(), versions, undefined, { storyboards: [receipt] });
     expect(read).toHaveBeenCalledOnce();
     expect(reference.overrides).toEqual({});
   } finally { read.mockRestore(); }
@@ -1176,4 +1176,184 @@ test('receipt serialization preserves existing split-image and inline-frame stor
   expect(inline.payload).toBe(JSON.stringify(frameValue));
   expect(inline.contentHash).toBe(await sha256(JSON.stringify(frameValue)));
   expect(inline.images).toHaveLength(0);
+});
+
+test.each([['transcript', false], ['transcript', true], ['comments', false], ['comments', true]] as const)('completed %s saves skip attachment readback, refresh=%s', async (kind, refresh) => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId();
+  const value = kind === 'transcript' ? transcript(id) : {
+    videoId: id, comments: [{ id: 'comment-1', text: 'A useful public comment',
+      author: { name: 'Viewer', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] }],
+    meta: transcript(id).meta,
+  };
+  const operation = kind === 'transcript' ? { kind, id, granularity: 'word' as const } : { kind, id };
+  const getOrLoad = vi.fn(async () => {
+    const catalogVersions = await saveVideoResource(env, operation, value, Date.now(), 60000);
+    return JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions, fetchedAt: Date.now() });
+  });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  await within(`text-save-receipts-${kind}-${refresh}`, async ({ store, reopen }) => {
+    const upstream = createYouTubeAgentProvider(configured);
+    const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+    try {
+      const p = sessionProvider(upstream, store);
+      const cold = kind === 'transcript' ? await p.transcript(id, undefined, { refresh })
+        : await p.comments(id, { refresh });
+      expect(cold.assetVersions).toHaveLength(1);
+      expect(read).not.toHaveBeenCalled();
+      const restored = sessionProvider(upstream, reopen());
+      const warm = kind === 'transcript' ? await restored.transcript(id) : await restored.comments(id);
+      expect(warm.sessionReused).toBe(true);
+      expect(warm.value).toEqual(cold.value);
+      expect(read).toHaveBeenCalledOnce();
+      expect(getOrLoad).toHaveBeenCalledOnce();
+    } finally { read.mockRestore(); }
+  });
+});
+
+test.each(['hit', 'coalesced', 'stale'] as const)('text %s responses keep independent attachment verification', async cacheStatus => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId(), value = transcript(id);
+  const catalogVersions = await saveVideoResource(env, { kind: 'transcript', id, granularity: 'word' }, value, Date.now(), 60000);
+  const getOrLoad = async () => JSON.stringify({ ok: true, value, cacheStatus, catalogVersions, fetchedAt: Date.now() });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  await within(`text-status-${cacheStatus}`, async ({ store }) => {
+    const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+    try {
+      const result = await sessionProvider(createYouTubeAgentProvider(configured), store).transcript(id, undefined, { refresh: true });
+      expect(result.verifiedTextSource).toBeUndefined();
+      expect(read).toHaveBeenCalledOnce();
+    } finally { read.mockRestore(); }
+  });
+});
+
+test.each(['transcript', 'comments'] as const)('a changed coordinator %s payload cannot authorize the fast path', async kind => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId(), value = kind === 'transcript' ? transcript(id) : { videoId: id, comments: [], meta: transcript(id).meta };
+  const operation = kind === 'transcript' ? { kind, id, granularity: 'word' as const } : { kind, id };
+  const catalogVersions = await saveVideoResource(env, operation, value, Date.now(), 60000);
+  const changed = { ...value, unexpected: 'Coordinator differs from completed storage' };
+  const getOrLoad = async () => JSON.stringify({ ok: true, value: changed, cacheStatus: 'miss', catalogVersions, fetchedAt: Date.now() });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const p = createYouTubeAgentProvider(configured);
+  const result = kind === 'transcript' ? await p.transcript(id, undefined, { refresh: true }) : await p.comments(id, { refresh: true });
+  expect(result.verifiedTextSource).toBeUndefined();
+  const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    await expect(new SessionCatalog(env).pin(kind, id, 'unused', result.value, Date.now(), result.catalogVersions,
+      undefined, { text: result.verifiedTextSource })).rejects.toThrow('does not match');
+    expect(read).toHaveBeenCalledOnce();
+  } finally { read.mockRestore(); }
+});
+
+test.each(['serialized', 'different-bucket', 'changed-payload', 'changed-reference'] as const)(
+  'a text receipt with %s cannot bypass storage verification', async mode => {
+    const { VerifiedTextSource } = await import('../src/lib/verified-text-source');
+    const id = videoId(), value = transcript(id);
+    const key = videoResourceKey({ kind: 'transcript', id, granularity: 'word' })!;
+    const versions = await saveVideoResource(env, { kind: 'transcript', id, granularity: 'word' }, value, Date.now(), 60000);
+    const receipt = await VerifiedTextSource.fromPersisted(mode === 'different-bucket' ? {} as R2Bucket : env.VIDEO_ASSETS,
+      key, versions[0]!, value);
+    expect(receipt).toBeDefined();
+    const supplied = mode === 'serialized' ? JSON.parse(JSON.stringify(receipt)) : receipt;
+    if (mode === 'changed-payload') value.segments[0]!.text = 'Changed after receipt';
+    if (mode === 'changed-reference') versions[0]!.contentHash = 'f'.repeat(64);
+    const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+    try {
+      const pending = new SessionCatalog(env).pin('transcript', id, 'unused', value, Date.now(), versions,
+        undefined, { text: supplied });
+      if (mode === 'changed-payload' || mode === 'changed-reference') await expect(pending).rejects.toThrow('does not match');
+      else await expect(pending).resolves.toBeDefined();
+      expect(read).toHaveBeenCalledOnce();
+    } finally { read.mockRestore(); }
+  });
+
+test.each(['video', 'kind', 'variant', 'inline', 'non-hex', 'missing', 'multiple'] as const)(
+  'text receipt issuance rejects %s catalog references', async mode => {
+    const { getVideoResource } = await import('../src/lib/youtube');
+    const id = videoId(), value = transcript(id), operation = { kind: 'transcript' as const, id, granularity: 'word' as const };
+    let catalogVersions = await saveVideoResource(env, operation, value, Date.now(), 60000);
+    if (mode === 'video') catalogVersions[0]!.videoId = videoId();
+    if (mode === 'kind') catalogVersions[0]!.kind = 'comments';
+    if (mode === 'variant') catalogVersions[0]!.variant = '{"language":"fr","granularity":"word"}';
+    if (mode === 'inline') catalogVersions[0]!.imageStorage = 'inline';
+    if (mode === 'non-hex') catalogVersions[0]!.contentHash = 'z'.repeat(64);
+    if (mode === 'missing') catalogVersions = [];
+    if (mode === 'multiple') catalogVersions.push(catalogVersions[0]!);
+    const getOrLoad = async () => JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions, fetchedAt: Date.now() });
+    const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+    expect((await getVideoResource(configured, operation, true, undefined, true)).verifiedTextSource).toBeUndefined();
+  });
+
+test('public text retrieval avoids receipt work and language, continuation, and all-comments variants remain bound', async () => {
+  const { getVideoResource, getTranscriptWithCache, getCommentsWithCache, getAllCommentsWithCache } = await import('../src/lib/youtube');
+  const id = videoId();
+  const getOrLoad = vi.fn(async (wire: string) => {
+    const { operation } = JSON.parse(wire);
+    const value = operation.kind === 'transcript' ? { ...transcript(id), translatedTo: { languageCode: 'fr', languageName: 'French' } }
+      : { videoId: id, comments: [], complete: true, continuation: 'next-page', meta: transcript(id).meta };
+    const catalogVersions = await saveVideoResource(env, operation, value, Date.now(), 60000);
+    return JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions, fetchedAt: Date.now() });
+  });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const publicResult = await getVideoResource(configured, { kind: 'transcript', id, granularity: 'word' }, true);
+  expect(publicResult.verifiedTextSource).toBeUndefined();
+  const results = [
+    await getTranscriptWithCache(configured, id, 'fr', undefined, true, Date.now() + 60000, true),
+    await getCommentsWithCache(configured, id, 'page-token', true, true),
+    await getAllCommentsWithCache(configured, id, true, true),
+  ];
+  const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    for (const result of results) {
+      expect(result.verifiedTextSource).toBeDefined();
+      const ref = result.catalogVersions![0]!;
+      const backend = new SessionCatalog(env);
+      const pinned = await backend.pin(ref.kind === 'transcript' ? 'transcript' : 'comments', id, 'unused', result.value,
+        Date.now(), [ref], undefined, { text: result.verifiedTextSource });
+      expect(read).not.toHaveBeenCalled();
+      expect(await backend.read(pinned)).toEqual(result.value);
+      read.mockClear();
+    }
+    expect(results.map(r => r.catalogVersions![0]!.variant)).toEqual([
+      '{"language":"fr","granularity":"word"}', '{"continuation":"page-token"}', '{"maxPages":5}',
+    ]);
+  } finally { read.mockRestore(); }
+});
+
+test('text receipts preserve envelope projection limits and keep large source metadata out of SQLite', async () => {
+  const { VerifiedTextSource } = await import('../src/lib/verified-text-source');
+  const id = videoId(), value = transcript(id);
+  value.meta.warnings = ['x'.repeat(33000)];
+  const key = videoResourceKey({ kind: 'transcript', id, granularity: 'word' })!;
+  const versions = await saveVideoResource(env, { kind: 'transcript', id, granularity: 'word' }, value, Date.now(), 60000);
+  const receipt = await VerifiedTextSource.fromPersisted(env.VIDEO_ASSETS, key, versions[0]!, value);
+  const backend = new SessionCatalog(env), read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    const pinned = await backend.pin('transcript', id, 'unused', { ...value, freshness: { state: 'fresh' } }, Date.now(), versions,
+      undefined, { text: receipt });
+    expect(pinned.overrides).toEqual({ freshness: { state: 'fresh' } });
+    expect(read).not.toHaveBeenCalled();
+    const changed = { ...value, meta: { ...value.meta, warnings: ['y'.repeat(33000)] } };
+    await expect(backend.pin('transcript', id, 'unused', changed, Date.now(), versions,
+      undefined, { text: receipt })).rejects.toThrow('does not match');
+    expect(read).toHaveBeenCalledOnce();
+  } finally { read.mockRestore(); }
+});
+
+test.each(['cancel', 'delete'] as const)('a verified text save cannot restore evidence after %s', async mode => {
+  const { VerifiedTextSource } = await import('../src/lib/verified-text-source');
+  const id = videoId(), value = transcript(id);
+  const key = videoResourceKey({ kind: 'transcript', id, granularity: 'word' })!;
+  const versions = await saveVideoResource(env, { kind: 'transcript', id, granularity: 'word' }, value, Date.now(), 60000);
+  const receipt = await VerifiedTextSource.fromPersisted(env.VIDEO_ASSETS, key, versions[0]!, value);
+  await within(`text-receipt-${mode}`, async ({ store }) => {
+    const controller = new AbortController();
+    await expect(store.retrieve(`transcript:${id}:default`, 'transcript', id, true, async () => {
+      if (mode === 'cancel') controller.abort(new Error('cancelled'));
+      else await store.delete();
+      return { value, cacheStatus: 'miss', catalogVersions: versions, verifiedTextSource: receipt };
+    }, () => ({}), undefined, controller.signal)).rejects.toThrow(mode === 'cancel' ? 'cancelled' : 'Session assets changed');
+    expect(store.brief().assets).toEqual([]);
+  });
 });

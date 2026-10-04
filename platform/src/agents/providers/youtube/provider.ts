@@ -151,20 +151,20 @@ export function createYouTubeAgentProvider(
       cacheStatus: 'miss',
     }),
     transcript: async (videoId, language, options, onDiagnostic) => researchDeadlineAt !== undefined
-      ? getTranscriptWithCache(env, videoId, language, onDiagnostic, options?.refresh, researchDeadlineAt)
+      ? getTranscriptWithCache(env, videoId, language, onDiagnostic, options?.refresh, researchDeadlineAt, true)
       : options?.refresh && videoCatalog(env)
-      ? getVideoResource(env,{kind:'transcript',id:videoId,lang:language,granularity:'word'},true,onDiagnostic)
+      ? getVideoResource(env,{kind:'transcript',id:videoId,lang:language,granularity:'word'},true,onDiagnostic,true)
       : options?.refresh
       ? {value: await runYouTubeOperation(env, {kind:'transcript',id:videoId,lang:language,granularity:'word'}, onDiagnostic),cacheStatus:'miss'}
-      : provider.getTranscript(env, videoId, language, onDiagnostic),
+      : provider.getTranscript(env, videoId, language, onDiagnostic, false, undefined, true),
     comments: async (videoId, options = {}) => options.refresh && videoCatalog(env)
       ? getVideoResource(env,options.all ? {kind:'all-comments',id:videoId,maxPages:ALL_COMMENTS_MAX_PAGES}
-        : {kind:'comments',id:videoId,continuation:options.continuation},true)
+        : {kind:'comments',id:videoId,continuation:options.continuation},true,undefined,true)
       : options.refresh
       ? {value: options.all ? await runYouTubeOperation(env, {kind:'all-comments',id:videoId,maxPages:ALL_COMMENTS_MAX_PAGES}) : await runYouTubeOperation(env, {kind:'comments',id:videoId,continuation:options.continuation}),cacheStatus:'miss'}
       : options.all
-      ? provider.getAllComments(env, videoId)
-      : provider.getComments(env, videoId, options.continuation),
+      ? provider.getAllComments(env, videoId, false, true)
+      : provider.getComments(env, videoId, options.continuation, false, true),
     endscreen: async (videoId) => ({
       value: await provider.getEndscreen(env, videoId),
       cacheStatus: 'miss',
