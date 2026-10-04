@@ -77,7 +77,7 @@ youtube/videos/abcdefghijk/
   images/<image-hash>.jpg
 ```
 
-Storyboard manifests and older frame manifests reference binary JPEG objects. New frame writes with the Media backend store the JPEG base64 inside the immutable frame JSON object. One atomic R2 write replaces separate image and manifest writes, at roughly 33% more storage for image bytes. Reads accept both layouts and reconstruct the provider response expected by existing callers. Byte-identical payloads share a content hash. New snapshots remain available in the version inventory.
+Storyboard manifests and older frame manifests reference binary JPEG objects. New frame writes with the Media backend store the JPEG base64 inside the immutable frame JSON object. One atomic R2 write replaces separate image and manifest writes, at roughly 33% more bytes per image copy and without deduplicating identical images across frame variants. Reads accept both layouts and reconstruct the provider response expected by existing callers. Byte-identical payloads share a content hash. New snapshots remain available in the version inventory.
 
 `video_metadata` means the get-video-details response, not a video file. Migration `0002_video_metadata_kind.sql` renames existing D1 asset and version records. Their R2 object keys stay unchanged, so historical objects under `video/` remain readable; new writes use `video_metadata/`. Reads also accept the legacy kind during rollout. The processor operation remains `video` for compatibility with its existing contract.
 

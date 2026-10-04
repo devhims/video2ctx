@@ -21,7 +21,8 @@ Completed Media frames begin catalog publication while the remaining frames deco
 Every started write is drained, and failures prevent a successful tool response.
 Each write retains the pending journal and final catalog publication. New Media
 frame records keep the JPEG base64 and metadata in one immutable JSON object,
-removing a second R2 write. This adds about one third to image storage size. Old
+removing a second R2 write. Base64 adds about one third per image copy, and identical frames across variants
+are now stored separately. Old
 split-image records remain readable; storyboards retain separate deduplicated JPEGs. Frame storage, session attachment, and preview writes admit
 six images together; storyboard I/O remains bounded to four.
 
