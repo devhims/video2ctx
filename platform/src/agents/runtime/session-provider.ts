@@ -7,6 +7,7 @@ import type { YouTubeAgentProvider } from '../providers/youtube/provider';
 import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, type Storyboard } from '../providers/youtube/storyboard';
 import { SessionEvidenceStore } from './session-evidence';
 import { assertTranscriptWithinLimit } from './video-duration-limit';
+import { VisualRetrievalQueue } from './visual-retrieval-queue';
 
 /** Retrieval is reusable independently of the question passed to any analyst. */
 export function sessionProvider(
@@ -15,16 +16,13 @@ export function sessionProvider(
   refresh = false,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
-  let visualQueue: Promise<unknown> = Promise.resolve();
-  const serial = <T>(work: () => Promise<T>): Promise<T> => {
+  const visualQueue = new VisualRetrievalQueue();
+  const visual = <T>(videoId: string, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> => {
     const generation = store.generation();
-    const guarded = () => {
+    return visualQueue.run(videoId, signal, () => {
       if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
       return work();
-    };
-    const next = visualQueue.then(guarded, guarded);
-    visualQueue = next.catch(() => undefined);
-    return next;
+    });
   };
   const transcriptKey = (id: string, language?: string) => `transcript:${id}:${language?.toLowerCase() ?? 'default'}`;
   return {
@@ -95,7 +93,7 @@ export function sessionProvider(
     },
     storyboard: provider.storyboard
       ? (id, timestamps, options = {}, diagnostic) =>
-          serial(async () => {
+          visual(id, options.signal, async () => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
             const manifestKey = `storyboard:${id}:manifest`;
@@ -216,7 +214,7 @@ export function sessionProvider(
       : undefined,
     frames: provider.frames
       ? (request, signal, limits, diagnostic) =>
-          serial(async () => {
+          visual(request.videoId, signal, async () => {
             signal?.throwIfAborted();
             const generation = store.generation();
             const maxWidth = request.maxWidth ?? 1920;
