@@ -917,7 +917,7 @@ test.each([false, true])('frame pins overlap safely, including session deletion=
     const spy = vi.spyOn(store, 'retrieve').mockImplementation((key, kind, videoId, fresh, load, describe, accept, signal) =>
       retrieve(key, kind, videoId, fresh, async () => {
         active++; calls++; peak = Math.max(peak, active);
-        if (calls === 4) started();
+        if (calls === 6) started();
         await gate;
         try { return await load(); } finally { active--; }
       }, describe, accept, signal));
@@ -928,9 +928,9 @@ test.each([false, true])('frame pins overlap safely, including session deletion=
       if (deleted) await store.delete();
       release();
       await outcome;
-      expect(peak).toBe(4);
+      expect(peak).toBe(6);
       expect(active).toBe(0);
-      expect(calls).toBe(deleted ? 4 : 6);
+      expect(calls).toBe(6);
       expect(reopen().brief().assets).toHaveLength(deleted ? 0 : 6);
       if (!deleted) {
         const reused = await sessionProvider(p, reopen()).frames!({ videoId: id, timestampsMs: times, maxWidth: 640 });

@@ -46,3 +46,11 @@ test('prefers itag 18 over larger progressive and adaptive streams by default', 
   expect(selectCandidates(raw, 1920)[0]?.formatId).toBe(18);
   expect(selectCandidates(raw, 1920, true)[0]?.formatId).toBe(22);
 });
+
+test.each([true, false, undefined])('keeps the player live flag %s with its media candidates', async live => {
+  const group = await loadMediaCandidateGroup(1, 'abcdefghijk', 1280, {
+    fetch: async () => Response.json({playabilityStatus:{status:'OK'},videoDetails:{isLiveContent:live},
+      streamingData:{formats:[{url:'https://example.com/video',mimeType:'video/mp4',width:640}]}}),
+  });
+  expect(group?.isLive).toBe(live);
+});

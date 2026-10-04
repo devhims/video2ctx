@@ -2,7 +2,7 @@ import { MAX_STORYBOARD_SHEETS } from '../agents/providers/youtube/storyboard';
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { VerifiedImage } from './verified-image';
 import { sha256 } from './http';
-import { mapInBatches } from './map-in-batches';
+import { mapInBatches, FRAME_IO_CONCURRENCY, EVIDENCE_IO_CONCURRENCY } from './map-in-batches';
 
 export interface VideoAssetKey {
   videoId: string;
@@ -199,6 +199,7 @@ export class VideoCatalog {
     if (!inputs.length) return [];
     try {
       if (inputs.length > MAX_STORYBOARD_SHEETS) throw new Error('Too many assets in a catalog write batch.');
+      const concurrency = inputs.every(input => input.key.kind === 'frame') ? FRAME_IO_CONCURRENCY : EVIDENCE_IO_CONCURRENCY;
       const writes = await mapInBatches(inputs, input => this.prepareWrite(input.key, input.value,
         input.fetchedAt, input.maxAgeMs, input.complete, input.coverage ?? {}, true));
       const videoIds = [...new Set(inputs.map(input => input.key.videoId))];
@@ -209,7 +210,7 @@ export class VideoCatalog {
         await mapInBatches(writes, async write => {
           await this.upload(write);
           completed.push(write);
-        });
+        }, concurrency);
       } catch (cause) { failed = { cause }; }
       // mapInBatches drains started uploads before throwing. Publish every success,
       // including siblings of a failed upload, without starting later batches.

@@ -10,7 +10,8 @@ type Input = { videoId: string; timestampsMs: number[]; maxWidth: number };
 export type MediaFramesAttempt = { frames: VideoFrames['frames']; reason?: FrameMediaError['code'] };
 
 /** Best-effort primary decoder. Completed frames survive any later failure or timeout. */
-export async function getYouTubeMediaFrames(env: Env, input: Input, signal: AbortSignal, diagnostic?: ExtractionDiagnosticSink): Promise<MediaFramesAttempt> {
+export async function getYouTubeMediaFrames(env: Env, input: Input, signal: AbortSignal, diagnostic?: ExtractionDiagnosticSink,
+  onFrame?: (frame: VideoFrames['frames'][number]) => void): Promise<MediaFramesAttempt> {
   const started = Date.now(), extractionId = crypto.randomUUID();
   const frames: VideoFrames['frames'] = [], events: ExtractionAttempt['events'] = [];
   let job: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
@@ -54,6 +55,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
           imageBytes += bytes.byteLength;
           frames.push({ timestampMs, mimeType: 'image/jpeg', ...dimensions, sourceWidth: selected.width,
             sourceHeight: selected.height, imageBase64: Buffer.from(bytes).toString('base64') });
+          onFrame?.(frames.at(-1)!);
           events.push({ stage: 'media_decode', timestampMs, elapsedMs: Date.now() - frameStarted,
             inputBytes: clip.bytes.byteLength, outputBytes: bytes.byteLength, outcome: 'success' });
         } catch (error) {
@@ -70,7 +72,8 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
         }
       }
     };
-    await Promise.all([work(), work()]);
+    // The account-wide eight-call admission limit still covers every decoder.
+    await Promise.all(Array.from({ length: Math.min(4, input.timestampsMs.length) }, () => work()));
   } catch (error) {
     reason = error instanceof FrameMediaError ? error.code : 'source';
     events.push({ stage: job ? 'media_source' : 'media_admission', outcome: 'error', elapsedMs: Date.now() - started,

@@ -11,6 +11,26 @@ reads the MP4 index once, and packages a short independently decodable clip for 
 requested timestamp. Cloudflare decodes that clip into a JPEG. The original video
 can exceed Media's input duration limit because only the short clip is submitted.
 
+Source discovery reuses the playable player's live-content flag. A missing flag
+retains the separate metadata lookup, and live content retains FFmpeg recovery.
+A bounded 64 KiB prefix read normally contains the MP4 index and first fragment
+header, avoiding separate proxy requests for each small box. Larger or tail indexes
+still use precise bounded range reads.
+
+Completed Media frames begin catalog publication while the remaining frames decode.
+Every started write is drained, and failures prevent a successful tool response.
+Each write retains the pending journal, image-before-manifest ordering, and final
+catalog publication. Frame storage, session attachment, and preview writes admit
+six images together; storyboard I/O remains bounded to four.
+
+After the private coordinator confirms successful publication, the agent provider
+creates request-local frame receipts tied to the bucket, immutable catalog reference,
+and exact frame payload. Session attachment can consume a matching receipt without
+downloading the newly saved images again. Receipts cannot be serialized or supplied
+by tool input. Missing, mismatched, cache-hit, and stale receipts use the existing
+catalog verification path. Later session reads still load the immutable stored
+version. Session generation checks, cancellation, and preview revocation are retained.
+
 The existing shared frame cache, session storage, image validation, preview paths,
 credits, and caller-facing frame contract remain in place. Cache hits do not invoke
 either decoder. Signed media URLs, proxy credentials, and clip bytes are never saved
@@ -42,7 +62,7 @@ The `MediaFrameCapacity` Durable Object stores only random lease IDs, start time
 and cooldowns. One shared account quota allows four Media batches, eight active
 Media calls, and at most 24 Media call starts in any 15-second window. These are
 our conservative rollout settings, not Cloudflare's published quota. Each batch
-prepares and decodes at most two frames simultaneously. Admission waits at most
+prepares and decodes at most four frames simultaneously. Admission waits at most
 two seconds. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
 FFmpeg recovery has a separate two-job limit, matching the existing container pool.
 Completed or failed calls retain their rate accounting. Leases expire after 90

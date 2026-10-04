@@ -18,13 +18,27 @@ async function setup() {
   const close = vi.fn(async () => {});
   const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const range = /^bytes=(\d+)-(\d+)$/.exec(new Headers(_input instanceof Request ? _input.headers : init?.headers).get('range')!)!;
-    const start = Number(range[1]), end = Number(range[2]);
+    const start = Number(range[1]), end = Math.min(Number(range[2]), bytes.length - 1);
     return new Response(bytes.slice(start, end + 1), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${bytes.length}` } });
   });
   vi.mocked(createWorkerProxyTransport).mockReturnValue({ fetch, close });
   return { fetch, close };
 }
 beforeEach(() => vi.clearAllMocks());
+test.each(['indexed', 'fragmented', 'fragmented-edit'])('prepares %s from one bounded prefix read', async name => {
+  const { fetch } = await setup();
+  const bytes = new Uint8Array(await readFile(new URL(`./fixtures/media/${name}.mp4`, import.meta.url)));
+  fetch.mockImplementation(async input => {
+    const range = /^bytes=(\d+)-(\d+)$/.exec((input as Request).headers.get('range')!)!;
+    const start = Number(range[1]), end = Math.min(Number(range[2]), bytes.length - 1);
+    return new Response(bytes.slice(start, end + 1), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${bytes.length}` } });
+  });
+  const source = await openYouTubeFrameSource(env, id, 640, new AbortController().signal);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect((fetch.mock.calls[0]![0] as Request).headers.get('range')).toBe('bytes=0-65535');
+  expect((await source.clip(2.5)).bytes.length).toBeGreaterThan(0);
+  await source.close();
+});
 test('reads all media through the selected proxy and requires precise byte ranges', async () => {
   const { fetch, close } = await setup();
   const source = await openYouTubeFrameSource(env,id,640,new AbortController().signal);
@@ -71,7 +85,7 @@ test('records safe source stages without provider messages or URLs', async () =>
   await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal, record)).rejects.toMatchObject({ code: 'unsupported' });
   expect(record).toHaveBeenCalledWith(expect.objectContaining({ stage: 'player', outcome: 'error', code: 'AUTH_REQUIRED' }));
   expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
-  expect(loadMediaCandidateGroup).not.toHaveBeenCalled();
+  expect(loadMediaCandidateGroup).toHaveBeenCalledOnce();
 });
 
 test('does not replace an unsupported sharper source with a lower-resolution Media source', async () => {
@@ -83,4 +97,21 @@ test('does not replace an unsupported sharper source with a lower-resolution Med
   fetch.mockImplementation(async () => new Response('', { status: 403 }));
   await expect(openYouTubeFrameSource(env, id, 1280, new AbortController().signal)).rejects.toMatchObject({ code: 'unsupported' });
   expect(fetch.mock.calls.every(([request]) => request instanceof Request && new URL(request.url).pathname === '/high')).toBe(true);
+});
+
+test('reuses the source player live flag instead of fetching unrelated video metadata', async () => {
+  await setup();
+  const group = await vi.mocked(loadMediaCandidateGroup).getMockImplementation()!(1, id, 640, {});
+  vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ ...group!, isLive: false });
+  const source = await openYouTubeFrameSource(env, id, 640, new AbortController().signal);
+  expect(getDetails).not.toHaveBeenCalled();
+  await source.close();
+});
+test('a live source player is rejected before media bytes or secondary metadata are fetched', async () => {
+  const { fetch } = await setup();
+  const group = await vi.mocked(loadMediaCandidateGroup).getMockImplementation()!(1, id, 640, {});
+  vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ ...group!, isLive: true });
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal)).rejects.toMatchObject({code:'unsupported'});
+  expect(fetch).not.toHaveBeenCalled();
+  expect(getDetails).not.toHaveBeenCalled();
 });

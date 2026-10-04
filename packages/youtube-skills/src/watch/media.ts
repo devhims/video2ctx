@@ -30,6 +30,7 @@ export interface MediaCandidate {
 export interface MediaCandidateGroup {
   profile: (typeof WATCH_MEDIA_PROFILES)[number]['name'];
   candidates: MediaCandidate[];
+  isLive?: boolean;
 }
 
 function formats(value: unknown, progressive: boolean): MediaCandidate[] {
@@ -103,7 +104,9 @@ export async function loadMediaCandidateGroup(
     const response = await callWatchPlayer(videoId, profile, options, onDiagnostic);
     const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
     diagnose(onDiagnostic, { stage: 'media_candidates', profile: profile.name, candidateCount: candidates.length });
-    return candidates.length ? { profile: response.profile, candidates } : undefined;
+    const live = object(response.raw.videoDetails).isLiveContent;
+    return candidates.length ? { profile: response.profile, candidates,
+      ...(typeof live === 'boolean' ? { isLive: live } : {}) } : undefined;
   } catch (error) {
     if ((error as { code?: string })?.code === 'PROXY_TUNNEL_FAILED') throw error;
     diagnose(onDiagnostic, { stage: 'player', profile: profile.name, error });

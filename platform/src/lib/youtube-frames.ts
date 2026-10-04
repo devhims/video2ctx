@@ -74,9 +74,10 @@ async function withTransportDeadline<T>(timeoutMs: number, signal: AbortSignal |
 
 
 export async function getVideoFrames(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
+  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink,
+  onFrame?: (frame: VideoFrames['frames'][number]) => void): Promise<VideoFrames> {
   return visualSpan('extraction', () => env.YOUTUBE_FRAMES_BACKEND === 'media'
-    ? getFramesWithMedia(env, request, signal, limits, onDiagnostic)
+    ? getFramesWithMedia(env, request, signal, limits, onDiagnostic, onFrame)
     : getVideoFramesImpl(env, request, signal, limits, onDiagnostic));
 }
 
@@ -183,7 +184,8 @@ function isBusy(payload: unknown): boolean {
 
 /** Both backends share one budget. Never fetch completed Media timestamps again. */
 async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-  limits?: { extractionTimeoutMs: number }, diagnostic?: ExtractionDiagnosticSink): Promise<VideoFrames> {
+  limits?: { extractionTimeoutMs: number }, diagnostic?: ExtractionDiagnosticSink,
+  onFrame?: (frame: VideoFrames['frames'][number]) => void): Promise<VideoFrames> {
   const parsed = frameRequestSchema.safeParse(request);
   if (!parsed.success) throw new ApiError(422, 'INVALID_INPUT', 'Provide a video ID, 1 to 6 integer timestampsMs, and maxWidth from 320 to 1920.');
   const input = { ...parsed.data, timestampsMs: [...new Set(parsed.data.timestampsMs)].sort((a, b) => a - b) };
@@ -197,7 +199,7 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new DOMException('Media deadline', 'TimeoutError')), mediaBudget);
       try {
-        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), diagnostic);
+        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), diagnostic, onFrame);
         frames = result.frames;
       } finally { clearTimeout(timer); controller.abort(); }
     }

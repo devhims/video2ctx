@@ -101,7 +101,7 @@ jobs:
       - name: Install platform dependencies
         run: npm ci
       - name: Install shared extraction source dependencies
-        run: npm ci --prefix ../packages/all-things-youtube --ignore-scripts
+        run: npm run prebuild
       - name: Run auth integration tests
         run: npm run test:auth:integration
       - name: Verify processor Linux image
@@ -135,7 +135,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps --only-shell chromium
       - name: Install shared extraction source dependencies
-        run: npm ci --prefix ../packages/all-things-youtube --ignore-scripts
+        run: npm run prebuild
       - name: Run CLI and browser auth E2E
         run: npm --prefix .. run test:auth:e2e
 
@@ -181,7 +181,7 @@ jobs:
         if: steps.modules.outputs.cache-hit != 'true'
         run: npm ci && npm ci --prefix ../web
       - name: Install shared extraction source dependencies
-        run: npm ci --prefix ../packages/all-things-youtube --ignore-scripts
+        run: npm run prebuild
       # The runner image already has Chromium's system libraries; --with-deps only adds extra fonts.
       - run: npx playwright install --only-shell chromium
       # Complementary filters cover every test selected by the dashboard config.

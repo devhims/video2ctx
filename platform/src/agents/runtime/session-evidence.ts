@@ -600,6 +600,7 @@ export class SessionEvidenceStore implements SessionAccess {
           Date.now(),
           result.catalogVersions,
           images => { verifiedImages = images; },
+          result.verifiedFrames,
         );
         signal?.throwIfAborted();
         if (generation !== this.generation())

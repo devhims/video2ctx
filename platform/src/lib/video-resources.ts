@@ -319,6 +319,22 @@ export async function loadVideoResource(
     const fetchedAt = Date.now();
     let catalogWriteMs: number | undefined;
     let catalogSucceeded = false;
+    let firstWrite: number | undefined;
+    let publicationClosed = false;
+    const publishing = new Map<number, Promise<{ versions: VideoAssetReference[]; error?: never } | { error: unknown; versions?: never }>>();
+    const ready = (frame: VideoFrames['frames'][number]) => {
+      if (publicationClosed || publishing.has(frame.timestampMs) || !missing.includes(frame.timestampMs)) return;
+      firstWrite ??= Date.now();
+      const value: VideoFrames = { videoId: op.id, frames: [frame], failures: [], meta: {
+        partial: false, warnings: (frame.sourceHeight ?? 0) > 0 && frame.sourceHeight! < 720
+          ? ['Best-effort media fallback produced frames below 720p.'] : [],
+        source: 'video2ctx', fetchedAt: new Date(fetchedAt).toISOString(),
+      } };
+      // Capture failures immediately, then drain all writes before returning or
+      // throwing. Extraction can keep decoding while each ready frame is saved.
+      publishing.set(frame.timestampMs, visualSpan('catalog_write', () => saveVideoResource(env, op, value, fetchedAt, VIDEO_MAX_AGE.frames))
+        .then(versions => ({ versions }), error => ({ error })));
+    };
     try {
       const fetched = missing.length
         ? await getVideoFrames(
@@ -330,16 +346,23 @@ export async function loadVideoResource(
               lastAttempt = event;
               emitExtractionDiagnostic(diagnostic, event);
             } : undefined,
+            ...(store && env.YOUTUBE_FRAMES_BACKEND === 'media' ? [ready] : []),
           )
         : undefined;
       const writeStarted = Date.now();
       let versions: VideoAssetReference[] = [];
       if (fetched) {
         try {
-          versions = await visualSpan('catalog_write', () => saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.frames));
+          const remaining = fetched.frames.filter(frame => !publishing.has(frame.timestampMs));
+          if (remaining.length) versions = await visualSpan('catalog_write', () => saveVideoResource(env, op,
+            { ...fetched, frames: remaining }, fetchedAt, VIDEO_MAX_AGE.frames));
+          for (const published of await Promise.all(publishing.values())) {
+            if ('error' in published) throw published.error;
+            versions.push(...published.versions);
+          }
           catalogSucceeded = true;
         } finally {
-          catalogWriteMs = Date.now() - writeStarted;
+          catalogWriteMs = Date.now() - (firstWrite ?? writeStarted);
         }
       }
       onVersions?.([...hits.flatMap((hit) => hit.catalogVersions ?? []), ...versions]);
@@ -352,8 +375,11 @@ export async function loadVideoResource(
         meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
       });
     } finally {
+      publicationClosed = true;
+      await Promise.all(publishing.values());
+      if (firstWrite !== undefined) catalogWriteMs = Date.now() - firstWrite;
       if (lastAttempt && catalogWriteMs !== undefined) {
-        // Keep extraction attempts immediate. Storage is a separate diagnostic phase.
+        // Publication overlaps extraction for Media. These durations must not be added.
         emitExtractionDiagnostic(diagnostic, { ...lastAttempt, phase: 'catalog',
           recordedAt: Date.now(), elapsedMs: lookupMs + catalogWriteMs,
           outcome: catalogSucceeded ? 'success' : 'failed', status: undefined, failureKind: undefined,

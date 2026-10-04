@@ -49,19 +49,22 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
     };
     try {
       const options = { fetch: tracked, retry: { policy: { maxAttempts: 1, attemptTimeoutMs: 8000 } } };
-      const video = await frameAbortable(signal, () => getDetails({ videoId, ...options }));
-      // Archived and uncertain broadcasts retain the existing container verification path.
-      if (video.isLive) throw new FrameMediaError('unsupported');
+      let metadata: Awaited<ReturnType<typeof getDetails>> | undefined;
       for (const profile of [1, 0]) {
         const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true, event => capture({ ...event,
           code: event.error ? extractionEventSchema.shape.code.safeParse(safeErrorLog(event.error).errorCode).data ?? 'UNKNOWN' : undefined })));
+        if (!group) continue;
+        // The playable source response already identifies ordinary versus live
+        // content. Only older/ambiguous responses need a second metadata request.
+        if (group.isLive === undefined) metadata ??= await frameAbortable(signal, () => getDetails({ videoId, ...options }));
+        if (group.isLive === true || (group.isLive === undefined && metadata?.isLive)) throw new FrameMediaError('unsupported');
         preferredWidth = Math.max(preferredWidth, ...(group?.candidates.map(candidate => candidate.width ?? 0) ?? []));
         for (const candidate of group?.candidates.filter(c => c.mimeType.includes('avc1')) ?? []) {
           // Let FFmpeg try a sharper unsupported source instead of silently reducing detail.
           if (candidate.width !== undefined && candidate.width < preferredWidth) continue;
           const url = mediaUrl(candidate.url);
           let size: number | undefined;
-          const read = async (offset: number, length: number) => {
+          const readRange = async (offset: number, length: number, discoverSize = false) => {
             signal.throwIfAborted();
             if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 4 * 1024 * 1024) throw new FrameMediaError('budget');
             const active = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
@@ -70,19 +73,24 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
             capture({ stage: 'media_http', status: response.status, formatId: candidate.formatId, proxySlot: slot });
             if (response.status === 429) throttled = true;
             const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
-            if (response.status !== 206 || !range || Number(range[1]) !== offset || Number(range[2]) !== offset + length - 1
-              || !Number.isSafeInteger(Number(range[3])) || Number(range[3]) < offset + length || (size !== undefined && size !== Number(range[3]))) {
+            const expectedLength = discoverSize && range ? Math.min(length, Number(range[3]) - offset) : length;
+            if (response.status !== 206 || !range || expectedLength < 1 || Number(range[1]) !== offset || Number(range[2]) !== offset + expectedLength - 1
+              || !Number.isSafeInteger(Number(range[3])) || Number(range[3]) < offset + expectedLength || (size !== undefined && size !== Number(range[3]))) {
               void response.body?.cancel().catch(() => undefined);
               throw new FrameMediaError('source');
             }
             size = Number(range[3]);
-            const bytes = await frameBytes(response, length, active);
+            const bytes = await frameBytes(response, expectedLength, active);
             totalBytes += bytes.byteLength;
-            if (bytes.byteLength !== length || totalBytes > 40 * 1024 * 1024) throw new FrameMediaError('budget');
+            if (bytes.byteLength !== expectedLength || totalBytes > 40 * 1024 * 1024) throw new FrameMediaError('budget');
             return bytes;
           };
           try {
-            await read(0, 16);
+            // The index and first fragment header normally share this prefix.
+            // Reuse it instead of paying a proxy round trip for each tiny box.
+            const prefix = await readRange(0, 64 * 1024, true);
+            const read = (offset: number, length: number) => offset >= 0 && length > 0 && offset + length <= prefix.length
+              ? Promise.resolve(prefix.slice(offset, offset + length)) : readRange(offset, length);
             const source = await openMp4FrameSource(read, size!);
             keep = true;
             return { ...source, slot, profile: group!.profile, formatId: candidate.formatId,

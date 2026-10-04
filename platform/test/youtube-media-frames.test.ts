@@ -24,15 +24,18 @@ function setup(response = vi.fn(async () => new Response(jpeg))) {
 
 beforeEach(() => vi.clearAllMocks());
 
-test('decodes two frames at a time and stores safe diagnostics', async () => {
+test('decodes at most four frames at a time and publishes each completed frame', async () => {
   let active = 0, peak = 0;
   const response = vi.fn(async () => { peak = Math.max(peak, ++active); await new Promise(resolve => setTimeout(resolve, 5)); active--; return new Response(jpeg); });
-  const { env, leases, close } = setup(response), diagnostic = vi.fn();
-  const result = await getYouTubeMediaFrames(env, input, new AbortController().signal, diagnostic);
-  expect(result.frames.map(f => f.timestampMs)).toEqual(input.timestampsMs);
-  expect(peak).toBe(2);
+  const { env, leases, close } = setup(response), diagnostic = vi.fn(), ready = vi.fn();
+  const six = { ...input, timestampsMs: [1000, 2000, 3000, 4000, 5000, 6000] };
+  const result = await getYouTubeMediaFrames(env, six, new AbortController().signal, diagnostic, ready);
+  expect(result.frames.map(f => f.timestampMs)).toEqual(six.timestampsMs);
+  expect(peak).toBe(4);
+  expect(ready).toHaveBeenCalledTimes(6);
+  expect(ready.mock.calls.map(([frame]) => frame.timestampMs).sort((a, b) => a - b)).toEqual(six.timestampsMs);
   expect(close).toHaveBeenCalledOnce();
-  expect(leases).toHaveLength(4);
+  expect(leases).toHaveLength(7);
   expect(leases.every(lease => lease.release.mock.calls.length === 1)).toBe(true);
   expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({ backend: 'media', outcome: 'success' }));
 });
@@ -51,7 +54,7 @@ test('9423 cools shared admission and prevents further dispatch', async () => {
   const diagnostic = vi.fn();
   const result = await getYouTubeMediaFrames(env, input, new AbortController().signal, diagnostic);
   expect(result.reason).toBe('throttled');
-  expect(response.mock.calls.length).toBeLessThanOrEqual(2);
+  expect(response.mock.calls.length).toBeLessThanOrEqual(3);
   expect(leases.some(lease => lease.throttle.mock.calls.length === 1)).toBe(true);
   expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('untrusted');
 });

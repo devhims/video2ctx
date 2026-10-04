@@ -1,4 +1,4 @@
-/** Request-local evidence of a successful read, never serialized or persisted. */
+/** Request-local evidence of a successful read or completed catalog write. Never serialized. */
 export class VerifiedImage {
   readonly #bucket: R2Bucket;
   readonly #key: string;
