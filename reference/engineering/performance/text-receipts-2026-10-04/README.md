@@ -63,7 +63,7 @@ receipts, wrong references, and large overrides fall back to normal verification
 Cancellation and session-generation checks still guard the final attachment.
 
 ```mermaid
-%%{init: {'themeVariables': {'actorBkg':'#e8eef5','actorTextColor':'#152536','actorBorder':'#536779','signalColor':'#536779','labelBoxBkgColor':'#e8eef5','labelTextColor':'#152536','sequenceNumberColor':'#ffffff'}}}%%
+%%{init: {'theme':'base','themeVariables': {'actorBkg':'#e8eef5','actorTextColor':'#152536','actorBorder':'#536779','signalColor':'#536779','labelBoxBkgColor':'#e8eef5','labelTextColor':'#152536','sequenceNumberColor':'#ffffff'}}}%%
 sequenceDiagram
     autonumber
     participant C as Coordinator
@@ -108,3 +108,31 @@ language and pagination variants, large metadata, cancellation, and deletion.
 The full platform build and suite passed: 1,660 tests, with 39 intentional skips.
 This includes 85 session-catalog tests, authentication integration, and both
 container suites. Documentation checks also passed.
+
+## Follow-up PR considerations
+
+Start with receipts for text sources read from the shared catalog. `readRow`
+already verifies the original payload string against its immutable hash. Carry
+that verification locally into attachment instead of re-serializing hydrated
+objects or trusting a serializable `verifiedPayload` field. Keep proofs bound to
+the bucket and full reference, and opt in only for agent attachment.
+
+Measure shared-catalog hits separately from existing-session reuse. Assert that
+a catalog hit performs one source lookup and download, then attaches without a
+second read. Measure total tool time as well as D1, R2, and CPU work separately;
+eliminating half the reads does not establish a twofold tool speedup. Include
+malformed or missing sources, altered payloads, serialized receipts, oversized
+overrides, cancellation, and deletion. Keep coordinator RPC and stale-fallback
+behavior explicit rather than treating every cache-status label as proof.
+
+Consider a text-only serializer shortcut only after measuring its CPU cost and
+proving byte-for-byte hash compatibility, including unexpected image fields.
+A cross-request memory cache needs a byte budget, full source identity, and
+explicit handling of session deletion and missing shared sources. An immutable
+payload is not proof that a session still has access or that storage still exists.
+
+Replica reads need bookmarks or a primary fallback for newly written versions.
+Measure database and object-storage latency before adding replicas or migrating
+small text into D1. Keep broader receipt-class consolidation separate: frame
+receipts currently validate a different shape from storyboard and text receipts.
+Storyboard catalog and preview writes remain the larger measured latency target.

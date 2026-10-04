@@ -15,6 +15,12 @@ export interface SessionCatalogReference {
   omitted: string[];
 }
 
+export interface SessionCatalogReceipts {
+  frames?: VerifiedFrame[];
+  storyboards?: VerifiedStoryboardSheet[];
+  text?: VerifiedTextSource;
+}
+
 /** Public source persistence only. No session IDs, prompts, analyses or citations. */
 export class SessionCatalog {
   private readonly catalog;
@@ -46,9 +52,7 @@ export class SessionCatalog {
     collectedAt: number,
     versions?: VideoAssetReference[],
     onVerifiedImages?: (images: VerifiedImage[]) => void,
-    verifiedFrames?: VerifiedFrame[],
-    verifiedStoryboards?: VerifiedStoryboardSheet[],
-    verifiedTextSource?: VerifiedTextSource,
+    receipts: SessionCatalogReceipts = {},
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -58,7 +62,7 @@ export class SessionCatalog {
         throw new Error('Invalid shared session asset reference.');
       const asset = versions[0]!;
       if (kind === 'frame') {
-        const image = verifiedFrames?.flatMap(receipt => receipt instanceof VerifiedFrame
+        const image = receipts.frames?.flatMap(receipt => receipt instanceof VerifiedFrame
           ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
         if (image) {
           const payload = value as Record<string, unknown>;
@@ -73,15 +77,15 @@ export class SessionCatalog {
         }
       }
       if (kind === 'storyboard_sheet') {
-        const verified = verifiedStoryboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
+        const verified = receipts.storyboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
           ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
         if (verified) {
           onVerifiedImages?.([verified.image]);
           return { asset, ...verified.projection };
         }
       }
-      if ((kind === 'transcript' || kind === 'comments') && verifiedTextSource instanceof VerifiedTextSource) {
-        const verified = verifiedTextSource.match(this.env.VIDEO_ASSETS, asset, value);
+      if ((kind === 'transcript' || kind === 'comments') && receipts.text instanceof VerifiedTextSource) {
+        const verified = receipts.text.match(this.env.VIDEO_ASSETS, asset, value);
         if (verified) return { asset, ...verified };
       }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);

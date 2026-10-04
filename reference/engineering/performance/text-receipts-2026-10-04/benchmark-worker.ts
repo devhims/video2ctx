@@ -28,7 +28,7 @@ export default {
      start = performance.now();
      const receipt = await VerifiedTextSource.fromPersisted(env.VIDEO_ASSETS,reference,reference,stored.value);
      if (!receipt) throw new Error('Receipt rejected');
-     const attached = await session.pin(kind,row.video_id,'unused',value,Date.now(),[reference],undefined,undefined,undefined,receipt);
+     const attached = await session.pin(kind,row.video_id,'unused',value,Date.now(),[reference],undefined,{ text: receipt });
      const projection = {overrides:attached.overrides,omitted:attached.omitted};
      if (JSON.stringify(projection) !== JSON.stringify({overrides:pinned.overrides,omitted:pinned.omitted})) throw new Error('Projection mismatch');
      hashProjectionMs.push(performance.now()-start);

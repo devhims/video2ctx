@@ -848,7 +848,7 @@ test.each(['serialized','changed-bytes','changed-version','different-bucket'])('
   const refs = mode==='changed-version' ? [{...versions[0]!,contentHash:'a'.repeat(64)}] : versions;
   const read = vi.spyOn(VideoCatalog.prototype,'readVersion');
   try {
-    const pin = new SessionCatalog(env).pin('frame',id,`frame:${id}:640:1000`,changed,Date.now(),refs,undefined,[supplied]);
+    const pin = new SessionCatalog(env).pin('frame',id,`frame:${id}:640:1000`,changed,Date.now(),refs,undefined,{ frames: [supplied] });
     if (mode==='changed-bytes'||mode==='changed-version') await expect(pin).rejects.toThrow('does not match');
     else await expect(pin).resolves.toMatchObject({asset:versions[0]});
     expect(read).toHaveBeenCalledOnce();
@@ -962,7 +962,7 @@ test.each(['serialized', 'changed-bytes', 'changed-version', 'different-bucket',
     const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
     try {
       const pending = new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', value, Date.now(), versions,
-        undefined, undefined, [supplied]);
+        undefined, { storyboards: [supplied] });
       if (mode === 'serialized' || mode === 'different-bucket') await expect(pending).resolves.toBeDefined();
       else await expect(pending).rejects.toThrow('does not match');
       expect(read).toHaveBeenCalledOnce();
@@ -978,13 +978,13 @@ test('storyboard receipts allow envelope changes but keep images and mapping out
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     const backend = new SessionCatalog(env);
-    const reference = await backend.pin('storyboard_sheet', id, 'unused', value, Date.now(), versions, undefined, undefined, [receipt]);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', value, Date.now(), versions, undefined, { storyboards: [receipt] });
     expect(read).not.toHaveBeenCalled();
     expect(reference.overrides).toEqual({ meta: value.meta, freshness: value.freshness });
     expect(reference.omitted).toEqual(['selection']);
     expect(await backend.read(reference)).toEqual(value);
     await expect(backend.pin('storyboard_sheet', id, 'unused', { ...value, meta: { warnings: ['x'.repeat(32001)] } },
-      Date.now(), versions, undefined, undefined, [receipt])).rejects.toThrow('does not match');
+      Date.now(), versions, undefined, { storyboards: [receipt] })).rejects.toThrow('does not match');
   } finally { read.mockRestore(); }
 });
 
@@ -1049,7 +1049,7 @@ test('a coordinator payload must match its stored hash before it can receive a s
   const result = await createYouTubeAgentProvider(configured).storyboard!(id);
   expect(result.verifiedStoryboards ?? []).toHaveLength(0);
   await expect(new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', result.value, Date.now(), versions,
-    undefined, undefined, result.verifiedStoryboards)).rejects.toThrow('does not match');
+    undefined, { storyboards: result.verifiedStoryboards })).rejects.toThrow('does not match');
 });
 
 test.each(['storyboard', 'frame'] as const)('large unchanged %s metadata must remain attachable with a receipt', async kind => {
@@ -1068,7 +1068,7 @@ test.each(['storyboard', 'frame'] as const)('large unchanged %s metadata must re
     : new VerifiedFrame(env.VIDEO_ASSETS, versions[0]!, frame, 'unused');
   const backend = new SessionCatalog(env);
   const reference = await backend.pin(kind === 'storyboard' ? 'storyboard_sheet' : 'frame', id, 'unused', value, Date.now(), versions,
-    undefined, receipt instanceof VerifiedFrame ? [receipt] : undefined, receipt instanceof VerifiedStoryboardSheet ? [receipt] : undefined);
+    undefined, { frames: receipt instanceof VerifiedFrame ? [receipt] : undefined, storyboards: receipt instanceof VerifiedStoryboardSheet ? [receipt] : undefined });
   expect(reference.overrides).toEqual({});
   expect(await backend.read(reference)).toEqual(value);
 });
@@ -1087,7 +1087,7 @@ test('provider normalization drops unknown storyboard content while preserving f
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     const backend = new SessionCatalog(env);
-    const reference = await backend.pin('storyboard_sheet', id, 'unused', result.value, at, versions, undefined, undefined, result.verifiedStoryboards);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', result.value, at, versions, undefined, { storyboards: result.verifiedStoryboards });
     expect(read).not.toHaveBeenCalled();
     expect(await backend.read(reference)).toEqual(result.value);
   } finally { read.mockRestore(); }
@@ -1151,7 +1151,7 @@ test('storyboard receipt fallback can accept a large envelope identical to the s
   const receipt = new VerifiedStoryboardSheet(env.VIDEO_ASSETS, versions[0]!, { ...board, meta: { partial: false, warnings: [] } }, 'unused');
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
-    const reference = await new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', board, Date.now(), versions, undefined, undefined, [receipt]);
+    const reference = await new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', board, Date.now(), versions, undefined, { storyboards: [receipt] });
     expect(read).toHaveBeenCalledOnce();
     expect(reference.overrides).toEqual({});
   } finally { read.mockRestore(); }
@@ -1241,7 +1241,7 @@ test.each(['transcript', 'comments'] as const)('a changed coordinator %s payload
   const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     await expect(new SessionCatalog(env).pin(kind, id, 'unused', result.value, Date.now(), result.catalogVersions,
-      undefined, undefined, undefined, result.verifiedTextSource)).rejects.toThrow('does not match');
+      undefined, { text: result.verifiedTextSource })).rejects.toThrow('does not match');
     expect(read).toHaveBeenCalledOnce();
   } finally { read.mockRestore(); }
 });
@@ -1261,7 +1261,7 @@ test.each(['serialized', 'different-bucket', 'changed-payload', 'changed-referen
     const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
     try {
       const pending = new SessionCatalog(env).pin('transcript', id, 'unused', value, Date.now(), versions,
-        undefined, undefined, undefined, supplied);
+        undefined, { text: supplied });
       if (mode === 'changed-payload' || mode === 'changed-reference') await expect(pending).rejects.toThrow('does not match');
       else await expect(pending).resolves.toBeDefined();
       expect(read).toHaveBeenCalledOnce();
@@ -1310,7 +1310,7 @@ test('public text retrieval avoids receipt work and language, continuation, and 
       const ref = result.catalogVersions![0]!;
       const backend = new SessionCatalog(env);
       const pinned = await backend.pin(ref.kind === 'transcript' ? 'transcript' : 'comments', id, 'unused', result.value,
-        Date.now(), [ref], undefined, undefined, undefined, result.verifiedTextSource);
+        Date.now(), [ref], undefined, { text: result.verifiedTextSource });
       expect(read).not.toHaveBeenCalled();
       expect(await backend.read(pinned)).toEqual(result.value);
       read.mockClear();
@@ -1331,12 +1331,12 @@ test('text receipts preserve envelope projection limits and keep large source me
   const backend = new SessionCatalog(env), read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
   try {
     const pinned = await backend.pin('transcript', id, 'unused', { ...value, freshness: { state: 'fresh' } }, Date.now(), versions,
-      undefined, undefined, undefined, receipt);
+      undefined, { text: receipt });
     expect(pinned.overrides).toEqual({ freshness: { state: 'fresh' } });
     expect(read).not.toHaveBeenCalled();
     const changed = { ...value, meta: { ...value.meta, warnings: ['y'.repeat(33000)] } };
     await expect(backend.pin('transcript', id, 'unused', changed, Date.now(), versions,
-      undefined, undefined, undefined, receipt)).rejects.toThrow('does not match');
+      undefined, { text: receipt })).rejects.toThrow('does not match');
     expect(read).toHaveBeenCalledOnce();
   } finally { read.mockRestore(); }
 });
