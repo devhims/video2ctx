@@ -214,10 +214,10 @@ export class YouTubeCacheCoordinatorCore {
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
       // Await the best-effort copy so history can read it before KV catches up.
-      // History only resolves searches with this exact filter and cache key.
+      // Match the cache key's serialization, which drops undefined filters.
       const operation = request.operation;
       if (operation.kind !== 'search'
-        || (operation.filters?.type === 'video' && Object.keys(operation.filters).length === 1)) {
+        || JSON.stringify(operation.filters ?? {}) === '{"type":"video"}') {
         await saveSourceResponse(this.env, request.cacheKey, request.resourceType, entry,
           cacheRetentionSeconds(request.maxAgeMs) * 1000);
       }

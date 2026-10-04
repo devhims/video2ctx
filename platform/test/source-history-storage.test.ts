@@ -138,6 +138,36 @@ test.each(['get failure', 'invalid JSON'] as const)('history uses valid KV data 
   } finally { warn.mockRestore(); }
 });
 
+const sourcesSearchFilters: SearchFilters = {
+  type: 'video', channelId: undefined, language: undefined, duration: undefined,
+  sort: undefined, captionsOnly: undefined, live: undefined, continuation: undefined,
+};
+
+test('the coordinator copies route-shaped video search filters using the history cache key', async () => {
+  const f = fixture();
+  const query = 'private search terms';
+  const searchKey = await sha256(JSON.stringify({ query, filters: sourcesSearchFilters }));
+  const cacheKey = `youtube:v1:${await sha256(JSON.stringify(['search-v3', searchKey]))}`;
+  const core = new YouTubeCacheCoordinatorCore(f.env, f.load);
+  await expect(core.getOrLoad({ cacheKey, resourceType: 'search-v3', maxAgeMs: 5 * 60_000,
+    operation: { kind: 'search', query, filters: sourcesSearchFilters },
+  })).resolves.toMatchObject({ ok: true, cacheStatus: 'miss' });
+  expect(f.bucket.put).toHaveBeenCalledOnce();
+  const saved = await referenceSource(f.env, { input: query, snapshot: { kind: 'search', selectedData: ['transcript'] } });
+  expect(await restoreSource(f.env, saved.snapshot)).toMatchObject({ kind: 'search', items: f.values.search.results });
+  expect(f.load).toHaveBeenCalledOnce();
+});
+
+test('Sources route-shaped search filters remain saveable after coordinator eviction while KV reports missing', async () => {
+  const f = fixture();
+  await expect(searchYouTubeWithCache(f.env, 'private search terms', sourcesSearchFilters)).resolves.toMatchObject({ cacheStatus: 'miss' });
+  expect(f.bucket.put).toHaveBeenCalledOnce();
+  f.coordinators.clear();
+  const saved = await referenceSource(f.env, { input: 'private search terms', snapshot: { kind: 'search', selectedData: ['transcript'] } });
+  expect(await restoreSource(f.env, saved.snapshot)).toMatchObject({ kind: 'search', items: f.values.search.results });
+  expect(f.load).toHaveBeenCalledOnce();
+});
+
 test.each<SearchFilters>([
   {}, { type: 'playlist' }, { type: 'channel' }, { type: 'video', sort: 'views' },
   { type: 'video', dateFrom: '2026-10-01' }, { type: 'video', captionsOnly: true },
