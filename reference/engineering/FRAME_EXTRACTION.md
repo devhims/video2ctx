@@ -87,6 +87,9 @@ PR #139 is independent: it admits two visual retrievals per session while keepin
 only one frame batch active. Its storyboard latency improvement does not require
 Media, and Media does not remove the need to bound work across sessions.
 
+Production measurements and rollout details are in the
+[October 4 validation report](performance/media-production-2026-10-04.md).
+
 ## Existing local skill
 
 The skill is `youtube-ctx`. Its visual entry point is `watch.mjs`, generated from `packages/youtube-skills/src/watch/`. The published instructions are in `.agents/skills/youtube-ctx/references/visual.md`.
