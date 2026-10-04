@@ -1,3 +1,4 @@
+import { VerifiedTextSource } from './verified-text-source';
 import { visualSpan, linkVisualWork } from './visual-diagnostics';
 import type { VerifiedImage } from './verified-image';
 import { emitExtractionDiagnostic, type ExtractionDiagnosticSink } from './extraction-diagnostics';
@@ -40,6 +41,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  verifiedTextSource?: VerifiedTextSource;
   verifiedStoryboards?: import('./verified-storyboard').VerifiedStoryboardSheet[];
   verifiedFrames?: import('./verified-frame').VerifiedFrame[];
   verifiedImages?: VerifiedImage[];
@@ -125,6 +127,7 @@ async function cached<T extends VideoResourceOperation>(
   operation: T,
   onDiagnostic?: ExtractionDiagnosticSink,
   refresh = false,
+  sessionReceipt = false,
 ): Promise<CachedResult<ResourceResult<T> & { freshness?: Record<string, unknown> }>> {
   const legacyCacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
   const catalog = videoCatalog(env);
@@ -186,7 +189,16 @@ async function cached<T extends VideoResourceOperation>(
     fetchedAt: response.fetchedAt,
     freshUntil: response.fetchedAt + maxAgeMs,
   };
-  return cachedValue(entry, response.cacheStatus, !!resource);
+  const result = cachedValue(entry, response.cacheStatus, !!resource);
+  // Opt-in for agent attachment only. Cache hits, coalesced/stale responses and
+  // incomplete references keep independent verification. Hash before metadata rewriting.
+  if (sessionReceipt && catalog && resource && response.cacheStatus === 'miss'
+    && response.catalogVersions?.length === 1) {
+    const receipt = await VerifiedTextSource.fromPersisted(env.VIDEO_ASSETS, resource,
+      response.catalogVersions[0]!, response.value);
+    if (receipt) result.verifiedTextSource = receipt;
+  }
+  return result;
 }
 
 function parseCoordinatorResponse(value: string): YouTubeCacheResponse {
@@ -341,9 +353,9 @@ export async function getComments(env: Env, id: string, continuation?: string) {
   return (await getCommentsWithCache(env, id, continuation)).value;
 }
 
-export function getCommentsWithCache(env: Env, id: string, continuation?: string, refresh = false) {
+export function getCommentsWithCache(env: Env, id: string, continuation?: string, refresh = false, sessionReceipt = false) {
   const key = `v6:${id}:${continuation ?? 'first'}`;
-  return cached(env, 'comments', key, 15 * 60_000, { kind: 'comments', id, continuation }, undefined, refresh);
+  return cached(env, 'comments', key, 15 * 60_000, { kind: 'comments', id, continuation }, undefined, refresh, sessionReceipt);
 }
 
 export async function getAllComments(env: Env, id: string) {
@@ -357,20 +369,20 @@ export async function getAllComments(env: Env, id: string) {
  */
 export const ALL_COMMENTS_MAX_PAGES = 5;
 
-export function getAllCommentsWithCache(env: Env, id: string, refresh = false) {
+export function getAllCommentsWithCache(env: Env, id: string, refresh = false, sessionReceipt = false) {
   return cached(env, 'all-comments', `v7:${id}:p${ALL_COMMENTS_MAX_PAGES}`, 15 * 60_000, {
     kind: 'all-comments', id, maxPages: ALL_COMMENTS_MAX_PAGES,
-  }, undefined, refresh);
+  }, undefined, refresh, sessionReceipt);
 }
 
 export async function getTranscript(env: Env, id: string, lang?: string): Promise<Transcript> {
   return (await getTranscriptWithCache(env, id, lang)).value;
 }
 
-export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false, deadlineAt?: number) {
+export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false, deadlineAt?: number, sessionReceipt = false) {
   return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
     kind: 'transcript', id, lang, granularity: 'word', ...(deadlineAt === undefined ? {} : { deadlineAt }),
-  }, onDiagnostic, refresh);
+  }, onDiagnostic, refresh, sessionReceipt);
 }
 
 export async function getCaptionTracks(env: Env, id: string) {
@@ -385,11 +397,11 @@ export function getEndscreen(env: Env, id: string) {
 
 /** Shared DB-first retrieval for uncached visual resources and explicit refreshes. */
 export async function getVideoResource<T extends VideoResourceOperation>(env: Env, operation: T,
-  refresh = false, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<ResourceResult<T>>> {
+  refresh = false, onDiagnostic?: ExtractionDiagnosticSink, sessionReceipt = false): Promise<CachedResult<ResourceResult<T>>> {
   const key = videoResourceKey(operation);
   if (!key) throw new Error('Expected a video-specific resource.');
   return cached(env,`video-resource-v1:${key.kind}`,`${key.videoId}:${key.variant}`,
-    VIDEO_MAX_AGE[operation.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh);
+    VIDEO_MAX_AGE[operation.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh,sessionReceipt);
 }
 
 async function hash(value: string): Promise<string> {

@@ -2,6 +2,7 @@ import { projectSessionPayload as projection } from '../../lib/session-payload';
 export { canonicalJson as canonicalSessionPayload } from '../../lib/canonical-json';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { VerifiedStoryboardSheet } from '../../lib/verified-storyboard';
+import { VerifiedTextSource } from '../../lib/verified-text-source';
 import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
@@ -47,6 +48,7 @@ export class SessionCatalog {
     onVerifiedImages?: (images: VerifiedImage[]) => void,
     verifiedFrames?: VerifiedFrame[],
     verifiedStoryboards?: VerifiedStoryboardSheet[],
+    verifiedTextSource?: VerifiedTextSource,
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -77,6 +79,10 @@ export class SessionCatalog {
           onVerifiedImages?.([verified.image]);
           return { asset, ...verified.projection };
         }
+      }
+      if ((kind === 'transcript' || kind === 'comments') && verifiedTextSource instanceof VerifiedTextSource) {
+        const verified = verifiedTextSource.match(this.env.VIDEO_ASSETS, asset, value);
+        if (verified) return { asset, ...verified };
       }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);
       const overlay = stored && projection(stored.value, value);

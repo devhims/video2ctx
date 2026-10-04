@@ -1,0 +1,71 @@
+{
+  "probeVersion": "receipt-v1",
+  "recordedAt": "2026-10-04T18:28:17.621Z",
+  "colo": "BOM",
+  "results": [
+    {
+      "kind": "transcript",
+      "videoId": "OKNmWvAzdLk",
+      "bytes": 67857,
+      "items": 139,
+      "baselineMs": [
+        141,
+        172,
+        160
+      ],
+      "hashProjectionMs": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "transcript",
+      "videoId": "7AmK6QeiUY8",
+      "bytes": 107323,
+      "items": 451,
+      "baselineMs": [
+        214,
+        159,
+        150
+      ],
+      "hashProjectionMs": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "comments",
+      "videoId": "e2rivwGE68I",
+      "bytes": 11497,
+      "items": 20,
+      "baselineMs": [
+        160,
+        142,
+        155
+      ],
+      "hashProjectionMs": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "comments",
+      "videoId": "aircAruvnKk",
+      "bytes": 11476,
+      "items": 20,
+      "baselineMs": [
+        144,
+        175,
+        135
+      ],
+      "hashProjectionMs": [
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}
