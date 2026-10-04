@@ -20,6 +20,176 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
+  it.each([undefined, null, '', 'unknown', 0, false, {}, []].map(value => ({ value })))(
+    'defaults and reports omitted or invalid answer detail on the first response: $value', async ({ value }) => {
+      const model = classifierModel({ route: 'topic_research', answerDetail: value, researchBreadth: 'focused',
+        searchQuery: 'exercise technique', visualEvidence: 'none' });
+      const diagnostic = vi.fn();
+      await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique', model,
+        signal: new AbortController().signal, onDiagnostic: diagnostic })).resolves.toMatchObject({
+        route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused', researchVideoCount: 2,
+      });
+      expect(model.doGenerateCalls).toHaveLength(1);
+      expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'valid', issues: [], defaultedFields: ['answerDetail'] }));
+    });
+
+  it('keeps an explicit source count when research breadth defaults to focused', async () => {
+    const model = classifierModel({ route: 'topic_research', answerDetail: 'detailed', researchBreadth: undefined,
+      explicitSourceCount: 5, searchQuery: 'exercise technique', visualEvidence: 'none' });
+    await expect(classifyCapabilityWithModel({ message: 'Give me a detailed report from five videos about exercise technique', model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ answerDetail: 'detailed', researchBreadth: 'focused',
+      researchVideoCount: 5, requiredVideoCount: 5 });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it.each([undefined, 'comparison', 'broad'].map(researchBreadth => ({ researchBreadth })))(
+    'repairs discovery breadth before considering a fallback: $researchBreadth', async ({ researchBreadth }) => {
+      const base = { route: 'topic_research', searchQuery: 'exercise comparison', visualEvidence: 'none' };
+      const model = sequenceClassifier([{ ...base, researchBreadth }, { ...base, researchBreadth: 'comparative' }]);
+      const diagnostics = vi.fn();
+      await expect(classifyCapabilityWithModel({ message: 'Compare exercise techniques', model,
+        signal: new AbortController().signal, onDiagnostic: diagnostics })).resolves.toMatchObject({ researchBreadth: 'comparative', researchVideoCount: 4 });
+      expect(model.doGenerateCalls).toHaveLength(2);
+      expect(diagnostics.mock.calls.map(([event]) => ({ outcome: event.outcome, defaultedFields: event.defaultedFields })))
+        .toEqual([{ outcome: 'invalid', defaultedFields: [] }, { outcome: 'valid', defaultedFields: [] }]);
+    });
+
+  it('defaults and reports only still-missing discovery breadth after repair', async () => {
+    const model = sequenceClassifier([{ route: 'topic_research', answerDetail: undefined,
+      searchQuery: 'exercise technique', visualEvidence: 'none' }]);
+    const diagnostics = vi.fn();
+    const traces: { output?: unknown; error?: unknown }[] = [];
+    const traceToolCall: TraceToolCall = async call => {
+      const trace: typeof traces[number] = {};
+      traces.push(trace);
+      try { const output = await call.execute(); trace.output = output; return output; }
+      catch (error) { trace.error = error; throw error; }
+    };
+    await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique', model, traceToolCall,
+      signal: new AbortController().signal, onDiagnostic: diagnostics })).resolves.toMatchObject({ answerDetail: 'standard', researchBreadth: 'focused', researchVideoCount: 2 });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(diagnostics.mock.calls.map(([event]) => ({ outcome: event.outcome, defaultedFields: event.defaultedFields })))
+      .toEqual([{ outcome: 'invalid', defaultedFields: ['answerDetail'] },
+        { outcome: 'valid', defaultedFields: ['answerDetail', 'researchBreadth'] }]);
+    expect(traces).toHaveLength(2);
+    expect(traces[0]?.error).toMatchObject({ name: 'AI_InvalidToolInputError' });
+    expect(traces[1]?.output).toMatchObject({ accepted: true });
+    expect(model.doGenerateCalls[1]!.tools).toEqual(model.doGenerateCalls[0]!.tools);
+  });
+
+  it.each([null, '', 'comparison', 'broad', 0, false, {}, []].map(researchBreadth => ({ researchBreadth })))(
+    'rejects still-invalid breadth after repair: $researchBreadth', async ({ researchBreadth }) => {
+      const model = sequenceClassifier([{ route: 'topic_research', researchBreadth,
+        searchQuery: 'exercise comparison', visualEvidence: 'none' }]);
+      const diagnostics = vi.fn();
+      await expect(classifyCapabilityWithModel({ message: 'Compare exercise techniques', model,
+        signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toThrow(/researchBreadth/);
+      expect(model.doGenerateCalls).toHaveLength(2);
+      expect(diagnostics.mock.calls.map(([event]) => event.defaultedFields)).toEqual([[], []]);
+    });
+
+  it('retains valid comparative scope when an advisory visual reconsideration omits breadth', async () => {
+    const first = { route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'slide design comparison', visualEvidence: 'helpful' };
+    const model = sequenceClassifier([first, { ...first, researchBreadth: undefined }]);
+    const diagnostics = vi.fn();
+    await expect(classifyCapabilityWithModel({ message: 'Compare slide designs', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostics })).resolves.toMatchObject({ researchBreadth: 'comparative', researchVideoCount: 4 });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(diagnostics.mock.calls.map(([event]) => event.defaultedFields)).toEqual([[], []]);
+  });
+
+  it('still reports missing essential fields when optional preferences need defaults', async () => {
+    const diagnostics = vi.fn();
+    const model = sequenceClassifier([{ route: 'topic_research', answerDetail: undefined, explicitSourceCount: 0 }]);
+    await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    expect(diagnostics.mock.calls[0]![0].issues.map((issue: { path: string }) => issue.path).sort())
+      .toEqual(['explicitSourceCount', 'researchBreadth', 'searchQuery', 'visualEvidence']);
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it.each([false, true])('recovers the captured fixed-video follow-up with missing discovery fields (answerDetail present: %s)', async hasDetail => {
+    const decision = { route: 'topic_research', comparisonVideoIds: ['abcdefghijk', 'lmnopqrstuv'],
+      visualEvidence: 'required', visualRequirements: ['exercise form'] };
+    const model = sequenceClassifier([{ ...decision, answerDetail: hasDetail ? 'standard' : undefined },
+      { ...decision, answerDetail: 'standard' }]);
+    const diagnostics = vi.fn();
+    const result = await classifyCapabilityWithModel({ message: 'Show exercise images from both videos', model, onDiagnostic: diagnostics,
+      conversationHistory: [conversationTurn({ user: 'Review these videos', assistant: 'Earlier review', resourceIds: decision.comparisonVideoIds })],
+      signal: new AbortController().signal });
+    expect(result).toMatchObject({ ...decision, answerDetail: 'standard', researchVideoCount: 2 });
+    expect(result).not.toHaveProperty('searchQuery');
+    expect(result).not.toHaveProperty('researchBreadth');
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(diagnostics.mock.calls[0]![0].defaultedFields).toEqual(hasDetail ? [] : ['answerDetail']);
+  });
+
+  it('gives repair the previous candidate and all missing fields without losing valid choices', async () => {
+    const candidate = { route: 'topic_research', answerDetail: 'detailed', visualEvidence: 'required',
+      visualRequirements: ['exercise form'] };
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async ({ prompt }) => {
+      const text = prompt.find(message => message.role === 'user')?.content.find(part => part.type === 'text');
+      if (!text || text.type !== 'text') throw new Error('Expected the classifier input as text.');
+      const payload = JSON.parse(text.text);
+      if (calls++) {
+        expect(payload.classificationRepair.previousCandidate).toEqual({ researchVideoCount: 1, ...candidate });
+        expect(payload.classificationRepair.issues.map((issue: { path: string }) => issue.path).sort())
+          .toEqual(['researchBreadth', 'searchQuery']);
+      }
+      return { content: [{ type: 'tool-call', toolCallId: `route-${calls}`, toolName: 'classify_request',
+        input: JSON.stringify(calls === 1 ? { researchVideoCount: 1, ...candidate }
+          : { ...payload.classificationRepair.previousCandidate, researchBreadth: 'focused', searchQuery: 'exercise technique' }) }],
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [] };
+    } });
+    await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique with images', model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ ...candidate, researchBreadth: 'focused', researchVideoCount: 2 });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('defaults a repaired candidate without merging preferences from the previous attempt', async () => {
+    const model = sequenceClassifier([
+      { route: 'topic_research', answerDetail: 'detailed', visualEvidence: 'none' },
+      { route: 'topic_research', answerDetail: undefined, researchBreadth: 'focused', searchQuery: 'exercise technique', visualEvidence: 'none' },
+    ]);
+    await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique', model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ answerDetail: 'standard', researchBreadth: 'focused' });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('previousCandidate');
+  });
+
+  it.each([[], ['abcdefghijk'], ['abcdefghijk', 'abcdefghijk'], ['abcdefghijk', 'zzzzzzzzzzz']].map(comparisonVideoIds => ({ comparisonVideoIds })))(
+    'does not bypass video-scope validation when discovery fields are omitted: $comparisonVideoIds', async ({ comparisonVideoIds }) => {
+      const model = sequenceClassifier([{ route: 'topic_research', comparisonVideoIds, visualEvidence: 'none' }]);
+      await expect(classifyCapabilityWithModel({ message: 'Review those videos', model,
+        conversationHistory: [conversationTurn({ user: 'Review these videos', assistant: 'Earlier review', resourceIds: ['abcdefghijk', 'lmnopqrstuv'] })],
+        signal: new AbortController().signal })).rejects.toThrow(/comparisonVideoIds/);
+      expect(model.doGenerateCalls).toHaveLength(2);
+    });
+
+  it('collects conditional visual and context requirements alongside invalid base fields', async () => {
+    const diagnostics = vi.fn();
+    const model = sequenceClassifier([{ route: 'finalize', responseIntent: 'context_answer', answerDetail: undefined,
+      reason: 'Saved context', visualEvidence: 'required' }]);
+    await expect(classifyCapabilityWithModel({ message: 'Explain the earlier scene', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    expect(diagnostics.mock.calls[0]![0].issues.map((issue: { path: string }) => issue.path).sort())
+      .toEqual(['contextScope', 'visualRequirements']);
+  });
+
+  it('sends route-specific requirements in the model tool schema', async () => {
+    const model = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'exercise technique' });
+    await classifyCapabilityWithModel({ message: 'Explain exercise technique', model, signal: new AbortController().signal });
+    const schema = model.doGenerateCalls[0]!.tools!.find(tool => tool.type === 'function')!.inputSchema;
+    expect(schema).toMatchObject({ type: 'object', required: ['route', 'answerDetail'], anyOf: expect.arrayContaining([
+      { properties: { route: { const: 'topic_research' } }, required: ['researchBreadth', 'searchQuery', 'visualEvidence'] },
+      { properties: { route: { const: 'topic_research' } }, required: ['comparisonVideoIds', 'visualEvidence'] },
+      { properties: { route: { const: 'inspect_video' } }, required: ['videoId', 'visualEvidence'] },
+      { properties: { route: { const: 'finalize' } }, required: ['responseIntent', 'reason'] },
+    ]) });
+  });
+
   it.each(['how to get the most out of Claude Opus 4.5 tips and prompting guide', 'Opus prompting guide', 'Opus 5.5 and 4.5 prompting guide'])('rejects changed or dropped versions before discovery: %s', async searchQuery => {
     const model = classifierModel({ route: 'topic_research', researchVideoCount: 2, researchBreadth: 'focused',
       searchQuery });
@@ -297,16 +467,16 @@ describe('YouTube agent capability router', () => {
       signal: new AbortController().signal });
     expect(decision).toMatchObject({ answerDetail });
     expect(model.doGenerateCalls[0]?.tools?.find(t => t.type === 'function')?.inputSchema).toMatchObject({
-      required: expect.arrayContaining(['answerDetail']),
+      required: ['route', 'answerDetail'],
       properties: { answerDetail: { enum: ['standard', 'detailed'] } },
     });
     expect(await resolveCapabilityRoute({ persisted: decision, classify: vi.fn(), persist: vi.fn() })).toEqual(decision);
   });
 
-  it('rejects a new classification without an output-budget choice', async () => {
+  it('defaults an inspection without an output-budget choice to standard', async () => {
     await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
       model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', answerDetail: undefined }),
-      signal: new AbortController().signal })).rejects.toThrow();
+      signal: new AbortController().signal })).resolves.toMatchObject({ answerDetail: 'standard' });
   });
 
   it('routes a request pinned to one supplied video into inspect_video', async () => {

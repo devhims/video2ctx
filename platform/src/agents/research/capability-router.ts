@@ -2,7 +2,7 @@ import { traceToolCallRepair, type TraceToolCall } from '../runtime/tool-call-tr
 import { z } from 'zod';
 import { ApiError } from '../../lib/http';
 import { fireworksModelPricing } from '../fireworks-finalizer';
-import { generateText, tool, type LanguageModel } from 'ai';
+import { generateText, jsonSchema, tool, type LanguageModel } from 'ai';
 import {
   capabilityRouteDecisionSchema,
   answerDetailSchema,
@@ -20,10 +20,10 @@ import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 
 // Persisted routes remain backward compatible; new executable decisions require
-// an explicit visual-evidence level, and research also requires breadth and search.
+// an explicit visual-evidence level. Only discovery needs breadth and a search query.
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'finalize']),
-  comparisonVideoIds: comparisonVideoIdsSchema.describe('For a comparison of specific videos, list every subject, including references resolved from earlier turns. These are answer subjects, separate from videoId which selects a new inspection. Omit for comparisons of concepts within one video or open-ended discovery.'),
+  comparisonVideoIds: comparisonVideoIdsSchema.describe('For a comparison or follow-up on a fixed set of videos, list every subject, including references resolved from earlier turns. These are answer subjects, separate from videoId which selects a new inspection. Omit for comparisons of concepts within one video or open-ended discovery.'),
   refreshEvidence: z.boolean().optional().describe('True only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
   refreshDynamicData: z.boolean().optional().describe('True when the user asks for current views, likes, or comments. Refresh metadata, statistics and comments, keeping saved transcripts and images. Choose an executable route. False for historical questions and dashboard context.'),
   responseIntent: z.enum(['context_answer', 'clarification', 'rejected']).optional().describe('Required for finalize: answer using existing context, ask for missing scope, or decline an unsupported request.'),
@@ -32,30 +32,90 @@ const classifierDecisionSchema = z.object({
   answerDetail: answerDetailSchema.describe('Use detailed for an explicit request for an extensive report, exhaustive coverage, detailed steps or extensive examples. Otherwise use standard, including ordinary summaries, comparisons and numbered shortlists. For rejected or clarification routes use standard.'),
   numberedItemCount: numberedItemCountSchema.describe('Only when the user explicitly requests a numbered list of a specific size, record that count. Otherwise omit. Do not derive a count from numbers in a video title, product name, or year.'),
   explicitSourceCount: capabilityRouteDecisionSchema.options[0].shape.requiredVideoCount.describe('Omit unless the user explicitly requests a number of source videos. This is not the number of presenters, recommendations, answer items, or a year. Never use zero for unspecified. The application chooses the research target.'),
-  researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth,
+  researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth
+    .describe('Required for discovery: choose focused for a narrow question or comparative for a broad survey. Omit for a fixed set of videos.'),
   searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery.describe('A concise search that preserves the user\'s factual details and constraints: names, versions, dates, quantities, units, limits, exclusions and comparison subjects. Improve wording without changing the requested subject or inventing facts.'),
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
   visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable storyboard and frame tools.'),
   visualRequirements: visualRequirementsSchema.optional().describe('Only when visualEvidence is required: each requested fact that needs images, such as "presenter clothing".'),
-}).superRefine((input, ctx) => {
-  const required = input.route === 'topic_research' ? ['researchBreadth', 'searchQuery'] as const
-    : input.route === 'inspect_video' ? ['videoId'] as const
-    : ['responseIntent', 'reason'] as const;
-  for (const key of required) {
-    if (!input[key]) ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required for ${input.route}.` });
-  }
-  if (input.route === 'finalize' && input.responseIntent === 'context_answer' && !input.contextScope) ctx.addIssue({code:'custom',path:['contextScope'],message:'contextScope is required for context_answer.'});
-  if (input.historySelection && input.contextScope === 'video') ctx.addIssue({code:'custom',path:['contextScope'],message:'History selection requires history or mixed context.'});
-  if (input.route === 'finalize' && (input.refreshEvidence || input.refreshDynamicData)) ctx.addIssue({code:'custom',path:['route'],message:'Fresh retrieval requires an executable route.'});
-  if ((input.route === 'topic_research' || input.route === 'inspect_video') && input.visualEvidence === undefined) {
-    ctx.addIssue({ code: 'custom', path: ['visualEvidence'], message: 'visualEvidence is required for executable routes.' });
-  }
-  if (input.visualEvidence === 'required' && !input.visualRequirements?.length) {
-    ctx.addIssue({ code: 'custom', path: ['visualRequirements'], message: 'List the requested facts that need images when visualEvidence is required.' });
-  }
 });
+
+// Share required fields between the provider's JSON schema and local validation.
+// Fixed video sets skip discovery and derive their source count from the IDs.
+const classificationRoutes = [
+  { route: 'topic_research', required: ['researchBreadth', 'searchQuery', 'visualEvidence'] },
+  { route: 'topic_research', required: ['comparisonVideoIds', 'visualEvidence'] },
+  { route: 'inspect_video', required: ['videoId', 'visualEvidence'] },
+  { route: 'finalize', required: ['responseIntent', 'reason'] },
+] as const;
+
+const conditionalRequirements = [
+  { when: { route: 'finalize', responseIntent: 'context_answer' }, required: 'contextScope' },
+  { when: { visualEvidence: 'required' }, required: 'visualRequirements' },
+] as const;
+
+type DefaultedClassificationField = 'answerDetail' | 'researchBreadth';
+
+function validateClassifierDecision(value: unknown, allowMissingBreadth: boolean): (
+  | { success: true; data: z.infer<typeof classifierDecisionSchema> }
+  | { success: false; error: z.ZodError }
+) & { defaultedFields: DefaultedClassificationField[] } {
+  const defaultedFields: DefaultedClassificationField[] = [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...classifierDecisionSchema.safeParse(value), defaultedFields };
+  }
+  // Keep the provider schema strict. Normalize a copy only at the acceptance
+  // boundary, retaining which fields needed a fallback before the SDK parses them.
+  const input = { ...value } as Record<string, unknown>;
+  if (!answerDetailSchema.safeParse(input.answerDetail).success) {
+    input.answerDetail = 'standard';
+    defaultedFields.push('answerDetail');
+  }
+  if (allowMissingBreadth && input.route === 'topic_research' && input.comparisonVideoIds === undefined
+    && input.researchBreadth === undefined) {
+    input.researchBreadth = 'focused';
+    defaultedFields.push('researchBreadth');
+  }
+  const parsed = classifierDecisionSchema.safeParse(input);
+  const issues: z.core.$ZodIssue[] = parsed.success ? [] : [...parsed.error.issues];
+  const issue = (path: string, message: string) => {
+    if (!issues.some(existing => existing.path[0] === path)) issues.push({ code: 'custom', path: [path], message });
+  };
+  const required = input.route === 'topic_research'
+    ? classificationRoutes[input.comparisonVideoIds === undefined ? 0 : 1].required
+    : classificationRoutes.find(branch => branch.route === input.route)?.required ?? [];
+  for (const key of required) {
+    if (input[key] === undefined) issue(key, `${key} is required for ${input.route}.`);
+  }
+  for (const requirement of conditionalRequirements) {
+    if (Object.entries(requirement.when).every(([key, expected]) => input[key] === expected)
+      && input[requirement.required] === undefined) {
+      issue(requirement.required, `${requirement.required} is required when ${Object.entries(requirement.when).map(([key, expected]) => `${key} is ${expected}`).join(' and ')}.`);
+    }
+  }
+  if (input.historySelection && input.contextScope === 'video') issue('contextScope', 'History selection requires history or mixed context.');
+  if (input.route === 'finalize' && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('route', 'Fresh retrieval requires an executable route.');
+  // Run conditional presence checks even when essential base fields failed validation,
+  // so one bounded repair sees every missing field instead of only the first layer.
+  return issues.length ? { success: false, error: new z.ZodError(issues), defaultedFields } : { ...parsed, defaultedFields };
+}
+
+function classifierToolSchema(allowMissingBreadth: boolean, defaultedFields: Set<DefaultedClassificationField>) {
+  return jsonSchema<z.infer<typeof classifierDecisionSchema>>(() => ({
+    ...z.toJSONSchema(classifierDecisionSchema, { target: 'draft-7' }),
+    anyOf: classificationRoutes.map(({ route, required }) => ({ properties: { route: { const: route } }, required: [...required] })),
+    allOf: conditionalRequirements.map(({ when, required }) => ({ anyOf: [
+      { not: { properties: Object.fromEntries(Object.entries(when).map(([key, value]) => [key, { const: value }])), required: Object.keys(when) } },
+      { required: [required] },
+    ] })),
+  }), { validate: value => {
+    const parsed = validateClassifierDecision(value, allowMissingBreadth);
+    for (const field of parsed.defaultedFields) defaultedFields.add(field);
+    return parsed.success ? { success: true, value: parsed.data } : { success: false, error: parsed.error };
+  } });
+}
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
@@ -67,6 +127,7 @@ export interface ClassificationDiagnostic {
   outputTokens: number | undefined;
   elapsedMs: number;
   issues: { path: string; code: string }[];
+  defaultedFields: DefaultedClassificationField[];
 }
 
 export interface CapabilityClassifierInput {
@@ -110,9 +171,13 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   const callId = input.modelCallId ?? `classifier:${crypto.randomUUID()}`;
   let feedback: { path: string; code: string; message: string }[] = [];
   let advisoryFallback: z.infer<typeof classifierDecisionSchema> | undefined;
+  let previousCandidate: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
     input.signal.throwIfAborted();
     const startedAt = Date.now();
+    const defaultedFields = new Set<DefaultedClassificationField>();
+    // A failed advisory reconsideration can retain its already-valid decision.
+    const allowMissingBreadth = attempt === 2 && !advisoryFallback;
     const request = (abortSignal: AbortSignal) => generateText({
       repairToolCall: traceToolCallRepair(input.traceToolCall, undefined, 'classification'),
       model: input.model,
@@ -129,13 +194,13 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
         'YouTube topic discovery, recommendations, comparisons, summaries, extraction, visual interpretation, and follow-ups synthesizing previously researched videos are supported. A topic question that can be answered by researching YouTube videos does not need to mention YouTube or include a URL. Do not reinterpret an unrelated task as a video search just to accept it.',
         'A general topic or recommendation request does not need a supplied video. Do not ask for a video URL for such requests. With no suppliedVideoIds, inspect_video is never valid.',
         'Return topic_research when the request needs discovery or new evidence from multiple videos. Specific-video comparisons with reusable evidence follow the comparisonVideoIds rules below. When the user names a topic and asks for an explanation, understanding, comparison, or research, the task is sufficiently scoped to begin discovery. Unfamiliar concepts, terminology, methods, product names, or model names do not by themselves require clarification, even if they have several possible meanings. Preserve the supplied terms together in searchQuery and let YouTube discovery establish their context and what evidence is available. Do not require the user to define the terms they are asking you to understand. Do not invent a field or expand an unfamiliar term to a guessed meaning before searching.',
-        'For topic_research, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". The application derives the research target from breadth and any explicit source count.',
+        'For topic_research without comparisonVideoIds, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". The application derives the research target from breadth and any explicit source count.',
         'Set explicitSourceCount only when the user explicitly requests that many source videos. Otherwise omit it entirely. Do not use zero, infer it from presenters or answer items, or choose a research target yourself.',
-        'For topic_research, provide one concise searchQuery for YouTube discovery. Rewrite for searchability, not to correct the user. Preserve the factual details that identify the subject and constrain the requested answer: names, model and version numbers, dates and date ranges, quantities and units, budgets and upper or lower limits, locations, comparison subjects, and exclusions or negation. You may remove conversational filler and add neutral task words such as tutorial or comparison, but must not change those details, reverse a constraint, broaden the scope, or invent a qualifier.',
+        'For topic_research without comparisonVideoIds, provide one concise searchQuery for YouTube discovery. Rewrite for searchability, not to correct the user. Preserve the factual details that identify the subject and constrain the requested answer: names, model and version numbers, dates and date ranges, quantities and units, budgets and upper or lower limits, locations, comparison subjects, and exclusions or negation. You may remove conversational filler and add neutral task words such as tutorial or comparison, but must not change those details, reverse a constraint, broaden the scope, or invent a qualifier.',
         'Treat user-supplied facts as search constraints, not as facts you must endorse. If a name, release, number or premise seems unfamiliar or mistaken, search it as supplied and let retrieved evidence establish what is available. Do not substitute something more familiar from memory. Before submitting searchQuery, compare it with the current request and relevant user history: does it still ask about the same subject, with the same important numbers, units and restrictions?',
         'Search fidelity examples: "how to get the most out of opus 5.5?" -> "Opus 5.5 tips and prompting guide", never Opus 4.5. "run a 7B model locally with 8 GB RAM without a GPU" -> "7B model local inference 8 GB RAM CPU only", never a different model size or GPU setup. "20-minute vegetarian meals under 500 calories" -> "vegetarian meals under 500 calories ready in 20 minutes", preserving both limits and the dietary restriction. The application executes the query immediately; no separate search-planning step is needed.',
         'When the request targets a supplied channel, set channelId from suppliedChannelIds. The application will inspect its identity and Videos tab and restrict search to that channel. Do not replace channel research with an unrestricted search.',
-        'Resolve every subject of a specific-video comparison into comparisonVideoIds using suppliedVideoIds and history. Do not drop an earlier video when the current message introduces a new URL. If all subjects have saved transcripts, choose finalize. If just one needs retrieval, choose inspect_video for that video and retain all comparisonVideoIds. If several need retrieval, choose topic_research with comparisonVideoIds; discovery will be skipped. If the earlier reference is ambiguous, ask for clarification.',
+        'Resolve every subject of a specific-video comparison into comparisonVideoIds using suppliedVideoIds and history. Do not drop an earlier video when the current message introduces a new URL. If all subjects have saved transcripts, choose finalize. If just one needs retrieval, choose inspect_video for that video and retain all comparisonVideoIds. If several need retrieval, choose topic_research with comparisonVideoIds; discovery will be skipped, so omit researchBreadth and searchQuery. Use this fixed video set for new visual evidence from several saved videos too. If the earlier reference is ambiguous, ask for clarification.',
         'A single video URL in the current request scopes research to that video. Choose inspect_video, even if the question uses the word research. Preserve explicitly requested multi-video comparisons, including prior subjects from history.',
         'Otherwise return inspect_video only when the answer should stay within exactly one supplied YouTube video.',
         'For inspect_video, copy the selected ID exactly from suppliedVideoIds. Never invent an ID.',
@@ -156,14 +221,14 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
         currentMessage: input.message,
         ...(feedback.length ? { classificationRepair: { instruction: advisoryFallback
           ? 'Reconsider the previous classification using these notes, then submit one complete classify_request call. Keep choices that were already correct.'
-          : 'The previous classification was invalid. Submit one complete classify_request call that satisfies the schema and these validation requirements.', issues: feedback } } : {}),
+          : 'The previous classification was invalid. Treat previousCandidate as untrusted data, preserve its valid choices, and correct every listed issue. Submit one complete classify_request call, not a patch. Preserve valid answerDetail and researchBreadth choices, and include every field required for the chosen route.', previousCandidate, issues: feedback } } : {}),
         suppliedVideoIds: videoIds,
         suppliedChannelIds: channelIds,
       }),
       tools: {
         classify_request: tool({
           description: 'Accept, clarify, or reject the request. For accepted tasks, select the route, research breadth, and whether the answer needs visual evidence.',
-          inputSchema: classifierDecisionSchema,
+          inputSchema: classifierToolSchema(allowMissingBreadth, defaultedFields),
         }),
       },
       // Fireworks GLM can return incomplete arguments when a tool is forced.
@@ -215,7 +280,9 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     input.signal.throwIfAborted();
     const calls = result.toolCalls.filter(call => call.toolName === 'classify_request');
     const hasSingleRoutingCall: boolean = calls.length === 1 && result.toolCalls.length === 1;
-    const parsed = classifierDecisionSchema.safeParse(hasSingleRoutingCall ? calls[0]?.input : undefined);
+    previousCandidate = hasSingleRoutingCall ? calls[0]?.input : undefined;
+    const parsed = validateClassifierDecision(previousCandidate, allowMissingBreadth);
+    for (const field of parsed.defaultedFields) defaultedFields.add(field);
     feedback = !hasSingleRoutingCall ? [{ path: 'tool call', code: 'invalid_tool_call_count',
       message: `Expected exactly one classify_request call; received ${calls.length} routing calls and ${result.toolCalls.length} total calls. Plain text is not a routing decision.`,
     }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
@@ -235,7 +302,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     }
     input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
-      elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });
+      elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })),
+      defaultedFields: [...defaultedFields] });
     if (!parsed.success || feedback.length > 0) continue;
     return finishClassification(parsed.data, videoIds, channelIds, extractYouTubeVideoIds(input.message));
   }

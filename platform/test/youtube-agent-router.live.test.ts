@@ -1,10 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { createAgentModel } from '../src/agents/model';
-import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
+import { classifyCapabilityWithModel, type ClassificationDiagnostic } from '../src/agents/research/capability-router';
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 // Explicit opt-in: calls the real classifier provider, but starts no agent runs.
 describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability routing', () => {
+  it('routes new visuals for a fixed set of saved videos', async () => {
+    const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
+    if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
+    const videoIds = ['abcdefghijk', 'lmnopqrstuv'];
+    const attempts: ClassificationDiagnostic[] = [];
+    const decision = await classifyCapabilityWithModel({
+      message: 'Show images of the exercise form from both of those videos. Fetch and inspect images from each video because we only have transcripts.',
+      conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: videoIds,
+        user: 'Compare the exercise techniques in these two videos.', assistant: 'Both transcripts describe exercise techniques. No images have been retrieved.' }],
+      sessionBrief: { assets: videoIds.map((videoId, index) => ({ version: String(index + 1).repeat(64), kind: 'transcript' as const,
+        videoId, collectedAt: 1, current: true, details: {} })), memories: [] },
+      model: createAgentModel({ AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: apiKey,
+        AI_GATEWAY_ID: '' } as unknown as Env, `router-fixed-videos:${crypto.randomUUID()}`, 'low', { model_role: 'classifier' }),
+      signal: AbortSignal.timeout(25_000), onDiagnostic: event => attempts.push(event),
+    });
+    expect(decision).toMatchObject({ route: 'topic_research', comparisonVideoIds: videoIds,
+      researchVideoCount: 2, visualEvidence: 'required', answerDetail: 'standard' });
+    expect(attempts).toMatchObject([{ attempt: 1, outcome: 'valid' }]);
+    console.info(JSON.stringify({ case: 'fixed-video visuals', attempts: attempts.length, route: decision.route,
+      defaultedFields: attempts.flatMap(event => event.defaultedFields) }));
+  }, 30_000);
+
   const cases = [
     { message: "help me understand graph engineering and how it's different from loop engineering", route: 'topic_research', terms: ['graph engineering', 'loop engineering'] },
     { message: 'Explain context engineering and how it differs from prompt engineering', route: 'topic_research', terms: ['context engineering', 'prompt engineering'] },
