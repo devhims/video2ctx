@@ -107,7 +107,7 @@ production tests. Baseline Worker: `e889d1fe-8a16-4dc2-9138-34272bc6660d`.
 Tested Worker: `5d6a0f0d-f3ff-4d21-bbe7-f26f070eec71`, deployed at
 17:30:40 UTC to 100% of traffic from implementation commit `d0b5dad`.
 The deployment used `--containers-rollout=none`. No container image, migration,
-or secret changed. This deployment remains active.
+or secret changed. The review-verification deployment below superseded it.
 
 The timings below precede the review hardening that adds the explicit hash check.
 
@@ -184,3 +184,37 @@ investigation. This small two-video sample is not a load test or latency percent
 - After: fresh B repeat: `de3269a8-b278-45b2-a612-9801d1892c3a`.
 - After: saved A: `70283008-3f82-48f9-969f-71a7c9921cf6`.
 - After: saved B: `883d6cb3-e827-4305-9c59-567e848b99d5`.
+
+### Production verification after review fixes
+
+Implementation commit `98fb705` was deployed on October 4 at 18:03:05 UTC as
+Worker `52f00b28-cbd9-4b11-82c2-858e7e30d76a`, serving 100% of traffic. This
+deployment includes the explicit content-hash check, shared projection helper,
+and oversized-envelope fallback. Container rollout was disabled again; no
+migrations or secrets changed.
+
+Two further sequential agent requests used video A and the same six-sheet
+selection. Both returned all six sheets with current diagnostics. The second
+request reused the first request's session.
+
+| Case | Extraction attempts | Complete storyboard tool | Whole agent run, polled | Catalog R2 GETs | Preview HEADs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh source | 2 | 13.917 s | 53.988 s | 1 | 0 |
+| Saved session | 0 | 6.652 s | 36.811 s | 13 | 0 |
+
+The stricter hash check preserved the measured operation reduction. Fresh
+retrieval still spent 4.498 seconds in catalog writes and 3.242 seconds creating
+previews. It still exceeded ten seconds. These two calls verify the reviewed
+implementation, not a new latency percentile or an upstream reliability fix.
+
+The first and last previews from each request passed four additional GET checks:
+HTTP 200, `image/jpeg`, and complete JPEG markers. The fresh agent answer was
+marked partial because the prompt requested retrieval without visual analysis;
+the storyboard tool itself returned the complete requested selection.
+
+Before deployment, the build, documentation checks, and all 1,636 tests passed,
+with 39 intentional skips. This includes 61 session-catalog tests. All GitHub
+checks also passed for implementation commit `98fb705`.
+
+- Fresh source run: `693a1e4b-6fdb-47c7-b09c-d957e6528191`.
+- Saved-session run: `71818e82-fa30-407f-a0c7-9c2d0fa6dbda`.
