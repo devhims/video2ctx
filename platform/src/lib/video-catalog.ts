@@ -256,15 +256,7 @@ export class VideoCatalog {
     coverage: Record<string, unknown>,
     publishCurrent: boolean,
   ): Promise<PreparedWrite> {
-    const images: ImageWrite[] = [];
-    const raw = JSON.parse(JSON.stringify(value)) as Json;
-    // One atomic object contains a frame and its metadata. Existing split-image
-    // objects remain readable; larger storyboard selections retain image deduplication.
-    const inlineFrame = this.inlineFrames && key.kind === 'frame' && hasInlineFrame(raw);
-    if (inlineFrame) atob((raw as { frames: { imageBase64: string }[] }).frames[0]!.imageBase64);
-    const serialized = inlineFrame ? raw : await this.dehydrate(raw, key.videoId, images);
-    const payload = JSON.stringify(serialized);
-    const hash = await sha256(payload);
+    const { images, payload, contentHash: hash, inlineFrame } = await prepareVideoAssetContent(key, value, this.inlineFrames);
     const objectKey = `youtube/videos/${key.videoId}/${key.kind}/${await sha256(key.variant)}/${hash}.json`;
     const reference = { ...key, contentHash: hash, ...(inlineFrame ? { imageStorage: 'inline' as const } : {}) };
     // Do not publish partial sources as fresh reusable responses. Preserve them
@@ -396,21 +388,6 @@ export class VideoCatalog {
       .all<AssetRow>());
   }
 
-  private async dehydrate(value: Json, videoId: string, images: ImageWrite[]): Promise<Json> {
-    if (Array.isArray(value)) return Promise.all(value.map((item) => this.dehydrate(item, videoId, images)));
-    if (value === null || typeof value !== 'object') return value;
-    const out: Record<string, Json> = {};
-    for (const [name, item] of Object.entries(value)) {
-      if (name === 'imageBase64' && typeof item === 'string') {
-        const bytes = Uint8Array.from(atob(item), (c) => c.charCodeAt(0));
-        const key = await videoImageKey(videoId, bytes);
-        images.push({ key, bytes });
-        out[name] = { r2Image: key };
-      } else out[name] = await this.dehydrate(item, videoId, images);
-    }
-    return out;
-  }
-
   private async hydrate(value: Json, videoId: string, verifiedImages?: VerifiedImage[], inlineFrameKey?: string): Promise<Json> {
     if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId, verifiedImages, inlineFrameKey)));
     if (value === null || typeof value !== 'object') return value;
@@ -473,4 +450,32 @@ export async function videoImageKey(videoId: string, bytes: Uint8Array<ArrayBuff
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
   return `youtube/videos/${videoId}/images/${hash}.jpg`;
+}
+
+/** The exact storage serialization, shared by writes and request-local receipts.
+ * Preserve JSON property order: changing it would change existing content hashes.
+ */
+export async function prepareVideoAssetContent(key: VideoAssetKey, value: unknown, inlineFrames = false) {
+  const images: ImageWrite[] = [];
+  const raw = JSON.parse(JSON.stringify(value)) as Json;
+  const inlineFrame = inlineFrames && key.kind === 'frame' && hasInlineFrame(raw);
+  if (inlineFrame) atob((raw as { frames: { imageBase64: string }[] }).frames[0]!.imageBase64);
+  const serialized = inlineFrame ? raw : await dehydrate(raw, key.videoId, images);
+  const payload = JSON.stringify(serialized);
+  return { images, payload, contentHash: await sha256(payload), inlineFrame };
+}
+
+async function dehydrate(value: Json, videoId: string, images: ImageWrite[]): Promise<Json> {
+  if (Array.isArray(value)) return Promise.all(value.map((item) => dehydrate(item, videoId, images)));
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, Json> = {};
+  for (const [name, item] of Object.entries(value)) {
+    if (name === 'imageBase64' && typeof item === 'string') {
+      const bytes = Uint8Array.from(atob(item), (c) => c.charCodeAt(0));
+      const key = await videoImageKey(videoId, bytes);
+      images.push({ key, bytes });
+      out[name] = { r2Image: key };
+    } else out[name] = await dehydrate(item, videoId, images);
+  }
+  return out;
 }

@@ -1,14 +1,14 @@
 import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnostics';
 import { getVideoFrames, validateFrameResponse, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
 import { VerifiedStoryboardSheet } from '../../../lib/verified-storyboard';
-import { sheetKey } from '../../../lib/video-resources';
+import { sheetKey, storyboardSheetSource } from '../../../lib/video-resources';
 import { VerifiedFrame } from '../../../lib/verified-frame';
 import type { VerifiedImage } from '../../../lib/verified-image';
-import { videoCatalog, videoImageKey } from '../../../lib/video-catalog';
+import { videoCatalog, videoImageKey, prepareVideoAssetContent } from '../../../lib/video-catalog';
 import { sha256 } from '../../../lib/http';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
-import { ALL_COMMENTS_MAX_PAGES, getTranscriptWithCache, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
+import { ALL_COMMENTS_MAX_PAGES, withYouTubeMetadata, getTranscriptWithCache, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
   BrowseOptions,
@@ -105,15 +105,18 @@ export function createYouTubeAgentProvider(
       signal?.throwIfAborted();
       const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
       const sharedCatalog = videoCatalog(env);
-      const result: CachedResult<Storyboard> = await abortable(sharedCatalog
+      const result: CachedResult<Storyboard & { freshness?: Record<string, unknown> }> = await abortable(sharedCatalog
         ? getVideoResource(env, operation, selection.refresh, diagnostic)
         : runYouTubeOperation(env, operation, diagnostic)
           .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
-      // Only a completed cold save can issue a local receipt. Cache and legacy
-      // results keep the independent storage verification path.
-      if (!sharedCatalog || result.cacheStatus !== 'miss') return result;
+      if (!sharedCatalog) return result;
       const board = storyboardSchema.parse(result.value);
-      if (board.videoId !== videoId || !board.manifest) return result;
+      const value = { ...withYouTubeMetadata(board),
+        ...(result.value.freshness ? { freshness: result.value.freshness } : {}) };
+      // A miss includes new saves and partial-cache selections. Reconstruct each
+      // immutable source and check its hash before trusting the completed response.
+      // Aggregated warnings can differ from an older sheet; those use readback.
+      if (result.cacheStatus !== 'miss' || board.videoId !== videoId || !board.manifest) return { ...result, value };
       const verifiedStoryboards = await Promise.all(board.sheets.map(async sheet => {
         const index = sheet.firstFrameIndex / board.manifest!.framesPerSheet;
         if (!Number.isSafeInteger(index)) return undefined;
@@ -121,12 +124,13 @@ export function createYouTubeAgentProvider(
         const reference = result.catalogVersions?.find(ref => ref.kind === key.kind
           && ref.videoId === key.videoId && ref.variant === key.variant);
         if (!reference || reference.imageStorage !== undefined || !/^[a-f0-9]{64}$/.test(reference.contentHash)) return undefined;
-        const bytes = Uint8Array.from(atob(sheet.imageBase64), c => c.charCodeAt(0));
-        return new VerifiedStoryboardSheet(env.VIDEO_ASSETS, reference, { ...board, sheets: [sheet] },
-          await videoImageKey(videoId, bytes));
+        const source = storyboardSheetSource(board, index);
+        const content = await prepareVideoAssetContent(key, source);
+        if (content.contentHash !== reference.contentHash || content.images.length !== 1) return undefined;
+        return new VerifiedStoryboardSheet(env.VIDEO_ASSETS, reference, source, content.images[0]!.key);
       }));
       signal?.throwIfAborted();
-      return { ...result, verifiedStoryboards: verifiedStoryboards.filter((receipt): receipt is VerifiedStoryboardSheet => !!receipt) };
+      return { ...result, value, verifiedStoryboards: verifiedStoryboards.filter((receipt): receipt is VerifiedStoryboardSheet => !!receipt) };
     },
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),

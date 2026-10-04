@@ -1,5 +1,7 @@
+import { projectSessionPayload as projection } from '../../lib/session-payload';
+export { canonicalJson as canonicalSessionPayload } from '../../lib/canonical-json';
 import type { VerifiedImage } from '../../lib/verified-image';
-import { VerifiedStoryboardSheet, storyboardEnvelopeFields } from '../../lib/verified-storyboard';
+import { VerifiedStoryboardSheet } from '../../lib/verified-storyboard';
 import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
@@ -10,41 +12,6 @@ export interface SessionCatalogReference {
   asset: VideoAssetReference;
   overrides: Record<string, unknown>;
   omitted: string[];
-}
-
-// Only response-envelope fields may differ from the immutable source payload.
-// Transcript text, comments and image bytes must match the referenced version.
-const envelopeFields = new Set(['meta', 'freshness', 'selection', 'failures']);
-export function canonicalSessionPayload(value: unknown): string {
-  return JSON.stringify(value, (_key, item) =>
-    item && typeof item === 'object' && !Array.isArray(item)
-      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
-      : item,
-  );
-}
-function projection(source: unknown, value: unknown): Omit<SessionCatalogReference, 'asset'> | undefined {
-  if (
-    !source ||
-    !value ||
-    typeof source !== 'object' ||
-    typeof value !== 'object' ||
-    Array.isArray(source) ||
-    Array.isArray(value)
-  )
-    return;
-  const a = source as Record<string, unknown>,
-    b = value as Record<string, unknown>;
-  const overrides: Record<string, unknown> = {},
-    omitted: string[] = [];
-  for (const field of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    if (canonicalSessionPayload(a[field]) === canonicalSessionPayload(b[field])) continue;
-    if (!envelopeFields.has(field)) return;
-    if (b[field] === undefined) omitted.push(field);
-    else overrides[field] = b[field];
-  }
-  // Keep source arrays and images out of Durable Object SQLite.
-  if (JSON.stringify(overrides).length > 32_000) return;
-  return { overrides, omitted };
 }
 
 /** Public source persistence only. No session IDs, prompts, analyses or citations. */
@@ -95,23 +62,20 @@ export class SessionCatalog {
           const payload = value as Record<string, unknown>;
           const overrides = Object.fromEntries(['meta', 'failures', 'freshness']
             .filter(key => payload[key] !== undefined).map(key => [key, payload[key]]));
-          if (JSON.stringify(overrides).length > 32_000) throw new Error('Session envelope is too large.');
-          onVerifiedImages?.([image]);
-          return { asset, overrides,
-            omitted: ['meta', 'failures', 'freshness'].filter(key => payload[key] === undefined) };
+          if (JSON.stringify(overrides).length <= 32_000) {
+            onVerifiedImages?.([image]);
+            return { asset, overrides,
+              omitted: ['meta', 'failures', 'freshness'].filter(key => payload[key] === undefined) };
+          }
+          // A large envelope may be identical to storage. Let projection decide.
         }
       }
       if (kind === 'storyboard_sheet') {
-        const image = verifiedStoryboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
+        const verified = verifiedStoryboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
           ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
-        if (image) {
-          const payload = value as Record<string, unknown>;
-          const overrides = Object.fromEntries(storyboardEnvelopeFields
-            .filter(key => payload[key] !== undefined).map(key => [key, payload[key]]));
-          if (JSON.stringify(overrides).length > 32_000) throw new Error('Session envelope is too large.');
-          onVerifiedImages?.([image]);
-          return { asset, overrides,
-            omitted: storyboardEnvelopeFields.filter(key => payload[key] === undefined) };
+        if (verified) {
+          onVerifiedImages?.([verified.image]);
+          return { asset, ...verified.projection };
         }
       }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);

@@ -13,15 +13,16 @@ just confirmed its completed save and returned the same bytes. Saved-session
 reads also downloaded the images, then issued separate HEAD requests before
 creating previews.
 
-The provider now creates a private, request-local receipt for each returned sheet
-with an exact catalog reference. Session attachment checks that receipt against
+The provider creates a private, request-local receipt only when the reconstructed
+per-sheet source hashes to the returned catalog reference. Persistence and receipt
+verification share the same serializer and per-sheet source builder. Session attachment checks that receipt against
 the bucket, immutable reference, video identity, image bytes, and grid mapping.
 A match avoids the repeated downloads. The manifest still uses independent
 storage verification. Restored sessions hash the JPEGs they already download and
 carry that verification into preview creation, avoiding the extra HEAD requests.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'actorBkg':'#e8eef5','actorTextColor':'#152536','actorBorder':'#536779','signalColor':'#536779','signalTextColor':'#536779','labelBoxBkgColor':'#e8eef5','labelTextColor':'#152536','sequenceNumberColor':'#ffffff'}}}%%
+%%{init: {'theme':'base','themeVariables':{'actorBkg':'#e8eef5','actorTextColor':'#152536','actorBorder':'#536779','signalColor':'#536779','labelBoxBkgColor':'#e8eef5','labelTextColor':'#152536','sequenceNumberColor':'#ffffff'}}}%%
 sequenceDiagram
     autonumber
     participant C as Coordinator
@@ -70,8 +71,17 @@ Receipts have private fields and exist only within a request. A serialized objec
 cannot authorize the fast path. Cache hits, coalesced or stale results, missing
 references, and legacy results still use storage verification. A mismatched
 receipt falls back to the verifier, which rejects changed bytes or mapping.
-Only metadata, selection, and freshness envelopes can differ. Envelope size
-limits and cancellation/session-generation checks remain in effect.
+Only metadata, selection, and freshness envelopes can differ. Receipts retain a
+snapshot of the verified source, so session overrides contain only actual changes.
+An oversized override falls back to normal storage verification in both storyboard
+and frame paths. Envelope size limits and cancellation/session-generation checks
+remain in effect.
+
+Partial-cache misses can include verified older sheets as well as newly saved
+sheets. Matching per-sheet hashes permit receipts for both. Merged warning metadata
+may differ from an individual stored source, in which case readback verifies the
+projection. Normalization strips unknown content fields while preserving the
+supported freshness and provider metadata.
 
 Tests cover cold and restored selections, receipt serialization, byte/reference/
 bucket/mapping mismatches, extra payload fields, envelope changes, oversized
@@ -98,6 +108,8 @@ Tested Worker: `5d6a0f0d-f3ff-4d21-bbe7-f26f070eec71`, deployed at
 17:30:40 UTC to 100% of traffic from implementation commit `d0b5dad`.
 The deployment used `--containers-rollout=none`. No container image, migration,
 or secret changed. This deployment remains active.
+
+The timings below precede the review hardening that adds the explicit hash check.
 
 The tests used the authenticated production agent API and its real storyboard
 tool. Fresh requests explicitly requested source refresh; classification confirmed

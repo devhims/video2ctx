@@ -925,7 +925,9 @@ test('completed storyboard saves avoid sheet readback and restored previews avoi
       const result = await sessionProvider(p, reopen()).storyboard!(id, undefined, { maxSheets: 6 });
       expect(result.sessionReused).toBe(true);
       await preview(result);
+      return result;
     });
+    expect(warm.value.value.sheets).toEqual(cold.value.value.sheets);
     expect(warm.diagnostics.counters.catalogR2Gets).toBe(13); // Verify persisted bytes after restoring.
     expect(warm.diagnostics.counters.previewR2Heads ?? 0).toBe(0);
     const fallback = await captureVisualWork('tool', 'storyboard', () => saveStoryboardPreviews(
@@ -982,7 +984,7 @@ test('storyboard receipts allow envelope changes but keep images and mapping out
     expect(reference.omitted).toEqual(['selection']);
     expect(await backend.read(reference)).toEqual(value);
     await expect(backend.pin('storyboard_sheet', id, 'unused', { ...value, meta: { warnings: ['x'.repeat(32001)] } },
-      Date.now(), versions, undefined, undefined, [receipt])).rejects.toThrow('envelope is too large');
+      Date.now(), versions, undefined, undefined, [receipt])).rejects.toThrow('does not match');
   } finally { read.mockRestore(); }
 });
 
@@ -1034,4 +1036,144 @@ test.each(['delete', 'cancel', 'save-failure'] as const)('storyboard %s cannot a
     expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
     expect(store.brief().assets).toEqual([]);
   });
+});
+
+test('a coordinator payload must match its stored hash before it can receive a storyboard receipt', async () => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId(), stored = receiptStoryboard(id);
+  const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, stored, Date.now(), 60000);
+  const changed = structuredClone(stored);
+  changed.sheets[0]!.imageBase64 = '/9j/AQ==';
+  const getOrLoad = async () => JSON.stringify({ ok: true, value: changed, cacheStatus: 'miss', catalogVersions: versions, fetchedAt: Date.now() });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const result = await createYouTubeAgentProvider(configured).storyboard!(id);
+  expect(result.verifiedStoryboards ?? []).toHaveLength(0);
+  await expect(new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', result.value, Date.now(), versions,
+    undefined, undefined, result.verifiedStoryboards)).rejects.toThrow('does not match');
+});
+
+test.each(['storyboard', 'frame'] as const)('large unchanged %s metadata must remain attachable with a receipt', async kind => {
+  const { VerifiedStoryboardSheet } = await import('../src/lib/verified-storyboard');
+  const { VerifiedFrame } = await import('../src/lib/verified-frame');
+  const id = videoId(), meta = { partial: false, warnings: ['x'.repeat(32001)] };
+  const board = { ...receiptStoryboard(id), meta };
+  const frame = { timestampMs: 1000, width: 640, height: 360, mimeType: 'image/jpeg' as const, imageBase64: '/9j/AA==' };
+  const frames = { videoId: id, frames: [frame], meta, failures: [] };
+  const value = kind === 'storyboard' ? board : frames;
+  // The lower-level catalog can contain historical envelopes beyond today's frame schema limits.
+  const versions = kind === 'storyboard'
+    ? await saveVideoResource(env, { kind, id, maxSheets: 1 }, value, Date.now(), 60000)
+    : [await catalog().save({ videoId: id, kind: 'frame', variant: 'v1:640:1000' }, value, Date.now(), 60000, true, {})];
+  const receipt = kind === 'storyboard' ? new VerifiedStoryboardSheet(env.VIDEO_ASSETS, versions[0]!, board, 'unused')
+    : new VerifiedFrame(env.VIDEO_ASSETS, versions[0]!, frame, 'unused');
+  const backend = new SessionCatalog(env);
+  const reference = await backend.pin(kind === 'storyboard' ? 'storyboard_sheet' : 'frame', id, 'unused', value, Date.now(), versions,
+    undefined, receipt instanceof VerifiedFrame ? [receipt] : undefined, receipt instanceof VerifiedStoryboardSheet ? [receipt] : undefined);
+  expect(reference.overrides).toEqual({});
+  expect(await backend.read(reference)).toEqual(value);
+});
+
+test('provider normalization drops unknown storyboard content while preserving freshness and provider metadata', async () => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId(), value = receiptStoryboard(id), at = Date.now();
+  const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, value, at, 60000);
+  const getOrLoad = async () => JSON.stringify({ ok: true, value: { ...value, extra: 'ignored', sheets: value.sheets.map(s => ({ ...s, extra: 'ignored' })) },
+    cacheStatus: 'miss', catalogVersions: versions, fetchedAt: at });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const result = await createYouTubeAgentProvider(configured).storyboard!(id);
+  expect(result.value).not.toHaveProperty('extra');
+  expect(result.value.sheets[0]).not.toHaveProperty('extra');
+  expect(result.value).toMatchObject({ freshness: { state: 'fresh', fetchedAt: at }, meta: { source: 'video2ctx', provider: 'youtube' } });
+  const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    const backend = new SessionCatalog(env);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', result.value, at, versions, undefined, undefined, result.verifiedStoryboards);
+    expect(read).not.toHaveBeenCalled();
+    expect(await backend.read(reference)).toEqual(result.value);
+  } finally { read.mockRestore(); }
+});
+
+test.each([false, true])('partial-hit storyboard misses verify source hashes, differing warnings=%s', async differingWarnings => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { storyboardMetadata } = await import('../src/agents/providers/youtube/storyboard');
+  const { captureVisualWork } = await import('../src/lib/visual-diagnostics');
+  const id = videoId(), one = receiptStoryboard(id);
+  const board = { ...one, frameCount: 4, manifest: { ...one.manifest, totalSheets: 2, lastSampleMs: 30000 },
+    sheets: [one.sheets[0]!, { ...one.sheets[0]!, firstFrameIndex: 2, imageBase64: '/9j/AQ==' }] };
+  const old = { ...board, sheets: [board.sheets[0]!], meta: { partial: false, warnings: differingWarnings ? ['old warning'] : [] } };
+  const manifestRefs = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, storyboardMetadata(board), Date.now(), 60000);
+  const oldRefs = await saveVideoResource(env, { kind: 'storyboard', id, sheetIndexes: [0] }, old, Date.now(), 60000);
+  const getOrLoad = vi.fn(async () => {
+    const hit = await catalog().readVersion<typeof board>(oldRefs[0]!);
+    expect(hit).not.toBeNull();
+    const fresh = { ...board, sheets: [board.sheets[1]!], meta: { partial: false, warnings: differingWarnings ? ['new warning'] : [] } };
+    const freshRefs = await saveVideoResource(env, { kind: 'storyboard', id, sheetIndexes: [1] }, fresh, Date.now(), 60000);
+    const combined = { ...board, selection: { mode: 'spread' }, sheets: [...hit!.value.sheets, ...fresh.sheets],
+      meta: { partial: false, warnings: [...hit!.value.meta.warnings, ...fresh.meta.warnings] } };
+    return JSON.stringify({ ok: true, value: combined, cacheStatus: 'miss', catalogVersions: [...manifestRefs, ...oldRefs, ...freshRefs], fetchedAt: Date.now() });
+  });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  // Coordinator work has its own production diagnostic scope. Count attachment separately.
+  const fetched = await createYouTubeAgentProvider(configured).storyboard!(id, undefined, { maxSheets: 2 });
+  expect(fetched.verifiedStoryboards).toHaveLength(differingWarnings ? 0 : 2);
+  await within(`partial-storyboard-receipts-${differingWarnings}`, async ({ store, reopen }) => {
+    const upstream = vi.fn(async () => fetched);
+    const p = { storyboard: upstream } as unknown as YouTubeAgentProvider;
+    const cold = await captureVisualWork('tool', 'storyboard', () => sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 2 }));
+    expect(cold.diagnostics.counters.catalogR2Gets).toBe(differingWarnings ? 5 : 1);
+    const warm = await sessionProvider(p, reopen()).storyboard!(id, undefined, { maxSheets: 2 });
+    expect(warm.sessionReused).toBe(true);
+    expect(warm.value.sheets).toEqual(cold.value.value.sheets);
+    expect(warm.value.meta).toEqual(cold.value.value.meta);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+});
+
+test.each(['inline', 'non-hex', 'fractional-index'] as const)('provider rejects storyboard receipts for %s references or mappings', async mode => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId(), value = receiptStoryboard(id);
+  const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, value, Date.now(), 60000);
+  if (mode === 'inline') versions[0]!.imageStorage = 'inline';
+  if (mode === 'non-hex') versions[0]!.contentHash = 'z'.repeat(64);
+  if (mode === 'fractional-index') Object.assign(value.sheets[0]!, { firstFrameIndex: 1, frameCount: 1 });
+  const getOrLoad = async () => JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions: versions, fetchedAt: Date.now() });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const result = await createYouTubeAgentProvider(configured).storyboard!(id);
+  expect(result.verifiedStoryboards).toHaveLength(0);
+});
+
+test('storyboard receipt fallback can accept a large envelope identical to the stored version', async () => {
+  const { VerifiedStoryboardSheet } = await import('../src/lib/verified-storyboard');
+  const id = videoId(), board = receiptStoryboard(id);
+  board.meta.warnings = ['x'.repeat(32001)];
+  const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, board, Date.now(), 60000);
+  // A stale receipt envelope cannot authorize a large override, but normal readback can verify it.
+  const receipt = new VerifiedStoryboardSheet(env.VIDEO_ASSETS, versions[0]!, { ...board, meta: { partial: false, warnings: [] } }, 'unused');
+  const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    const reference = await new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', board, Date.now(), versions, undefined, undefined, [receipt]);
+    expect(read).toHaveBeenCalledOnce();
+    expect(reference.overrides).toEqual({});
+  } finally { read.mockRestore(); }
+});
+
+test('receipt serialization preserves existing split-image and inline-frame storage hashes', async () => {
+  const { prepareVideoAssetContent, videoImageKey } = await import('../src/lib/video-catalog');
+  const { sha256 } = await import('../src/lib/http');
+  const id = videoId(), value = { z: 1, a: { imageBase64: '/9j/AA==' } };
+  const imageKey = await videoImageKey(id, Uint8Array.from(atob(value.a.imageBase64), c => c.charCodeAt(0)));
+  const key = { videoId: id, kind: 'storyboard_sheet', variant: 'compatibility' };
+  const expected = JSON.stringify({ z: 1, a: { imageBase64: { r2Image: imageKey } } });
+  const prepared = await prepareVideoAssetContent(key, value);
+  expect(prepared.payload).toBe(expected); // Intentionally not alphabetized.
+  expect(prepared.contentHash).toBe(await sha256(expected));
+  const saved = await catalog().save(key, value, Date.now(), 60000, true, {});
+  expect(saved.contentHash).toBe(prepared.contentHash);
+  const object = await env.VIDEO_ASSETS.get(`youtube/videos/${id}/${key.kind}/${await sha256(key.variant)}/${saved.contentHash}.json`);
+  expect(await object!.text()).toBe(expected);
+  const frameKey = { ...key, kind: 'frame' }, frameValue = { videoId: id, frames: [{ imageBase64: '/9j/AA==' }] };
+  const inline = await prepareVideoAssetContent(frameKey, frameValue, true);
+  expect(inline.payload).toBe(JSON.stringify(frameValue));
+  expect(inline.contentHash).toBe(await sha256(JSON.stringify(frameValue)));
+  expect(inline.images).toHaveLength(0);
 });

@@ -1,11 +1,7 @@
+import { canonicalJson as canonical } from './canonical-json';
 import type { VideoAssetReference } from './video-catalog';
 import type { VideoFrames } from './youtube-frames-contract';
 import { VerifiedImage } from './verified-image';
-
-function canonical(value: unknown): string | undefined {
-  return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-}
 
 /** Request-local receipt from the trusted catalog coordinator, never wire data.
  * Construct only after its successful response confirms completed persistence.
