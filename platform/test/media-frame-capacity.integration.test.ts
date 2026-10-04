@@ -2,17 +2,17 @@ import { env as workerEnv, runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
 const env = workerEnv as Env;
 
-test('shares job admission and keeps FFmpeg recovery capacity separate', async () => {
+test('admits eight batches, rejects a ninth, and keeps FFmpeg capacity separate', async () => {
   const stub = env.MEDIA_FRAME_CAPACITY.getByName('job-capacity');
-  const ids = Array.from({ length: 5 }, () => crypto.randomUUID());
+  const ids = Array.from({ length: 9 }, () => crypto.randomUUID());
   const results = await Promise.all(ids.map(id => stub.acquire(id, 'media-job')));
-  expect(results.filter(r => r.admitted)).toHaveLength(4);
+  expect(results.filter(r => r.admitted)).toHaveLength(8);
   expect((await stub.acquire(ids[0]!, 'media-job')).admitted).toBe(true);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(true);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(true);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(false);
   await stub.release(ids[0]!);
-  expect((await stub.acquire(ids[4]!, 'media-job')).admitted).toBe(true);
+  expect((await stub.acquire(ids[8]!, 'media-job')).admitted).toBe(true);
 });
 
 test('limits active Media calls to eight even across many jobs', async () => {
@@ -51,7 +51,7 @@ test('throttling persists a cooldown that leaves FFmpeg recovery available', asy
 
 test('expired leases recover capacity without trusting in-memory state', async () => {
   const stub = env.MEDIA_FRAME_CAPACITY.getByName('expiry');
-  for (let i = 0; i < 4; i++) await stub.acquire(crypto.randomUUID(), 'media-job');
+  for (let i = 0; i < 8; i++) await stub.acquire(crypto.randomUUID(), 'media-job');
   await runInDurableObject(stub, (_instance, state) => { state.storage.sql.exec('UPDATE leases SET expires = ?', Date.now() - 1); });
   expect((await stub.acquire(crypto.randomUUID(), 'media-job')).admitted).toBe(true);
 });

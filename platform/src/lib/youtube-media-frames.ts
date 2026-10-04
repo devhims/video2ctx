@@ -86,8 +86,9 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
           }
         }
       };
+      // Two workers per batch leave decoding capacity for other admitted batches.
       // The account-wide eight-call admission limit still covers every decoder.
-      await Promise.all(Array.from({ length: Math.min(4, missing.length) }, () => work()));
+      await Promise.all(Array.from({ length: Math.min(2, missing.length) }, () => work()));
       if (frames.length === input.timestampsMs.length) { reason = undefined; break; }
       if (stop || signal.aborted || sourceAttempts >= 3) break;
     }

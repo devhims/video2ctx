@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 
 export type FrameLeaseKind = 'media-job' | 'media-frame' | 'ffmpeg-job';
-const LIMITS: Record<FrameLeaseKind, number> = { 'media-job': 4, 'media-frame': 8, 'ffmpeg-job': 2 };
+const LIMITS: Record<FrameLeaseKind, number> = { 'media-job': 8, 'media-frame': 8, 'ffmpeg-job': 2 };
 export const FRAME_LEASE_MS = 90_000;
 const WINDOW_MS = 15_000;
 const STARTS_PER_WINDOW = 24;

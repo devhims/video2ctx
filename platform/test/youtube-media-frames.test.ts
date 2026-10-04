@@ -25,14 +25,14 @@ function setup(response = vi.fn(async () => new Response(jpeg))) {
 
 beforeEach(() => vi.clearAllMocks());
 
-test('decodes at most four frames at a time and publishes each completed frame', async () => {
+test('decodes at most two frames at a time and publishes each completed frame', async () => {
   let active = 0, peak = 0;
   const response = vi.fn(async () => { peak = Math.max(peak, ++active); await new Promise(resolve => setTimeout(resolve, 5)); active--; return new Response(jpeg); });
   const { env, leases, close } = setup(response), diagnostic = vi.fn(), ready = vi.fn();
   const six = { ...input, timestampsMs: [1000, 2000, 3000, 4000, 5000, 6000] };
   const result = await getYouTubeMediaFrames(env, six, new AbortController().signal, diagnostic, ready);
   expect(result.frames.map(f => f.timestampMs)).toEqual(six.timestampsMs);
-  expect(peak).toBe(4);
+  expect(peak).toBe(2);
   expect(ready).toHaveBeenCalledTimes(6);
   expect(ready.mock.calls.map(([frame]) => frame.timestampMs).sort((a, b) => a - b)).toEqual(six.timestampsMs);
   expect(close).toHaveBeenCalledOnce();
@@ -47,7 +47,7 @@ test('retains completed frames when another timestamp cannot be clipped', async 
     if (time === 2) throw new FrameMediaError('unsupported');
     return { bytes: new Uint8Array([1]), time: 0, duration: 1 };
   });
-  expect((await getYouTubeMediaFrames(env, input, new AbortController().signal)).frames.map(f => f.timestampMs)).toEqual([1000, 3000]);
+  expect((await getYouTubeMediaFrames(env, input, new AbortController().signal)).frames.map(f => f.timestampMs)).toEqual([1000]);
 });
 
 test('9423 cools shared admission and prevents further dispatch', async () => {
@@ -153,7 +153,7 @@ test('a service failure stops remaining decode work instead of retrying sources'
   vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () { yield source; yield { ...source, clip: alternate }; });
   const result = await getYouTubeMediaFrames(env, { ...input, timestampsMs: [1000,2000,3000,4000,5000,6000] }, new AbortController().signal);
   expect(result.reason).toBe('decode');
-  expect(response).toHaveBeenCalledTimes(4);
+  expect(response).toHaveBeenCalledTimes(2);
   expect(alternate).not.toHaveBeenCalled();
 });
 

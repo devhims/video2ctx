@@ -187,3 +187,17 @@ Both finished with answered outcomes and one frame-tool call. The first retained
 the API's `/v1` prefix; checking the actual public route returned all 12 JPEGs.
 The deterministic alias and rollback integration tests exercise the exact review
 regression; these live checks establish the deployed normal paths still work.
+
+### Eight-batch configuration follow-up
+
+The proposed configuration now admits eight Media batches, with two frame workers
+per batch and the existing eight-call global decoder limit. The 24-start rolling
+window, two-second admission budget, and 90-second abandoned-work lease remain
+unchanged. This permits more batches to prepare sources without increasing the
+maximum simultaneous Cloudflare decoding operations. It does not implement fair
+queuing or establish a higher sustained request rate.
+
+All 19 focused frame/admission unit tests, five capacity integration tests, and
+TypeScript passed. The live results above used the earlier four-batch/four-worker
+configuration. The new eight-batch/two-worker setting is not yet deployed or
+production load-tested.

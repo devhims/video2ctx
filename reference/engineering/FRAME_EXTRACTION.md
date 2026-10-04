@@ -66,11 +66,13 @@ sequenceDiagram
 ```
 
 The `MediaFrameCapacity` Durable Object stores only random lease IDs, start times,
-and cooldowns. One shared account quota allows four Media batches, eight active
+and cooldowns. One shared account quota allows eight Media batches, eight active
 Media calls, and at most 24 Media call starts in any 15-second window. These are
 our conservative rollout settings, not Cloudflare's published quota. Each batch
-prepares and decodes at most four frames simultaneously. Admission waits at most
-two seconds. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
+prepares and decodes at most two frames simultaneously. Admission waits at most
+two seconds. Eight admitted batches do not guarantee eight batches decoding at
+once, and admission is not a fair queue. The rate limit and admission timeout
+can still constrain bursts; sustained-load tuning remains outstanding. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
 FFmpeg recovery has a separate two-job limit, matching the existing container pool.
 Completed or failed calls retain their rate accounting. Leases expire after 90
 seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
