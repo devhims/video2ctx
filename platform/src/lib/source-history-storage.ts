@@ -2,6 +2,7 @@ import { ApiError, sha256 } from './http';
 import { videoCatalog, type VideoAssetReference } from './video-catalog';
 import { videoResourceKey } from './video-resources';
 import { readYouTubeCacheEntry } from './youtube-cache-coordinator';
+import { readSourceResponse } from './source-response-storage';
 import { routeInput, withYouTubeMetadata } from './youtube';
 import { sourceSnapshotSchema, type SaveSourceInput, type SaveReferencedSource, type SourceReference, type SourceSnapshot } from './source-history';
 
@@ -38,9 +39,15 @@ export async function referenceSource(env: Env, value: SaveSourceInput): Promise
   const { input, snapshot } = value;
   const cachedPublicData = async (type: string, id: string): Promise<Record<string, unknown>> => {
     const key = `youtube:v1:${await sha256(JSON.stringify([type, id]))}`;
-    const cached = await readYouTubeCacheEntry<Record<string, unknown>>(env, key, type);
-    if (!cached) throw new ApiError(409, 'SOURCE_ASSET_NOT_SAVED', 'Source data has not finished saving. Inspect the source again.');
-    return withYouTubeMetadata(cached.value);
+    const [saved, cached] = await Promise.all([
+      readSourceResponse<Record<string, unknown>>(env, key, type),
+      readYouTubeCacheEntry<Record<string, unknown>>(env, key, type),
+    ]);
+    // Prefer the latest completed response, including when KV retains an older
+    // value. KV remains the compatibility path for responses fetched before this rollout.
+    const response = saved && (!cached || saved.fetchedAt >= cached.fetchedAt) ? saved : cached;
+    if (!response) throw new ApiError(409, 'SOURCE_ASSET_NOT_SAVED', 'Source data has not finished saving. Inspect the source again.');
+    return withYouTubeMetadata(response.value);
   };
   if (snapshot.kind === 'search') {
     const resolved = routeInput(input);

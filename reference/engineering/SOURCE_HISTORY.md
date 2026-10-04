@@ -8,6 +8,12 @@ Video datasets reference immutable catalog versions through `(videoId, kind, var
 
 Search, playlist, and channel caches expire. When remembering them, the platform copies the existing public response into a content-addressed JSON object under `youtube/source-history/<hash>.json` in `VIDEO_ASSETS`. Search objects contain only public results, without the user's query. Original inputs, user IDs, selections, and errors stay in the user DO. This extends persistence for history without changing the provider cache policy.
 
+Fresh channel, playlist, and video-search responses also write a public response under `youtube/source-responses/v1/<hash-of-cache-key>.json` before extraction reports success. This R2 record makes immediate history saves independent of KV propagation and cached negative lookups, including after coordinator eviction. Search records contain only public video results, never the query, filters, or operation.
+
+Each record is eligible for history saves for the same retention window as its KV entry, at least seven days. Its deadline does not expire already-saved history objects. History reads both R2 and KV and uses the response with the latest fetch timestamp. Existing KV responses from before rollout remain usable.
+
+A failed R2 write prevents a fresh success. The existing stale-response fallback still applies when a prior KV response is available. The provider cache and freshness policies are unchanged. Only the platform needs deployment, with no migration or new binding.
+
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'background':'#ffffff','actorBkg':'#e2e8f0','actorTextColor':'#0f172a','actorBorder':'#64748b','signalColor':'#334155','signalTextColor':'#334155','sequenceNumberColor':'#ffffff','noteBkgColor':'#f1f5f9','noteTextColor':'#0f172a'}}}%%
 sequenceDiagram

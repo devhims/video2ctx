@@ -5,6 +5,7 @@ import { ApiError, safeErrorLog } from './http';
 import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
+import { saveSourceResponse } from './source-response-storage';
 import { isVisualSelection, readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
@@ -212,6 +213,10 @@ export class YouTubeCacheCoordinatorCore {
           entry.catalogVersions = await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
+      // A fresh public source must be immediately available to history saves.
+      // KV may still serve the negative lookup from before this extraction.
+      await saveSourceResponse(this.env, request.cacheKey, request.resourceType, entry,
+        cacheRetentionSeconds(request.maxAgeMs) * 1000);
       try {
         countVisualWork('legacyKvPuts');
         await visualSpan('legacy_cache', () => this.env.YOUTUBE_CACHE.put(request.cacheKey, JSON.stringify(entry), {
