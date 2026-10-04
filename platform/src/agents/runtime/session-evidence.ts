@@ -608,6 +608,7 @@ export class SessionEvidenceStore implements SessionAccess {
           result.catalogVersions,
           images => { verifiedImages = images; },
           result.verifiedFrames,
+          result.verifiedStoryboards,
         );
         signal?.throwIfAborted();
         if (generation !== this.generation())

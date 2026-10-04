@@ -40,6 +40,7 @@ export type UniversalInput =
 export type CacheStatus = CoordinatorCacheStatus;
 
 export interface CachedResult<T> {
+  verifiedStoryboards?: import('./verified-storyboard').VerifiedStoryboardSheet[];
   verifiedFrames?: import('./verified-frame').VerifiedFrame[];
   verifiedImages?: VerifiedImage[];
   frameTimingsMs?: { sessionLookup: number; retrieval: number; sessionPin: number };

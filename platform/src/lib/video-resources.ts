@@ -210,6 +210,14 @@ export async function readVideoResource(
   return stored ?? (op.kind === 'video' ? store.read({ ...key, kind: 'video' }) : null);
 }
 
+/** Immutable per-sheet source shape. Keep persistence and receipt hashing identical. */
+export function storyboardSheetSource(board: Storyboard, index: number): Storyboard {
+  const sheet = board.sheets.find(sheet => sheet.firstFrameIndex === index * (board.manifest?.framesPerSheet ?? 0));
+  if (!board.manifest || !Number.isSafeInteger(index) || !sheet) throw new Error('Unexpected storyboard sheet.');
+  return { ...board, sheets: [sheet], selection: { mode: 'indexes', requestedSheetIndexes: [index] },
+    meta: { ...board.meta, partial: false } };
+}
+
 export async function saveVideoResource(
   env: Env,
   op: VideoResourceOperation,
@@ -240,12 +248,7 @@ export async function saveVideoResource(
             throw new Error('Unexpected storyboard sheet.');
           return {
             key: await sheetKey(board, index),
-            value: {
-              ...board,
-              sheets: [sheet],
-              selection: { mode: 'indexes', requestedSheetIndexes: [index] },
-              meta: { ...board.meta, partial: false },
-            },
+            value: storyboardSheetSource(board, index),
             fetchedAt,
             maxAgeMs,
             complete: true,
