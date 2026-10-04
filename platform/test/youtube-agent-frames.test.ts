@@ -152,3 +152,40 @@ test('frame tool forwards request-local image verification to previews without p
   expect(ctx.saveFramePreviews).toHaveBeenCalledWith(frames,ctx.signal,verifiedImages);
   expect(JSON.stringify(result)).not.toContain('verifiedImages');
 });
+
+
+test('analyzes a selected batch without treating the broader question as extraction coverage', async () => {
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    const user = call.prompt.find(message => message.role === 'user');
+    if (!user || !Array.isArray(user.content)) throw new Error('Missing analyst input');
+    const text = user.content.find(part => part.type === 'text');
+    if (!text || text.type !== 'text') throw new Error('Missing frame mapping');
+    const payload = JSON.parse(text.text);
+    expect(payload.researchQuestion).toContain('1234 and 5678');
+    expect(payload.analysisScope.suppliedTimestampsMs).toEqual([1234]);
+    expect(user.content.filter(part => part.type === 'file')).toHaveLength(1);
+    expect(call.prompt.filter(message => message.role === 'system').map(message => message.content).join(' '))
+      .toContain('Only the retrieval tool determines extraction coverage');
+    return { content: [{ type: 'text', text: JSON.stringify({ findings: [{ observation: 'A chart.', timestampsMs: [1234] }], warnings: [] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+      usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } } };
+  } });
+  const result = await createFrameAnalyst(model)({ frames, focus: 'Describe this batch', researchQuestion: 'Describe frames at 1234 and 5678.',
+    signal: new AbortController().signal, modelCallId: 'batch-scope' });
+  expect(result.findings[0]!.timestampsMs).toEqual([1234]);
+});
+
+test('accepts one grounded finding for every image in a six-frame batch', async () => {
+  const timestamps = [1000, 2000, 3000, 4000, 5000, 6000];
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    const user = call.prompt.find(message => message.role === 'user');
+    if (!user || !Array.isArray(user.content)) throw new Error('Missing analyst input');
+    expect(user.content.filter(part => part.type === 'file')).toHaveLength(6);
+    return { content: [{ type: 'text', text: JSON.stringify({ findings: timestamps.map(time => ({ observation: 'A visible chart.', timestampsMs: [time] })), warnings: [] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+      usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } } };
+  } });
+  const result = await createFrameAnalyst(model)({ frames: { ...frames, frames: timestamps.map(timestampMs => ({ ...frames.frames[0]!, timestampMs })) },
+    focus: 'Describe each frame', signal: new AbortController().signal, modelCallId: 'six-frames' });
+  expect(result.findings.flatMap(f => f.timestampsMs)).toEqual(timestamps);
+});

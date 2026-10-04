@@ -93,9 +93,14 @@ bounded to a 2 MiB index and 50,000 declared samples across tracks. This can sen
 longer progressive videos to FFmpeg, especially when they contain audio tracks.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
-fragment data offsets use FFmpeg. A sharper unsupported source triggers recovery
-instead of silently choosing a lower-resolution Media source. Existing quality
-warnings are preserved.
+fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
+the Media path prioritizes a progressive source before other adaptive formats,
+then tries another client or proxy for only the missing frames.
+This can select progressive 360p after adaptive 720p fails. Below-720p output keeps
+an explicit quality warning. A request tries at most three prepared sources across
+at most four configured proxy routes, within the same 20-second Media deadline
+and aggregate byte limit. Completed frames are never extracted again. Source
+read failures are recorded separately from decoder failures.
 Selected media ranges are limited to 4 MiB, keyframe groups to 1,000 samples and 30
 seconds, and aggregate source reads to 40 MiB per Media attempt. Sources must honor
 exact HTTP byte ranges; full-file HTTP 200 responses are rejected without reading
@@ -103,9 +108,11 @@ their bodies. Input limits are deliberate recovery triggers, not user-facing vid
 limits. The original library and container behavior is retained.
 
 Deployment requires the new `MEDIA` binding and SQLite-backed `MediaFrameCapacity`
-namespace (migration `v8`) in the Worker. No D1 data migration, container image
-change, or capacity increase is required. The existing images remain the rollback
-path. Production validation was explicitly authorized before PR review. Local development can set
+namespace (migration `v8`) in the Worker. No D1 data migration or capacity increase is required. The initial Media
+integration did not change containers. The subsequent source-recovery fix also
+requires rebuilding the frames image so confirmed bot challenges can try another
+proxy within the existing job deadline. Ordinary authentication restrictions do
+not trigger that retry. Production validation was explicitly authorized before PR review. Local development can set
 `YOUTUBE_FRAMES_BACKEND:container`; Media decoding requires Cloudflare's remote
 binding. Safe extraction diagnostics identify `backend: media` and admission,
 source preparation, and decode stages separately from container attempts.
@@ -523,3 +530,36 @@ event is recorded as a route failure, the slot that served a successful job clea
 its cooldown, and a `RATE_LIMITED` job cools its slot for longer. With static ISP
 proxies a bad IP tends to stay bad, so this memory, not the per-job retry, is what
 stops later jobs from paying the 3 to 5 second check on the same proxy again.
+
+
+### Recovery after a blocked frame source
+
+The October 4 run `fe52fe8c-6b51-4864-9ef8-b987a250b791` needed three tool calls
+for six frames of `tXcT3OE7G1g`. Player bot challenges stopped the first call.
+The second returned one 720p frame while the other adaptive range reads received
+403. The third recovered the remaining five through progressive 360p and FFmpeg.
+
+Media source discovery now remains open while the caller decodes each batch.
+When ranges fail, it tries progressive recovery, other candidates, client profiles, and the
+bounded healthy-first proxy order. Only missing timestamps enter
+the next batch. Every in-flight frame settles before switching sources, and closing
+the iterator releases the active transport. Cancellation, quota cooldowns, byte
+limits, and the Media deadline still stop recovery. FFmpeg remains the final path.
+
+A confirmed player bot challenge marks its proxy rate limited and moves source
+discovery to the next configured route. Reading an index alone no longer marks a
+proxy healthy. A route with failed frame reads cannot clear a cooldown. A 403 for
+one format does not alone condemn the whole proxy, since another format can work.
+The frames container also retries confirmed bot challenges, but keeps ordinary
+login restrictions terminal. It does not reset the extraction deadline.
+
+
+The frame analyst receives an explicit selected-batch scope. It must not label
+other timestamps in the original question as missing simply because another
+analysis call owns them. Retrieval diagnostics remain the source of extraction
+coverage; quality warnings for supplied images remain visible. Each image has an
+explicit numbered timestamp label, and the schema accepts six findings so a
+six-frame batch can describe every frame individually.
+
+See [production recovery validation](performance/frame-recovery-2026-10-04.md) for
+the deployed versions, per-run results, and remaining reliability limits.

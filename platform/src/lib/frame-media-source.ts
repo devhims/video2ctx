@@ -21,18 +21,24 @@ export function frameMediaRangeRequest(url: string, offset: number, length: numb
   } });
 }
 
-/** Resolve and read on one proxy route. Source URLs never leave this request-scoped closure. */
-export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth: number, signal: AbortSignal, record: (event: ExtractionAttempt['events'][number]) => void = () => {}) {
+/** Yield resolution-ordered sources on bounded proxy routes. Closing the iterator releases its transport. */
+export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWidth: number, signal: AbortSignal, record: (event: ExtractionAttempt['events'][number]) => void = () => {}) {
   const urls = normalizedProxyUrls(env);
   if (!urls?.length) throw new FrameMediaError('source');
   const plan = await planProxyOrder(env, urls);
   const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
-  let totalBytes = 0, preferredWidth = 0;
-  for (const slot of plan.order.slice(0, 2)) {
+  let totalBytes = 0;
+  for (const slot of plan.order.slice(0, 4)) {
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
-    let keep = false, answered = false, throttled = false;
-    const capture = (event: unknown) => { const parsed = extractionEventSchema.safeParse(event); if (parsed.success) record(parsed.data); };
+    let answered = false, throttled = false, served = false, sourceFailed = false;
+    const capture = (event: unknown) => {
+      const value = event as { reason?: unknown; code?: unknown };
+      const botChallenge = typeof value.reason === 'string' && /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(value.reason);
+      if (botChallenge || value.code === 'RATE_LIMITED') throttled = true;
+      const parsed = extractionEventSchema.safeParse({ ...value, proxySlot: slot, ...(botChallenge ? { failureReason: 'bot_challenge' } : {}) });
+      if (parsed.success) record(parsed.data);
+    };
     const close = () => frameAbortable(AbortSignal.timeout(1000), () => transport.close()).catch(() => undefined);
     const tracked: typeof fetch = async (input, init = {}) => {
       const active = AbortSignal.any([signal, AbortSignal.timeout(8000), ...(init.signal ? [init.signal] : [])]);
@@ -53,15 +59,17 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
       for (const profile of [1, 0]) {
         const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true, event => capture({ ...event,
           code: event.error ? extractionEventSchema.shape.code.safeParse(safeErrorLog(event.error).errorCode).data ?? 'UNKNOWN' : undefined })));
-        if (!group) continue;
+        if (!group) { if (throttled) break; continue; }
         // The playable source response already identifies ordinary versus live
         // content. Only older/ambiguous responses need a second metadata request.
         if (group.isLive === undefined) metadata ??= await frameAbortable(signal, () => getDetails({ videoId, ...options }));
         if (group.isLive === true || (group.isLive === undefined && metadata?.isLive)) throw new FrameMediaError('unsupported');
-        preferredWidth = Math.max(preferredWidth, ...(group?.candidates.map(candidate => candidate.width ?? 0) ?? []));
-        for (const candidate of group?.candidates.filter(c => c.mimeType.includes('avc1')) ?? []) {
-          // Let FFmpeg try a sharper unsupported source instead of silently reducing detail.
-          if (candidate.width !== undefined && candidate.width < preferredWidth) continue;
+        const [preferred, ...alternates] = group.candidates.filter(c => c.mimeType.includes('avc1'));
+        // Prefer detail first, then the progressive source that avoids adaptive range failures.
+        const candidates = preferred ? [preferred, ...alternates.filter(c => c.progressive), ...alternates.filter(c => !c.progressive)] : [];
+        for (const candidate of candidates) {
+          // Resume here only for missing frames.
+          signal.throwIfAborted();
           const url = mediaUrl(candidate.url);
           let size: number | undefined;
           const readRange = async (offset: number, length: number, discoverSize = false) => {
@@ -77,6 +85,7 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
             if (response.status !== 206 || !range || expectedLength < 1 || Number(range[1]) !== offset || Number(range[2]) !== offset + expectedLength - 1
               || !Number.isSafeInteger(Number(range[3])) || Number(range[3]) < offset + expectedLength || (size !== undefined && size !== Number(range[3]))) {
               void response.body?.cancel().catch(() => undefined);
+              sourceFailed = true;
               throw new FrameMediaError('source');
             }
             size = Number(range[3]);
@@ -92,31 +101,36 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
             const read = (offset: number, length: number) => offset >= 0 && length > 0 && offset + length <= prefix.length
               ? Promise.resolve(prefix.slice(offset, offset + length)) : readRange(offset, length);
             const source = await openMp4FrameSource(read, size!);
-            keep = true;
-            return { ...source, slot, profile: group!.profile, formatId: candidate.formatId,
-              get bytesRead() { return totalBytes; }, close: async () => {
-                outcomes.push({ slot, outcome: throttled ? 'rate_limited' : 'success' });
-                await close(); await reportProxyOutcomes(env, plan, outcomes);
+            yield { ...source, slot, profile: group.profile, formatId: candidate.formatId,
+              get bytesRead() { return totalBytes; },
+              clip: async (time: number) => {
+                try { const clip = await source.clip(time); served = true; return clip; }
+                catch (error) { sourceFailed = true; throw error; }
               } };
+            signal.throwIfAborted();
+            if (throttled) break;
           } catch (error) {
             capture({ stage: 'media_source', outcome: 'error', formatId: candidate.formatId, code: 'MEDIA_UNAVAILABLE' });
             console.info({ event: 'media_source_candidate_failure', videoId, slot, formatId: candidate.formatId, ...safeErrorLog(error) });
             signal.throwIfAborted();
+            if (error instanceof FrameMediaError && error.code === 'budget') throw error;
+            if (throttled) break;
           }
         }
+        if (throttled) break;
       }
     } catch (error) {
       capture({ stage: 'player', outcome: 'error', proxySlot: slot, code: extractionEventSchema.shape.code.safeParse(safeErrorLog(error).errorCode).data ?? 'UNKNOWN' });
       console.info({ event: 'media_source_route_failure', videoId, slot, ...safeErrorLog(error) });
       signal.throwIfAborted();
+      if (error instanceof FrameMediaError && error.code === 'budget') throw error;
     }
     finally {
-      if (!keep) {
-        if (throttled) outcomes.push({ slot, outcome: 'rate_limited' });
-        else if (!answered && !signal.aborted) outcomes.push({ slot, outcome: 'route_failure' });
-        await close();
-        await reportProxyOutcomes(env, plan, outcomes.splice(0));
-      }
+      if (throttled) outcomes.push({ slot, outcome: 'rate_limited' });
+      else if (!answered && !signal.aborted) outcomes.push({ slot, outcome: 'route_failure' });
+      else if (served && !sourceFailed && !signal.aborted) outcomes.push({ slot, outcome: 'success' });
+      await close();
+      await reportProxyOutcomes(env, plan, outcomes.splice(0));
     }
   }
   throw new FrameMediaError('unsupported');

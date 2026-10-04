@@ -1,17 +1,18 @@
 import { getYouTubeMediaFrames } from '../src/lib/youtube-media-frames';
-import { openYouTubeFrameSource } from '../src/lib/frame-media-source';
+import { openYouTubeFrameSources } from '../src/lib/frame-media-source';
 import { acquireFrameLease } from '../src/lib/frame-media-admission';
 import { FrameMediaError } from '../src/lib/frame-media-io';
 
-vi.mock('../src/lib/frame-media-source', () => ({ openYouTubeFrameSource: vi.fn() }));
+vi.mock('../src/lib/frame-media-source', () => ({ openYouTubeFrameSources: vi.fn() }));
 vi.mock('../src/lib/frame-media-admission', () => ({ acquireFrameLease: vi.fn() }));
 const input = { videoId: 'abcdefghijk', timestampsMs: [1000, 2000, 3000], maxWidth: 640 };
 const jpeg = new Uint8Array([255,216,255,192,0,17,8,0,48,0,64,3,1,17,0,2,17,0,3,17,0,255,217]);
 
 function setup(response = vi.fn(async () => new Response(jpeg))) {
   const close = vi.fn(async () => {}), clip = vi.fn(async (time: number) => ({ bytes: new Uint8Array([1,2,3]), time: time % 1, duration: 1 }));
-  vi.mocked(openYouTubeFrameSource).mockResolvedValue({ duration: 60, width: 640, height: 360, clip, slot: 0,
-    profile: 'android', formatId: 18, bytesRead: 500, close });
+  const source = { duration: 60, width: 640, height: 360, clip, slot: 0,
+    profile: 'android' as const, formatId: 18, bytesRead: 500 };
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () { try { yield source; } finally { await close(); } });
   const leases: Array<{ kind: string; release: ReturnType<typeof vi.fn>; throttle: ReturnType<typeof vi.fn> }> = [];
   vi.mocked(acquireFrameLease).mockImplementation(async (_env, kind) => {
     const lease = { kind, release: vi.fn(async () => {}), throttle: vi.fn(async () => {}) };
@@ -19,7 +20,7 @@ function setup(response = vi.fn(async () => new Response(jpeg))) {
   });
   const output = vi.fn(() => ({ response }));
   const env = { MEDIA: { input: vi.fn(() => ({ transform: vi.fn(() => ({ output })) })) } } as unknown as Env;
-  return { env, response, close, clip, leases, output };
+  return { env, response, close, clip, leases, output, source };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -60,7 +61,7 @@ test('9423 cools shared admission and prevents further dispatch', async () => {
 });
 
 test('a canceled uncooperative Media call leaves its capacity leased until expiry', async () => {
-  const { env, leases, response } = setup(vi.fn(() => new Promise<Response>(() => {})));
+  const { env, leases, response, close } = setup(vi.fn(() => new Promise<Response>(() => {})));
   const controller = new AbortController();
   const result = getYouTubeMediaFrames(env, { ...input, timestampsMs: [1000] }, controller.signal);
   await vi.waitFor(() => expect(response).toHaveBeenCalledOnce());
@@ -68,11 +69,49 @@ test('a canceled uncooperative Media call leaves its capacity leased until expir
   expect((await result).frames).toEqual([]);
   expect(leases.find(lease => lease.kind === 'media-frame')!.release).not.toHaveBeenCalled();
   expect(leases.find(lease => lease.kind === 'media-job')!.release).toHaveBeenCalledOnce();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 test('admission failure does not resolve or download a source', async () => {
   const { env } = setup();
   vi.mocked(acquireFrameLease).mockRejectedValue(new FrameMediaError('capacity'));
   expect((await getYouTubeMediaFrames(env, input, new AbortController().signal)).reason).toBe('capacity');
-  expect(openYouTubeFrameSource).not.toHaveBeenCalled();
+  expect(openYouTubeFrameSources).not.toHaveBeenCalled();
+});
+
+
+test('a failed source recovers only missing frames after the old batch settles', async () => {
+  const { env, source, leases } = setup();
+  const oldClosed = vi.fn(), ready = vi.fn(), fallbackClip = vi.fn(async (time: number) => source.clip(time));
+  const first = { ...source, width: 1280, height: 720, formatId: 136, clip: async (time: number) => {
+    if (time !== 1) throw new FrameMediaError('source');
+    return source.clip(time);
+  } };
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () {
+    yield first;
+    oldClosed();
+    yield { ...source, clip: async (time: number) => {
+      expect(oldClosed).toHaveBeenCalledOnce();
+      return fallbackClip(time);
+    } };
+  });
+  const result = await getYouTubeMediaFrames(env, input, new AbortController().signal, undefined, ready);
+  expect(result.frames.map(frame => [frame.timestampMs, frame.sourceHeight])).toEqual([[1000, 720], [2000, 360], [3000, 360]]);
+  expect(fallbackClip.mock.calls.map(([time]) => time).sort()).toEqual([2, 3]);
+  expect(ready).toHaveBeenCalledTimes(3);
+  expect(leases.filter(lease => lease.kind === 'media-frame')).toHaveLength(3);
+});
+
+test('failed sources are bounded to three, even if more are available', async () => {
+  const { env, source } = setup();
+  let sources = 0;
+  const closed = vi.fn();
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () {
+    try {
+      for (let i = 0; i < 10; i++) { sources++; yield { ...source, clip: async () => { throw new FrameMediaError('source'); } }; }
+    } finally { closed(); }
+  });
+  expect((await getYouTubeMediaFrames(env, input, new AbortController().signal)).frames).toEqual([]);
+  expect(sources).toBe(3);
+  expect(closed).toHaveBeenCalledOnce();
 });

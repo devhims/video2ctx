@@ -1,4 +1,5 @@
 import { createFrameTransport, proxyConnections } from './egress.mjs';
+import { diagnosticDetails } from './diagnostics.mjs';
 
 // Time allowed for a proxy's first media response headers before switching proxies.
 export const MEDIA_FIRST_RESPONSE_TIMEOUT_MS = 3_000;
@@ -29,18 +30,23 @@ export async function extractWithProxyFallback(request, {
       ...(preferSlot !== undefined ? { preferSlot } : {}),
       ...(alternateAvailable ? { firstResponseTimeoutMs: ROUTE_FIRST_RESPONSE_TIMEOUT_MS } : {}),
     });
-    let routeFailed = false;
+    let routeFailed = false, challenged = false;
+    const capture = event => {
+      const safe = diagnosticDetails(event);
+      if (safe.failureReason === 'bot_challenge' || event.error?.code === 'RATE_LIMITED' || event.status === 429) challenged = true;
+      onDiagnostic(event);
+    };
     try {
       onDiagnostic({ stage: 'proxy', egress: transport.proxyConfigured ? 'proxy' : 'direct', proxySlot: transport.slot, attempt });
       return await extractFrames({
         ...request, preferResolution: false, timeBudgetMs: Math.max(1, deadline - now()),
-        frameTimeoutMs: 10_000, fetch: transport.fetch, onDiagnostic,
+        frameTimeoutMs: 10_000, fetch: transport.fetch, onDiagnostic: capture,
         ...(alternateAvailable ? { mediaFirstResponseTimeoutMs: MEDIA_FIRST_RESPONSE_TIMEOUT_MS } : {}),
         retry: { policy: { maxAttempts: 2, attemptTimeoutMs: 8_000 } },
       });
     } catch (error) {
       const failure = transport.failure ?? error;
-      if (failure?.code !== 'PROXY_TUNNEL_FAILED') throw error;
+      if (failure?.code !== 'PROXY_TUNNEL_FAILED' && !(challenged && ['MEDIA_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED'].includes(error?.code))) throw error;
       routeFailed = true;
       onDiagnostic({ stage: 'proxy', proxySlot: transport.slot, attempt, error: failure });
       if (attempt === maxAttempts || deadline - now() < 5_000) throw failure;
