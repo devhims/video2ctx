@@ -3,6 +3,8 @@ import { loadMediaCandidateGroup } from '../../../packages/youtube-skills/src/wa
 import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { createWorkerProxyTransport } from './youtube-worker-transport';
 import { FrameMediaError, frameAbortable, frameBytes } from './frame-media-io';
+import { extractionEventSchema, type ExtractionAttempt } from './extraction-diagnostics';
+import { safeErrorLog } from './http';
 import { openMp4FrameSource } from './mp4-frame-clip';
 
 function mediaUrl(value: string): string {
@@ -12,7 +14,7 @@ function mediaUrl(value: string): string {
 }
 
 /** Resolve and read on one proxy route. Source URLs never leave this request-scoped closure. */
-export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth: number, signal: AbortSignal) {
+export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth: number, signal: AbortSignal, record: (event: ExtractionAttempt['events'][number]) => void = () => {}) {
   const urls = normalizedProxyUrls(env);
   if (!urls?.length) throw new FrameMediaError('source');
   const plan = await planProxyOrder(env, urls);
@@ -22,11 +24,13 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
     let keep = false, answered = false, throttled = false;
+    const capture = (event: unknown) => { const parsed = extractionEventSchema.safeParse(event); if (parsed.success) record(parsed.data); };
     const close = () => frameAbortable(AbortSignal.timeout(1000), () => transport.close()).catch(() => undefined);
     const tracked: typeof fetch = async (input, init = {}) => {
       const active = AbortSignal.any([signal, AbortSignal.timeout(8000), ...(init.signal ? [init.signal] : [])]);
       const response = await frameAbortable(active, () => transport.fetch(input, { ...init, signal: active }));
       answered = true;
+      capture({ stage: 'player', status: response.status, outcome: response.ok ? 'success' : 'error', proxySlot: slot });
       if (response.status === 429) throttled = true;
       const bytes = await frameBytes(response, 8 * 1024 * 1024, active);
       totalBytes += bytes.byteLength;
@@ -41,7 +45,8 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
       // Archived and uncertain broadcasts retain the existing container verification path.
       if (video.isLive) throw new FrameMediaError('unsupported');
       for (const profile of [1, 0]) {
-        const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true));
+        const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true, event => capture({ ...event,
+          code: event.error ? extractionEventSchema.shape.code.safeParse(safeErrorLog(event.error).errorCode).data ?? 'UNKNOWN' : undefined })));
         for (const candidate of group?.candidates.filter(c => c.mimeType.includes('avc1')) ?? []) {
           const url = mediaUrl(candidate.url);
           let size: number | undefined;
@@ -52,6 +57,7 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
             const response = await frameAbortable(active, () => transport.fetch(url, { signal: active, redirect: 'error',
               headers: { range: `bytes=${offset}-${offset + length - 1}`, 'user-agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip' } }));
             answered = true;
+            capture({ stage: 'media_http', status: response.status, formatId: candidate.formatId, proxySlot: slot });
             if (response.status === 429) throttled = true;
             const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
             if (response.status !== 206 || !range || Number(range[1]) !== offset || Number(range[2]) !== offset + length - 1
@@ -74,10 +80,18 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
                 outcomes.push({ slot, outcome: throttled ? 'rate_limited' : 'success' });
                 await close(); await reportProxyOutcomes(env, plan, outcomes);
               } };
-          } catch { signal.throwIfAborted(); }
+          } catch (error) {
+            capture({ stage: 'media_source', outcome: 'error', formatId: candidate.formatId, code: 'MEDIA_UNAVAILABLE' });
+            console.info({ event: 'media_source_candidate_failure', videoId, slot, formatId: candidate.formatId, ...safeErrorLog(error) });
+            signal.throwIfAborted();
+          }
         }
       }
-    } catch { signal.throwIfAborted(); }
+    } catch (error) {
+      capture({ stage: 'player', outcome: 'error', proxySlot: slot, code: extractionEventSchema.shape.code.safeParse(safeErrorLog(error).errorCode).data ?? 'UNKNOWN' });
+      console.info({ event: 'media_source_route_failure', videoId, slot, ...safeErrorLog(error) });
+      signal.throwIfAborted();
+    }
     finally {
       if (!keep) {
         if (throttled) outcomes.push({ slot, outcome: 'rate_limited' });

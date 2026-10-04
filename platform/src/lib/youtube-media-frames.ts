@@ -15,12 +15,14 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
   const frames: VideoFrames['frames'] = [], events: ExtractionAttempt['events'] = [];
   let job: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
   let source: Awaited<ReturnType<typeof openYouTubeFrameSource>> | undefined;
+  let droppedEvents = 0;
+  const record = (event: ExtractionAttempt['events'][number]) => { if (events.length < 54) events.push(event); else droppedEvents++; };
   let reason: FrameMediaError['code'] | undefined, imageBytes = 0, cursor = 0, stop = false;
   linkVisualExtraction(extractionId, 1);
   try {
     job = await acquireFrameLease(env, 'media-job', signal);
     events.push({ stage: 'media_admission', outcome: 'success', elapsedMs: Date.now() - started });
-    source = await openYouTubeFrameSource(env, input.videoId, input.maxWidth, signal);
+    source = await openYouTubeFrameSource(env, input.videoId, input.maxWidth, signal, record);
     events.push({ stage: 'media_source', outcome: 'success', elapsedMs: Date.now() - started,
       profile: source.profile, formatId: source.formatId, width: source.width, height: source.height, inputBytes: source.bytesRead });
     const selected = source;
@@ -80,7 +82,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
     const outcome = frames.length === input.timestampsMs.length ? 'success' : 'fallback';
     emitExtractionDiagnostic(diagnostic, { version: 1, kind: 'frames', backend: 'media', egress: 'proxy', videoId: input.videoId,
       extractionId, attempt: 1, slot: source?.slot ?? 0, recordedAt: Date.now(), elapsedMs: Date.now() - started,
-      outcome, capture: 'available', events, droppedEvents: 0, failureKind: signal.aborted ? 'timeout' : undefined });
+      outcome, capture: 'available', events, droppedEvents, failureKind: signal.aborted ? 'timeout' : undefined });
     console.info(JSON.stringify({ event: 'youtube_media_frames', extractionId, videoId: input.videoId, outcome,
       elapsedMs: Date.now() - started, completed: frames.length, requested: input.timestampsMs.length,
       bytesRead: source?.bytesRead ?? 0, imageBytes, reason }));
