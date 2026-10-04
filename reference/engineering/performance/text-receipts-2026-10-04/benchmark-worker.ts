@@ -1,4 +1,5 @@
 // Isolated, authenticated, read-only benchmark. Never mount on the application Worker.
+import { timingSafeEqual } from 'node:crypto';
 import { VerifiedTextSource } from '../../../../platform/src/lib/verified-text-source';
 import { SessionCatalog } from '../../../../platform/src/agents/runtime/session-catalog';
 import { withYouTubeMetadata } from '../../../../platform/src/lib/youtube';
@@ -8,7 +9,7 @@ export default {
   const enc = new TextEncoder();
   const expected = await crypto.subtle.digest('SHA-256',enc.encode(`Bearer ${env.BENCH_TOKEN}`));
   const actual = await crypto.subtle.digest('SHA-256',enc.encode(request.headers.get('authorization') ?? ''));
-  if (!crypto.subtle.timingSafeEqual(expected,actual)) return new Response('Not found',{status:404});
+  if (!timingSafeEqual(new Uint8Array(expected),new Uint8Array(actual))) return new Response('Not found',{status:404});
   const session = new SessionCatalog(env);
   const results = [];
   for (const kind of ['transcript','comments'] as const) {
