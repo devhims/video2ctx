@@ -58,8 +58,8 @@ explicit partial coverage. Caller cancellation prevents fallback.
 
 Supported formats are indexed H.264 MP4 and H.264 fragmented MP4 with a flat
 segment index. Both require an identity display matrix and an IDR keyframe at the
-clip start. Regular MP4 allows a simple edit list; fragmented MP4 rejects nonzero
-edits. Fragment presentation time is normalized using the first fragment header,
+clip start. Regular MP4 allows a simple edit list; fragmented MP4 accepts no edit or the initial presentation offset used to
+remove decode preroll. Other edits use FFmpeg. Fragment presentation time is normalized using the first fragment header,
 without downloading that fragment's video body. Other
 formats and uncertain broadcasts use the existing container path. Parser work is
 bounded to a 2 MiB index and 50,000 declared samples across tracks. This can send

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { openMp4FrameSource } from '../src/lib/mp4-frame-clip';
 
-for (const file of ['indexed.mp4', 'tail-index.mp4', 'fragmented.mp4']) {
+for (const file of ['indexed.mp4', 'tail-index.mp4', 'fragmented.mp4', 'fragmented-edit.mp4']) {
   test(`reads and remuxes a keyframe group from ${file} without fetching the whole file`, async () => {
     const original = new Uint8Array(await readFile(new URL(`./fixtures/media/${file}`, import.meta.url)));
     const ranges: Array<[number, number]> = [];
@@ -78,4 +78,12 @@ test('fragmented clips cover the first instant and keyframe boundaries', async (
   const source = await openMp4FrameSource(async (offset, length) => bytes.slice(offset, offset + length), bytes.length);
   for (const target of [0, 1, 2, 3]) expect((await source.clip(target)).time).toBe(0);
   expect((await source.clip(3.9)).time).toBeCloseTo(0.9);
+});
+
+test('rejects fragmented trims that differ from the initial presentation offset', async () => {
+  const bytes = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented-edit.mp4', import.meta.url)));
+  const at = Buffer.from(bytes).indexOf('elst');
+  new DataView(bytes.buffer).setUint32(at + 16, 1024);
+  await expect(openMp4FrameSource(async (offset, length) => bytes.slice(offset, offset + length), bytes.length))
+    .rejects.toMatchObject({ code: 'unsupported' });
 });

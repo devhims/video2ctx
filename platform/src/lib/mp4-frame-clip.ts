@@ -155,10 +155,10 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
         firstFile.appendBuffer(MP4BoxBuffer.fromArrayBuffer(combined.buffer, 0));
         const firstSamples = firstFile.getTrackSamplesInfo(track.id);
         if (!firstSamples.length || firstSamples.length > 1000) return unsupported();
-        // Nonzero edits in fragmented inputs need additional presentation mapping.
-        if (editOffset !== 0) return unsupported();
         presentationOffset = Math.min(...firstSamples.map(sample => sample.cts));
-        if (!integer(presentationOffset)) return unsupported();
+        // YouTube uses an edit equal to the initial PTS to remove decode preroll.
+        // Other trims need additional presentation mapping and retain FFmpeg recovery.
+        if (!integer(presentationOffset) || (editOffset !== 0 && editOffset !== presentationOffset)) return unsupported();
         found = true;
         break;
       }
