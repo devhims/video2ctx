@@ -50,7 +50,7 @@ test('retries and stalled RPCs share one overall admission deadline', async () =
     })
     .mockImplementation(() => new Promise(() => {})));
   const pending = acquireFrameLease(env, 'media-frame', new AbortController().signal);
-  const failed = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+  const failed = expect(pending).rejects.toMatchObject({ code: 'capacity' });
   await vi.advanceTimersByTimeAsync(2000);
   await failed;
   expect(stub.acquire).toHaveBeenCalledTimes(2);

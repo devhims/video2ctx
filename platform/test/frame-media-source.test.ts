@@ -177,3 +177,17 @@ test('tries progressive recovery before spending its source attempts on more ada
   expect((await sources.next()).value).toMatchObject({ formatId: 18 });
   await sources.return();
 });
+
+test.each([true, undefined])('a confirmed live video stops all proxy discovery (player flag %s)', async isLive => {
+  const { fetch, close } = await setup();
+  vi.mocked(normalizedProxyUrls).mockReturnValue(['https://one.test', 'https://two.test', 'https://three.test', 'https://four.test']);
+  vi.mocked(planProxyOrder).mockResolvedValue({ order: [0,1,2,3] } as Awaited<ReturnType<typeof planProxyOrder>>);
+  const group = await vi.mocked(loadMediaCandidateGroup).getMockImplementation()!(1, id, 640, {});
+  vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ ...group!, isLive });
+  vi.mocked(getDetails).mockResolvedValue({ isLive: true } as Awaited<ReturnType<typeof getDetails>>);
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal)).rejects.toMatchObject({ code: 'unsupported' });
+  expect(loadMediaCandidateGroup).toHaveBeenCalledOnce();
+  expect(createWorkerProxyTransport).toHaveBeenCalledOnce();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
+});

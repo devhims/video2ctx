@@ -37,7 +37,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
         while (!stop && !sourceStopped && cursor < missing.length) {
           const timestampMs = missing[cursor++]!;
           let lease: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
-          let settled = true;
+          let settled = true, clipRejected = false;
           let stage: 'media_source' | 'media_decode' = 'media_source';
           const frameStarted = Date.now();
           try {
@@ -54,7 +54,12 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
                 return response;
               });
             const response = await frameAbortable(signal, () => pending);
-            if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new FrameMediaError(response.status === 429 ? 'throttled' : 'decode'); }
+            if (!response.ok) {
+              void response.body?.cancel().catch(() => undefined);
+              // A rejected clip does not establish an outage for other timestamps.
+              clipRejected = response.status === 422;
+              throw new FrameMediaError(response.status === 429 ? 'throttled' : 'decode');
+            }
             const bytes = await frameBytes(response, 4 * 1024 * 1024, signal);
             settled = true;
             const dimensions = jpegSize(bytes);
@@ -69,11 +74,11 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
           } catch (error) {
             const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
             const throttled = code === 9423 || code === '9423' || code === 'throttled';
-            reason = throttled ? 'throttled' : error instanceof FrameMediaError ? error.code : 'decode';
+            reason = throttled ? 'throttled' : error instanceof FrameMediaError ? error.code : stage === 'media_source' ? 'source' : 'decode';
             record({ stage, timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
               outcome: 'error', code: throttled ? 'RATE_LIMITED' : 'FRAME_EXTRACTION_FAILED' });
             if (throttled) await lease?.throttle();
-            if (throttled || signal.aborted || reason === 'capacity' || reason === 'budget' || reason === 'decode') stop = true;
+            if (throttled || signal.aborted || reason === 'capacity' || reason === 'budget' || (reason === 'decode' && !clipRejected)) stop = true;
             if (reason === 'source' || reason === 'unsupported') sourceStopped = true;
           } finally {
             // An aborted binding call may still be decoding. Its lease expires instead of freeing capacity early.
@@ -87,7 +92,8 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
       if (stop || signal.aborted || sourceAttempts >= 3) break;
     }
   } catch (error) {
-    reason = error instanceof FrameMediaError ? error.code : 'source';
+    const exhausted = error instanceof FrameMediaError && error.code === 'unsupported';
+    if (!exhausted || !reason) reason = error instanceof FrameMediaError ? error.code : 'source';
     record({ stage: job ? 'media_source' : 'media_admission', outcome: 'error', elapsedMs: Date.now() - started,
       code: reason === 'capacity' ? 'RATE_LIMITED' : 'FRAME_EXTRACTION_FAILED' });
   }

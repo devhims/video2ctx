@@ -563,3 +563,38 @@ six-frame batch can describe every frame individually.
 
 See [production recovery validation](performance/frame-recovery-2026-10-04.md) for
 the deployed versions, per-run results, and remaining reliability limits.
+
+### Review hardening before merge
+
+Inline frame previews retain verified storage references when a refresh or another
+width request aliases an existing session version. This branch reads the pinned
+version through the catalog verifier, including when the backend has been switched
+back to `container`. It does not assume a separate JPEG object exists.
+
+A per-range timeout or transport error during clipping is a source failure and can
+advance to another source. Caller cancellation and the overall deadline still
+stop recovery. An HTTP 422 from Media rejects that clip without skipping unrelated
+timestamps. Rate limits and service failures still stop further Media dispatch.
+A confirmed live video stops Media source discovery after the first player or
+metadata confirmation, rather than repeating the same check across proxy routes.
+
+FFmpeg admission exhaustion returns `PROCESSOR_BUSY`, including as a retryable
+failure for missing timestamps in a partial result. Admission RPC deadlines use
+this same capacity classification; caller cancellation is preserved. Capacity and generic failure
+responses retain the most recent extraction ID, and source exhaustion no longer
+replaces a specific per-frame failure reason with `unsupported`.
+
+Progressive MP4 preparation inspects the source index before building a short
+clip. The 50,000-sample safety limit includes both audio and video sample tables.
+For example, 30 fps video plus about 43 AAC packets per second reaches the cap at
+roughly 11 minutes. The threshold varies with encoding. This is an application
+parser bound, not a duration limit on the clip sent to Cloudflare Media. Longer
+progressive inputs may therefore require FFmpeg even for a short requested range.
+
+The 90-second abandoned-work lease and awaited release RPCs remain conservative
+choices. The Media response API exposes no abort parameter; a local timeout does
+not establish remote completion. Before reducing lease expiry, measure abandoned
+work lifetime and concurrent admission under slowdown. Before moving release off
+the critical path, track its completion and verify that subsequent acquisitions
+do not wait on finished work. Neither change is a prerequisite for the corrected
+preview and recovery paths, but sustained-load validation remains outstanding.

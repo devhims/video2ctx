@@ -31,7 +31,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
   for (const slot of plan.order.slice(0, 4)) {
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
-    let answered = false, throttled = false, served = false, sourceFailed = false;
+    let answered = false, throttled = false, served = false, sourceFailed = false, live = false;
     const capture = (event: unknown) => {
       const value = event as { reason?: unknown; code?: unknown };
       const botChallenge = typeof value.reason === 'string' && /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(value.reason);
@@ -63,7 +63,8 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
         // The playable source response already identifies ordinary versus live
         // content. Only older/ambiguous responses need a second metadata request.
         if (group.isLive === undefined) metadata ??= await frameAbortable(signal, () => getDetails({ videoId, ...options }));
-        if (group.isLive === true || (group.isLive === undefined && metadata?.isLive)) throw new FrameMediaError('unsupported');
+        live = group.isLive === true || (group.isLive === undefined && metadata?.isLive === true);
+        if (live) throw new FrameMediaError('unsupported');
         const [preferred, ...alternates] = group.candidates.filter(c => c.mimeType.includes('avc1'));
         // Prefer detail first, then the progressive source that avoids adaptive range failures.
         const candidates = preferred ? [preferred, ...alternates.filter(c => c.progressive), ...alternates.filter(c => !c.progressive)] : [];
@@ -123,7 +124,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
       capture({ stage: 'player', outcome: 'error', proxySlot: slot, code: extractionEventSchema.shape.code.safeParse(safeErrorLog(error).errorCode).data ?? 'UNKNOWN' });
       console.info({ event: 'media_source_route_failure', videoId, slot, ...safeErrorLog(error) });
       signal.throwIfAborted();
-      if (error instanceof FrameMediaError && error.code === 'budget') throw error;
+      if (live || (error instanceof FrameMediaError && error.code === 'budget')) throw error;
     }
     finally {
       if (throttled) outcomes.push({ slot, outcome: 'rate_limited' });

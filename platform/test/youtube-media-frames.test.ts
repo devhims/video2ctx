@@ -115,3 +115,55 @@ test('failed sources are bounded to three, even if more are available', async ()
   expect(sources).toBe(3);
   expect(closed).toHaveBeenCalledOnce();
 });
+
+test.each([new TypeError('fetch failed'), new DOMException('range deadline', 'TimeoutError')])('recovers a source transport failure: %s', async error => {
+  const { env, source } = setup();
+  const recovery = vi.fn(async (time: number) => source.clip(time)), diagnostic = vi.fn();
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () {
+    yield { ...source, clip: async () => { throw error; } };
+    yield { ...source, clip: recovery };
+  });
+  const result = await getYouTubeMediaFrames(env, input, new AbortController().signal, diagnostic);
+  expect(result.frames.map(frame => frame.timestampMs)).toEqual(input.timestampsMs);
+  expect(recovery).toHaveBeenCalledTimes(3);
+  expect(diagnostic.mock.calls[0]![0].events).toContainEqual(expect.objectContaining({ stage: 'media_source', outcome: 'error' }));
+});
+
+test('source exhaustion preserves the transport failure reason', async () => {
+  const { env, source } = setup();
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () {
+    yield { ...source, clip: async () => { throw new FrameMediaError('source'); } };
+    throw new FrameMediaError('unsupported');
+  });
+  expect((await getYouTubeMediaFrames(env, input, new AbortController().signal)).reason).toBe('source');
+});
+
+test('a rejected clip does not stop unrelated timestamps on the same source', async () => {
+  const { env, response } = setup();
+  response.mockResolvedValueOnce(new Response(null, { status: 422 }));
+  const six = { ...input, timestampsMs: [1000,2000,3000,4000,5000,6000] };
+  const result = await getYouTubeMediaFrames(env, six, new AbortController().signal);
+  expect(result.frames.map(frame => frame.timestampMs)).toEqual([2000,3000,4000,5000,6000]);
+  expect(response).toHaveBeenCalledTimes(6);
+});
+
+test('a service failure stops remaining decode work instead of retrying sources', async () => {
+  const { env, source, response } = setup(vi.fn(async () => new Response(null, { status: 503 })));
+  const alternate = vi.fn(async (time: number) => source.clip(time));
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () { yield source; yield { ...source, clip: alternate }; });
+  const result = await getYouTubeMediaFrames(env, { ...input, timestampsMs: [1000,2000,3000,4000,5000,6000] }, new AbortController().signal);
+  expect(result.reason).toBe('decode');
+  expect(response).toHaveBeenCalledTimes(4);
+  expect(alternate).not.toHaveBeenCalled();
+});
+
+test('caller cancellation during source reads never tries the alternate source', async () => {
+  const { env, source } = setup();
+  const controller = new AbortController(), alternate = vi.fn(async (time: number) => source.clip(time));
+  vi.mocked(openYouTubeFrameSources).mockImplementation(async function* () {
+    yield { ...source, clip: async () => { controller.abort(); throw controller.signal.reason; } };
+    yield { ...source, clip: alternate };
+  });
+  expect((await getYouTubeMediaFrames(env, input, controller.signal)).frames).toEqual([]);
+  expect(alternate).not.toHaveBeenCalled();
+});

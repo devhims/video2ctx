@@ -1,5 +1,6 @@
 import { getYouTubeMediaFrames } from './youtube-media-frames';
 import { acquireFrameLease } from './frame-media-admission';
+import { FrameMediaError } from './frame-media-io';
 import { Buffer } from 'node:buffer';
 import { visualSpan, countVisualWork, linkVisualExtraction } from './visual-diagnostics';
 import { boundedContainerJson } from './bounded-container-json';
@@ -191,6 +192,11 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
   const input = { ...parsed.data, timestampsMs: [...new Set(parsed.data.timestampsMs)].sort((a, b) => a - b) };
   const budget = z.number().int().min(5000).max(45000).parse(limits?.extractionTimeoutMs ?? 45000);
   const started = Date.now();
+  let extractionId: string = crypto.randomUUID();
+  const record: ExtractionDiagnosticSink = attempt => {
+    extractionId = attempt.extractionId;
+    emitExtractionDiagnostic(diagnostic, attempt);
+  };
   return withTransportDeadline(budget + 5000, signal, async deadline => {
     let frames: VideoFrames['frames'] = [];
     // Reserve at least ten extraction seconds for FFmpeg recovery.
@@ -199,7 +205,7 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new DOMException('Media deadline', 'TimeoutError')), mediaBudget);
       try {
-        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), diagnostic, onFrame);
+        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), record, onFrame);
         frames = result.frames;
       } finally { clearTimeout(timer); controller.abort(); }
     }
@@ -217,7 +223,7 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
         if (remaining < 5000) throw new ApiError(503, 'FRAME_TIMEOUT', 'Frame extraction exhausted its allotted time.');
         dispatched = true;
         const fallback = await getVideoFramesImpl(env, { ...input, timestampsMs: missing }, deadline,
-          { extractionTimeoutMs: Math.min(45000, remaining) }, diagnostic, settled => { finished = settled; });
+          { extractionTimeoutMs: Math.min(45000, remaining) }, record, settled => { finished = settled; });
         finished = true;
         let bytes = frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.imageBase64, 'base64'), 0);
         for (const frame of fallback.frames) {
@@ -226,7 +232,10 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
         }
         failures = fallback.failures;
         warnings.push(...fallback.meta.warnings);
-      } catch (error) { fallbackError = error; }
+      } catch (error) {
+        fallbackError = error instanceof FrameMediaError && error.code === 'capacity'
+          ? new ApiError(503, 'PROCESSOR_BUSY', 'Frame processors are busy. Retry shortly.', { extractionId }) : error;
+      }
       finally {
         // Keep uncertain timeouts leased until expiry; otherwise an abandoned process could exceed admission.
         if (lease && (!dispatched || finished)) await lease.release();
@@ -234,10 +243,11 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     }
     deadline.throwIfAborted();
     if (!frames.length) throw fallbackError instanceof ApiError ? fallbackError
-      : new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.');
+      : new ApiError(503, 'FRAME_EXTRACTION_FAILED', 'YouTube frames could not be retrieved within the request limits.', { extractionId });
     const uncovered = input.timestampsMs.filter(time => !frames.some(frame => frame.timestampMs === time));
     failures = uncovered.map(timestampMs => failures.find(failure => failure.timestampMs === timestampMs) ?? {
-      timestampMs, code: 'FRAME_EXTRACTION_FAILED', message: 'The requested frame could not be extracted within the request limits.', retryable: true,
+      timestampMs, code: fallbackError instanceof ApiError && fallbackError.code === 'PROCESSOR_BUSY' ? 'PROCESSOR_BUSY' : 'FRAME_EXTRACTION_FAILED',
+      message: 'The requested frame could not be extracted within the request limits.', retryable: true,
     });
     if (failures.length) warnings.push('Some requested frames could not be extracted.');
     if (frames.some(frame => (frame.sourceHeight ?? 0) > 0 && (frame.sourceHeight ?? 0) < 720)) {

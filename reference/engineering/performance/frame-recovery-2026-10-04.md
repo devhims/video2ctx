@@ -101,7 +101,7 @@ YouTube access failures.
 - Worker `72e7d024-0e31-4eba-bca3-27b57b46bf8e` prioritized progressive recovery.
   All subsequent extraction tests use this behavior.
 - Worker `7409f071-1a70-4bf4-a6e1-85c85880e688` added analysis-batch scope.
-- Current Worker `61f4983a-16a3-4c83-bb3c-c0189d2c3175` adds six findings and
+- Worker `61f4983a-16a3-4c83-bb3c-c0189d2c3175` adds six findings and
   individual image labels. The refresh and cache rechecks below use this version.
 - Frames application `video2ctx-youtubeframescontainer`, version 97, completed its
   rollout with no health errors. Image digest:
@@ -153,3 +153,37 @@ Regression coverage includes blocked high-resolution sources, progressive fallba
 order, retaining completed frames, limiting source attempts, proxy-health reports,
 bot challenges reaching the fourth route, ordinary auth restrictions, exhausted
 budgets, cancellation, and preserving shared admission leases.
+
+## Reviewer follow-up
+
+The review exposed paths the original live checks did not exercise. Regression
+tests reproduced broken inline previews after identical refreshes and width aliases,
+raw range timeouts and transport errors skipping source recovery, repeated live
+checks across four proxies, and generic errors when FFmpeg capacity was exhausted.
+These defects are fixed. Tests also cover container-backend reads of inline frames,
+partial success during capacity exhaustion, HTTP 422 clip rejection, service-wide
+failure stopping work, cancellation, and retaining diagnostic causes.
+
+The 90-second abandoned-work lease and awaited release remain unchanged. Their
+optimization needs remote-lifetime and contention measurements. The source index
+sample bound is now documented. User-agent changes, range caching, and unrelated
+constant/key-format cleanup remain outside this correction.
+
+The follow-up build, documentation check, and all 1,610 tests passed: 1,287 Node,
+4 catalog integration, 183 Worker integration, 49 processor, 49 frames-container,
+and 38 authentication/billing tests. The Node suite has 39 existing skips.
+Worker `47185214-4e24-4ea7-821a-10960475365b` deploys these review fixes without
+changing container images, secrets, bindings, or migrations.
+
+Fresh checks on this deployment:
+
+| Run | Video | Requested timestamps in ms | Complete tool time | Frames / previews |
+| --- | --- | --- | ---: | --- |
+| `b7b59fc2-5594-4a3a-84aa-0fb4147bef7a` | `tXcT3OE7G1g` | 61375 + 30,000 × 0…5 | 30.315s | 6/6, all JPEG HTTP 200 |
+| `b285cd5b-87cf-4503-8f15-86345074c66f` | `dQw4w9WgXcQ` | 62375 + 30,000 × 0…5 | 9.615s | 6/6, all JPEG HTTP 200 |
+
+Both finished with answered outcomes and one frame-tool call. The first retained
+480p/360p recovery; the control returned 720p. The preview check initially omitted
+the API's `/v1` prefix; checking the actual public route returned all 12 JPEGs.
+The deterministic alias and rollback integration tests exercise the exact review
+regression; these live checks establish the deployed normal paths still work.

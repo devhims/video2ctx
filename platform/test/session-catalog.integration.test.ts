@@ -854,3 +854,37 @@ test.each(['serialized','changed-bytes','changed-version','different-bucket'])('
     expect(read).toHaveBeenCalledOnce();
   } finally { read.mockRestore(); }
 });
+
+test.each(['refresh', 'width-alias', 'rollback'] as const)('inline frame previews survive %s in the same session', async mode => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { saveFramePreviews } = await import('../src/agents/runtime/frame-previews');
+  const { agentFramePreviewRoutes } = await import('../src/routes/agent/frame-previews');
+  const { videoImageKey } = await import('../src/lib/video-catalog');
+  const id = videoId(), at = Date.now();
+  const request = { videoId: id, timestampsMs: [1000], maxWidth: 640 };
+  const frame = { timestampMs: 1000, width: 320, height: 180, mimeType: 'image/jpeg' as const, imageBase64: '/9j/AA==' };
+  const value = { videoId: id, frames: [frame], failures: [], meta: { partial: false, warnings: [] } };
+  const versions = await saveVideoResource({ ...env, YOUTUBE_FRAMES_BACKEND: 'media' },
+    { kind: 'frames', id, ...request, extractionTimeoutMs: 5000 }, value, at, 60000);
+  const getOrLoad = vi.fn(async () => JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions: versions, fetchedAt: at }));
+  const configured = { ...env, YOUTUBE_FRAMES_BACKEND: 'media', YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  await within(`inline-alias-${mode}`, async ({ store, reopen }) => {
+    const first = await sessionProvider(createYouTubeAgentProvider(configured), store).frames!(request);
+    expect(await env.VIDEO_ASSETS.head(await videoImageKey(id, Uint8Array.from(atob(frame.imageBase64), c => c.charCodeAt(0))))).toBeNull();
+    const nextRequest = mode === 'width-alias' ? { ...request, maxWidth: 1280 } : request;
+    if (mode === 'width-alias') {
+      const wider = await saveVideoResource(configured, { kind: 'frames', id, ...nextRequest, extractionTimeoutMs: 5000 }, value, at, 60000);
+      getOrLoad.mockResolvedValue(JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions: wider, fetchedAt: at }));
+    }
+    const backend = (mode === 'rollback' ? { ...configured, YOUTUBE_FRAMES_BACKEND: 'container' } : configured) as Env;
+    const next = await sessionProvider(createYouTubeAgentProvider(backend), mode === 'rollback' ? reopen() : store)
+      .frames!(nextRequest, undefined, mode === 'refresh' ? { refresh: true, extractionTimeoutMs: 5000 } : undefined);
+    expect(next.assetVersions).toEqual(first.assetVersions);
+    const previews = await saveFramePreviews(env.RESEARCH, 'inline-alias-owner', next.value,
+      new AbortController().signal, env.VIDEO_ASSETS, next.verifiedImages);
+    const response = await agentFramePreviewRoutes.request(`/agent/frames/${previews[0]!.collectionId}/${previews[0]!.assetId}`, {}, env);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from(atob(frame.imageBase64), c => c.charCodeAt(0)));
+    expect(getOrLoad).toHaveBeenCalledTimes(mode === 'rollback' ? 1 : 2);
+  });
+});
