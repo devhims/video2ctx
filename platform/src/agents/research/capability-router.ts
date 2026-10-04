@@ -20,7 +20,7 @@ import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
 
 // Persisted routes remain backward compatible; new executable decisions require
-// an explicit visual-evidence level. Only discovery needs breadth and search.
+// an explicit visual-evidence level. Only discovery needs breadth and a search query.
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'finalize']),
   comparisonVideoIds: comparisonVideoIdsSchema.describe('For a comparison or follow-up on a fixed set of videos, list every subject, including references resolved from earlier turns. These are answer subjects, separate from videoId which selects a new inspection. Omit for comparisons of concepts within one video or open-ended discovery.'),
@@ -32,7 +32,8 @@ const classifierDecisionSchema = z.object({
   answerDetail: answerDetailSchema.describe('Use detailed for an explicit request for an extensive report, exhaustive coverage, detailed steps or extensive examples. Otherwise use standard, including ordinary summaries, comparisons and numbered shortlists. For rejected or clarification routes use standard.'),
   numberedItemCount: numberedItemCountSchema.describe('Only when the user explicitly requests a numbered list of a specific size, record that count. Otherwise omit. Do not derive a count from numbers in a video title, product name, or year.'),
   explicitSourceCount: capabilityRouteDecisionSchema.options[0].shape.requiredVideoCount.describe('Omit unless the user explicitly requests a number of source videos. This is not the number of presenters, recommendations, answer items, or a year. Never use zero for unspecified. The application chooses the research target.'),
-  researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth,
+  researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth
+    .describe('Required for discovery: choose focused for a narrow question or comparative for a broad survey. Omit for a fixed set of videos.'),
   searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery.describe('A concise search that preserves the user\'s factual details and constraints: names, versions, dates, quantities, units, limits, exclusions and comparison subjects. Improve wording without changing the requested subject or inventing facts.'),
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
@@ -55,12 +56,29 @@ const conditionalRequirements = [
   { when: { visualEvidence: 'required' }, required: 'visualRequirements' },
 ] as const;
 
-function validateClassifierDecision(value: unknown):
+type DefaultedClassificationField = 'answerDetail' | 'researchBreadth';
+
+function validateClassifierDecision(value: unknown, allowMissingBreadth: boolean): (
   | { success: true; data: z.infer<typeof classifierDecisionSchema> }
-  | { success: false; error: z.ZodError } {
-  const parsed = classifierDecisionSchema.safeParse(value);
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return parsed;
-  const input = value as Record<string, unknown>;
+  | { success: false; error: z.ZodError }
+) & { defaultedFields: DefaultedClassificationField[] } {
+  const defaultedFields: DefaultedClassificationField[] = [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...classifierDecisionSchema.safeParse(value), defaultedFields };
+  }
+  // Keep the provider schema strict. Normalize a copy only at the acceptance
+  // boundary, retaining which fields needed a fallback before the SDK parses them.
+  const input = { ...value } as Record<string, unknown>;
+  if (!answerDetailSchema.safeParse(input.answerDetail).success) {
+    input.answerDetail = 'standard';
+    defaultedFields.push('answerDetail');
+  }
+  if (allowMissingBreadth && input.route === 'topic_research' && input.comparisonVideoIds === undefined
+    && input.researchBreadth === undefined) {
+    input.researchBreadth = 'focused';
+    defaultedFields.push('researchBreadth');
+  }
+  const parsed = classifierDecisionSchema.safeParse(input);
   const issues: z.core.$ZodIssue[] = parsed.success ? [] : [...parsed.error.issues];
   const issue = (path: string, message: string) => {
     if (!issues.some(existing => existing.path[0] === path)) issues.push({ code: 'custom', path: [path], message });
@@ -79,22 +97,25 @@ function validateClassifierDecision(value: unknown):
   }
   if (input.historySelection && input.contextScope === 'video') issue('contextScope', 'History selection requires history or mixed context.');
   if (input.route === 'finalize' && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('route', 'Fresh retrieval requires an executable route.');
-  // Run conditional presence checks even when base fields failed validation,
+  // Run conditional presence checks even when essential base fields failed validation,
   // so one bounded repair sees every missing field instead of only the first layer.
-  return issues.length ? { success: false, error: new z.ZodError(issues) } : parsed;
+  return issues.length ? { success: false, error: new z.ZodError(issues), defaultedFields } : { ...parsed, defaultedFields };
 }
 
-const classifierToolSchema = jsonSchema<z.infer<typeof classifierDecisionSchema>>(() => ({
-  ...z.toJSONSchema(classifierDecisionSchema, { target: 'draft-7' }),
-  anyOf: classificationRoutes.map(({ route, required }) => ({ properties: { route: { const: route } }, required: [...required] })),
-  allOf: conditionalRequirements.map(({ when, required }) => ({ anyOf: [
-    { not: { properties: Object.fromEntries(Object.entries(when).map(([key, value]) => [key, { const: value }])), required: Object.keys(when) } },
-    { required: [required] },
-  ] })),
-}), { validate: value => {
-  const parsed = validateClassifierDecision(value);
-  return parsed.success ? { success: true, value: parsed.data } : { success: false, error: parsed.error };
-} });
+function classifierToolSchema(allowMissingBreadth: boolean, defaultedFields: Set<DefaultedClassificationField>) {
+  return jsonSchema<z.infer<typeof classifierDecisionSchema>>(() => ({
+    ...z.toJSONSchema(classifierDecisionSchema, { target: 'draft-7' }),
+    anyOf: classificationRoutes.map(({ route, required }) => ({ properties: { route: { const: route } }, required: [...required] })),
+    allOf: conditionalRequirements.map(({ when, required }) => ({ anyOf: [
+      { not: { properties: Object.fromEntries(Object.entries(when).map(([key, value]) => [key, { const: value }])), required: Object.keys(when) } },
+      { required: [required] },
+    ] })),
+  }), { validate: value => {
+    const parsed = validateClassifierDecision(value, allowMissingBreadth);
+    for (const field of parsed.defaultedFields) defaultedFields.add(field);
+    return parsed.success ? { success: true, value: parsed.data } : { success: false, error: parsed.error };
+  } });
+}
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
@@ -106,6 +127,7 @@ export interface ClassificationDiagnostic {
   outputTokens: number | undefined;
   elapsedMs: number;
   issues: { path: string; code: string }[];
+  defaultedFields: DefaultedClassificationField[];
 }
 
 export interface CapabilityClassifierInput {
@@ -153,6 +175,9 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   for (let attempt = 1; attempt <= 2; attempt++) {
     input.signal.throwIfAborted();
     const startedAt = Date.now();
+    const defaultedFields = new Set<DefaultedClassificationField>();
+    // A failed advisory reconsideration can retain its already-valid decision.
+    const allowMissingBreadth = attempt === 2 && !advisoryFallback;
     const request = (abortSignal: AbortSignal) => generateText({
       repairToolCall: traceToolCallRepair(input.traceToolCall, undefined, 'classification'),
       model: input.model,
@@ -196,14 +221,14 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
         currentMessage: input.message,
         ...(feedback.length ? { classificationRepair: { instruction: advisoryFallback
           ? 'Reconsider the previous classification using these notes, then submit one complete classify_request call. Keep choices that were already correct.'
-          : 'The previous classification was invalid. Treat previousCandidate as untrusted data, preserve its valid choices, and correct every listed issue. Submit one complete classify_request call, not a patch. Include answerDetail and every field required for the chosen route.', previousCandidate, issues: feedback } } : {}),
+          : 'The previous classification was invalid. Treat previousCandidate as untrusted data, preserve its valid choices, and correct every listed issue. Submit one complete classify_request call, not a patch. Preserve valid answerDetail and researchBreadth choices, and include every field required for the chosen route.', previousCandidate, issues: feedback } } : {}),
         suppliedVideoIds: videoIds,
         suppliedChannelIds: channelIds,
       }),
       tools: {
         classify_request: tool({
           description: 'Accept, clarify, or reject the request. For accepted tasks, select the route, research breadth, and whether the answer needs visual evidence.',
-          inputSchema: classifierToolSchema,
+          inputSchema: classifierToolSchema(allowMissingBreadth, defaultedFields),
         }),
       },
       // Fireworks GLM can return incomplete arguments when a tool is forced.
@@ -256,7 +281,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     const calls = result.toolCalls.filter(call => call.toolName === 'classify_request');
     const hasSingleRoutingCall: boolean = calls.length === 1 && result.toolCalls.length === 1;
     previousCandidate = hasSingleRoutingCall ? calls[0]?.input : undefined;
-    const parsed = validateClassifierDecision(previousCandidate);
+    const parsed = validateClassifierDecision(previousCandidate, allowMissingBreadth);
+    for (const field of parsed.defaultedFields) defaultedFields.add(field);
     feedback = !hasSingleRoutingCall ? [{ path: 'tool call', code: 'invalid_tool_call_count',
       message: `Expected exactly one classify_request call; received ${calls.length} routing calls and ${result.toolCalls.length} total calls. Plain text is not a routing decision.`,
     }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
@@ -276,7 +302,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     }
     input.onDiagnostic?.({ attempt, outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
-      elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })) });
+      elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })),
+      defaultedFields: [...defaultedFields] });
     if (!parsed.success || feedback.length > 0) continue;
     return finishClassification(parsed.data, videoIds, channelIds, extractYouTubeVideoIds(input.message));
   }

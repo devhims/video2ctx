@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAgentModel } from '../src/agents/model';
-import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
+import { classifyCapabilityWithModel, type ClassificationDiagnostic } from '../src/agents/research/capability-router';
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 // Explicit opt-in: calls the real classifier provider, but starts no agent runs.
@@ -9,7 +9,7 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
     if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
     const videoIds = ['abcdefghijk', 'lmnopqrstuv'];
-    const attempts: { attempt: number; outcome: string }[] = [];
+    const attempts: ClassificationDiagnostic[] = [];
     const decision = await classifyCapabilityWithModel({
       message: 'Show images of the exercise form from both of those videos. Fetch and inspect images from each video because we only have transcripts.',
       conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: videoIds,
@@ -22,8 +22,9 @@ describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability rout
     });
     expect(decision).toMatchObject({ route: 'topic_research', comparisonVideoIds: videoIds,
       researchVideoCount: 2, visualEvidence: 'required', answerDetail: 'standard' });
-    expect(attempts.at(-1)?.outcome).toBe('valid');
-    console.info(JSON.stringify({ case: 'fixed-video visuals', attempts: attempts.length, route: decision.route }));
+    expect(attempts).toMatchObject([{ attempt: 1, outcome: 'valid' }]);
+    console.info(JSON.stringify({ case: 'fixed-video visuals', attempts: attempts.length, route: decision.route,
+      defaultedFields: attempts.flatMap(event => event.defaultedFields) }));
   }, 30_000);
 
   const cases = [
