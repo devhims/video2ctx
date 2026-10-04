@@ -1,5 +1,7 @@
 import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnostics';
 import { getVideoFrames, validateFrameResponse, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
+import { VerifiedStoryboardSheet } from '../../../lib/verified-storyboard';
+import { sheetKey } from '../../../lib/video-resources';
 import { VerifiedFrame } from '../../../lib/verified-frame';
 import type { VerifiedImage } from '../../../lib/verified-image';
 import { videoCatalog, videoImageKey } from '../../../lib/video-catalog';
@@ -102,10 +104,29 @@ export function createYouTubeAgentProvider(
         ...(deadlineAt === undefined ? {} : { deadlineAt }) };
       signal?.throwIfAborted();
       const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
-      return abortable(videoCatalog(env)
+      const sharedCatalog = videoCatalog(env);
+      const result: CachedResult<Storyboard> = await abortable(sharedCatalog
         ? getVideoResource(env, operation, selection.refresh, diagnostic)
         : runYouTubeOperation(env, operation, diagnostic)
           .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
+      // Only a completed cold save can issue a local receipt. Cache and legacy
+      // results keep the independent storage verification path.
+      if (!sharedCatalog || result.cacheStatus !== 'miss') return result;
+      const board = storyboardSchema.parse(result.value);
+      if (board.videoId !== videoId || !board.manifest) return result;
+      const verifiedStoryboards = await Promise.all(board.sheets.map(async sheet => {
+        const index = sheet.firstFrameIndex / board.manifest!.framesPerSheet;
+        if (!Number.isSafeInteger(index)) return undefined;
+        const key = await sheetKey(board, index);
+        const reference = result.catalogVersions?.find(ref => ref.kind === key.kind
+          && ref.videoId === key.videoId && ref.variant === key.variant);
+        if (!reference || reference.imageStorage !== undefined || !/^[a-f0-9]{64}$/.test(reference.contentHash)) return undefined;
+        const bytes = Uint8Array.from(atob(sheet.imageBase64), c => c.charCodeAt(0));
+        return new VerifiedStoryboardSheet(env.VIDEO_ASSETS, reference, { ...board, sheets: [sheet] },
+          await videoImageKey(videoId, bytes));
+      }));
+      signal?.throwIfAborted();
+      return { ...result, verifiedStoryboards: verifiedStoryboards.filter((receipt): receipt is VerifiedStoryboardSheet => !!receipt) };
     },
     search: (query, filters = {}) => provider.search(env, query, filters),
     browse: (options = {}) => provider.browse(env, provider.normalizeBrowseOptions(options)),

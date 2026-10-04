@@ -1,4 +1,5 @@
 import type { VerifiedImage } from '../../lib/verified-image';
+import { VerifiedStoryboardSheet, storyboardEnvelopeFields } from '../../lib/verified-storyboard';
 import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
@@ -57,7 +58,7 @@ export class SessionCatalog {
   }
 
   async read(reference: SessionCatalogReference): Promise<unknown | null> {
-    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset, reference.asset.kind === 'frame');
+    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset, reference.asset.kind === 'frame' || reference.asset.kind === 'storyboard_sheet');
     if (!stored) return null;
     const value = { ...stored.value, ...reference.overrides };
     for (const field of reference.omitted) delete value[field];
@@ -78,6 +79,7 @@ export class SessionCatalog {
     versions?: VideoAssetReference[],
     onVerifiedImages?: (images: VerifiedImage[]) => void,
     verifiedFrames?: VerifiedFrame[],
+    verifiedStoryboards?: VerifiedStoryboardSheet[],
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -97,6 +99,19 @@ export class SessionCatalog {
           onVerifiedImages?.([image]);
           return { asset, overrides,
             omitted: ['meta', 'failures', 'freshness'].filter(key => payload[key] === undefined) };
+        }
+      }
+      if (kind === 'storyboard_sheet') {
+        const image = verifiedStoryboards?.flatMap(receipt => receipt instanceof VerifiedStoryboardSheet
+          ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
+        if (image) {
+          const payload = value as Record<string, unknown>;
+          const overrides = Object.fromEntries(storyboardEnvelopeFields
+            .filter(key => payload[key] !== undefined).map(key => [key, payload[key]]));
+          if (JSON.stringify(overrides).length > 32_000) throw new Error('Session envelope is too large.');
+          onVerifiedImages?.([image]);
+          return { asset, overrides,
+            omitted: storyboardEnvelopeFields.filter(key => payload[key] === undefined) };
         }
       }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);

@@ -888,3 +888,150 @@ test.each(['refresh', 'width-alias', 'rollback'] as const)('inline frame preview
     expect(getOrLoad).toHaveBeenCalledTimes(mode === 'rollback' ? 1 : 2);
   });
 });
+
+test('completed storyboard saves avoid sheet readback and restored previews avoid extra HEAD requests', async () => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { storyboardMetadata } = await import('../src/agents/providers/youtube/storyboard');
+  const { saveStoryboardPreviews } = await import('../src/agents/runtime/storyboard-previews');
+  const { captureVisualWork } = await import('../src/lib/visual-diagnostics');
+  const id = videoId();
+  const board = { videoId: id, frameCount: 12, intervalMs: 10000,
+    manifest: { totalSheets: 6, framesPerSheet: 2, tileWidth: 120, tileHeight: 90, columns: 2, rows: 1, lastSampleMs: 110000 },
+    selection: { mode: 'spread' as const }, meta: { partial: false, warnings: [] },
+    sheets: Array.from({ length: 6 }, (_, index) => ({ firstFrameIndex: index * 2, frameCount: 2,
+      intervalMs: 10000, tileWidth: 120, tileHeight: 90, columns: 2, rows: 1, imageBase64: '/9j/AA==' })) };
+  const getOrLoad = vi.fn(async () => {
+    const manifest = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, storyboardMetadata(board), Date.now(), 60000);
+    const sheets = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 6 }, board, Date.now(), 60000);
+    return JSON.stringify({ ok: true, value: board, cacheStatus: 'miss', catalogVersions: [...manifest, ...sheets], fetchedAt: Date.now() });
+  });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  await within('storyboard-save-receipts', async ({ store, reopen }) => {
+    const p = createYouTubeAgentProvider(configured);
+    const preview = async (result: Awaited<ReturnType<NonNullable<YouTubeAgentProvider['storyboard']>>>) => {
+      expect(result.verifiedImages).toHaveLength(6);
+      expect(await saveStoryboardPreviews(env.RESEARCH, 'receipt-owner', result.value,
+        new AbortController().signal, env.VIDEO_ASSETS, result.verifiedImages)).toHaveLength(6);
+    };
+    const cold = await captureVisualWork('tool', 'storyboard', async () => {
+      const result = await sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 6 });
+      expect(result.assetVersions).toHaveLength(7);
+      await preview(result);
+      return result;
+    });
+    expect(cold.diagnostics.counters.catalogR2Gets).toBe(1); // Manifest only, no sheet JSON/JPEG readback.
+    expect(cold.diagnostics.counters.previewR2Heads ?? 0).toBe(0);
+    const warm = await captureVisualWork('tool', 'storyboard', async () => {
+      const result = await sessionProvider(p, reopen()).storyboard!(id, undefined, { maxSheets: 6 });
+      expect(result.sessionReused).toBe(true);
+      await preview(result);
+    });
+    expect(warm.diagnostics.counters.catalogR2Gets).toBe(13); // Verify persisted bytes after restoring.
+    expect(warm.diagnostics.counters.previewR2Heads ?? 0).toBe(0);
+    const fallback = await captureVisualWork('tool', 'storyboard', () => saveStoryboardPreviews(
+      env.RESEARCH, 'fallback-owner', cold.value.value, new AbortController().signal, env.VIDEO_ASSETS));
+    expect(fallback.diagnostics.counters.previewR2Heads).toBe(6);
+    expect(getOrLoad).toHaveBeenCalledOnce();
+  });
+});
+
+function receiptStoryboard(id: string) {
+  return { videoId: id, frameCount: 2, intervalMs: 10000,
+    manifest: { totalSheets: 1, framesPerSheet: 2, tileWidth: 120, tileHeight: 90, columns: 2, rows: 1, lastSampleMs: 10000 },
+    selection: { mode: 'indexes' as const, requestedSheetIndexes: [0] }, meta: { partial: false, warnings: [] as string[] },
+    sheets: [{ firstFrameIndex: 0, frameCount: 2, intervalMs: 10000, tileWidth: 120, tileHeight: 90,
+      columns: 2, rows: 1, imageBase64: '/9j/AA==' }] };
+}
+
+test.each(['serialized', 'changed-bytes', 'changed-version', 'different-bucket', 'changed-mapping', 'extra-field'] as const)(
+  'a storyboard %s receipt cannot bypass storage verification', async mode => {
+    const { VerifiedStoryboardSheet } = await import('../src/lib/verified-storyboard');
+    const { videoImageKey } = await import('../src/lib/video-catalog');
+    const id = videoId(), board = receiptStoryboard(id);
+    const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, board, Date.now(), 60000);
+    const imageKey = await videoImageKey(id, Uint8Array.from(atob(board.sheets[0]!.imageBase64), c => c.charCodeAt(0)));
+    const receipt = new VerifiedStoryboardSheet(mode === 'different-bucket' ? {} as R2Bucket : env.VIDEO_ASSETS,
+      versions[0]!, board, imageKey);
+    const supplied = mode === 'serialized' ? JSON.parse(JSON.stringify(receipt)) : receipt;
+    if (mode === 'changed-bytes') board.sheets[0]!.imageBase64 = '/9j/AQ==';
+    if (mode === 'changed-version') versions[0]!.contentHash = 'f'.repeat(64);
+    if (mode === 'changed-mapping') board.manifest.lastSampleMs += 10000;
+    const value = mode === 'extra-field' ? { ...board, unexpected: 'must not be trusted' } : board;
+    const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+    try {
+      const pending = new SessionCatalog(env).pin('storyboard_sheet', id, 'unused', value, Date.now(), versions,
+        undefined, undefined, [supplied]);
+      if (mode === 'serialized' || mode === 'different-bucket') await expect(pending).resolves.toBeDefined();
+      else await expect(pending).rejects.toThrow('does not match');
+      expect(read).toHaveBeenCalledOnce();
+    } finally { read.mockRestore(); }
+  });
+
+test('storyboard receipts allow envelope changes but keep images and mapping out of session SQLite', async () => {
+  const { VerifiedStoryboardSheet } = await import('../src/lib/verified-storyboard');
+  const id = videoId(), board = receiptStoryboard(id);
+  const versions = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, board, Date.now(), 60000);
+  const receipt = new VerifiedStoryboardSheet(env.VIDEO_ASSETS, versions[0]!, board, 'unused');
+  const value = { ...board, selection: undefined, meta: { partial: true, warnings: ['Another sheet failed'] }, freshness: { state: 'fresh' } };
+  const read = vi.spyOn(VideoCatalog.prototype, 'readVersion');
+  try {
+    const backend = new SessionCatalog(env);
+    const reference = await backend.pin('storyboard_sheet', id, 'unused', value, Date.now(), versions, undefined, undefined, [receipt]);
+    expect(read).not.toHaveBeenCalled();
+    expect(reference.overrides).toEqual({ meta: value.meta, freshness: value.freshness });
+    expect(reference.omitted).toEqual(['selection']);
+    expect(await backend.read(reference)).toEqual(value);
+    await expect(backend.pin('storyboard_sheet', id, 'unused', { ...value, meta: { warnings: ['x'.repeat(32001)] } },
+      Date.now(), versions, undefined, undefined, [receipt])).rejects.toThrow('envelope is too large');
+  } finally { read.mockRestore(); }
+});
+
+test.each(['hit', 'coalesced', 'stale', 'missing-reference'] as const)('storyboard %s results retain independent verification', async mode => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { storyboardMetadata } = await import('../src/agents/providers/youtube/storyboard');
+  const id = videoId(), value = receiptStoryboard(id);
+  const manifest = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, storyboardMetadata(value), Date.now(), 60000);
+  const sheets = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, value, Date.now(), 60000);
+  const getOrLoad = async () => JSON.stringify({ ok: true, value, cacheStatus: mode === 'missing-reference' ? 'miss' : mode,
+    catalogVersions: mode === 'missing-reference' ? undefined : [...manifest, ...sheets], fetchedAt: Date.now() });
+  const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  const result = await createYouTubeAgentProvider(configured).storyboard!(id);
+  expect(result.verifiedStoryboards ?? []).toHaveLength(0);
+  await within(`storyboard-unverified-${mode}`, async ({ store }) => {
+    const p = { storyboard: async () => result } as unknown as YouTubeAgentProvider;
+    const attached = await sessionProvider(p, store).storyboard!(id, undefined, { maxSheets: 1 });
+    expect(attached.assetVersions).toHaveLength(2);
+    expect(attached.verifiedImages).toHaveLength(1);
+  });
+});
+
+test.each(['delete', 'cancel', 'save-failure'] as const)('storyboard %s cannot attach coordinator save receipts', async mode => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { storyboardMetadata } = await import('../src/agents/providers/youtube/storyboard');
+  const id = videoId(), value = receiptStoryboard(id);
+  await within(`storyboard-receipt-${mode}`, async ({ store, sql }) => {
+    let entered!: () => void, release!: () => void;
+    const published = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const getOrLoad = async () => {
+      const manifest = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true }, storyboardMetadata(value), Date.now(), 60000);
+      const sheets = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, value, Date.now(), 60000);
+      entered();
+      await gate;
+      return JSON.stringify(mode === 'save-failure'
+        ? { ok: false, error: { code: 'STORAGE_FAILURE', message: 'save failed', apiStatus: 503 } }
+        : { ok: true, value, cacheStatus: 'miss', catalogVersions: [...manifest, ...sheets], fetchedAt: Date.now() });
+    };
+    const configured = { ...env, YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+    const controller = new AbortController();
+    const pending = sessionProvider(createYouTubeAgentProvider(configured), store).storyboard!(id, undefined, { maxSheets: 1, signal: controller.signal });
+    const rejected = expect(pending).rejects.toThrow(mode === 'delete' ? 'Session assets changed' : mode === 'cancel' ? 'cancelled' : 'save failed');
+    await published;
+    if (mode === 'delete') await store.delete();
+    if (mode === 'cancel') controller.abort(new Error('cancelled'));
+    release();
+    await rejected;
+    expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    expect(store.brief().assets).toEqual([]);
+  });
+});
