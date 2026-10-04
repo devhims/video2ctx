@@ -73,3 +73,14 @@ test('records safe source stages without provider messages or URLs', async () =>
   expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
   expect(loadMediaCandidateGroup).not.toHaveBeenCalled();
 });
+
+test('does not replace an unsupported sharper source with a lower-resolution Media source', async () => {
+  const { fetch } = await setup();
+  vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ profile: 'android', candidates: [
+    { url: 'https://r1.googlevideo.com/high', formatId: 136, width: 1280, progressive: false, mimeType: 'video/mp4; codecs="avc1"' },
+    { url: 'https://r1.googlevideo.com/low', formatId: 18, width: 640, progressive: true, mimeType: 'video/mp4; codecs="avc1"' },
+  ] });
+  fetch.mockImplementation(async () => new Response('', { status: 403 }));
+  await expect(openYouTubeFrameSource(env, id, 1280, new AbortController().signal)).rejects.toMatchObject({ code: 'unsupported' });
+  expect(fetch.mock.calls.every(([request]) => request instanceof Request && new URL(request.url).pathname === '/high')).toBe(true);
+});

@@ -70,3 +70,11 @@ test('short budgets go directly to FFmpeg', async () => {
   expect(getYouTubeMediaFrames).not.toHaveBeenCalled();
   expect(requests[0]!.extractionTimeoutMs).toBeLessThanOrEqual(10000);
 });
+
+test('retains fallback quality warnings', async () => {
+  const { env, fetch } = setup();
+  vi.mocked(getYouTubeMediaFrames).mockResolvedValue({ frames: [] });
+  fetch.mockResolvedValue(Response.json({ value: { videoId: input.videoId, frames: input.timestampsMs.map(frame), failures: [],
+    meta: { partial: false, warnings: ['Best-effort media fallback produced frames below 720p.'] } } }));
+  expect((await getVideoFrames(env, input)).meta.warnings).toContain('Best-effort media fallback produced frames below 720p.');
+});

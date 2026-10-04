@@ -27,7 +27,7 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
   if (!urls?.length) throw new FrameMediaError('source');
   const plan = await planProxyOrder(env, urls);
   const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
-  let totalBytes = 0;
+  let totalBytes = 0, preferredWidth = 0;
   for (const slot of plan.order.slice(0, 2)) {
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
@@ -55,7 +55,10 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
       for (const profile of [1, 0]) {
         const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true, event => capture({ ...event,
           code: event.error ? extractionEventSchema.shape.code.safeParse(safeErrorLog(event.error).errorCode).data ?? 'UNKNOWN' : undefined })));
+        preferredWidth = Math.max(preferredWidth, ...(group?.candidates.map(candidate => candidate.width ?? 0) ?? []));
         for (const candidate of group?.candidates.filter(c => c.mimeType.includes('avc1')) ?? []) {
+          // Let FFmpeg try a sharper unsupported source instead of silently reducing detail.
+          if (candidate.width !== undefined && candidate.width < preferredWidth) continue;
           const url = mediaUrl(candidate.url);
           let size: number | undefined;
           const read = async (offset: number, length: number) => {

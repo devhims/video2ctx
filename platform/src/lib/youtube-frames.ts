@@ -204,6 +204,7 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     deadline.throwIfAborted();
     const missing = input.timestampsMs.filter(time => !frames.some(frame => frame.timestampMs === time));
     let failures: VideoFrames['failures'] = [];
+    const warnings: string[] = [];
     let fallbackError: unknown;
     if (missing.length) {
       let lease: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
@@ -222,6 +223,7 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
           if (bytes + size <= 8 * 1024 * 1024) { frames.push(frame); bytes += size; }
         }
         failures = fallback.failures;
+        warnings.push(...fallback.meta.warnings);
       } catch (error) { fallbackError = error; }
       finally {
         // Keep uncertain timeouts leased until expiry; otherwise an abandoned process could exceed admission.
@@ -235,8 +237,12 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     failures = uncovered.map(timestampMs => failures.find(failure => failure.timestampMs === timestampMs) ?? {
       timestampMs, code: 'FRAME_EXTRACTION_FAILED', message: 'The requested frame could not be extracted within the request limits.', retryable: true,
     });
+    if (failures.length) warnings.push('Some requested frames could not be extracted.');
+    if (frames.some(frame => (frame.sourceHeight ?? 0) > 0 && (frame.sourceHeight ?? 0) < 720)) {
+      warnings.push('Best-effort media fallback produced frames below 720p.');
+    }
     return validateFrameResponse(input, { videoId: input.videoId, frames: frames.sort((a, b) => a.timestampMs - b.timestampMs), failures,
-      meta: { partial: failures.length > 0, warnings: failures.length ? ['Some requested frames could not be extracted.'] : [],
+      meta: { partial: failures.length > 0, warnings: [...new Set(warnings)].slice(0, 20),
         fetchedAt: new Date().toISOString(), source: 'video2ctx' } });
   });
 }

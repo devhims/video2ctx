@@ -56,11 +56,19 @@ time; it does not restart the budget or discard completed Media frames. Combined
 output retains the 8 MiB image limit. If recovery fails, usable frames return with
 explicit partial coverage. Caller cancellation prevents fallback.
 
-The first supported format is indexed, non-fragmented H.264 with a simple edit
-list, an identity display matrix, and an IDR keyframe at the clip start. Other
+Supported formats are indexed H.264 MP4 and H.264 fragmented MP4 with a flat
+segment index. Both require an identity display matrix and an IDR keyframe at the
+clip start. Regular MP4 allows a simple edit list; fragmented MP4 rejects nonzero
+edits. Fragment presentation time is normalized using the first fragment header,
+without downloading that fragment's video body. Other
 formats and uncertain broadcasts use the existing container path. Parser work is
 bounded to a 2 MiB index and 50,000 declared samples across tracks. This can send
 longer progressive videos to FFmpeg, especially when they contain audio tracks.
+Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
+bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
+fragment data offsets use FFmpeg. A sharper unsupported source triggers recovery
+instead of silently choosing a lower-resolution Media source. Existing quality
+warnings are preserved.
 Selected media ranges are limited to 4 MiB, keyframe groups to 1,000 samples and 30
 seconds, and aggregate source reads to 40 MiB per Media attempt. Sources must honor
 exact HTTP byte ranges; full-file HTTP 200 responses are rejected without reading

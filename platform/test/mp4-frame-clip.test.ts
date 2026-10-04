@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { openMp4FrameSource } from '../src/lib/mp4-frame-clip';
 
-for (const file of ['indexed.mp4', 'tail-index.mp4']) {
+for (const file of ['indexed.mp4', 'tail-index.mp4', 'fragmented.mp4']) {
   test(`reads and remuxes a keyframe group from ${file} without fetching the whole file`, async () => {
     const original = new Uint8Array(await readFile(new URL(`./fixtures/media/${file}`, import.meta.url)));
     const ranges: Array<[number, number]> = [];
@@ -45,4 +45,37 @@ test('rejects hostile sample counts before parser allocation', async () => {
   new DataView(original.buffer).setUint32(index + 12, 0xffffffff);
   await expect(openMp4FrameSource(async (offset, length) => original.slice(offset, offset + length), original.length))
     .rejects.toMatchObject({ code: 'unsupported' });
+});
+
+test('rejects hierarchical or oversized fragment indexes before reading any fragment', async () => {
+  for (const field of ['hierarchical', 'count']) {
+    const original = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented.mp4', import.meta.url)));
+    const at = Buffer.from(original).indexOf('sidx') - 4;
+    const view = new DataView(original.buffer);
+    if (field === 'hierarchical') view.setUint32(at + 40, view.getUint32(at + 40) | 0x80000000);
+    else view.setUint16(at + 38, 65535);
+    const ranges: number[] = [];
+    await expect(openMp4FrameSource(async (offset, length) => { ranges.push(offset); return original.slice(offset, offset + length); }, original.length))
+      .rejects.toMatchObject({ code: 'unsupported' });
+    expect(ranges.every(offset => offset <= at)).toBe(true);
+  }
+});
+
+test('rejects hostile fragment sample counts and absolute data offsets before parser allocation', async () => {
+  for (const type of ['trun', 'tfhd']) {
+    const original = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented.mp4', import.meta.url)));
+    const at = Buffer.from(original).indexOf(type);
+    const view = new DataView(original.buffer);
+    if (type === 'trun') view.setUint32(at + 8, 0xffffffff);
+    else view.setUint32(at + 4, view.getUint32(at + 4) | 1);
+    await expect(openMp4FrameSource(async (offset, length) => original.slice(offset, offset + length), original.length))
+      .rejects.toMatchObject({ code: 'unsupported' });
+  }
+});
+
+test('fragmented clips cover the first instant and keyframe boundaries', async () => {
+  const bytes = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented.mp4', import.meta.url)));
+  const source = await openMp4FrameSource(async (offset, length) => bytes.slice(offset, offset + length), bytes.length);
+  for (const target of [0, 1, 2, 3]) expect((await source.clip(target)).time).toBe(0);
+  expect((await source.clip(3.9)).time).toBeCloseTo(0.9);
 });
