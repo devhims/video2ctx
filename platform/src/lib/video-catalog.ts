@@ -2,7 +2,7 @@ import { MAX_STORYBOARD_SHEETS } from '../agents/providers/youtube/storyboard';
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { VerifiedImage } from './verified-image';
 import { sha256 } from './http';
-import { mapInBatches } from './map-in-batches';
+import { mapInBatches, FRAME_IO_CONCURRENCY, EVIDENCE_IO_CONCURRENCY } from './map-in-batches';
 
 export interface VideoAssetKey {
   videoId: string;
@@ -12,6 +12,7 @@ export interface VideoAssetKey {
 /** Immutable payload identity, independent of the video's current pointer. */
 export interface VideoAssetReference extends VideoAssetKey {
   contentHash: string;
+  imageStorage?: 'inline';
 }
 export interface StoredVideoAsset<T = unknown> {
   verifiedImages?: VerifiedImage[];
@@ -61,6 +62,7 @@ export class VideoCatalog {
   constructor(
     private readonly db: D1Database,
     private readonly bucket: R2Bucket,
+    private readonly inlineFrames = false,
   ) {}
 
   private batch<T = unknown>(statements: D1PreparedStatement[]) {
@@ -161,7 +163,9 @@ export class VideoCatalog {
     if ((await sha256(payload)) !== row.content_hash) return null;
     try {
       const verifiedImages: VerifiedImage[] | undefined = verifyImages ? [] : undefined;
-      const value = await this.hydrate(JSON.parse(payload) as Json, row.video_id, verifiedImages);
+      const raw = JSON.parse(payload) as Json;
+      const inlineFrame = row.kind === 'frame' && hasInlineFrame(raw);
+      const value = await this.hydrate(raw, row.video_id, verifiedImages, inlineFrame ? row.object_key : undefined);
       return {
         ...(verifiedImages ? { verifiedImages } : {}),
         value: value as T,
@@ -169,7 +173,8 @@ export class VideoCatalog {
         freshUntil: row.fresh_until,
         complete: !!row.complete,
         catalogVersions: [
-          { videoId: row.video_id, kind: row.kind, variant: row.variant, contentHash: row.content_hash },
+          { videoId: row.video_id, kind: row.kind, variant: row.variant, contentHash: row.content_hash,
+            ...(inlineFrame ? { imageStorage: 'inline' as const } : {}) },
         ],
       };
     } catch (error) {
@@ -199,6 +204,7 @@ export class VideoCatalog {
     if (!inputs.length) return [];
     try {
       if (inputs.length > MAX_STORYBOARD_SHEETS) throw new Error('Too many assets in a catalog write batch.');
+      const concurrency = inputs.every(input => input.key.kind === 'frame') ? FRAME_IO_CONCURRENCY : EVIDENCE_IO_CONCURRENCY;
       const writes = await mapInBatches(inputs, input => this.prepareWrite(input.key, input.value,
         input.fetchedAt, input.maxAgeMs, input.complete, input.coverage ?? {}, true));
       const videoIds = [...new Set(inputs.map(input => input.key.videoId))];
@@ -209,7 +215,7 @@ export class VideoCatalog {
         await mapInBatches(writes, async write => {
           await this.upload(write);
           completed.push(write);
-        });
+        }, concurrency);
       } catch (cause) { failed = { cause }; }
       // mapInBatches drains started uploads before throwing. Publish every success,
       // including siblings of a failed upload, without starting later batches.
@@ -251,11 +257,16 @@ export class VideoCatalog {
     publishCurrent: boolean,
   ): Promise<PreparedWrite> {
     const images: ImageWrite[] = [];
-    const serialized = await this.dehydrate(JSON.parse(JSON.stringify(value)) as Json, key.videoId, images);
+    const raw = JSON.parse(JSON.stringify(value)) as Json;
+    // One atomic object contains a frame and its metadata. Existing split-image
+    // objects remain readable; larger storyboard selections retain image deduplication.
+    const inlineFrame = this.inlineFrames && key.kind === 'frame' && hasInlineFrame(raw);
+    if (inlineFrame) atob((raw as { frames: { imageBase64: string }[] }).frames[0]!.imageBase64);
+    const serialized = inlineFrame ? raw : await this.dehydrate(raw, key.videoId, images);
     const payload = JSON.stringify(serialized);
     const hash = await sha256(payload);
     const objectKey = `youtube/videos/${key.videoId}/${key.kind}/${await sha256(key.variant)}/${hash}.json`;
-    const reference = { ...key, contentHash: hash };
+    const reference = { ...key, contentHash: hash, ...(inlineFrame ? { imageStorage: 'inline' as const } : {}) };
     // Do not publish partial sources as fresh reusable responses. Preserve them
     // in the inventory, and keep an earlier complete current pointer intact.
     const freshUntil = complete ? fetchedAt + maxAgeMs : fetchedAt;
@@ -400,12 +411,20 @@ export class VideoCatalog {
     return out;
   }
 
-  private async hydrate(value: Json, videoId: string, verifiedImages?: VerifiedImage[]): Promise<Json> {
-    if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId, verifiedImages)));
+  private async hydrate(value: Json, videoId: string, verifiedImages?: VerifiedImage[], inlineFrameKey?: string): Promise<Json> {
+    if (Array.isArray(value)) return Promise.all(value.map((item) => this.hydrate(item, videoId, verifiedImages, inlineFrameKey)));
     if (value === null || typeof value !== 'object') return value;
     const out: Record<string, Json> = {};
     await Promise.all(
       Object.entries(value).map(async ([name, item]) => {
+        if (name === 'imageBase64' && typeof item === 'string' && inlineFrameKey) {
+          if (verifiedImages) {
+            const bytes = Uint8Array.from(atob(item), c => c.charCodeAt(0));
+            verifiedImages.push(new VerifiedImage(this.bucket, await videoImageKey(videoId, bytes), inlineFrameKey));
+          }
+          out[name] = item;
+          return;
+        }
         if (
           name === 'imageBase64' &&
           item &&
@@ -425,7 +444,7 @@ export class VideoCatalog {
           for (let offset = 0; offset < bytes.length; offset += 8192)
             binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
           out[name] = btoa(binary);
-        } else out[name] = await this.hydrate(item, videoId, verifiedImages);
+        } else out[name] = await this.hydrate(item, videoId, verifiedImages, inlineFrameKey);
       }),
     );
     return out;
@@ -434,12 +453,18 @@ export class VideoCatalog {
 export class VideoCatalogWriteError extends Error {}
 class MissingVideoImage extends Error {}
 
+function hasInlineFrame(value: Json): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.frames) || value.frames.length !== 1) return false;
+  const frame = value.frames[0];
+  return !!frame && typeof frame === 'object' && !Array.isArray(frame) && typeof frame.imageBase64 === 'string';
+}
+
 export function videoCatalog(env: Env): VideoCatalog | undefined {
   // Older deployments and isolated tests may not have the new dedicated bindings.
   if (!env.VIDEO_CATALOG && !env.VIDEO_ASSETS) return undefined;
   if (!env.VIDEO_CATALOG || !env.VIDEO_ASSETS)
     throw new Error('Both VIDEO_CATALOG and VIDEO_ASSETS must be configured.');
-  return new VideoCatalog(env.VIDEO_CATALOG, env.VIDEO_ASSETS);
+  return new VideoCatalog(env.VIDEO_CATALOG, env.VIDEO_ASSETS, env.YOUTUBE_FRAMES_BACKEND === 'media');
 }
 
 /** Shared identity for stored source images and revocable preview references. */

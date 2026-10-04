@@ -7,6 +7,21 @@ const pool4 = { OUTBOUND_PROXY_URLS: JSON.stringify(['http://one.test', 'http://
 // Picks the lowest slot not yet excluded, so tests can follow the route sequence.
 const nextSlot = excludeSlots => [0, 1, 2, 3].find(slot => !excludeSlots.includes(slot));
 const tunnel = () => Object.assign(new Error('Outbound proxy tunnel failed.'), { code: 'PROXY_TUNNEL_FAILED', status: 522 });
+test('a confirmed bot challenge recovers on another proxy within the same job', async () => {
+  const routes = [];
+  const result = await extractWithProxyFallback({}, { environment,
+    transportFactory: (_, { excludeSlots }) => { const slot = nextSlot(excludeSlots); routes.push(slot); return { slot, fetch: slot, close: async () => {} }; },
+    extractFrames: async options => {
+      if (options.fetch === 0) {
+        options.onDiagnostic({ stage: 'player_response', playabilityStatus: 'LOGIN_REQUIRED', reason: "Sign in to confirm you're not a bot" });
+        throw Object.assign(new Error('No source'), { code: 'MEDIA_UNAVAILABLE' });
+      }
+      return { frames: ['ok'] };
+    },
+  });
+  assert.deepEqual(result.frames, ['ok']);
+  assert.deepEqual(routes, [0, 1]);
+});
 test('nested tunnel failures latch the route and never retry media on that route', async () => {
   let calls = 0;
   const nested = new TypeError('fetch failed', { cause: new Error('cancelled', { cause: new Error('Proxy response (522) !== 200 when HTTP Tunneling') }) });
@@ -153,4 +168,30 @@ test('a Worker proxy order is followed, skipping slots that already failed', asy
   });
   assert.deepEqual(result.frames, ['ok']);
   assert.deepEqual(preferred, [2, 0, 3]);
+});
+
+for (const code of ['AUTH_REQUIRED', 'MEDIA_UNAVAILABLE']) test(`ordinary ${code} without a bot challenge does not rotate proxies`, async () => {
+  let calls = 0;
+  await assert.rejects(extractWithProxyFallback({}, { environment,
+    transportFactory: () => ({ slot: 0, close: async () => {} }),
+    extractFrames: async options => {
+      calls++;
+      options.onDiagnostic({ stage: 'player_response', playabilityStatus: 'LOGIN_REQUIRED', reason: 'Sign in to confirm your age' });
+      throw Object.assign(new Error('Restricted'), { code });
+    },
+  }), { code });
+  assert.equal(calls, 1);
+});
+
+test('bot challenge recovery shares the deadline and stops before an underfunded retry', async () => {
+  let clock = 0, calls = 0;
+  await assert.rejects(extractWithProxyFallback({}, { environment, now: () => clock,
+    transportFactory: () => ({ slot: 0, close: async () => {} }),
+    extractFrames: async options => {
+      calls++; clock = 42000;
+      options.onDiagnostic({ stage: 'player_response', reason: "Sign in to confirm you're not a bot" });
+      throw Object.assign(new Error('No source'), { code: 'MEDIA_UNAVAILABLE' });
+    },
+  }), { code: 'MEDIA_UNAVAILABLE' });
+  assert.equal(calls, 1);
 });

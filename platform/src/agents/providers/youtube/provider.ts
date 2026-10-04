@@ -1,9 +1,12 @@
 import type { ExtractionDiagnosticSink } from '../../../lib/extraction-diagnostics';
-import { getVideoFrames, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
+import { getVideoFrames, validateFrameResponse, type VideoFrames, type frameRequestSchema } from '../../../lib/youtube-frames';
+import { VerifiedFrame } from '../../../lib/verified-frame';
+import type { VerifiedImage } from '../../../lib/verified-image';
+import { videoCatalog, videoImageKey } from '../../../lib/video-catalog';
+import { sha256 } from '../../../lib/http';
 import type { z } from 'zod';
 import { runYouTubeOperation } from '../../../lib/youtube-processor-client';
 import { ALL_COMMENTS_MAX_PAGES, getTranscriptWithCache, getVideoResource, getVideoSignalsWithCache } from '../../../lib/youtube';
-import { videoCatalog } from '../../../lib/video-catalog';
 import { storyboardSchema, type Storyboard, type StoryboardSelectionOptions } from './storyboard';
 import type {
   BrowseOptions,
@@ -68,9 +71,28 @@ export function createYouTubeAgentProvider(
     frames: async (request, signal, limits, onDiagnostic) => {
       if (!videoCatalog(env)) return { value:await getVideoFrames(env,request,signal,limits,onDiagnostic),cacheStatus:'miss' };
       signal?.throwIfAborted();
-      return abortable(getVideoResource(env,{kind:'frames',id:request.videoId,
+      const result = await abortable(getVideoResource(env,{kind:'frames',id:request.videoId,
         timestampsMs:request.timestampsMs,maxWidth:request.maxWidth??1920,extractionTimeoutMs:limits?.extractionTimeoutMs??45_000},
       limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}),signal);
+      // The private coordinator responds only after publishing every returned
+      // frame. Carry that receipt locally instead of downloading the batch again.
+      // Cache/stale results and missing references retain independent verification.
+      if (env.YOUTUBE_FRAMES_BACKEND !== 'media' || result.cacheStatus !== 'miss') return result;
+      const frames = validateFrameResponse({ ...request, maxWidth: request.maxWidth ?? 1920 }, result.value);
+      const verifiedImages: VerifiedImage[] = [];
+      const verifiedFrames = await Promise.all(frames.frames.map(async frame => {
+        const reference = result.catalogVersions?.find(ref => ref.kind === 'frame' && ref.videoId === request.videoId
+          && ref.variant === `v1:${request.maxWidth ?? 1920}:${frame.timestampMs}`);
+        if (!reference || !/^[a-f0-9]{64}$/.test(reference.contentHash)) return undefined;
+        const bytes = Uint8Array.from(atob(frame.imageBase64), c => c.charCodeAt(0));
+        const frameKey = reference.imageStorage === 'inline'
+          ? `youtube/videos/${request.videoId}/frame/${await sha256(reference.variant)}/${reference.contentHash}.json` : undefined;
+        const receipt = new VerifiedFrame(env.VIDEO_ASSETS, reference, frame, await videoImageKey(request.videoId, bytes), frameKey);
+        verifiedImages.push(receipt.match(env.VIDEO_ASSETS, reference, { videoId: request.videoId, frames: [frame] })!);
+        return receipt;
+      }));
+      signal?.throwIfAborted();
+      return { ...result, verifiedImages, verifiedFrames: verifiedFrames.filter((value): value is VerifiedFrame => !!value) };
     },
     storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => {
       const { signal, deadlineAt: requestedDeadlineAt, ...selection } = options;

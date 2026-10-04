@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { framePreviewKey, framePreviewSchema } from '../../agents/runtime/frame-previews';
 import { ApiError } from '../../lib/http';
 import type { App } from '../../types';
+import { framesSchema } from '../../lib/youtube-frames-contract';
 
 // Public image links only. Session reads and frame extraction remain authenticated.
 export const agentFramePreviewRoutes = new Hono<App>();
@@ -12,7 +13,23 @@ agentFramePreviewRoutes.get('/agent/frames/:collectionId/:assetId', async c => {
   let object = await c.env.RESEARCH.get(framePreviewKey(parsed.data.collectionId, parsed.data.assetId));
   if (!object) throw new ApiError(404, 'FRAME_PREVIEW_NOT_FOUND', 'This frame preview is unavailable.');
   if (object.httpMetadata?.contentType === 'application/json') {
-    const reference = await object.json<{sharedImageKey?:unknown}>();
+    const reference = await object.json<{sharedImageKey?:unknown;sharedFrameKey?:unknown}>();
+    if (typeof reference.sharedFrameKey === 'string') {
+      if (!/^youtube\/videos\/[A-Za-z0-9_-]{11}\/frame\/[a-f0-9]{64}\/[a-f0-9]{64}\.json$/.test(reference.sharedFrameKey))
+        throw new ApiError(404, 'FRAME_PREVIEW_NOT_FOUND', 'This frame preview is unavailable.');
+      const frameObject = await c.env.VIDEO_ASSETS?.get(reference.sharedFrameKey);
+      const stored = frameObject ? framesSchema.safeParse(await frameObject.json().catch(() => null)) : undefined;
+      if (!stored?.success || stored.data.frames.length !== 1)
+        throw new ApiError(404, 'FRAME_PREVIEW_NOT_FOUND', 'This frame preview is unavailable.');
+      let bytes: Uint8Array<ArrayBuffer>;
+      try { bytes = Uint8Array.from(atob(stored.data.frames[0]!.imageBase64), ch => ch.charCodeAt(0)); }
+      catch { throw new ApiError(404, 'FRAME_PREVIEW_NOT_FOUND', 'This frame preview is unavailable.'); }
+      c.header('Content-Type', 'image/jpeg');
+      c.header('X-Content-Type-Options', 'nosniff');
+      c.header('X-Robots-Tag', 'noindex, nofollow');
+      c.header('Content-Disposition', 'inline; filename="video-frame.jpg"');
+      return c.body(bytes);
+    }
     const key = reference.sharedImageKey;
     if (typeof key !== 'string' || !/^youtube\/videos\/[A-Za-z0-9_-]{11}\/images\/[a-f0-9]{64}\.jpg$/.test(key))
       throw new ApiError(404, 'FRAME_PREVIEW_NOT_FOUND', 'This frame preview is unavailable.');

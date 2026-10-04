@@ -1,6 +1,6 @@
 import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
-import { mapInBatches } from '../../lib/map-in-batches';
+import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
@@ -261,6 +261,7 @@ export function sessionProvider(
                   async () => ({
                     value,
                     cacheStatus: fetchedResult.cacheStatus,
+                    verifiedFrames: fetchedResult.verifiedFrames,
                     catalogVersions: fetchedResult.catalogVersions?.filter(
                       (asset) =>
                         asset.kind === 'frame' && asset.variant === `v1:${maxWidth}:${frame.timestampMs}`,
@@ -277,7 +278,7 @@ export function sessionProvider(
                 );
                 refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
                 return result;
-              }));
+              }, FRAME_IO_CONCURRENCY));
               signal?.throwIfAborted();
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               hits.push(...pinned);

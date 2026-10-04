@@ -637,13 +637,13 @@ test('persists frames with bounded R2 concurrency and returns references in time
   const times = [1000, 2000, 3000, 4000, 5000, 6000];
   const refs = await saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
     { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000);
-  expect(peak).toBe(4);
+  expect(peak).toBe(6);
   expect(active).toBe(0);
   expect(refs.map(ref => ref.variant)).toEqual(times.map(time => `v1:640:${time}`));
   expect(f.batches).toHaveLength(2);
 });
 
-test('settles started frame writes before rejecting and does not start the next batch', async () => {
+test('settles all six started frame writes before rejecting', async () => {
   const f = fixture();
   let settled = 0;
   vi.mocked(f.bucket.put).mockImplementation(async () => {
@@ -655,8 +655,8 @@ test('settles started frame writes before rejecting and does not start the next 
   const times = [1000, 2000, 3000, 4000, 5000, 6000];
   await expect(saveVideoResource(f.env, { kind: 'frames', id, timestampsMs: times, maxWidth: 640, extractionTimeoutMs: 5000 },
     { videoId: id, frames: times.map(frame), failures: [], meta: { partial: false, warnings: [] } }, Date.now(), 60_000)).rejects.toThrow('could not be saved');
-  expect(f.bucket.put).toHaveBeenCalledTimes(4);
-  expect(settled).toBe(4);
+  expect(f.bucket.put).toHaveBeenCalledTimes(6);
+  expect(settled).toBe(6);
 });
 
 test('attaches catalog timings to extraction diagnostics even when persistence fails', async () => {
@@ -1075,4 +1075,82 @@ test('image verification hashing is opt-in and still rejects proof for mismatche
     f.objects.set(key, new Uint8Array([255, 216, 255, 1]));
     expect((await f.store.readVersion(reference!, true))?.verifiedImages).toEqual([]);
   } finally { digest.mockRestore(); }
+});
+
+test.each([false, true])('publishes ready Media frames during decoding and drains writes on failure=%s', async fail => {
+  const f = fixture();
+  f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = VideoCatalog.prototype.saveMany;
+  let entered = false, finished = false;
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany').mockImplementation(async function(this: VideoCatalog, ...args) {
+    entered = true;
+    await gate;
+    finished = true;
+    if (fail) throw new Error('storage unavailable');
+    return original.apply(this, args);
+  });
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _limits, _diagnostic, ready) => {
+    ready?.(frame(1000));
+    await Promise.resolve();
+    expect(entered).toBe(true);
+    return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  });
+  let settled = false;
+  const pending = loadVideoResource(f.env, {kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000})
+    .finally(() => { settled = true; });
+  const outcome = fail ? expect(pending).rejects.toThrow('storage unavailable') : expect(pending).resolves.toMatchObject({frames:[frame(1000)]});
+  try {
+    await vi.waitFor(() => expect(entered).toBe(true));
+    expect(settled).toBe(false);
+    expect(finished).toBe(false);
+  } finally { release(); }
+  await outcome;
+  expect(finished).toBe(true);
+  expect(save).toHaveBeenCalledOnce();
+  save.mockRestore();
+});
+
+test('drains a started frame publication before propagating an extraction failure', async () => {
+  const f = fixture(); f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany').mockImplementation(async () => { await gate; return []; });
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _limits, _diagnostic, ready) => {
+    ready!(frame(1000)); throw new Error('extraction failed');
+  });
+  let settled = false;
+  const pending = loadVideoResource(f.env, {kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000})
+    .finally(() => { settled = true; });
+  const outcome = expect(pending).rejects.toThrow('extraction failed');
+  await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(settled).toBe(false);
+  release(); await outcome; save.mockRestore();
+});
+
+test('publishes only remaining fallback frames after progressive Media results', async () => {
+  const f = fixture(); f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany');
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _limits, _diagnostic, ready) => {
+    ready!(frame(1000)); ready!(frame(1000));
+    return {videoId:id,frames:[frame(1000),frame(2000)],failures:[],meta:{partial:false,warnings:['Recovery used.']}};
+  });
+  const versions = vi.fn();
+  await loadVideoResource(f.env, {kind:'frames',id,timestampsMs:[1000,2000],maxWidth:640,extractionTimeoutMs:5000}, undefined, false, versions);
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(save.mock.calls.flatMap(([inputs]) => inputs.map(input => input.key.variant)).sort()).toEqual(['v1:640:1000','v1:640:2000']);
+  expect(versions.mock.calls[0]![0]).toHaveLength(2);
+  save.mockRestore();
+});
+
+test('stores a Media frame atomically with one R2 write and no separate image object', async () => {
+  const f = fixture(); f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  const value = {videoId:id,frames:[frame(1000)],failures:[],meta:{partial:false,warnings:[]}};
+  const versions=await saveVideoResource(f.env,{kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000},value,Date.now(),60000);
+  expect(f.bucket.put).toHaveBeenCalledOnce();
+  expect(versions[0]).toMatchObject({imageStorage:'inline'});
+  const restored=await f.store.readVersion(versions[0]!,true);
+  expect(restored?.value).toEqual(value);
+  expect(restored?.verifiedImages?.[0]?.previewReference()).toEqual({sharedFrameKey:vi.mocked(f.bucket.put).mock.calls[0]![0]});
 });

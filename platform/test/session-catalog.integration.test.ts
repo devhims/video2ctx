@@ -720,7 +720,7 @@ test('six-frame session pinning reuses verification for previews and explicit re
   });
 });
 
-test.each(['cancel','delete'])('%s during frame pinning drains four started pins without late session attachments', async mode=>{
+test.each(['cancel','delete'])('%s during frame pinning drains six started pins without late session attachments', async mode=>{
   const id=videoId();
   const times=[1000,2000,3000,4000,5000,6000];
   const frames={videoId:id,frames:times.map(timestampMs=>({timestampMs,width:640,height:360,
@@ -734,7 +734,7 @@ test.each(['cancel','delete'])('%s during frame pinning drains four started pins
     const gate=new Promise<void>(resolve=>{release=resolve;});
     const entered=new Promise<void>(resolve=>{ready=resolve;});
     vi.spyOn(backend,'pin').mockImplementation(async(...args)=>{
-      if (++started===4) ready();
+      if (++started===6) ready();
       await gate;
       return original(...args);
     });
@@ -746,7 +746,7 @@ test.each(['cancel','delete'])('%s during frame pinning drains four started pins
     if(mode==='cancel') controller.abort(new Error('cancelled')); else await store.delete();
     release();
     await rejected;
-    expect(started).toBe(4);
+    expect(started).toBe(6);
     expect(store.brief().assets).toEqual([]);
     expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
     expect(await catalog().readVersion(refs[0]!)).not.toBeNull();
@@ -791,5 +791,100 @@ test('session storyboard metadata and missing sheets retain the caller retrieval
     await p.storyboard!(id, undefined, { metadataOnly: true, deadlineAt });
     await p.storyboard!(id, undefined, { sheetIndexes: [0], maxSheets: 1, deadlineAt });
     expect(upstream).toHaveBeenCalledTimes(2);
+  });
+});
+
+test('a completed coordinator save attaches frames without downloading them again and restores from storage', async () => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const id = videoId();
+  const request = {videoId:id,timestampsMs:[1000,2000],maxWidth:640};
+  const value = {videoId:id,frames:request.timestampsMs.map(timestampMs=>({timestampMs,width:640,height:360,
+    mimeType:'image/jpeg' as const,imageBase64:'/9j/AA=='})),failures:[],meta:{partial:false,warnings:[]}};
+  let published = false;
+  const getOrLoad = vi.fn(async () => {
+    const versions = await saveVideoResource(configured,{kind:'frames',id,...request,extractionTimeoutMs:5000},value,Date.now(),60000);
+    published = true;
+    return JSON.stringify({ok:true,value,cacheStatus:'miss',catalogVersions:versions,fetchedAt:Date.now()});
+  });
+  const configured = {...env,YOUTUBE_FRAMES_BACKEND:'media',YOUTUBE_REQUEST_COORDINATOR:{getByName:()=>({getOrLoad})}} as unknown as Env;
+  await within('frame-receipt',async({store})=>{
+    const read = vi.spyOn(VideoCatalog.prototype,'readVersion');
+    try {
+      const result = await sessionProvider(createYouTubeAgentProvider(configured),store).frames!(request);
+      expect(published).toBe(true);
+      expect(result.assetVersions).toHaveLength(2);
+      expect(result.verifiedImages).toHaveLength(2);
+      expect(read).not.toHaveBeenCalled();
+      const restored = await store.lookup(`frame:${id}:640:1000`);
+      expect(restored?.value).toMatchObject({frames:[value.frames[0]]});
+      expect(read).toHaveBeenCalledOnce();
+      expect(restored?.verifiedImages).toHaveLength(1);
+      const { saveFramePreviews, framePreviewKey } = await import('../src/agents/runtime/frame-previews');
+      const { agentFramePreviewRoutes } = await import('../src/routes/agent/frame-previews');
+      const preview = (await saveFramePreviews(env.RESEARCH, 'inline-owner', result.value, new AbortController().signal, env.VIDEO_ASSETS, result.verifiedImages))[0]!;
+      const previewPath = `/agent/frames/${preview.collectionId}/${preview.assetId}`;
+      expect((await agentFramePreviewRoutes.request(previewPath, {}, env)).status).toBe(200);
+      const repeated = await sessionProvider(createYouTubeAgentProvider(configured),store).frames!(request);
+      expect(repeated.sessionReused).toBe(true);
+      const reusedPreview = (await saveFramePreviews(env.RESEARCH, 'inline-owner', repeated.value, new AbortController().signal, env.VIDEO_ASSETS, repeated.verifiedImages))[0]!;
+      expect((await agentFramePreviewRoutes.request(`/agent/frames/${reusedPreview.collectionId}/${reusedPreview.assetId}`, {}, env)).status).toBe(200);
+      await env.RESEARCH.delete(framePreviewKey(preview.collectionId,preview.assetId));
+      expect((await env.RESEARCH.get(framePreviewKey(preview.collectionId,preview.assetId)))).toBeNull();
+      expect(getOrLoad).toHaveBeenCalledOnce();
+    } finally { read.mockRestore(); }
+  });
+});
+
+test.each(['serialized','changed-bytes','changed-version','different-bucket'])('a %s receipt cannot bypass catalog verification', async mode => {
+  const { VerifiedFrame } = await import('../src/lib/verified-frame');
+  const { videoImageKey } = await import('../src/lib/video-catalog');
+  const id = videoId(), frame = {timestampMs:1000,width:640,height:360,mimeType:'image/jpeg' as const,imageBase64:'/9j/AA=='};
+  const value = {videoId:id,frames:[frame],failures:[],meta:{partial:false,warnings:[]}};
+  const versions = await saveVideoResource(env,{kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000},value,Date.now(),60000);
+  const key = await videoImageKey(id,Uint8Array.from(atob(frame.imageBase64),c=>c.charCodeAt(0)));
+  const receipt = new VerifiedFrame(mode==='different-bucket'? {} as R2Bucket : env.VIDEO_ASSETS,versions[0]!,frame,key);
+  const supplied = mode==='serialized' ? JSON.parse(JSON.stringify(receipt)) : receipt;
+  const changed = mode==='changed-bytes' ? {...value,frames:[{...frame,imageBase64:'/9j/AQ=='}]} : value;
+  const refs = mode==='changed-version' ? [{...versions[0]!,contentHash:'a'.repeat(64)}] : versions;
+  const read = vi.spyOn(VideoCatalog.prototype,'readVersion');
+  try {
+    const pin = new SessionCatalog(env).pin('frame',id,`frame:${id}:640:1000`,changed,Date.now(),refs,undefined,[supplied]);
+    if (mode==='changed-bytes'||mode==='changed-version') await expect(pin).rejects.toThrow('does not match');
+    else await expect(pin).resolves.toMatchObject({asset:versions[0]});
+    expect(read).toHaveBeenCalledOnce();
+  } finally { read.mockRestore(); }
+});
+
+test.each(['refresh', 'width-alias', 'rollback'] as const)('inline frame previews survive %s in the same session', async mode => {
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { saveFramePreviews } = await import('../src/agents/runtime/frame-previews');
+  const { agentFramePreviewRoutes } = await import('../src/routes/agent/frame-previews');
+  const { videoImageKey } = await import('../src/lib/video-catalog');
+  const id = videoId(), at = Date.now();
+  const request = { videoId: id, timestampsMs: [1000], maxWidth: 640 };
+  const frame = { timestampMs: 1000, width: 320, height: 180, mimeType: 'image/jpeg' as const, imageBase64: '/9j/AA==' };
+  const value = { videoId: id, frames: [frame], failures: [], meta: { partial: false, warnings: [] } };
+  const versions = await saveVideoResource({ ...env, YOUTUBE_FRAMES_BACKEND: 'media' },
+    { kind: 'frames', id, ...request, extractionTimeoutMs: 5000 }, value, at, 60000);
+  const getOrLoad = vi.fn(async () => JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions: versions, fetchedAt: at }));
+  const configured = { ...env, YOUTUBE_FRAMES_BACKEND: 'media', YOUTUBE_REQUEST_COORDINATOR: { getByName: () => ({ getOrLoad }) } } as unknown as Env;
+  await within(`inline-alias-${mode}`, async ({ store, reopen }) => {
+    const first = await sessionProvider(createYouTubeAgentProvider(configured), store).frames!(request);
+    expect(await env.VIDEO_ASSETS.head(await videoImageKey(id, Uint8Array.from(atob(frame.imageBase64), c => c.charCodeAt(0))))).toBeNull();
+    const nextRequest = mode === 'width-alias' ? { ...request, maxWidth: 1280 } : request;
+    if (mode === 'width-alias') {
+      const wider = await saveVideoResource(configured, { kind: 'frames', id, ...nextRequest, extractionTimeoutMs: 5000 }, value, at, 60000);
+      getOrLoad.mockResolvedValue(JSON.stringify({ ok: true, value, cacheStatus: 'miss', catalogVersions: wider, fetchedAt: at }));
+    }
+    const backend = (mode === 'rollback' ? { ...configured, YOUTUBE_FRAMES_BACKEND: 'container' } : configured) as Env;
+    const next = await sessionProvider(createYouTubeAgentProvider(backend), mode === 'rollback' ? reopen() : store)
+      .frames!(nextRequest, undefined, mode === 'refresh' ? { refresh: true, extractionTimeoutMs: 5000 } : undefined);
+    expect(next.assetVersions).toEqual(first.assetVersions);
+    const previews = await saveFramePreviews(env.RESEARCH, 'inline-alias-owner', next.value,
+      new AbortController().signal, env.VIDEO_ASSETS, next.verifiedImages);
+    const response = await agentFramePreviewRoutes.request(`/agent/frames/${previews[0]!.collectionId}/${previews[0]!.assetId}`, {}, env);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from(atob(frame.imageBase64), c => c.charCodeAt(0)));
+    expect(getOrLoad).toHaveBeenCalledTimes(mode === 'rollback' ? 1 : 2);
   });
 });

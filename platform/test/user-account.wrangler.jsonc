@@ -17,6 +17,9 @@
         "class_name": "AgentRuntimeDO"
       },
       {
+        "name": "MEDIA_FRAME_CAPACITY", "class_name": "MediaFrameCapacity"
+      },
+      {
         "name": "PROXY_HEALTH",
         "class_name": "ProxyHealth"
       }
@@ -28,7 +31,8 @@
       "new_sqlite_classes": [
         "UserAccountDO",
         "AgentRuntimeDO",
-        "ProxyHealth"
+        "ProxyHealth",
+        "MediaFrameCapacity"
       ]
     }
   ],

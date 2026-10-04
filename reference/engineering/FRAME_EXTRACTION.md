@@ -2,6 +2,130 @@
 
 An agent uses storyboards to find relevant moments, then asks for individual video frames when it needs to read text, a chart, code, or a specific interface state. Frame extraction does not analyze the whole video or prove motion between images.
 
+## Managed decoding with FFmpeg recovery
+
+`YOUTUBE_FRAMES_BACKEND=media` selects Cloudflare Media Transformations for supported
+indexed H.264 MP4 inputs. `container` restores the original FFmpeg-only path. The
+Worker resolves source metadata and byte ranges through the configured proxy pool,
+reads the MP4 index once, and packages a short independently decodable clip for each
+requested timestamp. Cloudflare decodes that clip into a JPEG. The original video
+can exceed Media's input duration limit because only the short clip is submitted.
+
+Source discovery reuses the playable player's live-content flag. A missing flag
+retains the separate metadata lookup, and live content retains FFmpeg recovery.
+A bounded 64 KiB prefix read normally contains the MP4 index and first fragment
+header, avoiding separate proxy requests for each small box. Larger or tail indexes
+still use precise bounded range reads.
+
+Completed Media frames begin catalog publication while the remaining frames decode.
+Every started write is drained, and failures prevent a successful tool response.
+Each write retains the pending journal and final catalog publication. New Media
+frame records keep the JPEG base64 and metadata in one immutable JSON object,
+removing a second R2 write. Base64 adds about one third per image copy, and identical frames across variants
+are now stored separately. Old
+split-image records remain readable; storyboards retain separate deduplicated JPEGs. Frame storage, session attachment, and preview writes admit
+six images together; storyboard I/O remains bounded to four.
+
+After the private coordinator confirms successful publication, the agent provider
+creates request-local frame receipts tied to the bucket, immutable catalog reference,
+and exact frame payload. Session attachment can consume a matching receipt without
+downloading the newly saved images again. Receipts cannot be serialized or supplied
+by tool input. Missing, mismatched, cache-hit, and stale receipts use the existing
+catalog verification path. Later session reads still load the immutable stored
+version. Session generation checks, cancellation, and preview revocation are retained.
+Preview references can resolve either a shared JPEG or the JPEG inside a frame
+object. They remain private, individually revocable R2 records. Roll back decoding
+with the backend flag while retaining this compatible reader; older Worker builds
+cannot serve the new preview-reference format.
+
+The existing shared frame cache, session storage, image validation, preview paths,
+credits, and caller-facing frame contract remain in place. Cache hits do not invoke
+either decoder. Signed media URLs, proxy credentials, and clip bytes are never saved
+in diagnostics. This path creates no public frame endpoint.
+
+```mermaid
+%%{init: {'themeVariables': {'actorBkg': '#e2e8f0', 'actorTextColor': '#0f172a', 'signalColor': '#64748b', 'sequenceNumberColor': '#ffffff'}}}%%
+sequenceDiagram
+    autonumber
+    participant App as Platform Worker
+    participant Capacity as Shared admission
+    participant Source as YouTube through proxy
+    participant Media as Cloudflare Media
+    participant FF as Existing FFmpeg containers
+    App->>Capacity: Admit bounded batch
+    App->>Source: Read metadata, index, and selected ranges
+    App->>App: Package short MP4 clips
+    App->>Capacity: Admit each Media call
+    App->>Media: Decode clip at relative timestamp
+    Media-->>App: JPEG or failure
+    opt Missing frames and remaining budget
+        App->>Capacity: Admit FFmpeg recovery
+        App->>FF: Extract only missing timestamps
+        FF-->>App: Frames and explicit failures
+    end
+```
+
+The `MediaFrameCapacity` Durable Object stores only random lease IDs, start times,
+and cooldowns. One shared account quota allows eight Media batches, eight active
+Media calls, and at most 24 Media call starts in any 15-second window. These are
+our conservative rollout settings, not Cloudflare's published quota. Each batch
+prepares and decodes at most two frames simultaneously. Admission waits at most
+two seconds. Eight admitted batches do not guarantee eight batches decoding at
+once, and admission is not a fair queue. The rate limit and admission timeout
+can still constrain bursts; sustained-load tuning remains outstanding. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
+FFmpeg recovery has a separate two-job limit, matching the existing container pool.
+Completed or failed calls retain their rate accounting. Leases expire after 90
+seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
+Admission RPC failure never bypasses the limit.
+
+Media gets at most 20 seconds of the existing extraction budget and leaves at
+least ten seconds for recovery when that budget permits. Short-budget calls go
+directly to FFmpeg recovery. Fallback uses only missing timestamps and the remaining
+time; it does not restart the budget or discard completed Media frames. Combined
+output retains the 8 MiB image limit. If recovery fails, usable frames return with
+explicit partial coverage. Caller cancellation prevents fallback.
+
+Supported formats are indexed H.264 MP4 and H.264 fragmented MP4 with a flat
+segment index. Both require an identity display matrix and an IDR keyframe at the
+clip start. Regular MP4 allows a simple edit list; fragmented MP4 accepts no edit or the initial presentation offset used to
+remove decode preroll. Other edits use FFmpeg. Fragment presentation time is normalized using the first fragment header,
+without downloading that fragment's video body. Other
+formats and uncertain broadcasts use the existing container path. Parser work is
+bounded to a 2 MiB index and 50,000 declared samples across tracks. This can send
+longer progressive videos to FFmpeg, especially when they contain audio tracks.
+Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
+bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
+fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
+the Media path prioritizes a progressive source before other adaptive formats,
+then tries another client or proxy for only the missing frames.
+This can select progressive 360p after adaptive 720p fails. Below-720p output keeps
+an explicit quality warning. A request tries at most three prepared sources across
+at most four configured proxy routes, within the same 20-second Media deadline
+and aggregate byte limit. Completed frames are never extracted again. Source
+read failures are recorded separately from decoder failures.
+Selected media ranges are limited to 4 MiB, keyframe groups to 1,000 samples and 30
+seconds, and aggregate source reads to 40 MiB per Media attempt. Sources must honor
+exact HTTP byte ranges; full-file HTTP 200 responses are rejected without reading
+their bodies. Input limits are deliberate recovery triggers, not user-facing video
+limits. The original library and container behavior is retained.
+
+Deployment requires the new `MEDIA` binding and SQLite-backed `MediaFrameCapacity`
+namespace (migration `v8`) in the Worker. No D1 data migration or capacity increase is required. The initial Media
+integration did not change containers. The subsequent source-recovery fix also
+requires rebuilding the frames image so confirmed bot challenges can try another
+proxy within the existing job deadline. Ordinary authentication restrictions do
+not trigger that retry. Production validation was explicitly authorized before PR review. Local development can set
+`YOUTUBE_FRAMES_BACKEND:container`; Media decoding requires Cloudflare's remote
+binding. Safe extraction diagnostics identify `backend: media` and admission,
+source preparation, and decode stages separately from container attempts.
+
+PR #139 is independent: it admits two visual retrievals per session while keeping
+only one frame batch active. Its storyboard latency improvement does not require
+Media, and Media does not remove the need to bound work across sessions.
+
+Production measurements and rollout details are in the
+[October 4 validation report](performance/media-production-2026-10-04.md).
+
 ## Existing local skill
 
 The skill is `youtube-ctx`. Its visual entry point is `watch.mjs`, generated from `packages/youtube-skills/src/watch/`. The published instructions are in `.agents/skills/youtube-ctx/references/visual.md`.
@@ -21,7 +145,7 @@ There is no full-video file download or staging step. FFmpeg streams media throu
 
 ## Hosted flow
 
-The platform Worker's existing agent API owns authentication, permissions, admission limits, credits, input validation, and the agent response. The new private `YouTubeFramesContainer` owns frame-related YouTube traffic, the loopback range proxy, FFmpeg, and temporary files. The existing processor continues to handle storyboards and other provider reads. No YouTube media requests originate in the Worker.
+The platform Worker's existing agent API owns authentication, permissions, admission limits, credits, input validation, and the agent response. The diagram below describes the retained container backend. Its private `YouTubeFramesContainer` owns the loopback range proxy, FFmpeg, and temporary files. The managed backend above instead reads media through the Worker's required proxy transport. The existing processor continues to handle storyboards.
 
 ```mermaid
 %%{init: {'themeVariables': {'sequenceNumberColor': '#ffffff', 'actorBkg': '#e5e7eb', 'actorTextColor': '#111827', 'actorBorder': '#374151', 'signalColor': '#6b7280'}}}%%
@@ -408,3 +532,71 @@ event is recorded as a route failure, the slot that served a successful job clea
 its cooldown, and a `RATE_LIMITED` job cools its slot for longer. With static ISP
 proxies a bad IP tends to stay bad, so this memory, not the per-job retry, is what
 stops later jobs from paying the 3 to 5 second check on the same proxy again.
+
+
+### Recovery after a blocked frame source
+
+The October 4 run `fe52fe8c-6b51-4864-9ef8-b987a250b791` needed three tool calls
+for six frames of `tXcT3OE7G1g`. Player bot challenges stopped the first call.
+The second returned one 720p frame while the other adaptive range reads received
+403. The third recovered the remaining five through progressive 360p and FFmpeg.
+
+Media source discovery now remains open while the caller decodes each batch.
+When ranges fail, it tries progressive recovery, other candidates, client profiles, and the
+bounded healthy-first proxy order. Only missing timestamps enter
+the next batch. Every in-flight frame settles before switching sources, and closing
+the iterator releases the active transport. Cancellation, quota cooldowns, byte
+limits, and the Media deadline still stop recovery. FFmpeg remains the final path.
+
+A confirmed player bot challenge marks its proxy rate limited and moves source
+discovery to the next configured route. Reading an index alone no longer marks a
+proxy healthy. A route with failed frame reads cannot clear a cooldown. A 403 for
+one format does not alone condemn the whole proxy, since another format can work.
+The frames container also retries confirmed bot challenges, but keeps ordinary
+login restrictions terminal. It does not reset the extraction deadline.
+
+
+The frame analyst receives an explicit selected-batch scope. It must not label
+other timestamps in the original question as missing simply because another
+analysis call owns them. Retrieval diagnostics remain the source of extraction
+coverage; quality warnings for supplied images remain visible. Each image has an
+explicit numbered timestamp label, and the schema accepts six findings so a
+six-frame batch can describe every frame individually.
+
+See [production recovery validation](performance/frame-recovery-2026-10-04.md) for
+the deployed versions, per-run results, and remaining reliability limits.
+
+### Review hardening before merge
+
+Inline frame previews retain verified storage references when a refresh or another
+width request aliases an existing session version. This branch reads the pinned
+version through the catalog verifier, including when the backend has been switched
+back to `container`. It does not assume a separate JPEG object exists.
+
+A per-range timeout or transport error during clipping is a source failure and can
+advance to another source. Caller cancellation and the overall deadline still
+stop recovery. An HTTP 422 from Media rejects that clip without skipping unrelated
+timestamps. Rate limits and service failures still stop further Media dispatch.
+A confirmed live video stops Media source discovery after the first player or
+metadata confirmation, rather than repeating the same check across proxy routes.
+
+FFmpeg admission exhaustion returns `PROCESSOR_BUSY`, including as a retryable
+failure for missing timestamps in a partial result. Admission RPC deadlines use
+this same capacity classification; caller cancellation is preserved. Capacity and generic failure
+responses retain the most recent extraction ID, and source exhaustion no longer
+replaces a specific per-frame failure reason with `unsupported`.
+
+Progressive MP4 preparation inspects the source index before building a short
+clip. The 50,000-sample safety limit includes both audio and video sample tables.
+For example, 30 fps video plus about 43 AAC packets per second reaches the cap at
+roughly 11 minutes. The threshold varies with encoding. This is an application
+parser bound, not a duration limit on the clip sent to Cloudflare Media. Longer
+progressive inputs may therefore require FFmpeg even for a short requested range.
+
+The 90-second abandoned-work lease and awaited release RPCs remain conservative
+choices. The Media response API exposes no abort parameter; a local timeout does
+not establish remote completion. Before reducing lease expiry, measure abandoned
+work lifetime and concurrent admission under slowdown. Before moving release off
+the critical path, track its completion and verify that subsequent acquisitions
+do not wait on finished work. Neither change is a prerequisite for the corrected
+preview and recovery paths, but sustained-load validation remains outstanding.

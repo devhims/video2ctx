@@ -1,3 +1,4 @@
+export { MediaFrameCapacity } from './durable-objects/media-frame-capacity';
 export { YouTubeFramesContainer } from './youtube-frames-container';
 import app from './app';
 import { queueDigests } from './lib/digests';

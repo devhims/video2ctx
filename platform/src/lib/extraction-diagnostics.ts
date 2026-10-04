@@ -5,7 +5,7 @@ const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Deliberately no free-form strings, error messages, URLs, headers, or stderr.
 export const extractionEventSchema = z.object({
   stage: z.enum(['catalog_lookup', 'catalog_write', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
-    'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy']),
+    'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy', 'media_decode', 'media_admission', 'media_source']),
   failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge']).optional(),
   egress: z.enum(['direct', 'proxy']).optional(), proxySlot: z.number().int().min(0).max(3).optional(),
   signal: z.enum(['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL']).optional(),
@@ -29,7 +29,7 @@ export const extractionAttemptSchema = z.object({
   phase: z.enum(['extraction', 'catalog']).optional(),
   version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   extractionId: z.string().uuid(), attempt: z.number().int().min(1).max(5), slot: z.number().int().min(0).max(3),
-  backend: z.enum(['worker', 'container']).optional(), egress: z.enum(['direct', 'proxy']).optional(),
+  backend: z.enum(['worker', 'container', 'media']).optional(), egress: z.enum(['direct', 'proxy']).optional(),
   recordedAt: count, elapsedMs: metric, status: z.number().int().min(100).max(599).optional(),
   outcome: z.enum(['success', 'failed', 'fallback', 'transport_error']),
   failureKind: z.enum(['timeout', 'canceled', 'transport', 'invalid_response', 'upstream']).optional(),

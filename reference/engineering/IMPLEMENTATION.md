@@ -11,7 +11,7 @@ This repository implements the beta with a standalone library, private agent-ski
 
 The platform's core YouTube routes call `platform/src/lib/youtube.ts`. That adapter checks Workers KV first and sends misses through a cache-key-specific `YOUTUBE_REQUEST_COORDINATOR` Durable Object. The coordinator rechecks KV, coalesces identical concurrent misses, and invokes a randomly selected `YOUTUBE_PROCESSOR` container. The container executes both public package helpers and the internal search, browse, and trend-signal client. No platform route calls YouTube directly from the Worker runtime.
 
-Individual-frame requests are available only through the agent API. The agent tool uses the dedicated private `YOUTUBE_FRAMES` container. See [frame extraction](./FRAME_EXTRACTION.md) for the tool contract, skill implementation, resource limits, and verification.
+Individual-frame requests are available only through the agent API. The agent tool uses bounded Cloudflare Media decoding for supported short MP4 clips, with the dedicated private `YOUTUBE_FRAMES` container as fallback. See [frame extraction](./FRAME_EXTRACTION.md) for the tool contract, skill implementation, resource limits, and verification.
 
 ## YouTube processor boundary
 

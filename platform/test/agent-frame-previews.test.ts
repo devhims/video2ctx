@@ -50,3 +50,22 @@ test('ignores old or invalid preview descriptors', () => {
   packet.artifacts[0]!.data.previews = [{ assetId: '../private/file', timestampMs: 0, width: 10, height: 10 }];
   expect(packetFramePreviews(packet)).toEqual([]);
 });
+
+test('starts all six frame previews together and drains them before cancellation rollback', async () => {
+  let active = 0, peak = 0;
+  const controller = new AbortController();
+  const bucket = {
+    put: vi.fn(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      controller.abort();
+      active--;
+    }),
+    delete: vi.fn(async () => { expect(active).toBe(0); }),
+  } as unknown as R2Bucket;
+  const six = { ...frames, frames: Array.from({length: 6}, (_, i) => ({ ...frames.frames[0]!, timestampMs: i * 1000 })) };
+  await expect(saveFramePreviews(bucket, 'user-six', six, controller.signal)).rejects.toThrow();
+  expect(peak).toBe(6);
+  expect(bucket.delete).toHaveBeenCalledOnce();
+  expect(vi.mocked(bucket.delete).mock.calls[0]![0]).toHaveLength(6);
+});

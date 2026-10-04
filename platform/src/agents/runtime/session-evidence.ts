@@ -534,7 +534,8 @@ export class SessionEvidenceStore implements SessionAccess {
     if (!row) return;
     const value = await this.read(row.version);
     if (value !== null)
-      return { value: value as T, cacheStatus: 'hit', sessionReused: true, assetVersions: [row.version] };
+      return { value: value as T, verifiedImages: this.catalog?.verifiedImages?.(value),
+        cacheStatus: 'hit', sessionReused: true, assetVersions: [row.version] };
   }
   async retrieve<T>(
     key: string,
@@ -587,8 +588,14 @@ export class SessionEvidenceStore implements SessionAccess {
       if (generation !== this.generation())
         throw new Error('Session assets changed during retrieval. Retry the request.');
       if (this.has(version)) {
+        // An alias skips pin(), but inline frames still need a verified preview
+        // reference. Read the already pinned version using the normal verifier.
+        const stored = kind === 'frame' && this.catalog ? await this.read(version) : undefined;
+        signal?.throwIfAborted();
+        if (stored === null || generation !== this.generation() || !this.has(version))
+          throw new Error('Session assets changed during retrieval. Retry the request.');
         this.alias(key, version);
-        return { ...result, assetVersions: [version] };
+        return { ...result, ...(stored ? { verifiedImages: this.catalog?.verifiedImages(stored) } : {}), assetVersions: [version] };
       }
       if (this.catalog) {
         let verifiedImages: VerifiedImage[] = [];
@@ -600,6 +607,7 @@ export class SessionEvidenceStore implements SessionAccess {
           Date.now(),
           result.catalogVersions,
           images => { verifiedImages = images; },
+          result.verifiedFrames,
         );
         signal?.throwIfAborted();
         if (generation !== this.generation())

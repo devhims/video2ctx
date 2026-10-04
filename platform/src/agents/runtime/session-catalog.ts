@@ -1,4 +1,5 @@
 import type { VerifiedImage } from '../../lib/verified-image';
+import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
 import type { Storyboard } from '../providers/youtube/storyboard';
@@ -48,18 +49,24 @@ function projection(source: unknown, value: unknown): Omit<SessionCatalogReferen
 /** Public source persistence only. No session IDs, prompts, analyses or citations. */
 export class SessionCatalog {
   private readonly catalog;
-  constructor(env: Env) {
+  private readonly readImages = new WeakMap<object, VerifiedImage[]>();
+  constructor(private readonly env: Env) {
     const catalog = videoCatalog(env);
     if (!catalog) throw new Error('Shared video catalog bindings are required.');
     this.catalog = catalog;
   }
 
   async read(reference: SessionCatalogReference): Promise<unknown | null> {
-    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset);
+    const stored = await this.catalog.readVersion<Record<string, unknown>>(reference.asset, reference.asset.kind === 'frame');
     if (!stored) return null;
     const value = { ...stored.value, ...reference.overrides };
     for (const field of reference.omitted) delete value[field];
+    if (stored.verifiedImages) this.readImages.set(value, stored.verifiedImages);
     return value;
+  }
+
+  verifiedImages(value: unknown): VerifiedImage[] | undefined {
+    return value && typeof value === 'object' ? this.readImages.get(value) : undefined;
   }
 
   async pin(
@@ -70,6 +77,7 @@ export class SessionCatalog {
     collectedAt: number,
     versions?: VideoAssetReference[],
     onVerifiedImages?: (images: VerifiedImage[]) => void,
+    verifiedFrames?: VerifiedFrame[],
   ): Promise<SessionCatalogReference> {
     const compatible = (asset: VideoAssetReference) =>
       asset.videoId === videoId &&
@@ -78,6 +86,19 @@ export class SessionCatalog {
       if (versions.length !== 1 || !compatible(versions[0]!))
         throw new Error('Invalid shared session asset reference.');
       const asset = versions[0]!;
+      if (kind === 'frame') {
+        const image = verifiedFrames?.flatMap(receipt => receipt instanceof VerifiedFrame
+          ? receipt.match(this.env.VIDEO_ASSETS, asset, value) ?? [] : [])[0];
+        if (image) {
+          const payload = value as Record<string, unknown>;
+          const overrides = Object.fromEntries(['meta', 'failures', 'freshness']
+            .filter(key => payload[key] !== undefined).map(key => [key, payload[key]]));
+          if (JSON.stringify(overrides).length > 32_000) throw new Error('Session envelope is too large.');
+          onVerifiedImages?.([image]);
+          return { asset, overrides,
+            omitted: ['meta', 'failures', 'freshness'].filter(key => payload[key] === undefined) };
+        }
+      }
       const stored = await this.catalog.readVersion(asset, !!onVerifiedImages);
       const overlay = stored && projection(stored.value, value);
       if (!overlay) throw new Error('Session payload does not match its shared asset version.');

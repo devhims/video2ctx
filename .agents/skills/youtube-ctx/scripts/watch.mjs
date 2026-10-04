@@ -21885,7 +21885,12 @@ async function loadMediaCandidateGroup(profileIndex, videoId, maxWidth, options,
     const response = await callWatchPlayer(videoId, profile, options, onDiagnostic);
     const candidates = selectCandidates(response.raw, maxWidth, preferResolution);
     diagnose(onDiagnostic, { stage: "media_candidates", profile: profile.name, candidateCount: candidates.length });
-    return candidates.length ? { profile: response.profile, candidates } : void 0;
+    const live = object6(response.raw.videoDetails).isLiveContent;
+    return candidates.length ? {
+      profile: response.profile,
+      candidates,
+      ...typeof live === "boolean" ? { isLive: live } : {}
+    } : void 0;
   } catch (error) {
     if (error?.code === "PROXY_TUNNEL_FAILED") throw error;
     diagnose(onDiagnostic, { stage: "player", profile: profile.name, error });
