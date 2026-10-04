@@ -131,6 +131,42 @@ Worker invocation and video ID.
 
 ## Rollout and remaining measurement
 
+### Follow-up: concurrent videos
+
+Production run `7fb4a7e5-0e17-4ed8-9a48-bb1b31d36952` on October 4 confirmed
+the one-pass lookup and preview verification improvements were deployed. Its two
+six-sheet storyboard tools took 18.78 and 35.54 seconds. Both tools started together,
+but the second waited 14.95 seconds in the session provider's shared visual queue
+before its lookup began. This was the entire first video's retrieval and session
+attachment interval. The first video's preview writes overlapped the second retrieval.
+
+The session provider now admits two different videos at a time, with at most one
+frame request active per session. Two storyboards, or a storyboard and frames, can
+run together. This preserves the previous per-session demand on the two single-job
+frame containers. Storyboard and frame requests for the same video remain ordered,
+so overlapping selections can
+reuse pinned assets and refresh decisions. A waiter for a busy video does not
+consume the other slot. A canceled queued request rejects immediately and never
+dispatches extraction. An active request retains its slot until its work settles.
+Session generation checks still invalidate both active and queued work after deletion.
+The new `session_queue_wait` diagnostic span isolates admission time from retrieval.
+
+Deterministic integration tests hold one video's extraction open and require the
+other to complete, covering two storyboards and a mix of both visual tools. A
+separate regression keeps different-video frame calls serial. The storyboard
+test failed with the global queue and passes with bounded admission. Queue tests
+cover the two-video limit, ordering, cancellation, failures, and diagnostic isolation.
+These tests do not establish a new production latency figure.
+
+Shared source writes, session integrity verification, and private preview references
+remain required. In the measured run they took roughly 11–12 seconds per video.
+The second video's first proxy attempt also hit a YouTube bot challenge before
+another proxy succeeded. This change addresses the independent-video queue; it
+does not claim that cold retrieval now meets the ten-second target. Verify that
+with a deployed cold run and a saved-asset follow-up.
+
+### Deployment
+
 Only the platform Worker needs deployment. No processor image, library release,
 schema migration, secret, or container-size change is needed. The deployed processor
 already supports combined discovery and downloads.

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 
-const stage = z.enum(['retrieval', 'session_lookup', 'session_pin', 'session_asset_lookup', 'session_asset_pin', 'catalog_lookup', 'catalog_write',
+const stage = z.enum(['retrieval', 'session_queue_wait', 'session_lookup', 'session_pin', 'session_asset_lookup', 'session_asset_pin', 'catalog_lookup', 'catalog_write',
   'coordinator_wait', 'extraction', 'previews', 'catalog_d1', 'catalog_r2', 'preview_r2', 'legacy_cache']);
 const counter = z.enum(['catalogLookupPasses', 'catalogHits', 'catalogMisses', 'catalogD1Statements',
   'catalogD1Batches', 'catalogR2Gets', 'catalogR2Puts', 'previewR2Heads', 'previewR2Puts',
