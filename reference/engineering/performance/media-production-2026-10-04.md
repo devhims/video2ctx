@@ -70,19 +70,6 @@ that failure is not counted as a frame-decoding failure.
   compatibility, admission deadlines, shared capacity/cooldown, partial recovery,
   missing-timestamp-only fallback, and caller cancellation.
 
-A subsequent six-frame probe, run `889969df-5c62-4c22-80fe-a82dab33f014`,
-completed through Media in 10.116 seconds. It exposed a quality gap: the adapter
-rejected the available fragmented 720p MP4 and used progressive 360p instead.
-The final adapter supports flat-indexed fragments and sends sharper unsupported
-inputs to FFmpeg rather than silently selecting a lower-resolution Media source.
-Five generated fragmented clips (including the initial instant and fragment
-boundaries) produced decoded RGB pixels identical to FFmpeg seeking the original.
-
-A separate probe, `5d3f5302-e6da-4116-9f8d-a0af3e72a0d6`, failed classification
-with invalid `route` after one repair. It made zero tool calls. The retry above
-completed. Classifier behavior is outside this Media change and remains a separate
-follow-up; that failure is not counted as a frame-decoding failure.
-
 ## Runtime regressions caught during validation
 
 The first two requests completed through FFmpeg after Media admission exceeded
