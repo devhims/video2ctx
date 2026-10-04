@@ -4,6 +4,7 @@ import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinato
 import type { SaveSourceInput } from '../src/lib/source-history';
 import { readSourceResponse, saveSourceResponse } from '../src/lib/source-response-storage';
 import { sha256 } from '../src/lib/http';
+import type { SearchFilters } from 'all-things-youtube';
 
 const videoId = 'U-V7IfBwN1I';
 const channelId = 'UCB_qr75-ydFVKSF9Dmo6izg';
@@ -27,7 +28,7 @@ function fixture() {
   };
   // KV keeps returning the negative lookup made before extraction, including
   // after the write finishes and after the coordinator loses its memory.
-  const cache = { get: vi.fn(async (): Promise<unknown> => null), put: vi.fn(async () => {}) };
+  const cache = { get: vi.fn(async (): Promise<unknown> => null), put: vi.fn(async (_key: string, _value: string) => {}) };
   const env = { YOUTUBE_CACHE: cache, VIDEO_ASSETS: bucket } as unknown as Env;
   const values = {
     channel: { id: channelId, name: 'FORMULA 1', thumbnails: [], url: `https://youtube.com/channel/${channelId}`,
@@ -81,7 +82,7 @@ test.each(['video with channel', 'channel', 'playlist', 'search'] as const)(
   },
 );
 
-test('does not return a fresh response until its public data is durable', async () => {
+test('awaits the successful R2 copy so immediate history saves can read it', async () => {
   const f = fixture();
   let finish!: () => void;
   f.bucket.put.mockImplementationOnce(async (key, value) => {
@@ -98,12 +99,54 @@ test('does not return a fresh response until its public data is durable', async 
   await expect(referenceSource(f.env, inspection('video', videoId))).resolves.toMatchObject({ title: metadata.title });
 });
 
-test('a failed durable write prevents a successful fresh response', async () => {
+test.each(['miss', 'expired'] as const)('a failed R2 copy keeps the fresh response and KV write on a cache %s', async state => {
   const f = fixture();
-  f.bucket.put.mockRejectedValue(new Error('R2 unavailable'));
-  await expect(getChannelWithCache(f.env, channelId)).rejects.toMatchObject({ code: 'SOURCE_STORAGE_UNAVAILABLE', status: 503 });
-  expect(f.cache.put).not.toHaveBeenCalled();
-  expect(f.objects.size).toBe(0);
+  if (state === 'expired') f.cache.get.mockResolvedValue({ version: 1, value: { ...f.values.channel, name: 'Old channel' },
+    fetchedAt: Date.now() - 120_000, freshUntil: Date.now() - 60_000 });
+  f.bucket.put.mockRejectedValueOnce(new Error('R2 unavailable: private details'));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    await expect(getChannelWithCache(f.env, channelId)).resolves.toMatchObject({ cacheStatus: 'miss', value: withYouTubeMetadata(f.values.channel) });
+    expect(f.cache.put).toHaveBeenCalledOnce();
+    expect(f.objects.size).toBe(0);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'source_response_write_failed', resourceType: 'channel-v5' }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private details');
+    // The copy failed, but KV became visible and R2 recovered for the history write.
+    f.cache.get.mockResolvedValue(JSON.parse(f.cache.put.mock.calls[0]![1]));
+    await expect(referenceSource(f.env, inspection('video', videoId))).resolves.toMatchObject({ title: metadata.title });
+  } finally { warn.mockRestore(); }
+});
+
+test.each(['get failure', 'invalid JSON'] as const)('history uses valid KV data after an R2 %s', async failure => {
+  const f = fixture();
+  const stamp = Date.now();
+  const key = `youtube:v1:${await sha256(JSON.stringify(['playlist-v2', 'PLhistory']))}`;
+  const entry = { version: 1 as const, value: f.values.playlist, fetchedAt: stamp, freshUntil: stamp + 60_000 };
+  f.cache.get.mockResolvedValue(entry);
+  if (failure === 'get failure') f.bucket.get.mockRejectedValueOnce(new Error('R2 unavailable: private details'));
+  else {
+    await saveSourceResponse(f.env, key, 'playlist-v2', entry, 7 * 86400_000);
+    f.objects.set(f.bucket.put.mock.calls[0]![0], '{private details');
+  }
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const saved = await referenceSource(f.env, inspection('playlist', 'PLhistory'));
+    expect(await restoreSource(f.env, saved.snapshot)).toMatchObject({ inspector: { data: f.values.playlist } });
+    expect(f.load).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'source_response_read_failed', resourceType: 'playlist-v2' }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private details');
+  } finally { warn.mockRestore(); }
+});
+
+test.each<SearchFilters>([
+  {}, { type: 'playlist' }, { type: 'channel' }, { type: 'video', sort: 'views' },
+  { type: 'video', dateFrom: '2026-10-01' }, { type: 'video', captionsOnly: true },
+])('searches outside the history filter skip the R2 copy: %j', async filters => {
+  const f = fixture();
+  await expect(searchYouTubeWithCache(f.env, 'private search terms', filters)).resolves.toMatchObject({ cacheStatus: 'miss' });
+  expect(f.bucket.put).not.toHaveBeenCalled();
+  expect(f.cache.put).toHaveBeenCalledOnce();
+  expect(f.load).toHaveBeenCalledOnce();
 });
 
 test.each(['missing', 'older', 'newer'] as const)('chooses the newest available response with a %s retained entry', async state => {

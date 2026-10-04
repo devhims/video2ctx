@@ -213,10 +213,14 @@ export class YouTubeCacheCoordinatorCore {
           entry.catalogVersions = await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
-      // A fresh public source must be immediately available to history saves.
-      // KV may still serve the negative lookup from before this extraction.
-      await saveSourceResponse(this.env, request.cacheKey, request.resourceType, entry,
-        cacheRetentionSeconds(request.maxAgeMs) * 1000);
+      // Await the best-effort copy so history can read it before KV catches up.
+      // History only resolves searches with this exact filter and cache key.
+      const operation = request.operation;
+      if (operation.kind !== 'search'
+        || (operation.filters?.type === 'video' && Object.keys(operation.filters).length === 1)) {
+        await saveSourceResponse(this.env, request.cacheKey, request.resourceType, entry,
+          cacheRetentionSeconds(request.maxAgeMs) * 1000);
+      }
       try {
         countVisualWork('legacyKvPuts');
         await visualSpan('legacy_cache', () => this.env.YOUTUBE_CACHE.put(request.cacheKey, JSON.stringify(entry), {
