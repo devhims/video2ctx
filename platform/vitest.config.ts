@@ -12,7 +12,7 @@ export default defineConfig({
       'test/credits.integration.test.ts',
       'test/user-account-do.integration.test.ts',
       'test/agent-runtime-do.integration.test.ts',
-      'test/proxy-health-do.integration.test.ts', 'test/media-frame-capacity.integration.test.ts',
+      'test/proxy-health-do.integration.test.ts', 'test/media-frame-capacity.integration.test.ts', 'test/frame-media-source.integration.test.ts',
     ],
     setupFiles: ['./test/setup.ts'],
   },

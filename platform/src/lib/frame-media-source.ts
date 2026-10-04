@@ -13,6 +13,14 @@ function mediaUrl(value: string): string {
   return url.href;
 }
 
+/** Construct in workerd as well as Node; redirect modes differ between runtimes. */
+export function frameMediaRangeRequest(url: string, offset: number, length: number, signal: AbortSignal): Request {
+  return new Request(mediaUrl(url), { signal, redirect: 'manual', headers: {
+    range: `bytes=${offset}-${offset + length - 1}`,
+    'user-agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
+  } });
+}
+
 /** Resolve and read on one proxy route. Source URLs never leave this request-scoped closure. */
 export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth: number, signal: AbortSignal, record: (event: ExtractionAttempt['events'][number]) => void = () => {}) {
   const urls = normalizedProxyUrls(env);
@@ -54,8 +62,7 @@ export async function openYouTubeFrameSource(env: Env, videoId: string, maxWidth
             signal.throwIfAborted();
             if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 4 * 1024 * 1024) throw new FrameMediaError('budget');
             const active = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
-            const response = await frameAbortable(active, () => transport.fetch(url, { signal: active, redirect: 'error',
-              headers: { range: `bytes=${offset}-${offset + length - 1}`, 'user-agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip' } }));
+            const response = await frameAbortable(active, () => transport.fetch(frameMediaRangeRequest(url, offset, length, active)));
             answered = true;
             capture({ stage: 'media_http', status: response.status, formatId: candidate.formatId, proxySlot: slot });
             if (response.status === 429) throttled = true;

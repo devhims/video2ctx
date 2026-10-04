@@ -17,7 +17,7 @@ async function setup() {
     progressive: true, formatId: 18, mimeType: 'video/mp4; codecs="avc1"', width: 64, height: 48 }] });
   const close = vi.fn(async () => {});
   const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const range = /^bytes=(\d+)-(\d+)$/.exec(new Headers(init?.headers).get('range')!)!;
+    const range = /^bytes=(\d+)-(\d+)$/.exec(new Headers(_input instanceof Request ? _input.headers : init?.headers).get('range')!)!;
     const start = Number(range[1]), end = Number(range[2]);
     return new Response(bytes.slice(start, end + 1), { status: 206, headers: { 'content-range': `bytes ${start}-${end}/${bytes.length}` } });
   });
@@ -29,10 +29,10 @@ test('reads all media through the selected proxy and requires precise byte range
   const { fetch, close } = await setup();
   const source = await openYouTubeFrameSource(env,id,640,new AbortController().signal);
   expect((await source.clip(2.5)).time).toBeCloseTo(0.5);
-  expect(fetch.mock.calls.every(([,init]) => init?.redirect === 'error')).toBe(true);
+  expect(fetch.mock.calls.every(([request]) => request instanceof Request && request.redirect === 'manual')).toBe(true);
   await source.close(); expect(close).toHaveBeenCalledOnce();
 });
-test.each([200,403,429])('rejects HTTP %s without reading the media body', async status => {
+test.each([200,302,403,429])('rejects HTTP %s without reading the media body', async status => {
   const { fetch, close } = await setup(); const canceled = vi.fn();
   fetch.mockImplementation(async () => new Response(new ReadableStream({ cancel: canceled }),{status}));
   await expect(openYouTubeFrameSource(env,id,640,new AbortController().signal)).rejects.toMatchObject({code:'unsupported'});
@@ -62,4 +62,14 @@ test('prefers the sharper supported candidate over progressive 360p', async () =
   expect(source.formatId).toBe(136);
   expect(vi.mocked(loadMediaCandidateGroup).mock.calls[0]![4]).toBe(true);
   await source.close();
+});
+
+test('records safe source stages without provider messages or URLs', async () => {
+  await setup();
+  vi.mocked(getDetails).mockRejectedValue(Object.assign(new Error('https://private.invalid/?secret=never-log'), { code: 'AUTH_REQUIRED' }));
+  const record = vi.fn();
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal, record)).rejects.toMatchObject({ code: 'unsupported' });
+  expect(record).toHaveBeenCalledWith(expect.objectContaining({ stage: 'player', outcome: 'error', code: 'AUTH_REQUIRED' }));
+  expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
+  expect(loadMediaCandidateGroup).not.toHaveBeenCalled();
 });
