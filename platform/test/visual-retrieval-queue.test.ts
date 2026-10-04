@@ -148,3 +148,32 @@ test('queued cancellation retains a failed queue span for the canceled caller', 
     expect(failure.diagnostics?.spans).toEqual([expect.objectContaining({ stage: 'session_queue_wait', outcome: 'error' })]);
   } finally { held.release(); await first; }
 });
+
+test('admits one frame job while other-video storyboards use the remaining slot', async () => {
+  const queue = new VisualRetrievalQueue(), held = gate();
+  const started: string[] = [];
+  const first = queue.run('a', undefined, async () => { started.push('frame-a'); await held.promise; }, 'frames');
+  const second = queue.run('b', undefined, async () => { started.push('frame-b'); }, 'frames');
+  const sameVideo = queue.run('b', undefined, async () => { started.push('storyboard-b'); });
+  const other = queue.run('c', undefined, async () => { started.push('storyboard-c'); });
+  try {
+    await other;
+    expect(started).toEqual(['frame-a', 'storyboard-c']);
+  } finally { held.release(); await Promise.allSettled([first, second, sameVideo, other]); }
+  expect(started).toEqual(['frame-a', 'storyboard-c', 'frame-b', 'storyboard-b']);
+});
+
+test('canceling a capacity-blocked frame unblocks its later same-video storyboard', async () => {
+  const queue = new VisualRetrievalQueue(), held = gate(), controller = new AbortController();
+  const first = queue.run('a', undefined, () => held.promise, 'frames');
+  const frame = vi.fn(async () => {}), storyboard = vi.fn(async () => {});
+  const second = queue.run('b', controller.signal, frame, 'frames');
+  const rejected = expect(second).rejects.toThrow('canceled');
+  const third = queue.run('b', undefined, storyboard);
+  try {
+    await flush(); expect(storyboard).not.toHaveBeenCalled();
+    controller.abort(new Error('canceled'));
+    await rejected; await third;
+    expect(frame).not.toHaveBeenCalled(); expect(storyboard).toHaveBeenCalledOnce();
+  } finally { held.release(); await first; }
+});

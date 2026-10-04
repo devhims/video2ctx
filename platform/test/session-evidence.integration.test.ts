@@ -41,7 +41,7 @@ function retrieveVisual(p: YouTubeAgentProvider, kind: 'storyboard' | 'frames', 
 }
 
 test.each([
-  ['storyboard', 'storyboard'], ['frames', 'frames'], ['storyboard', 'frames'],
+  ['storyboard', 'storyboard'], ['frames', 'storyboard'], ['storyboard', 'frames'],
 ] as const)('different-video %s/%s retrievals complete independently while the first extraction is blocked', async (firstKind, secondKind) =>
   within(`parallel-${firstKind}-${secondKind}`, async (store, reopen) => {
     const held = visualGate(), firstStarted = visualGate();
@@ -71,6 +71,24 @@ test.each([
     const restored = sessionProvider(upstream, reopen());
     await Promise.all([retrieveVisual(restored, firstKind, id), retrieveVisual(restored, secondKind, secondId)]);
     expect(fetched).toHaveBeenCalledTimes(2);
+  }));
+
+test('different-video frame requests keep the previous single-job session limit', async () =>
+  within('serial-frame-capacity', async store => {
+    const held = visualGate(), entered = visualGate();
+    const frames = vi.fn(async ({ videoId }: { videoId: string }) => {
+      if (videoId === id) { entered.release(); await held.promise; }
+      return { cacheStatus: 'miss', value: oneFrame(videoId) };
+    });
+    const p = sessionProvider({ frames } as unknown as YouTubeAgentProvider, store);
+    const first = retrieveVisual(p, 'frames', id);
+    await entered.promise;
+    const second = retrieveVisual(p, 'frames', 'lmnopqrstuv');
+    try {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(frames).toHaveBeenCalledTimes(1);
+    } finally { held.release(); await Promise.allSettled([first, second]); }
+    expect(frames).toHaveBeenCalledTimes(2);
   }));
 
 test('same-video storyboard and frame requests stay ordered without blocking another video', async () =>
@@ -115,13 +133,13 @@ test('session deletion invalidates active and queued visual requests without rep
   within('parallel-visual-deletion', async (store, reopen) => {
     const held = visualGate(), bothStarted = visualGate();
     let calls = 0;
-    const upstream = vi.fn(async ({ videoId }: { videoId: string }) => {
+    const upstream = vi.fn(async (videoId: string) => {
       if (++calls === 2) bothStarted.release();
       await held.promise;
-      return { cacheStatus: 'miss', value: oneFrame(videoId) };
+      return { cacheStatus: 'miss', value: oneSheet(videoId) };
     });
-    const p = sessionProvider({ frames: upstream } as unknown as YouTubeAgentProvider, store);
-    const pending = [id, 'lmnopqrstuv', 'wxyzABCDEFG'].map(videoId => retrieveVisual(p, 'frames', videoId));
+    const p = sessionProvider({ storyboard: upstream } as unknown as YouTubeAgentProvider, store);
+    const pending = [id, 'lmnopqrstuv', 'wxyzABCDEFG'].map(videoId => retrieveVisual(p, 'storyboard', videoId));
     const settled = Promise.allSettled(pending);
     await bothStarted.promise;
     try { await store.delete(); } finally { held.release(); }

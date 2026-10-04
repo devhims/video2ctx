@@ -140,8 +140,11 @@ but the second waited 14.95 seconds in the session provider's shared visual queu
 before its lookup began. This was the entire first video's retrieval and session
 attachment interval. The first video's preview writes overlapped the second retrieval.
 
-The session provider now admits two different videos at a time. Storyboard and
-frame requests for the same video remain ordered, so overlapping selections can
+The session provider now admits two different videos at a time, with at most one
+frame request active per session. Two storyboards, or a storyboard and frames, can
+run together. This preserves the previous per-session demand on the two single-job
+frame containers. Storyboard and frame requests for the same video remain ordered,
+so overlapping selections can
 reuse pinned assets and refresh decisions. A waiter for a busy video does not
 consume the other slot. A canceled queued request rejects immediately and never
 dispatches extraction. An active request retains its slot until its work settles.
@@ -149,7 +152,8 @@ Session generation checks still invalidate both active and queued work after del
 The new `session_queue_wait` diagnostic span isolates admission time from retrieval.
 
 Deterministic integration tests hold one video's extraction open and require the
-other to complete, covering storyboards, frames, and a mix of both. The storyboard
+other to complete, covering two storyboards and a mix of both visual tools. A
+separate regression keeps different-video frame calls serial. The storyboard
 test failed with the global queue and passes with bounded admission. Queue tests
 cover the two-video limit, ordering, cancellation, failures, and diagnostic isolation.
 These tests do not establish a new production latency figure.

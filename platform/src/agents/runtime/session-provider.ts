@@ -17,12 +17,12 @@ export function sessionProvider(
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
   const visualQueue = new VisualRetrievalQueue();
-  const visual = <T>(videoId: string, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> => {
+  const visual = <T>(kind: 'storyboard' | 'frames', videoId: string, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> => {
     const generation = store.generation();
     return visualQueue.run(videoId, signal, () => {
       if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
       return work();
-    });
+    }, kind);
   };
   const transcriptKey = (id: string, language?: string) => `transcript:${id}:${language?.toLowerCase() ?? 'default'}`;
   return {
@@ -93,7 +93,7 @@ export function sessionProvider(
     },
     storyboard: provider.storyboard
       ? (id, timestamps, options = {}, diagnostic) =>
-          visual(id, options.signal, async () => {
+          visual('storyboard', id, options.signal, async () => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
             const manifestKey = `storyboard:${id}:manifest`;
@@ -214,7 +214,7 @@ export function sessionProvider(
       : undefined,
     frames: provider.frames
       ? (request, signal, limits, diagnostic) =>
-          visual(request.videoId, signal, async () => {
+          visual('frames', request.videoId, signal, async () => {
             signal?.throwIfAborted();
             const generation = store.generation();
             const maxWidth = request.maxWidth ?? 1920;
