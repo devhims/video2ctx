@@ -281,6 +281,37 @@ describe('classifier last resort', () => {
     expect(decision).not.toHaveProperty('searchQuery');
   });
 
+  it('applies earlier requirements to a recovered route', async () => {
+    // Attempt 1 asks for fresh statistics and required visuals but is invalid; the repair omits
+    // its route, has no refresh flag, and says no visuals are needed.
+    const first = { route: 'finalize', answerDetail: 'standard', responseIntent: 'context_answer', contextScope: 'video',
+      reason: 'Saved data answers this.', refreshDynamicData: true, visualEvidence: 'required', visualRequirements: ['thumbnail text'] };
+    const repair = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'MrBeast current views', visualEvidence: 'none' };
+    const result = await classify('What do the current MrBeast thumbnails say, and how many views do they have now?', rawClassifier(first, repair));
+    expect(result.lastResort).toMatchObject({ lastResort: 'route_recovery' });
+    expect(result.decision).toMatchObject({ route: 'topic_research', searchQuery: 'MrBeast current views', refreshDynamicData: true,
+      visualEvidence: 'required', visualRequirements: ['thumbnail text'] });
+    expect(result.lastResort!.defaultedFields).toEqual(expect.arrayContaining(['route', 'refreshDynamicData', 'visualEvidence']));
+  });
+
+  it('does not recover a finalization route when a candidate required fresh data', async () => {
+    const first = { route: 'topic_research', answerDetail: 'standard', refreshDynamicData: true, visualEvidence: 'none' };
+    const repair = { answerDetail: 'standard', responseIntent: 'context_answer', contextScope: 'video', reason: 'Saved data answers this.' };
+    const result = await classify('How many likes does https://youtu.be/dQw4w9WgXcQ have now?', rawClassifier(first, repair));
+    expect(result.lastResort?.lastResort).not.toBe('route_recovery');
+    expect(result.decision).toMatchObject({ route: 'inspect_video', videoId: 'dQw4w9WgXcQ', refreshDynamicData: true });
+  });
+
+  it('keeps a comparison set chosen by a candidate, whatever the request wording', async () => {
+    // An inspection with comparison subjects that lack saved evidence is invalid on every attempt.
+    const candidate = { route: 'inspect_video', answerDetail: 'standard', videoId: 'dQw4w9WgXcQ',
+      comparisonVideoIds: ['dQw4w9WgXcQ', 'tXcT3OE7G1g'], visualEvidence: 'none' };
+    const result = await classify('Compare https://youtu.be/dQw4w9WgXcQ and https://youtu.be/tXcT3OE7G1g', rawClassifier(candidate));
+    expect(result.calls).toBe(2);
+    expect(result.decision).toMatchObject({ route: 'topic_research', comparisonVideoIds: ['dQw4w9WgXcQ', 'tXcT3OE7G1g'] });
+    expect(result.decision).not.toHaveProperty('searchQuery');
+  });
+
   it('uses request defaults alone when no request produced a candidate', async () => {
     const research = await classify('Find Nikon Z6 III low-light tutorials', rawClassifier({ error: 'provider down' }),
       { fallbackModel: rawClassifier({ error: 'provider down' }) });

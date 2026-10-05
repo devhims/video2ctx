@@ -564,13 +564,6 @@ function lastResortDecision(
     .flatMap(item => { const candidate = candidateObject(item.candidate); return candidate ? [candidate] : []; });
   const validation = { allowMissingBreadth: true, suppliedVideoIds: videoIds };
 
-  for (const candidate of candidates) {
-    const parsed = validateClassifierDecision(candidate, { ...validation, recoverRoute: true });
-    if (parsed.success && parsed.defaultedFields.includes('route') && !semanticIssues(parsed.data, input, videoIds).length) {
-      return { decision: parsed.data, method: 'route_recovery', defaultedFields: parsed.defaultedFields };
-    }
-  }
-
   const message = input.message.trim().slice(0, 500) || 'YouTube videos';
   const usableVideoId = (value: unknown) => typeof value === 'string' && videoIds.includes(value) ? value : undefined;
   const soleVideoId = videoIds.length === 1 ? videoIds[0] : undefined;
@@ -591,7 +584,12 @@ function lastResortDecision(
     refreshDynamicData: candidates.some(candidate => candidate.refreshDynamicData === true),
     visualsRequired: candidates.some(candidate => candidate.visualEvidence === 'required'),
     visualRequirements: firstValid('visualRequirements') ?? [input.message.trim().slice(0, 200) || 'Requested visual facts'],
-    subjects: expectedComparisonSubjects(input),
+    // The follow-up form's subjects, plus any distinct supplied comparison set a candidate chose.
+    subjects: [...new Set([...expectedComparisonSubjects(input), ...candidates.flatMap(candidate => {
+      const ids = shape.comparisonVideoIds.safeParse(candidate.comparisonVideoIds);
+      const kept = ids.success && ids.data ? [...new Set(ids.data.filter(id => videoIds.includes(id)))] : [];
+      return kept.length >= 2 ? [kept] : [];
+    })[0] ?? []])].slice(0, 8),
   };
   const needsFreshData = constraints.refreshEvidence || constraints.refreshDynamicData;
   const allowed = (route: ClassifierDecision['route'] | undefined) => route && !(route === 'finalize' && needsFreshData) ? route : undefined;
@@ -651,6 +649,21 @@ function lastResortDecision(
     const parsed = validateClassifierDecision(decision, validation);
     return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds) } : undefined;
   };
+
+  // Recover a missing route from one candidate as returned. The recovered decision
+  // must still satisfy the constraints collected from every candidate.
+  for (const candidate of candidates) {
+    const recovered = validateClassifierDecision(candidate, { ...validation, recoverRoute: true });
+    if (!recovered.success || !recovered.defaultedFields.includes('route')) continue;
+    if (!allowed(recovered.data.route) || executable(recovered.data.route) !== recovered.data.route) continue;
+    const decision: Record<string, unknown> = { ...recovered.data };
+    defaultedFields.clear();
+    for (const field of recovered.defaultedFields) defaultedFields.add(field);
+    applyConstraints(decision);
+    const result = accept(decision);
+    if (result && !result.issues.length) return { decision: result.parsed, method: 'route_recovery', defaultedFields: [...defaultedFields] };
+  }
+  defaultedFields.clear();
 
   // Assemble fields that are valid on their own, then apply the constraints.
   let usedCandidate = false;
