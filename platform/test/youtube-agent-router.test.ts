@@ -439,6 +439,74 @@ describe('YouTube agent capability router', () => {
     } finally { warn.mockRestore(); vi.useRealTimers(); }
   });
 
+  // Responses keyed by request order: 1 original, 2 hedge at 10 s, 3 repair after the original fails.
+  const timedClassifier = (responses: Record<number, { afterMs: number; output?: Record<string, unknown> }>) => {
+    let calls = 0;
+    return new MockLanguageModelV4({ doGenerate: async () => {
+      const response = responses[++calls];
+      if (!response) return new Promise(() => {});
+      await new Promise(resolve => setTimeout(resolve, response.afterMs));
+      if (!response.output) return new Promise(() => {});
+      return { content: [{ type: 'tool-call', toolCallId: `classify-${calls}`, toolName: 'classify_request', input: JSON.stringify(response.output) }],
+        finishReason: { unified: 'tool-calls', raw: undefined },
+        usage: { inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 10, text: 10, reasoning: undefined } }, warnings: [] };
+    } });
+  };
+  const validRoute = { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused',
+    searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+
+  it('accepts a valid hedge that answers after the original failed validation and repair started', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Original invalid at 11 s, hedge valid at 12 s, repair never answers.
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: validRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(decision => decision, (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'event sourcing explained' });
+      expect(model.doGenerateCalls).toHaveLength(3);
+      expect(JSON.stringify(model.doGenerateCalls[2]!.prompt)).toContain('classificationRepair');
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('records usage for every completed classifier request under a distinct call ID', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const recordUsage = vi.fn();
+      const diagnostic = vi.fn();
+      // Original invalid at 11 s, repair invalid at 11.5 s, hedge valid at 12 s.
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: validRoute },
+        3: { afterMs: 500, output: missingRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal,
+        modelCallId: 'run:classifier', onDiagnostic: diagnostic,
+        modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage } });
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research' });
+      expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['run:classifier', 'run:classifier:repair', 'run:classifier:hedge']);
+      expect(diagnostic.mock.calls.map(([event]) => [event.attempt, event.hedged ?? false, event.outcome]))
+        .toEqual([[1, false, 'invalid'], [2, false, 'invalid'], [1, true, 'valid']]);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('fails as invalid when every original, hedge and repair response is invalid', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: missingRoute },
+        3: { afterMs: 500, output: missingRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(() => 'completed', (error: { code?: string }) => error.code);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toBe('AGENT_CLASSIFICATION_INVALID');
+      // One repair only: the invalid hedge does not start a second one.
+      expect(model.doGenerateCalls).toHaveLength(3);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('does not retry a stalled request when the outer phase deadline leaves too little time', async () => {
     vi.useFakeTimers();
     try {
