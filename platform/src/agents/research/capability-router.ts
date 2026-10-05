@@ -281,43 +281,17 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     return { context, candidate, feedback, decision, advisory };
   };
 
-  const call = async (context: AttemptContext, hedged: boolean, signal: AbortSignal): Promise<Evaluation> => {
+  const call = async (context: AttemptContext, requestId: string, hedged: boolean, signal: AbortSignal): Promise<Evaluation> => {
     signal.throwIfAborted();
     assertModelCostAvailable(input.modelBudget);
-    const requestId = `${callId}${context.attempt === 2 ? ':repair' : ''}${hedged ? ':hedge' : ''}`;
     const defaultedFields = new Set<DefaultedClassificationField>();
     const startedAt = Date.now();
     const result = await send(context, signal, defaultedFields);
     return evaluate(context, requestId, hedged, startedAt, defaultedFields, result);
   };
 
-  const winner = await firstAcceptedDecision(call, input.signal, deadlineAt, callId);
-  if (!winner.advisory) return finishClassification(winner.decision, videoIds, channelIds, explicitVideoIds);
-
-  // Best effort: provider failures, budget limits and this sub-deadline keep the first
-  // decision. Cancellation and the phase deadline abort input.signal and still propagate.
-  const budgetMs = Math.min(RECONSIDERATION_TIMEOUT_MS, deadlineAt - Date.now() - RECONSIDERATION_DEADLINE_MARGIN_MS);
-  if (budgetMs < RECONSIDERATION_MIN_MS) return finishClassification(winner.decision, videoIds, channelIds, explicitVideoIds);
-  const reconsideration = new AbortController();
-  const timer = setTimeout(() => reconsideration.abort(new Error('Classification reconsideration timeout.')), budgetMs);
-  // Stop waiting at the sub-deadline even if the provider ignores the abort.
-  const timedOut = new Promise<never>((_, reject) => reconsideration.signal.addEventListener('abort',
-    () => reject(reconsideration.signal.reason), { once: true }));
-  try {
-    const pending = call({ attempt: 2, feedback: winner.feedback, previousCandidate: winner.candidate, reconsider: true },
-      false, AbortSignal.any([input.signal, reconsideration.signal]));
-    pending.catch(() => {}); // An abandoned call can settle after the fallback.
-    const reconsidered = await Promise.race([pending, timedOut]);
-    // A malformed reconsideration must not discard a valid first decision.
-    return finishClassification(reconsidered.decision ?? winner.decision, videoIds, channelIds, explicitVideoIds);
-  } catch (error) {
-    if (input.signal.aborted) throw error;
-    console.warn(JSON.stringify({ event: 'agent_classification_reconsideration_failed', modelCallId: callId,
-      reason: reconsideration.signal.aborted ? 'timeout' : 'error' }));
-    return finishClassification(winner.decision, videoIds, channelIds, explicitVideoIds);
-  } finally {
-    clearTimeout(timer);
-  }
+  const decision = await coordinateClassification(call, input.signal, deadlineAt, callId);
+  return finishClassification(decision, videoIds, channelIds, explicitVideoIds);
 }
 
 type ClassificationIssue = { path: string; code: string; message: string };
@@ -336,72 +310,108 @@ interface Evaluation {
   decision?: z.infer<typeof classifierDecisionSchema>;
   advisory: boolean;
 }
+type ClassifierCall = (context: AttemptContext, requestId: string, hedged: boolean, signal: AbortSignal) => Promise<Evaluation>;
 
 // A classifier response normally arrives within a few seconds. The SDK only
 // retries error responses, so a request that never answers would otherwise
 // hold the whole phase. After the stall limit, send one more request for the
-// same attempt and keep the original running. The first validated decision
-// wins. An invalid response starts the repair while the other requests keep
-// running, so a valid hedge can still win during repair. Hedge only while the
-// extra request still has a useful share of the phase left. Requests still
-// running when a decision wins are aborted when the phase ends.
+// same attempt and keep the original running. Hedge only while the extra
+// request still has a useful share of the phase left.
 export const CLASSIFIER_REQUEST_STALL_MS = 10_000;
 const CLASSIFIER_STALL_RETRY_MIN_MS = 5_000;
 
-async function firstAcceptedDecision(
-  call: (context: AttemptContext, hedged: boolean, signal: AbortSignal) => Promise<Evaluation>,
-  signal: AbortSignal,
-  deadlineAt: number,
-  callId: string,
-): Promise<Evaluation & { decision: NonNullable<Evaluation['decision']> }> {
+/**
+ * Runs every classifier request for one phase and returns the first fully
+ * validated decision. All requests stay in one pool:
+ * - An invalid first-attempt response starts the single second attempt, a
+ *   repair, while the other requests keep running.
+ * - A valid first-attempt response with advisory notes becomes the fallback.
+ *   It starts the second attempt as a reconsideration only when no second
+ *   attempt exists yet, and waits at most the reconsideration budget for any
+ *   request in the pool to return a fully valid decision.
+ * Each request has its own usage ID. Requests still running when a decision
+ * wins are aborted when the phase ends.
+ */
+async function coordinateClassification(
+  call: ClassifierCall, signal: AbortSignal, deadlineAt: number, callId: string,
+): Promise<z.infer<typeof classifierDecisionSchema>> {
   type Settled = { key: Promise<Settled>; context: AttemptContext } & (
     { ok: true; evaluation: Evaluation } | { ok: false; error: unknown });
   const pending = new Set<Promise<Settled>>();
   const answered = new Set<AttemptContext>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
+  const requestIds = new Set<string>();
   let wake = () => {};
+  const later = (ms: number, work: () => void) => {
+    const timer = setTimeout(() => { timers.delete(timer); work(); wake(); }, ms);
+    timers.add(timer);
+  };
   const launch = (context: AttemptContext, hedged: boolean) => {
-    const key: Promise<Settled> = call(context, hedged, signal).then(
+    const base = `${callId}${context.attempt === 2 ? ':repair' : ''}${hedged ? ':hedge' : ''}`;
+    let requestId = base;
+    // The usage table keeps one row per call ID, so a reused ID would drop a usage record.
+    for (let n = 2; requestIds.has(requestId); n++) requestId = `${base}:${n}`;
+    requestIds.add(requestId);
+    const key: Promise<Settled> = call(context, requestId, hedged, signal).then(
       evaluation => ({ key, context, ok: true as const, evaluation }),
       (error: unknown) => ({ key, context, ok: false as const, error }));
     pending.add(key);
     if (hedged || deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return;
-    const timer = setTimeout(() => {
-      timers.delete(timer);
+    later(CLASSIFIER_REQUEST_STALL_MS, () => {
       if (answered.has(context) || signal.aborted) return;
       console.warn(JSON.stringify({ event: 'agent_classification_request_stalled', modelCallId: callId,
         attempt: context.attempt, stallMs: CLASSIFIER_REQUEST_STALL_MS }));
       launch(context, true);
-      wake();
-    }, CLASSIFIER_REQUEST_STALL_MS);
-    timers.add(timer);
+    });
   };
-  let repairStarted = false;
+  let secondAttemptStarted = false;
+  let fallback: { decision: z.infer<typeof classifierDecisionSchema>; until: number } | undefined;
   let lastFailure: { error: unknown } | { invalid: Evaluation } | undefined;
+  const keepFallback = (reason: 'timeout' | 'error' | 'invalid') => {
+    console.warn(JSON.stringify({ event: 'agent_classification_reconsideration_failed', modelCallId: callId, reason }));
+    return fallback!.decision;
+  };
   try {
     launch({ attempt: 1, feedback: [], previousCandidate: undefined, reconsider: false }, false);
     while (pending.size) {
+      if (fallback && Date.now() >= fallback.until) return keepFallback('timeout');
       const woke = new Promise<'wake'>(resolve => { wake = () => resolve('wake'); });
       const next = await Promise.race([...pending, woke]);
       if (next === 'wake') continue;
       pending.delete(next.key);
       answered.add(next.context);
       if (!next.ok) {
+        // Cancellation and the phase deadline propagate; provider and budget errors
+        // fail the run only when no request can still produce a decision.
         if (signal.aborted) throw next.error;
         lastFailure = { error: next.error };
         continue;
       }
       const { evaluation } = next;
-      if (evaluation.decision) return { ...evaluation, decision: evaluation.decision };
+      if (evaluation.decision && !evaluation.advisory) return evaluation.decision;
+      if (evaluation.decision) {
+        if (fallback) continue; // Keep the first advisory decision.
+        const budgetMs = Math.min(RECONSIDERATION_TIMEOUT_MS, deadlineAt - Date.now() - RECONSIDERATION_DEADLINE_MARGIN_MS);
+        if (budgetMs < RECONSIDERATION_MIN_MS) return evaluation.decision;
+        fallback = { decision: evaluation.decision, until: Date.now() + budgetMs };
+        later(budgetMs, () => {});
+        if (!secondAttemptStarted) {
+          secondAttemptStarted = true;
+          launch({ attempt: 2, feedback: evaluation.feedback, previousCandidate: evaluation.candidate, reconsider: true }, false);
+        }
+        continue;
+      }
       lastFailure = { invalid: evaluation };
-      if (!repairStarted && evaluation.context.attempt === 1) {
-        repairStarted = true;
+      if (!secondAttemptStarted && evaluation.context.attempt === 1) {
+        secondAttemptStarted = true;
         launch({ attempt: 2, feedback: evaluation.feedback, previousCandidate: evaluation.candidate, reconsider: false }, false);
       }
     }
   } finally {
     for (const timer of timers) clearTimeout(timer);
   }
+  // A failed or malformed second attempt must not discard a valid first decision.
+  if (fallback) return keepFallback(lastFailure && 'error' in lastFailure ? 'error' : 'invalid');
   if (lastFailure && 'error' in lastFailure) throw lastFailure.error;
   const feedback = lastFailure?.invalid.feedback ?? [];
   throw new ApiError(502, 'AGENT_CLASSIFICATION_INVALID',

@@ -739,6 +739,48 @@ describe('YouTube agent capability router', () => {
   describe('best-effort visual reconsideration', () => {
     const message = 'Summarize the slide design tips in popular talks';
     const first = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' };
+    const full = (output: Record<string, unknown>): Record<string, unknown> => ({ answerDetail: 'standard', ...output });
+    const required = full({ ...first, visualEvidence: 'required', visualRequirements: ['slide layouts'] });
+    const { route: _omitted, ...withoutRoute } = first;
+    const missing = full(withoutRoute);
+
+    it('lets an in-flight repair win instead of starting a reconsideration when a hedge returns advisory notes', async () => {
+      const recordUsage = vi.fn();
+      // Original invalid at 11 s starts the repair; the hedge returns advisory notes at 12 s; the repair is valid at 13 s.
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) },
+        3: { afterMs: 2_000, output: required } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal,
+        modelCallId: 'run:classifier', modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage } });
+      await vi.advanceTimersByTimeAsync(13_000);
+      await expect(run).resolves.toMatchObject({ visualEvidence: 'required' });
+      // No reconsideration request: the existing repair is the second attempt.
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+      expect(JSON.stringify(classifier.doGenerateCalls[2]!.prompt)).toContain('The previous classification was invalid');
+      expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['run:classifier', 'run:classifier:hedge', 'run:classifier:repair']);
+    });
+
+    it('keeps the advisory decision when the in-flight repair is invalid', async () => {
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) },
+        3: { afterMs: 2_000, output: missing } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(13_000);
+      await expect(run).resolves.toMatchObject({ visualEvidence: 'helpful' });
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"invalid"'));
+    });
+
+    it('waits for an in-flight repair only for the reconsideration budget', async () => {
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal })
+        .then(decision => decision, (error: Error) => error.message);
+      // The advisory decision arrives at 12 s, leaving 7 s before the 1 s deadline margin.
+      await vi.advanceTimersByTimeAsync(18_999);
+      expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await run).toMatchObject({ visualEvidence: 'helpful' });
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+    });
     const route = (toolCallId: string) => ({ content: [{ type: 'tool-call' as const, toolCallId, toolName: 'classify_request',
       input: JSON.stringify({ researchVideoCount: 1, answerDetail: 'standard', ...first }) }],
       finishReason: { unified: 'tool-calls' as const, raw: undefined },
