@@ -1384,6 +1384,26 @@ test('run summaries retry independently and settled history is skipped during re
   });
 });
 
+test('runs that end before their first tool call publish a summary with the terminal error',async()=>{
+  const {runtime,runId,userId,conversationId}=await seed('trace-zero-call-summary','running');
+  await runInDurableObject(runtime,async instance=>{
+    const manager=(instance as unknown as {traceManager:import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager}).traceManager;
+    instance.sql`UPDATE agent_runs SET created_at=1000,updated_at=1000 WHERE id=${runId}`;
+    // A non-terminal run without calls stays out of the index.
+    manager.syncRun(runId);
+    await manager.publishPending();
+    expect(await env.DB.prepare('SELECT run_id FROM agent_trace_runs WHERE run_id=?').bind(runId).first()).toBeNull();
+    expect(manager.hasPending).toBe(false);
+    instance.sql`UPDATE agent_runs SET status='failed',error=${'Classification phase timeout.'},updated_at=21000 WHERE id=${runId}`;
+    manager.syncRun(runId);
+    await manager.publishPending();
+    expect(await env.DB.prepare('SELECT * FROM agent_trace_runs WHERE run_id=?').bind(runId).first()).toMatchObject({
+      user_id:userId,session_id:conversationId,status:'failed',started_at:1000,updated_at:21000,
+      call_count:0,failed_calls:0,capture_failures:0,error:'Classification phase timeout.'});
+    expect(manager.hasPending).toBe(false);
+  });
+});
+
 test.each(['memory','other-version','same-version'] as const)('in-flight analysis handles %s deletion without a global invalidation',async deletion=>{
   const {runtime,runId,conversationId,userId}=await seed(`trace-scoped-delete-${deletion}`,'running');
   await runInDurableObject(runtime,async instance=>{

@@ -144,6 +144,7 @@ export async function executeResearchRun(options: {
       modelBudget: options.modelBudget,
       modelCallId: `${options.modelCallPrefix}:classifier`,
       currentDate: options.currentDate,
+      deadlineAt: classificationDeadlineAt,
       onDiagnostic: options.onClassificationDiagnostic,
       traceToolCall: options.traceToolCall,
     }), 'Classification phase timeout.'),

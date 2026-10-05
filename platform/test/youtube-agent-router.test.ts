@@ -364,7 +364,8 @@ describe('YouTube agent capability router', () => {
       let calls = 0;
       const model = new MockLanguageModelV4({ doGenerate: async () => {
         if (++calls > 1) return new Promise(() => {});
-        await new Promise(resolve => setTimeout(resolve, 15_000));
+        // Slow but under the stall limit, so the repair has too little time left to retry a stall.
+        await new Promise(resolve => setTimeout(resolve, 9_000));
         return { content: [{ type: 'tool-call', toolCallId: 'invalid', toolName: 'classify_request', input: '{}' }],
           finishReason: { unified: 'tool-calls', raw: undefined },
           usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -375,6 +376,161 @@ describe('YouTube agent capability router', () => {
       await vi.advanceTimersByTimeAsync(20_000);
       expect(await result).toBe('Classification phase timeout.');
       expect(calls).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('sends one fresh classifier request when the first stalls', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const answer = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'event sourcing explained' });
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async options => {
+        if (++calls === 1) return new Promise(() => {});
+        return answer.doGenerate(options);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(model.doGenerateCalls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research', researchBreadth: 'focused' });
+      expect(model.doGenerateCalls).toHaveLength(2);
+      // A stall is not a repair: the fresh request repeats the original prompt.
+      expect(model.doGenerateCalls[1]!.prompt).toEqual(model.doGenerateCalls[0]!.prompt);
+      // The phase ends with the decision, which aborts the abandoned request.
+      expect(model.doGenerateCalls[0]!.abortSignal?.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent_classification_request_stalled'));
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('keeps a slow first classifier response that answers after the fresh request starts', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const answer = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'event sourcing explained' });
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async options => {
+        if (++calls === 2) return new Promise(() => {});
+        await new Promise(resolve => setTimeout(resolve, 14_000));
+        return answer.doGenerate(options);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(14_000);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research' });
+      expect(model.doGenerateCalls).toHaveLength(2);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('fails a stalled classification with the provider error when both requests fail', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async () => {
+        const call = ++calls;
+        await new Promise(resolve => setTimeout(resolve, call === 1 ? 12_000 : 1_000));
+        throw new Error(`provider failure ${call}`);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toContain('provider failure 1');
+      expect(model.doGenerateCalls).toHaveLength(2);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  // Responses keyed by request order: 1 original, 2 hedge at 10 s, 3 repair after the original fails.
+  const timedClassifier = (responses: Record<number, { afterMs: number; output?: Record<string, unknown> }>) => {
+    let calls = 0;
+    return new MockLanguageModelV4({ doGenerate: async () => {
+      const response = responses[++calls];
+      if (!response) return new Promise(() => {});
+      await new Promise(resolve => setTimeout(resolve, response.afterMs));
+      if (!response.output) return new Promise(() => {});
+      return { content: [{ type: 'tool-call', toolCallId: `classify-${calls}`, toolName: 'classify_request', input: JSON.stringify(response.output) }],
+        finishReason: { unified: 'tool-calls', raw: undefined },
+        usage: { inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 10, text: 10, reasoning: undefined } }, warnings: [] };
+    } });
+  };
+  const validRoute = { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused',
+    searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+
+  it('accepts a valid hedge that answers after the original failed validation and repair started', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Original invalid at 11 s, hedge valid at 12 s, repair never answers.
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: validRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(decision => decision, (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'event sourcing explained' });
+      expect(model.doGenerateCalls).toHaveLength(3);
+      expect(JSON.stringify(model.doGenerateCalls[2]!.prompt)).toContain('classificationRepair');
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('records usage for every completed classifier request under a distinct call ID', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const recordUsage = vi.fn();
+      const diagnostic = vi.fn();
+      // Original invalid at 11 s, repair invalid at 11.5 s, hedge valid at 12 s.
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: validRoute },
+        3: { afterMs: 500, output: missingRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal,
+        modelCallId: 'run:classifier', onDiagnostic: diagnostic,
+        modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage } });
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research' });
+      expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['run:classifier', 'run:classifier:repair', 'run:classifier:hedge']);
+      expect(diagnostic.mock.calls.map(([event]) => [event.attempt, event.hedged ?? false, event.outcome]))
+        .toEqual([[1, false, 'invalid'], [2, false, 'invalid'], [1, true, 'valid']]);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('fails as invalid when every original, hedge and repair response is invalid', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: missingRoute },
+        3: { afterMs: 500, output: missingRoute } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(() => 'completed', (error: { code?: string }) => error.code);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toBe('AGENT_CLASSIFICATION_INVALID');
+      // One repair only: the invalid hedge does not start a second one.
+      expect(model.doGenerateCalls).toHaveLength(3);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('does not retry a stalled request when the outer phase deadline leaves too little time', async () => {
+    vi.useFakeTimers();
+    try {
+      const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model,
+        signal: new AbortController().signal, deadlineAt: Date.now() + 12_000 }).then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toBe('Classification phase timeout.');
+      expect(model.doGenerateCalls).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not retry a classifier request the caller cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: controller.signal })
+        .then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(5_000);
+      controller.abort(new Error('Cancelled by caller.'));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await result).toBe('Cancelled by caller.');
+      expect(model.doGenerateCalls).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
 
@@ -583,16 +739,58 @@ describe('YouTube agent capability router', () => {
   describe('best-effort visual reconsideration', () => {
     const message = 'Summarize the slide design tips in popular talks';
     const first = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' };
+    const full = (output: Record<string, unknown>): Record<string, unknown> => ({ answerDetail: 'standard', ...output });
+    const required = full({ ...first, visualEvidence: 'required', visualRequirements: ['slide layouts'] });
+    const { route: _omitted, ...withoutRoute } = first;
+    const missing = full(withoutRoute);
+
+    it('lets an in-flight repair win instead of starting a reconsideration when a hedge returns advisory notes', async () => {
+      const recordUsage = vi.fn();
+      // Original invalid at 11 s starts the repair; the hedge returns advisory notes at 12 s; the repair is valid at 13 s.
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) },
+        3: { afterMs: 2_000, output: required } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal,
+        modelCallId: 'run:classifier', modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage } });
+      await vi.advanceTimersByTimeAsync(13_000);
+      await expect(run).resolves.toMatchObject({ visualEvidence: 'required' });
+      // No reconsideration request: the existing repair is the second attempt.
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+      expect(JSON.stringify(classifier.doGenerateCalls[2]!.prompt)).toContain('The previous classification was invalid');
+      expect(recordUsage.mock.calls.map(([entry]) => entry.callId)).toEqual(['run:classifier', 'run:classifier:hedge', 'run:classifier:repair']);
+    });
+
+    it('keeps the advisory decision when the in-flight repair is invalid', async () => {
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) },
+        3: { afterMs: 2_000, output: missing } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(13_000);
+      await expect(run).resolves.toMatchObject({ visualEvidence: 'helpful' });
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"invalid"'));
+    });
+
+    it('waits for an in-flight repair only for the reconsideration budget', async () => {
+      const classifier = timedClassifier({ 1: { afterMs: 11_000, output: missing }, 2: { afterMs: 2_000, output: full(first) } });
+      const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal })
+        .then(decision => decision, (error: Error) => error.message);
+      // The advisory decision arrives at 12 s, leaving 7 s before the 1 s deadline margin.
+      await vi.advanceTimersByTimeAsync(18_999);
+      expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await run).toMatchObject({ visualEvidence: 'helpful' });
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"reason":"timeout"'));
+      expect(classifier.doGenerateCalls).toHaveLength(3);
+    });
     const route = (toolCallId: string) => ({ content: [{ type: 'tool-call' as const, toolCallId, toolName: 'classify_request',
       input: JSON.stringify({ researchVideoCount: 1, answerDetail: 'standard', ...first }) }],
       finishReason: { unified: 'tool-calls' as const, raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
       warnings: [] });
-    // First call answers after firstMs; the reconsideration runs `second`.
-    const model = (second: (signal?: AbortSignal) => Promise<never>, firstMs = 0) => {
+    // The first call answers at once; the reconsideration runs `second`.
+    const model = (second: (signal?: AbortSignal) => Promise<never>) => {
       let call = 0;
       return new MockLanguageModelV4({ doGenerate: async ({ abortSignal }) => {
-        if (call++ === 0) { await new Promise(resolve => setTimeout(resolve, firstMs)); return route('first'); }
+        if (call++ === 0) return route('first');
         return second(abortSignal);
       } });
     };
@@ -629,11 +827,18 @@ describe('YouTube agent capability router', () => {
     });
 
     it('skips reconsideration when too little classification time remains', async () => {
-      const classifier = model(async () => { throw new Error('must not be called'); }, 18_000);
+      let call = 0;
+      // A first response cannot take 18 s any more: it stalls at 10 s and the
+      // fresh request answers 8 s later, leaving no time to reconsider.
+      const classifier = new MockLanguageModelV4({ doGenerate: async () => {
+        if (call++ === 0) return new Promise<never>(() => {});
+        if (call === 2) { await new Promise(resolve => setTimeout(resolve, 8_000)); return route('first'); }
+        throw new Error('must not be called');
+      } });
       const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
       await vi.advanceTimersByTimeAsync(18_000);
       await expect(run).resolves.toMatchObject({ visualEvidence: 'helpful' });
-      expect(classifier.doGenerateCalls).toHaveLength(1);
+      expect(classifier.doGenerateCalls).toHaveLength(2);
     });
 
     it('propagates user cancellation during reconsideration', async () => {

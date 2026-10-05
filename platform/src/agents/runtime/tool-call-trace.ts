@@ -35,6 +35,16 @@ interface TraceRow extends Record<string, SqlStorageValue> {
 type PayloadField = 'input' | 'output' | 'error';
 const PAYLOAD_CHUNK_BYTES = 128 * 1024;
 const FLUSH_BATCH_SIZE = 32;
+const RUN_ERROR_MAX_CHARS = 500;
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+export interface TraceRunMetadata {
+  userId: string; sessionId: string; status: string;
+  /** Run admission and last update. Optional for callers that predate run-level summaries. */
+  startedAt?: number; updatedAt?: number;
+  /** User-visible terminal error, already shown to the run's owner. */
+  error?: string | null;
+}
 
 interface ToolCallTraceOptions {
   sql: SqlStorage;
@@ -44,7 +54,7 @@ interface ToolCallTraceOptions {
   queueCleanup: (keys: string[]) => void;
   cleanup: () => Promise<void>;
   db: D1Database;
-  metadata: (runId: string) => { userId: string; sessionId: string; status: string } | undefined;
+  metadata: (runId: string) => TraceRunMetadata | undefined;
   retryIndex?: () => Promise<unknown>;
   background?: (work: Promise<void>) => void;
   cancelRetry?: () => Promise<void>;
@@ -358,23 +368,28 @@ export class ToolCallTraceManager {
         this.sql.exec('DELETE FROM agent_trace_run_index WHERE run_id=?',item.run_id);
         continue;
       }
-      const counts = this.sql.exec<{started:number|null;updated:number|null;calls:number;failed:number;captures:number}>(`
+      const counts = this.sql.exec<{started:number|null;updated:number|null;calls:number;failed:number|null;captures:number|null}>(`
         SELECT MIN(started_at) AS started,MAX(COALESCE(finished_at,started_at)) AS updated,COUNT(*) AS calls,
         SUM(status='failed') AS failed,SUM(capture_error IS NOT NULL) AS captures
         FROM agent_call_traces WHERE run_id=?`,item.run_id).one();
-      if (!counts.calls) {
+      if (!counts.calls && !(TERMINAL_RUN_STATUSES.has(run.status) && run.startedAt !== undefined)) {
+        // A run that ends before its first tool call still gets a summary, so
+        // admission, classification and deadline failures stay visible.
         this.sql.exec('DELETE FROM agent_trace_run_index WHERE run_id=?',item.run_id);
         continue;
       }
+      const startedAt = run.startedAt ?? counts.started;
+      const updatedAt = Math.max(run.updatedAt ?? 0, counts.updated ?? 0, startedAt ?? 0);
+      const error = run.error ? run.error.slice(0, RUN_ERROR_MAX_CHARS) : null;
       try {
         await this.db.prepare(`INSERT INTO agent_trace_runs
-          (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version)
-          VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET
+          (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version,error)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET
           status=excluded.status,started_at=excluded.started_at,updated_at=excluded.updated_at,
           call_count=excluded.call_count,failed_calls=excluded.failed_calls,capture_failures=excluded.capture_failures,
-          index_version=excluded.index_version WHERE excluded.index_version>agent_trace_runs.index_version`)
-          .bind(item.run_id,run.userId,run.sessionId,run.status,counts.started,counts.updated,counts.calls,
-            counts.failed,counts.captures,item.revision).run();
+          index_version=excluded.index_version,error=excluded.error WHERE excluded.index_version>agent_trace_runs.index_version`)
+          .bind(item.run_id,run.userId,run.sessionId,run.status,startedAt,updatedAt,counts.calls,
+            counts.failed ?? 0,counts.captures ?? 0,item.revision,error).run();
         this.sql.exec('UPDATE agent_trace_run_index SET index_pending=0 WHERE run_id=? AND revision=?',item.run_id,item.revision);
       } catch {
         success = false;

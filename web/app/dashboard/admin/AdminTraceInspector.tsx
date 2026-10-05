@@ -69,7 +69,8 @@ export default function AdminTraceInspector() {
       </form>
       <div className={styles.runs} aria-busy={loading}>{page?.runs.map(item=><button key={item.runId} className={styles.run} onClick={()=>openRun(item.runId)}>
         <span><strong>{item.runId}</strong><small>User {item.userId}</small></span>
-        <span>{item.status}<small>{item.callCount} attempts, {item.failedCalls} failed{item.captureFailures>0 ? `, ${item.captureFailures} storage failures` : ''}</small></span>
+        <span>{item.status}<small>{item.callCount} attempts, {item.failedCalls} failed{item.captureFailures>0 ? `, ${item.captureFailures} storage failures` : ''}</small>
+          {item.error && <small>{item.error}</small>}</span>
         <time>{new Date(item.startedAt).toLocaleString()}</time>
       </button>)}</div>
       {!loading && page?.runs.length===0 && <p>No traces found. Diagnostic capture starts with new runs after deployment.</p>}
@@ -77,9 +78,10 @@ export default function AdminTraceInspector() {
         <button disabled={loading || page?.nextOffset==null} onClick={()=>setOffset(page!.nextOffset!)}>Next</button></nav>
     </> : <>
       <div className={styles.actions}>
-        <button onClick={downloadTrace} disabled={exporting}>{exporting ? 'Downloading…' : 'Download timeline JSONL'}</button></div>
+        <button onClick={downloadTrace} disabled={exporting || run?.calls.length===0}>{exporting ? 'Downloading…' : 'Download timeline JSONL'}</button></div>
       <h3 className={styles.identifier}>Run {runId}</h3>
       {run && <p className={styles.metadata}>User {run.userId} · Session {run.sessionId} · {run.status}</p>}
+      {run?.error && <p role='alert' className='alert error'>Run error: {run.error}</p>}
       <div className={styles.layout}>
         <ol className={styles.calls} aria-label='Tool call timeline'>{run?.calls.map(call=><li key={call.traceId}>
           <button className={traceId===call.traceId ? styles.selected : ''} onClick={()=>{setDetail(undefined);setTraceId(call.traceId);}}>
@@ -87,7 +89,8 @@ export default function AdminTraceInspector() {
             {call.finishedAt!==undefined && <small>{((call.finishedAt-call.startedAt)/1000).toFixed(2)} seconds</small>}
           </button></li>)}</ol>
         <div className={styles.payload}>
-          {!traceId && <p>Select a tool call to inspect its saved payload.</p>}
+          {run?.calls.length===0 && <p>This run ended before any tool call was recorded.</p>}
+          {!traceId && !!run?.calls.length && <p>Select a tool call to inspect its saved payload.</p>}
           {detail && <>
             <div className={styles.header}><h3>{detail.name}</h3><button onClick={async()=>{
               try {await navigator.clipboard.writeText(JSON.stringify(detail,null,2));setCopied(true);}

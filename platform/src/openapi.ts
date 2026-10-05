@@ -1606,7 +1606,7 @@ export const openApiDocument = {
     },
     '/v1/admin/agent-traces': {
       get: { tags:['Administration'],operationId:'listAdminAgentTraces',summary:'Find diagnostic agent runs',
-        description:'Admin-only diagnostic index. Requires a live verified browser admin session. Search an exact run, session or user ID. Complete payloads remain in private R2 and are loaded separately. Normal agent users and API keys cannot access traces.',
+        description:'Admin-only diagnostic index. Requires a live verified browser admin session. Search an exact run, session or user ID. Each run includes its terminal error when one was recorded, and runs that ended before any tool call are listed with zero calls. Complete payloads remain in private R2 and are loaded separately. Normal agent users and API keys cannot access traces.',
         security:browserSessionSecurity,
         parameters:[queryParameter('q','Exact run, session or user ID.',{type:'string',maxLength:200}),
           queryParameter('status','Filter by run status.',{type:'string',enum:['pending','running','completed','failed','cancelled']}),
@@ -1617,7 +1617,7 @@ export const openApiDocument = {
     },
     '/v1/admin/agent-traces/{runId}': {
       get:{tags:['Administration'],operationId:'getAdminAgentTraceRun',summary:'List a run’s diagnostic tool attempts',
-        description:'Returns ordered tool-attempt metadata, sequence numbers and payload availability for one run. Admin browser session required. Preserves earlier attempts. Runs with more than 500 attempts require querying the D1 index.',
+        description:'Returns ordered tool-attempt metadata, sequence numbers and payload availability for one run, plus its terminal error. A run that ended before any tool call returns an empty call list. Admin browser session required. Preserves earlier attempts. Runs with more than 500 attempts require querying the D1 index.',
         security:browserSessionSecurity,parameters:[pathParameter('runId','Agent run UUID.')],
         responses:{'200':jsonResponse('Run identity and ordered calls.',{type:'object'}),...standardErrors,'404':responseRef('NotFound')},
       },

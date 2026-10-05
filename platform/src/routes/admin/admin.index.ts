@@ -107,7 +107,7 @@ adminRoutes.get('/admin/agent-traces', async c => {
   if (status) { conditions.push('status=?'); values.push(status); }
   const rows=await c.env.DB.prepare(`SELECT run_id AS runId,user_id AS userId,session_id AS sessionId,
     status,started_at AS startedAt,updated_at AS updatedAt,call_count AS callCount,
-    failed_calls AS failedCalls,capture_failures AS captureFailures FROM agent_trace_runs
+    failed_calls AS failedCalls,capture_failures AS captureFailures,error FROM agent_trace_runs
     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
     ORDER BY started_at DESC,run_id DESC LIMIT ? OFFSET ?`)
     .bind(...values,limit+1,offset).all();
@@ -117,12 +117,16 @@ adminRoutes.get('/admin/agent-traces/:runId', async c => {
   const runId=traceRunId(c.req.param('runId'));
   const rows=await c.env.DB.prepare('SELECT * FROM agent_tool_traces WHERE run_id=? ORDER BY call_sequence LIMIT 501')
     .bind(runId).all<AdminTraceRow>();
+  const summary=await c.env.DB.prepare('SELECT user_id,session_id,status,error FROM agent_trace_runs WHERE run_id=?').bind(runId)
+    .first<{user_id:string;session_id:string;status:string;error:string|null}>();
+  // A run that ended before its first tool call has a summary and no call rows.
+  if (!rows.results.length && summary) return c.json({runId,userId:summary.user_id,sessionId:summary.session_id,
+    status:summary.status,error:summary.error,calls:[]});
   if (!rows.results.length) throw new ApiError(404,'TRACE_RUN_NOT_FOUND','No diagnostic trace was recorded for this run.');
   if (rows.results.length>500) throw new ApiError(422,'TRACE_RUN_TOO_LARGE','This run has more than 500 calls. Query its D1 index for additional records.');
   const first=rows.results[0]!;
-  const summary=await c.env.DB.prepare('SELECT status FROM agent_trace_runs WHERE run_id=?').bind(runId).first<{status:string}>();
   const status=summary?.status ?? first.run_status;
-  return c.json({runId,userId:first.user_id,sessionId:first.session_id,status,
+  return c.json({runId,userId:first.user_id,sessionId:first.session_id,status,error:summary?.error ?? null,
     calls:rows.results.map(row=>adminTraceSummary({...row,run_status:status}))});
 });
 adminRoutes.get('/admin/agent-traces/:runId/calls/:traceId', async c => {
