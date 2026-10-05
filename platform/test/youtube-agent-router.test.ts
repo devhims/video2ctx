@@ -455,7 +455,8 @@ describe('YouTube agent capability router', () => {
   };
   const validRoute = { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused',
     searchQuery: 'event sourcing explained', visualEvidence: 'none' };
-  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+  // Missing route with incomplete discovery fields, so route recovery cannot apply.
+  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', visualEvidence: 'none' };
 
   it('accepts a valid hedge that answers after the original failed validation and repair started', async () => {
     vi.useFakeTimers();
@@ -741,7 +742,8 @@ describe('YouTube agent capability router', () => {
     const first = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' };
     const full = (output: Record<string, unknown>): Record<string, unknown> => ({ answerDetail: 'standard', ...output });
     const required = full({ ...first, visualEvidence: 'required', visualRequirements: ['slide layouts'] });
-    const { route: _omitted, ...withoutRoute } = first;
+    // Missing route and search query, so route recovery cannot apply.
+    const { route: _omitted, searchQuery: _query, ...withoutRoute } = first;
     const missing = full(withoutRoute);
 
     it('lets an in-flight repair win instead of starting a reconsideration when a hedge returns advisory notes', async () => {

@@ -56,12 +56,59 @@ const conditionalRequirements = [
   { when: { visualEvidence: 'required' }, required: 'visualRequirements' },
 ] as const;
 
-type DefaultedClassificationField = 'answerDetail' | 'researchBreadth';
+type DefaultedClassificationField = 'answerDetail' | 'route' | 'researchBreadth';
 
-function validateClassifierDecision(value: unknown, allowMissingBreadth: boolean): (
+interface ClassifierValidationOptions {
+  /** The repair may omit breadth for discovery and receive the focused default. */
+  allowMissingBreadth: boolean;
+  /** Video IDs the request and session supplied. An inferred inspection must use one. */
+  suppliedVideoIds: readonly string[];
+}
+
+// Obsolete count fields the classifier still sends. They are stripped, and do
+// not count as unrecognized keys that block route recovery.
+const OBSOLETE_CLASSIFIER_KEYS = new Set(['researchVideoCount', 'requiredVideoCount']);
+const DISCOVERY_KEYS = ['searchQuery', 'researchBreadth', 'channelId'] as const;
+const FINALIZATION_KEYS = ['responseIntent', 'contextScope', 'historySelection'] as const;
+
+/**
+ * Recovers a missing route only when the other structured fields select exactly
+ * one route. Never reads the free-text reason, never replaces a route the model
+ * did send, and refuses payloads with unrecognized keys, which include keys
+ * corrupted by leaked tool-call markup. The recovered candidate still goes
+ * through every required-field and semantic check.
+ */
+function inferMissingRoute(input: Record<string, unknown>, suppliedVideoIds: readonly string[]):
+  z.infer<typeof classifierDecisionSchema>['route'] | undefined {
+  if (Object.hasOwn(input, 'route')) return undefined;
+  const known = classifierDecisionSchema.shape;
+  if (Object.keys(input).some(key => !Object.hasOwn(known, key) && !OBSOLETE_CLASSIFIER_KEYS.has(key))) return undefined;
+  const present = (key: string) => input[key] !== undefined && input[key] !== null;
+  const discovery = DISCOVERY_KEYS.some(present);
+  const inspection = present('videoId');
+  const finalization = FINALIZATION_KEYS.some(present);
+  const refresh = input.refreshEvidence === true || input.refreshDynamicData === true;
+  const signals = [discovery, inspection, finalization].filter(Boolean).length;
+  if (signals !== 1) return undefined;
+  // comparisonVideoIds and researchBreadth alone are valid in several routes, so
+  // discovery needs both the query and the breadth.
+  if (discovery) return present('searchQuery') && present('researchBreadth') ? 'topic_research' : undefined;
+  if (inspection) {
+    return typeof input.videoId === 'string' && suppliedVideoIds.includes(input.videoId) ? 'inspect_video' : undefined;
+  }
+  // Finalization cannot fetch fresh data, and needs its explanation to be routable.
+  if (refresh || !present('reason')) return undefined;
+  const intent = known.responseIntent.safeParse(input.responseIntent);
+  if (!intent.success || intent.data === undefined) return undefined;
+  if (intent.data === 'context_answer' && !present('contextScope')) return undefined;
+  return 'finalize';
+}
+
+function validateClassifierDecision(value: unknown, options: ClassifierValidationOptions): (
   | { success: true; data: z.infer<typeof classifierDecisionSchema> }
   | { success: false; error: z.ZodError }
 ) & { defaultedFields: DefaultedClassificationField[] } {
+  const { allowMissingBreadth, suppliedVideoIds } = options;
   const defaultedFields: DefaultedClassificationField[] = [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { ...classifierDecisionSchema.safeParse(value), defaultedFields };
@@ -72,6 +119,11 @@ function validateClassifierDecision(value: unknown, allowMissingBreadth: boolean
   if (!answerDetailSchema.safeParse(input.answerDetail).success) {
     input.answerDetail = 'standard';
     defaultedFields.push('answerDetail');
+  }
+  const inferredRoute = inferMissingRoute(input, suppliedVideoIds);
+  if (inferredRoute) {
+    input.route = inferredRoute;
+    defaultedFields.push('route');
   }
   if (allowMissingBreadth && input.route === 'topic_research' && input.comparisonVideoIds === undefined
     && input.researchBreadth === undefined) {
@@ -102,7 +154,7 @@ function validateClassifierDecision(value: unknown, allowMissingBreadth: boolean
   return issues.length ? { success: false, error: new z.ZodError(issues), defaultedFields } : { ...parsed, defaultedFields };
 }
 
-function classifierToolSchema(allowMissingBreadth: boolean, defaultedFields: Set<DefaultedClassificationField>) {
+function classifierToolSchema(options: ClassifierValidationOptions, defaultedFields: Set<DefaultedClassificationField>) {
   return jsonSchema<z.infer<typeof classifierDecisionSchema>>(() => ({
     ...z.toJSONSchema(classifierDecisionSchema, { target: 'draft-7' }),
     anyOf: classificationRoutes.map(({ route, required }) => ({ properties: { route: { const: route } }, required: [...required] })),
@@ -111,9 +163,11 @@ function classifierToolSchema(allowMissingBreadth: boolean, defaultedFields: Set
       { required: [required] },
     ] })),
   }), { validate: value => {
-    const parsed = validateClassifierDecision(value, allowMissingBreadth);
+    const parsed = validateClassifierDecision(value, options);
     for (const field of parsed.defaultedFields) defaultedFields.add(field);
-    return parsed.success ? { success: true, value: parsed.data } : { success: false, error: parsed.error };
+    // Accept the call but hand back the provider's own arguments. The caller validates
+    // again and keeps both, so traces show what the model returned, not the normalized copy.
+    return parsed.success ? { success: true, value: value as z.infer<typeof classifierDecisionSchema> } : { success: false, error: parsed.error };
   } });
 }
 
@@ -223,7 +277,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     tools: {
       classify_request: tool({
         description: 'Accept, clarify, or reject the request. For accepted tasks, select the route, research breadth, and whether the answer needs visual evidence.',
-        inputSchema: classifierToolSchema(context.attempt === 2 && !context.reconsider, defaultedFields),
+        inputSchema: classifierToolSchema({ allowMissingBreadth: context.attempt === 2 && !context.reconsider, suppliedVideoIds: videoIds }, defaultedFields),
       }),
     },
     // Fireworks GLM can return incomplete arguments when a tool is forced.
@@ -253,7 +307,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     const calls = result.toolCalls.filter(call => call.toolName === 'classify_request');
     const hasSingleRoutingCall: boolean = calls.length === 1 && result.toolCalls.length === 1;
     const candidate = hasSingleRoutingCall ? calls[0]?.input : undefined;
-    const parsed = validateClassifierDecision(candidate, context.attempt === 2 && !context.reconsider);
+    const parsed = validateClassifierDecision(candidate, { allowMissingBreadth: context.attempt === 2 && !context.reconsider,
+      suppliedVideoIds: videoIds });
     for (const field of parsed.defaultedFields) defaultedFields.add(field);
     let feedback: ClassificationIssue[] = !hasSingleRoutingCall ? [{ path: 'tool call', code: 'invalid_tool_call_count',
       message: `Expected exactly one classify_request call; received ${calls.length} routing calls and ${result.toolCalls.length} total calls. Plain text is not a routing decision.`,
@@ -271,7 +326,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     for (const call of result.toolCalls) {
       if (call.invalid) continue; // Already captured at the SDK validation boundary.
       await input.traceToolCall?.({toolCallId:call.toolCallId,name:call.toolName,operation:'classification',source:'model',
-        input:call.input,execute:async()=>({accepted:feedback.length===0,decision:parsed.success ? parsed.data : null,issues:feedback})});
+        input:call.input,execute:async()=>({accepted:feedback.length===0,decision:parsed.success ? parsed.data : null,issues:feedback,
+          defaultedFields:[...defaultedFields]})});
     }
     input.onDiagnostic?.({ attempt: context.attempt, ...(hedged ? { hedged: true as const } : {}), outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
