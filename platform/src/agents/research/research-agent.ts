@@ -35,7 +35,7 @@ import {
   visualEvidenceLevel,
 } from '../contracts';
 import { createVisualAnalyst } from '../providers/youtube/visual-analyst';
-import { createAgentModel } from '../model';
+import { createAgentModel, createClassifierFallbackModel } from '../model';
 import { normalizeAgentExecutionError } from '../runtime/agent-errors';
 import { createYouTubeAgentProvider } from '../providers/youtube/provider';
 import {
@@ -140,6 +140,7 @@ export async function executeResearchRun(options: {
         ...modelMetadata,
         model_role: 'classifier',
       }),
+      fallbackModel: createClassifierFallbackModel(options.env, options.sessionAffinity, modelMetadata),
       signal,
       modelBudget: options.modelBudget,
       modelCallId: `${options.modelCallPrefix}:classifier`,

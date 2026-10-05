@@ -82,10 +82,11 @@ describe('YouTube agent capability router', () => {
       const model = sequenceClassifier([{ route: 'topic_research', researchBreadth,
         searchQuery: 'exercise comparison', visualEvidence: 'none' }]);
       const diagnostics = vi.fn();
-      await expect(classifyCapabilityWithModel({ message: 'Compare exercise techniques', model,
-        signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toThrow(/researchBreadth/);
+      await expectLastResort(classifyCapabilityWithModel({ message: 'Compare exercise techniques', model,
+        signal: new AbortController().signal, onDiagnostic: diagnostics }));
       expect(model.doGenerateCalls).toHaveLength(2);
-      expect(diagnostics.mock.calls.map(([event]) => event.defaultedFields)).toEqual([[], []]);
+      const modelAttempts = diagnostics.mock.calls.filter(([event]) => event.stage !== 'last_resort');
+      expect(modelAttempts.map(([event]) => event.defaultedFields)).toEqual([[], []]);
     });
 
   it('retains valid comparative scope when an advisory visual reconsideration omits breadth', async () => {
@@ -101,8 +102,8 @@ describe('YouTube agent capability router', () => {
   it('still reports missing essential fields when optional preferences need defaults', async () => {
     const diagnostics = vi.fn();
     const model = sequenceClassifier([{ route: 'topic_research', answerDetail: undefined, explicitSourceCount: 0 }]);
-    await expect(classifyCapabilityWithModel({ message: 'Explain exercise technique', model,
-      signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Explain exercise technique', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostics }));
     expect(diagnostics.mock.calls[0]![0].issues.map((issue: { path: string }) => issue.path).sort())
       .toEqual(['explicitSourceCount', 'researchBreadth', 'searchQuery', 'visualEvidence']);
     expect(model.doGenerateCalls).toHaveLength(2);
@@ -162,9 +163,9 @@ describe('YouTube agent capability router', () => {
   it.each([[], ['abcdefghijk'], ['abcdefghijk', 'abcdefghijk'], ['abcdefghijk', 'zzzzzzzzzzz']].map(comparisonVideoIds => ({ comparisonVideoIds })))(
     'does not bypass video-scope validation when discovery fields are omitted: $comparisonVideoIds', async ({ comparisonVideoIds }) => {
       const model = sequenceClassifier([{ route: 'topic_research', comparisonVideoIds, visualEvidence: 'none' }]);
-      await expect(classifyCapabilityWithModel({ message: 'Review those videos', model,
+      await expectLastResort(classifyCapabilityWithModel({ message: 'Review those videos', model,
         conversationHistory: [conversationTurn({ user: 'Review these videos', assistant: 'Earlier review', resourceIds: ['abcdefghijk', 'lmnopqrstuv'] })],
-        signal: new AbortController().signal })).rejects.toThrow(/comparisonVideoIds/);
+        signal: new AbortController().signal }));
       expect(model.doGenerateCalls).toHaveLength(2);
     });
 
@@ -172,8 +173,8 @@ describe('YouTube agent capability router', () => {
     const diagnostics = vi.fn();
     const model = sequenceClassifier([{ route: 'finalize', responseIntent: 'context_answer', answerDetail: undefined,
       reason: 'Saved context', visualEvidence: 'required' }]);
-    await expect(classifyCapabilityWithModel({ message: 'Explain the earlier scene', model,
-      signal: new AbortController().signal, onDiagnostic: diagnostics })).rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Explain the earlier scene', model,
+      signal: new AbortController().signal, onDiagnostic: diagnostics }));
     expect(diagnostics.mock.calls[0]![0].issues.map((issue: { path: string }) => issue.path).sort())
       .toEqual(['contextScope', 'visualRequirements']);
   });
@@ -193,8 +194,8 @@ describe('YouTube agent capability router', () => {
   it.each(['how to get the most out of Claude Opus 4.5 tips and prompting guide', 'Opus prompting guide', 'Opus 5.5 and 4.5 prompting guide'])('rejects changed or dropped versions before discovery: %s', async searchQuery => {
     const model = classifierModel({ route: 'topic_research', researchVideoCount: 2, researchBreadth: 'focused',
       searchQuery });
-    await expect(classifyCapabilityWithModel({ message: 'how to get the most out of opus 5.5.',
-      model, signal: new AbortController().signal })).rejects.toThrow(/searchQuery/);
+    await expectLastResort(classifyCapabilityWithModel({ message: 'how to get the most out of opus 5.5.',
+      model, signal: new AbortController().signal }));
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
@@ -253,10 +254,10 @@ describe('YouTube agent capability router', () => {
       visualEvidence: 'none', researchVideoCount: 1, answerDetail: 'standard' };
     expect(await classifyCapabilityWithModel({ message: 'How many likes does https://youtu.be/abcdefghijk have now?',
       model: classifierModel(decision), signal: new AbortController().signal })).toMatchObject(decision);
-    await expect(classifyCapabilityWithModel({ message: 'How many likes now?',
+    await expectLastResort(classifyCapabilityWithModel({ message: 'How many likes now?',
       model: classifierModel({ route: 'finalize', responseIntent: 'context_answer', contextScope: 'video',
         reason: 'Saved counts', refreshDynamicData: true, researchVideoCount: 0 }),
-      signal: new AbortController().signal })).rejects.toThrow();
+      signal: new AbortController().signal }));
   });
 
   it('repairs a follow-up comparison that drops the saved video from its scope', async () => {
@@ -315,8 +316,8 @@ describe('YouTube agent capability router', () => {
 
   it('repairs finalization missing its response intent, and stops after one unsuccessful repair', async () => {
     const model = classifierModel({ route: 'finalize', reason: 'No earlier context.' });
-    await expect(classifyCapabilityWithModel({ message: 'try again', model, signal: new AbortController().signal }))
-      .rejects.toThrow(/Classification.*responseIntent/);
+    await expectLastResort(classifyCapabilityWithModel({ message: 'try again', model, signal: new AbortController().signal }))
+      ;
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
@@ -327,8 +328,8 @@ describe('YouTube agent capability router', () => {
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
         outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
     }) });
-    await expect(classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal }))
-      .rejects.toMatchObject({ code: 'AGENT_CLASSIFICATION_INVALID' });
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal }))
+      ;
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
@@ -358,7 +359,7 @@ describe('YouTube agent capability router', () => {
     }
   });
 
-  it('keeps repair inside the original classification deadline', async () => {
+  it('keeps repair inside the original classification deadline, then builds a last-resort decision', async () => {
     vi.useFakeTimers();
     try {
       let calls = 0;
@@ -371,11 +372,17 @@ describe('YouTube agent capability router', () => {
           usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
             outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
       } });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const result = classifyCapabilityWithModel({ message: 'Compare models', model, signal: new AbortController().signal })
-        .then(() => 'completed', error => error.message);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(await result).toBe('Classification phase timeout.');
+        .then(decision => decision, error => error.message);
+      await vi.advanceTimersByTimeAsync(19_749);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('agent_classification_last_resort'));
+      await vi.advanceTimersByTimeAsync(1);
+      // The stalled repair is abandoned just before the deadline, and the request becomes the search.
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'Compare models', researchBreadth: 'focused' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('"method":"defaults"'));
       expect(calls).toBe(2);
+      warn.mockRestore();
     } finally { vi.useRealTimers(); }
   });
 
@@ -421,7 +428,7 @@ describe('YouTube agent capability router', () => {
     } finally { warn.mockRestore(); vi.useRealTimers(); }
   });
 
-  it('fails a stalled classification with the provider error when both requests fail', async () => {
+  it('uses request defaults when the stalled request and its hedge both fail', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -432,9 +439,9 @@ describe('YouTube agent capability router', () => {
         throw new Error(`provider failure ${call}`);
       } });
       const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
-        .then(() => 'completed', error => error.message);
+        .then(decision => decision, error => error.message);
       await vi.advanceTimersByTimeAsync(12_000);
-      expect(await result).toContain('provider failure 1');
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'Explain event sourcing' });
       expect(model.doGenerateCalls).toHaveLength(2);
     } finally { warn.mockRestore(); vi.useRealTimers(); }
   });
@@ -455,7 +462,8 @@ describe('YouTube agent capability router', () => {
   };
   const validRoute = { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused',
     searchQuery: 'event sourcing explained', visualEvidence: 'none' };
-  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'event sourcing explained', visualEvidence: 'none' };
+  // Missing route with incomplete discovery fields, so route recovery cannot apply.
+  const missingRoute = { answerDetail: 'standard', researchBreadth: 'focused', visualEvidence: 'none' };
 
   it('accepts a valid hedge that answers after the original failed validation and repair started', async () => {
     vi.useFakeTimers();
@@ -492,16 +500,18 @@ describe('YouTube agent capability router', () => {
     } finally { warn.mockRestore(); vi.useRealTimers(); }
   });
 
-  it('fails as invalid when every original, hedge and repair response is invalid', async () => {
+  it('uses one repair, then the last resort, when every original, hedge and repair response is invalid', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const model = timedClassifier({ 1: { afterMs: 11_000, output: missingRoute }, 2: { afterMs: 2_000, output: missingRoute },
         3: { afterMs: 500, output: missingRoute } });
       const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
-        .then(() => 'completed', (error: { code?: string }) => error.code);
+        .then(decision => decision, (error: { code?: string }) => error.code);
       await vi.advanceTimersByTimeAsync(12_000);
-      expect(await result).toBe('AGENT_CLASSIFICATION_INVALID');
+      // The candidates keep their valid breadth and visual choice; the request supplies the query.
+      expect(await result).toMatchObject({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'Explain event sourcing' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('"method":"assembled"'));
       // One repair only: the invalid hedge does not start a second one.
       expect(model.doGenerateCalls).toHaveLength(3);
     } finally { warn.mockRestore(); vi.useRealTimers(); }
@@ -512,9 +522,9 @@ describe('YouTube agent capability router', () => {
     try {
       const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
       const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model,
-        signal: new AbortController().signal, deadlineAt: Date.now() + 12_000 }).then(() => 'completed', error => error.message);
+        signal: new AbortController().signal, deadlineAt: Date.now() + 12_000 }).then(decision => decision, error => error.message);
       await vi.advanceTimersByTimeAsync(12_000);
-      expect(await result).toBe('Classification phase timeout.');
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'Explain event sourcing' });
       expect(model.doGenerateCalls).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
@@ -667,26 +677,26 @@ describe('YouTube agent capability router', () => {
   });
 
   it('rejects a new research decision that omits breadth instead of silently reviewing two videos', async () => {
-    await expect(classifyCapabilityWithModel({
+    await expectLastResort(classifyCapabilityWithModel({
       message: 'Compare frontend design skills',
       model: classifierModel({ route: 'topic_research' }),
       signal: new AbortController().signal,
-    })).rejects.toThrow();
+    }));
   });
 
   it('requires a search query in new research classifications', async () => {
-    await expect(classifyCapabilityWithModel({
+    await expectLastResort(classifyCapabilityWithModel({
       message: 'Suggest use cases',
       model: classifierModel({ route: 'topic_research', researchBreadth: 'comparative' }),
       signal: new AbortController().signal,
-    })).rejects.toThrow();
+    }));
   });
 
   it.each(['topic_research', 'inspect_video'] as const)('requires an explicit visual evidence choice for new %s routes', async route => {
-    await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
       model: classifierModel({ route, videoId: 'abcdefghijk', researchBreadth: 'focused', searchQuery: 'YouTube', visualEvidence: undefined }),
       signal: new AbortController().signal,
-    })).rejects.toThrow(/visualEvidence/);
+    }));
   });
 
   it.each([
@@ -703,8 +713,8 @@ describe('YouTube agent capability router', () => {
 
   it('requires visual requirements when visual evidence is required, and drops them otherwise', async () => {
     const missing = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'required' });
-    await expect(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk', model: missing,
-      signal: new AbortController().signal })).rejects.toThrow(/visualRequirements/);
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk', model: missing,
+      signal: new AbortController().signal }));
     const helpful = await classifyCapabilityWithModel({ message: 'Inspect https://youtu.be/abcdefghijk',
       model: classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk', visualEvidence: 'helpful', visualRequirements: ['demo screens'] }),
       signal: new AbortController().signal });
@@ -741,7 +751,8 @@ describe('YouTube agent capability router', () => {
     const first = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'slide design tips', visualEvidence: 'helpful' };
     const full = (output: Record<string, unknown>): Record<string, unknown> => ({ answerDetail: 'standard', ...output });
     const required = full({ ...first, visualEvidence: 'required', visualRequirements: ['slide layouts'] });
-    const { route: _omitted, ...withoutRoute } = first;
+    // Missing route and search query, so route recovery cannot apply.
+    const { route: _omitted, searchQuery: _query, ...withoutRoute } = first;
     const missing = full(withoutRoute);
 
     it('lets an in-flight repair win instead of starting a reconsideration when a hedge returns advisory notes', async () => {
@@ -886,19 +897,19 @@ describe('YouTube agent capability router', () => {
   });
 
   it('rejects malformed scope rejections that omit the reason', async () => {
-    await expect(classifyCapabilityWithModel({ message: 'Book a flight for me',
+    await expectLastResort(classifyCapabilityWithModel({ message: 'Book a flight for me',
       model: classifierModel({ route: 'finalize', responseIntent: 'rejected' }), signal: new AbortController().signal,
-    })).rejects.toThrow();
+    }));
   });
 
-  it('bounds even a classifier provider that ignores cancellation', async () => {
+  it('bounds even a classifier provider that ignores cancellation, using request defaults', async () => {
     vi.useFakeTimers();
     try {
       const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
       const result = classifyCapabilityWithModel({ message: 'Research YouTube tutorials', model,
-        signal: new AbortController().signal }).then(() => 'completed', error => error.message);
+        signal: new AbortController().signal }).then(decision => decision, error => error.message);
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(await result).toBe('Classification phase timeout.');
+      expect(await result).toMatchObject({ route: 'topic_research', searchQuery: 'Research YouTube tutorials' });
     } finally { vi.useRealTimers(); }
   });
 
@@ -1070,6 +1081,17 @@ describe('YouTube agent capability router', () => {
     expect(storyboard).not.toHaveBeenCalled();
   });
 });
+
+// Invalid model output no longer fails classification. These cases must still be
+// rejected by validation, so the decision has to come from the last-resort step.
+async function expectLastResort<T>(pending: Promise<T>): Promise<T> {
+  const warn = vi.spyOn(console, 'warn');
+  try {
+    const decision = await pending;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent_classification_last_resort'));
+    return decision;
+  } finally { warn.mockRestore(); }
+}
 
 function sequenceClassifier(outputs: Record<string, unknown>[]): MockLanguageModelV4 {
   let call = 0;

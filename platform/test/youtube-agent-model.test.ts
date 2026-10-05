@@ -16,9 +16,35 @@ import {
   AGENT_MODEL_PRICING,
   FIREWORKS_GLM_MODEL_ID,
   createAgentModel,
+  createClassifierFallbackModel,
 } from '../src/agents/model';
 
 describe('YouTube agent model', () => {
+  test('sends the classifier fallback to DeepSeek with reasoning disabled, and only with a Fireworks key', async () => {
+    // Production GLM settings must not leak into the fallback.
+    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: '', AGENT_TEXT_MODEL: '',
+      FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    expect(createClassifierFallbackModel({ ...env, FIREWORKS_API_KEY: '' } as unknown as Env, 'session')).toBeUndefined();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
+      expect(body.reasoning_effort).toBe('none');
+      expect(body.max_tokens).toBe(1000);
+      expect(body.service_tier).toBe('priority');
+      expect(body.tools[0].function.name).toBe('classify_request');
+      return Response.json({ id: 'test', created: 1, model: body.model,
+        choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
+          tool_calls: [{ id: 'call', type: 'function', function: { name: 'classify_request', arguments: '{"route":"finalize"}' } }] } }],
+        usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
+    });
+    try {
+      const result = await generateText({ model: createClassifierFallbackModel(env, 'session')!, prompt: 'Classify.', maxOutputTokens: 1000,
+        tools: { classify_request: tool({ inputSchema: z.object({ route: z.string() }) }) } });
+      expect(result.toolCalls[0]?.input).toEqual({ route: 'finalize' });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally { fetchMock.mockRestore(); }
+  });
+
   test('defaults GLM to Fireworks and requires its secret without silently falling back', () => {
     const env = { AI_GATEWAY_ID: '', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     expect(createAgentModel(env, 'session', 'low', { model_role: 'classifier' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
