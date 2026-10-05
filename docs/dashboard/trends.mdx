@@ -16,6 +16,8 @@ The report includes:
 
 The richer planning action validates the report before generating an angle, audience, hook, outline, titles, hashtags, differentiation, evidence, and caveats.
 
+Story arc headings are kept to 100 characters. If the model writes a longer heading, its explanation moves into the purpose line below it, or the heading ends with an ellipsis and the full heading appears in that line, so accepted heading text is not cut. A heading longer than 500 characters after whitespace is collapsed is treated as an invalid response: planning retries once on the fallback model, and the request fails if that response is also invalid. The model's own purpose text is still truncated to 260 characters.
+
 <Warning>
   Trend reports do not have access to private creator metrics such as click-through rate, retention, recommendation traffic, or proof of market demand. Early scans have lower confidence until snapshot history exists.
 </Warning>

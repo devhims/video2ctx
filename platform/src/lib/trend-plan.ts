@@ -4,6 +4,13 @@ import { PROVIDER_IDS, type ProviderId } from '../providers/contract';
 export const TREND_PLAN_MODEL = '@cf/moonshotai/kimi-k2.6' as const;
 export const TREND_PLAN_FALLBACK_MODEL = '@cf/openai/gpt-oss-120b' as const;
 
+/** Length the model is asked to keep Story arc headings within. */
+export const OUTLINE_SECTION_HEADING_TARGET = 80;
+/** Longest heading returned; longer ones are split or visibly shortened, never silently cut. */
+export const OUTLINE_SECTION_MAX_LENGTH = 100;
+/** Longest model `section` accepted before the response is treated as malformed. */
+export const OUTLINE_SECTION_RAW_MAX_LENGTH = 500;
+
 export interface TrendPlanSignals {
   provider: ProviderId;
   query: string;
@@ -66,7 +73,10 @@ const PLAN_SCHEMA = {
       type: 'array', minItems: 3, maxItems: 7,
       items: {
         type: 'object', additionalProperties: false, required: ['section', 'goal'],
-        properties: { section: { type: 'string' }, goal: { type: 'string' } },
+        properties: {
+          section: { type: 'string', description: `Short segment heading of at most ${OUTLINE_SECTION_HEADING_TARGET} characters, optionally with a time range. No explanation.` },
+          goal: { type: 'string', description: 'What the segment shows and why it matters.' },
+        },
       },
     },
     titleIdeas: { type: 'array', minItems: 3, maxItems: 5, items: { type: 'string' } },
@@ -186,6 +196,7 @@ export async function generateTrendPlan(env: Env, signals: TrendPlanSignals, ope
           'Do not claim access to CTR, retention, recommendation traffic, or private analytics. Discuss acceleration only when the supplied signalSource is observed.',
           'Do not confuse correlation with causation. Use only supplied video ids in evidence.',
           'Prefer a specific editorial angle over generic advice. Return only JSON matching the schema.',
+          `Each outline section is a short heading of at most ${OUTLINE_SECTION_HEADING_TARGET} characters; put the segment's details in its goal.`,
         ].join(' '),
       },
       {
@@ -264,10 +275,7 @@ export function parseTrendPlanResponse(
   }), 503).filter((item) => item.videoIds.length);
   if (evidence.length < 2) throw new ApiError(503, 'AI_RESPONSE_INVALID', 'The planning model did not ground its recommendations in the sampled videos.');
 
-  const outline = normalizeItems(plan.outline, 7, (item) => ({
-    section: requiredText(item.section, 100, 'Outline section', 503),
-    goal: requiredText(item.goal, 260, 'Outline goal', 503),
-  }), 503);
+  const outline = normalizeItems(plan.outline, 7, (item) => outlineItem(item.section, item.goal), 503);
   const titleIdeas = stringArray(plan.titleIdeas, 5, 180);
   const differentiation = stringArray(plan.differentiation, 4, 260);
   const caveats = stringArray(plan.caveats, 3, 260);
@@ -289,6 +297,60 @@ export function parseTrendPlanResponse(
     evidence,
     caveats,
   };
+}
+
+// Models often pack a heading and its explanation into `section`, such as
+// "Intro (0:00–0:45) – 30 s teaser of …". Slicing that at a fixed length cut
+// headings mid-word (QA 013). Keep the heading as `section` and move the
+// explanation to the front of `goal`, so no generated text is lost.
+function outlineItem(rawSection: unknown, rawGoal: unknown): { section: string; goal: string } {
+  const text = requiredText(rawSection, Number.MAX_SAFE_INTEGER, 'Outline section', 503).replace(/\s+/g, ' ');
+  if (text.length > OUTLINE_SECTION_RAW_MAX_LENGTH) {
+    throw new ApiError(503, 'AI_RESPONSE_INVALID', 'Outline section is too long.');
+  }
+  const goal = requiredText(rawGoal, 260, 'Outline goal', 503);
+  if (text.length <= OUTLINE_SECTION_MAX_LENGTH) return { section: text, goal };
+
+  const split = splitHeading(text);
+  if (split) return { section: split.heading, goal: prependDetail(split.detail, goal) };
+  // No usable separator: shorten visibly and keep the full heading in the goal.
+  return { section: shortenAtWordBoundary(text, OUTLINE_SECTION_MAX_LENGTH), goal: prependDetail(text, goal) };
+}
+
+function splitHeading(text: string): { heading: string; detail: string } | undefined {
+  // Spaced dashes first, so colons inside headings ("Step 1: Setup – …") survive.
+  for (const separator of [/\s[–—-]\s/, /:\s/]) {
+    const match = separator.exec(text);
+    if (!match) continue;
+    const heading = text.slice(0, match.index).trim();
+    const detail = text.slice(match.index + match[0].length).trim();
+    if (heading && detail && heading.length <= OUTLINE_SECTION_MAX_LENGTH) return { heading, detail };
+  }
+  return undefined;
+}
+
+function prependDetail(detail: string, goal: string): string {
+  return `${detail}${/[.!?…]$/.test(detail) ? '' : '.'} ${goal}`;
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+function shortenAtWordBoundary(text: string, max: number): string {
+  const budget = max - 1; // room for the ellipsis
+  let kept = '';
+  let lastSpace = -1;
+  let wordEnds = false;
+  for (const { segment } of graphemes.segment(text)) {
+    if (kept.length + segment.length > budget) {
+      wordEnds = /\s/.test(segment);
+      break;
+    }
+    if (/\s/.test(segment)) lastSpace = kept.length;
+    kept += segment;
+  }
+  // Prefer a whole-word cut; a single over-long token is cut on a grapheme boundary.
+  const cut = wordEnds || lastSpace <= 0 ? kept : kept.slice(0, lastSpace);
+  return `${cut.trimEnd()}…`;
 }
 
 function extractModelText(result: unknown): string {
