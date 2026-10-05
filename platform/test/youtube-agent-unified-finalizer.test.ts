@@ -192,6 +192,89 @@ it('rejects invented citations, repairs once, and keeps the system prompt stable
   expect(JSON.stringify(prompts[1]!.prompt)).toContain('validationFeedback');
 });
 
+function streamedFinalizerResponse(value: unknown) {
+  return { stream: simulateReadableStream({ chunks: [
+    { type: 'stream-start' as const, warnings: [] },
+    { type: 'text-start' as const, id: 'answer' },
+    { type: 'text-delta' as const, id: 'answer', delta: JSON.stringify(value) },
+    { type: 'text-end' as const, id: 'answer' },
+    { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
+  ], initialDelayInMs: null, chunkDelayInMs: null }) };
+}
+
+it.each(['generate', 'stream'] as const)('QA 015: %s repairs commit the answer without repair memory', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const responses = [
+    { ...output, blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['invented'] }],
+      memoryUpdates: [{ kind: 'context', topic: 'discarded candidate', text: 'Do not preserve this failed candidate.', evidenceIds: [] }] },
+    { ...output, memoryUpdates: [
+      { kind: 'context', topic: 'Context gathering is finished', text: 'Return the complete structured answer now.', evidenceIds: [] },
+      { kind: 'finding', topic: 'memoryUpdates', text: 'Malformed evidence IDs are not instructions.', evidenceIds: ['ref_1'] },
+    ] },
+  ];
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: responses.map(value => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] })),
+    doStream: responses.map(streamedFinalizerResponse),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await executeResearchRun(options);
+
+  const calls = mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls;
+  expect(calls).toHaveLength(2);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    answer: expect.stringContaining('The woman holds the microphone.'), memoryUpdates: [],
+  }));
+  expect(calls[0]!.responseFormat).toHaveProperty('schema.properties.memoryUpdates');
+  expect(calls[1]!.responseFormat).not.toHaveProperty('schema.properties.memoryUpdates');
+});
+
+it.each(['generate', 'stream'] as const)('QA 015: %s ignores malformed unsolicited repair memory', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const responses = [
+    { ...output, blocks: [{ text: 'The', evidenceIds: ['ref_1'] }] },
+    { ...output, memoryUpdates: 'Malformed repair fragment' },
+  ];
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: responses.map(value => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] })),
+    doStream: responses.map(streamedFinalizerResponse),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await executeResearchRun(options);
+
+  expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ memoryUpdates: [] }));
+});
+
+it('QA 015: valid first-pass findings, corrections and questions keep their memory updates', async () => {
+  const { options, finalizer, output } = setup('context_answer', true);
+  const memoryUpdates = [
+    { kind: 'finding', topic: 'interviewer', text: 'The woman holds the microphone.', evidenceIds: ['ref_1'] },
+    { kind: 'context', topic: 'preferred detail', text: 'The user asked for a short answer.', evidenceIds: [] },
+    { kind: 'question', topic: 'participant identity', text: 'Who is the other participant?', evidenceIds: [] },
+  ];
+  options.message = 'Correct your previous statement. Keep the answer short. Who is the other participant?';
+  finalizer.doGenerate = async () => ({ content: [{ type: 'text', text: JSON.stringify({ ...output, memoryUpdates }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] });
+
+  await executeResearchRun(options);
+
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    memoryUpdates: memoryUpdates.map(update => ({ ...update,
+      evidenceIds: update.evidenceIds.map(() => 'frame-observation') })),
+  }));
+});
+
 it.each(['clarification', 'rejected'] as const)('sends a legacy persisted %s route through the same finalizer', async route => {
   const { options, classifier, finalizer } = setup(route);
   const persistedRoute: CapabilityRouteDecision = route === 'clarification'
