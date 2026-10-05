@@ -56,13 +56,17 @@ const conditionalRequirements = [
   { when: { visualEvidence: 'required' }, required: 'visualRequirements' },
 ] as const;
 
-type DefaultedClassificationField = 'answerDetail' | 'route' | 'researchBreadth';
+type ClassifierDecision = z.infer<typeof classifierDecisionSchema>;
+/** A field the application filled in or corrected instead of taking it from the model. */
+type DefaultedClassificationField = keyof ClassifierDecision;
 
 interface ClassifierValidationOptions {
   /** The repair may omit breadth for discovery and receive the focused default. */
   allowMissingBreadth: boolean;
   /** Video IDs the request and session supplied. An inferred inspection must use one. */
   suppliedVideoIds: readonly string[];
+  /** Infer an omitted route. Only the last-resort step does this, after every model attempt failed. */
+  recoverRoute?: boolean;
 }
 
 // Obsolete count fields the classifier still sends. They are stripped, and do
@@ -108,7 +112,7 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   | { success: true; data: z.infer<typeof classifierDecisionSchema> }
   | { success: false; error: z.ZodError }
 ) & { defaultedFields: DefaultedClassificationField[] } {
-  const { allowMissingBreadth, suppliedVideoIds } = options;
+  const { allowMissingBreadth, suppliedVideoIds, recoverRoute = false } = options;
   const defaultedFields: DefaultedClassificationField[] = [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { ...classifierDecisionSchema.safeParse(value), defaultedFields };
@@ -120,7 +124,7 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
     input.answerDetail = 'standard';
     defaultedFields.push('answerDetail');
   }
-  const inferredRoute = inferMissingRoute(input, suppliedVideoIds);
+  const inferredRoute = recoverRoute ? inferMissingRoute(input, suppliedVideoIds) : undefined;
   if (inferredRoute) {
     input.route = inferredRoute;
     defaultedFields.push('route');
@@ -177,6 +181,13 @@ export interface ClassificationDiagnostic {
   attempt: number;
   /** Set on the extra request sent after the first one for this attempt stalled. */
   hedged?: true;
+  /**
+   * fallback_model: attempt 3, sent to the fallback model after both primary attempts failed.
+   * last_resort: no model call. The decision was built from earlier candidates and request defaults.
+   */
+  stage?: 'fallback_model' | 'last_resort';
+  /** For the last-resort stage: recovered a route, assembled valid fields with defaults, or used defaults only. */
+  lastResort?: LastResortMethod;
   outcome: 'valid' | 'invalid';
   modelId: string;
   finishReason: string;
@@ -194,6 +205,8 @@ export interface CapabilityClassifierInput {
   availableEvidence?: EvidencePacket[];
   sessionBrief?: SessionBrief;
   model: LanguageModel;
+  /** Different model for attempt 3, after both primary attempts failed. */
+  fallbackModel?: LanguageModel;
   signal: AbortSignal;
   modelBudget?: AgentModelCostBudget;
   modelCallId?: string;
@@ -229,7 +242,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   const callId = input.modelCallId ?? `classifier:${crypto.randomUUID()}`;
   const send = (context: AttemptContext, abortSignal: AbortSignal, defaultedFields: Set<DefaultedClassificationField>) => generateText({
     repairToolCall: traceToolCallRepair(input.traceToolCall, undefined, 'classification'),
-    model: input.model,
+    model: context.attempt === 3 && input.fallbackModel ? input.fallbackModel : input.model,
     instructions: [
       'Requests for current view counts, likes, or comments require an executable route with refreshDynamicData true, even when past values are in history. Use saved data for historical questions. This does not require refreshing transcripts or images.',
       'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
@@ -306,7 +319,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     input.signal.throwIfAborted();
     const calls = result.toolCalls.filter(call => call.toolName === 'classify_request');
     const hasSingleRoutingCall: boolean = calls.length === 1 && result.toolCalls.length === 1;
-    const candidate = hasSingleRoutingCall ? calls[0]?.input : undefined;
+    const candidate = hasSingleRoutingCall ? candidateObject(calls[0]?.input) : undefined;
     const parsed = validateClassifierDecision(candidate, { allowMissingBreadth: context.attempt === 2 && !context.reconsider,
       suppliedVideoIds: videoIds });
     for (const field of parsed.defaultedFields) defaultedFields.add(field);
@@ -315,8 +328,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
-    if (parsed.success && feedback.length === 0) feedback = comparisonScopeIssues(parsed.data, input, videoIds);
-    if (parsed.success && feedback.length === 0) feedback = searchQueryNumberIssues(parsed.data, input);
+    if (parsed.success && feedback.length === 0) feedback = semanticIssues(parsed.data, input, videoIds);
     // Advisory only: the reconsideration may keep its choice, so a keyword match never fails classification.
     let advisory = false;
     if (parsed.success && feedback.length === 0 && context.attempt === 1) {
@@ -329,7 +341,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
         input:call.input,execute:async()=>({accepted:feedback.length===0,decision:parsed.success ? parsed.data : null,issues:feedback,
           defaultedFields:[...defaultedFields]})});
     }
-    input.onDiagnostic?.({ attempt: context.attempt, ...(hedged ? { hedged: true as const } : {}), outcome: feedback.length === 0 ? 'valid' : 'invalid',
+    input.onDiagnostic?.({ attempt: context.attempt, ...(hedged ? { hedged: true as const } : {}),
+      ...(context.attempt === 3 ? { stage: 'fallback_model' as const } : {}), outcome: feedback.length === 0 ? 'valid' : 'invalid',
       modelId: result.response.modelId, finishReason: result.finishReason, outputTokens: result.usage.outputTokens,
       elapsedMs: Date.now() - startedAt, issues: feedback.map(({ path, code }) => ({ path, code })),
       defaultedFields: [...defaultedFields] });
@@ -346,13 +359,26 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     return evaluate(context, requestId, hedged, startedAt, defaultedFields, result);
   };
 
-  const decision = await coordinateClassification(call, input.signal, deadlineAt, callId);
+  const lastResort = (evaluations: Evaluation[]) => {
+    // The fallback uses no model, but an exhausted budget still ends the run.
+    assertModelCostAvailable(input.modelBudget);
+    const built = lastResortDecision(evaluations, input, videoIds, channelIds, explicitVideoIds);
+    console.warn(JSON.stringify({ event: 'agent_classification_last_resort', modelCallId: callId, method: built.method,
+      candidates: evaluations.length, defaultedFields: built.defaultedFields }));
+    input.onDiagnostic?.({ attempt: 0, stage: 'last_resort', lastResort: built.method, outcome: 'valid', modelId: '',
+      finishReason: 'none', outputTokens: undefined, elapsedMs: 0, issues: [], defaultedFields: built.defaultedFields });
+    return built.decision;
+  };
+
+  const decision = await coordinateClassification(call, input.signal, deadlineAt, callId,
+    { fallbackModel: Boolean(input.fallbackModel), lastResort });
   return finishClassification(decision, videoIds, channelIds, explicitVideoIds);
 }
 
 type ClassificationIssue = { path: string; code: string; message: string };
 interface AttemptContext {
-  attempt: 1 | 2;
+  /** 1 and 2 use the primary model, the second as repair or reconsideration. 3 uses the fallback model. */
+  attempt: 1 | 2 | 3;
   feedback: ClassificationIssue[];
   previousCandidate: unknown;
   /** An advisory reconsideration of an already-valid first decision. */
@@ -375,35 +401,46 @@ type ClassifierCall = (context: AttemptContext, requestId: string, hedged: boole
 // request still has a useful share of the phase left.
 export const CLASSIFIER_REQUEST_STALL_MS = 10_000;
 const CLASSIFIER_STALL_RETRY_MIN_MS = 5_000;
+// The fallback model's p95 latency in probes was 11 to 15 s. Start it only with
+// enough time left for a typical response, at the latest this long before the deadline.
+export const CLASSIFIER_FALLBACK_MIN_MS = 8_000;
+// Build the last-resort decision this long before the phase deadline, so a
+// stalled request cannot turn a recoverable run into a timeout.
+const LAST_RESORT_MARGIN_MS = 250;
 
 /**
- * Runs every classifier request for one phase and returns the first fully
- * validated decision. All requests stay in one pool:
+ * Runs every classifier request for one phase. All requests stay in one pool:
  * - An invalid first-attempt response starts the single second attempt, a
  *   repair, while the other requests keep running.
- * - A valid first-attempt response with advisory notes becomes the fallback.
- *   It starts the second attempt as a reconsideration only when no second
- *   attempt exists yet, and waits at most the reconsideration budget for any
- *   request in the pool to return a fully valid decision.
- * Each request has its own usage ID. Requests still running when a decision
- * wins are aborted when the phase ends.
+ * - A valid first-attempt response with advisory notes becomes the advisory
+ *   decision. It starts the second attempt as a reconsideration only when no
+ *   second attempt exists yet, and waits at most the reconsideration budget for
+ *   any request in the pool to return a fully valid decision.
+ * - When the repair fails, every request has failed, or the fallback start time
+ *   arrives, attempt 3 goes to the fallback model with the original prompt.
+ * - When no request can still help, or the last-resort time arrives, the
+ *   decision is built from the collected candidates and request defaults.
+ * The first fully validated model decision wins. Each request has its own usage
+ * ID. Requests still running when a decision wins are aborted when the phase ends.
  */
 async function coordinateClassification(
   call: ClassifierCall, signal: AbortSignal, deadlineAt: number, callId: string,
-): Promise<z.infer<typeof classifierDecisionSchema>> {
+  options: { fallbackModel: boolean; lastResort: (evaluations: Evaluation[]) => ClassifierDecision },
+): Promise<ClassifierDecision> {
   type Settled = { key: Promise<Settled>; context: AttemptContext } & (
     { ok: true; evaluation: Evaluation } | { ok: false; error: unknown });
   const pending = new Set<Promise<Settled>>();
   const answered = new Set<AttemptContext>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const requestIds = new Set<string>();
+  const evaluations: Evaluation[] = [];
   let wake = () => {};
   const later = (ms: number, work: () => void) => {
-    const timer = setTimeout(() => { timers.delete(timer); work(); wake(); }, ms);
+    const timer = setTimeout(() => { timers.delete(timer); work(); wake(); }, Math.max(0, ms));
     timers.add(timer);
   };
   const launch = (context: AttemptContext, hedged: boolean) => {
-    const base = `${callId}${context.attempt === 2 ? ':repair' : ''}${hedged ? ':hedge' : ''}`;
+    const base = `${callId}${context.attempt === 2 ? ':repair' : context.attempt === 3 ? ':fallback' : ''}${hedged ? ':hedge' : ''}`;
     let requestId = base;
     // The usage table keeps one row per call ID, so a reused ID would drop a usage record.
     for (let n = 2; requestIds.has(requestId); n++) requestId = `${base}:${n}`;
@@ -421,35 +458,52 @@ async function coordinateClassification(
     });
   };
   let secondAttemptStarted = false;
-  let fallback: { decision: z.infer<typeof classifierDecisionSchema>; until: number } | undefined;
-  let lastFailure: { error: unknown } | { invalid: Evaluation } | undefined;
-  const keepFallback = (reason: 'timeout' | 'error' | 'invalid') => {
+  let fallbackStarted = false;
+  let lastResortDue = false;
+  let advisory: { decision: ClassifierDecision; until: number } | undefined;
+  const launchFallback = () => {
+    if (!options.fallbackModel || fallbackStarted || advisory || signal.aborted) return;
+    if (deadlineAt - Date.now() < CLASSIFIER_FALLBACK_MIN_MS) return;
+    fallbackStarted = true;
+    console.warn(JSON.stringify({ event: 'agent_classification_fallback_model', modelCallId: callId }));
+    launch({ attempt: 3, feedback: [], previousCandidate: undefined, reconsider: false }, false);
+  };
+  const keepAdvisory = (reason: 'timeout' | 'error' | 'invalid') => {
     console.warn(JSON.stringify({ event: 'agent_classification_reconsideration_failed', modelCallId: callId, reason }));
-    return fallback!.decision;
+    return advisory!.decision;
   };
   try {
     launch({ attempt: 1, feedback: [], previousCandidate: undefined, reconsider: false }, false);
-    while (pending.size) {
-      if (fallback && Date.now() >= fallback.until) return keepFallback('timeout');
+    later(deadlineAt - CLASSIFIER_FALLBACK_MIN_MS - Date.now(), launchFallback);
+    later(deadlineAt - LAST_RESORT_MARGIN_MS - Date.now(), () => { lastResortDue = true; });
+    while (true) {
+      if (advisory && Date.now() >= advisory.until) return keepAdvisory('timeout');
+      if (lastResortDue) break;
+      if (!pending.size) {
+        launchFallback();
+        if (!pending.size) break;
+      }
       const woke = new Promise<'wake'>(resolve => { wake = () => resolve('wake'); });
       const next = await Promise.race([...pending, woke]);
       if (next === 'wake') continue;
       pending.delete(next.key);
       answered.add(next.context);
+      const failedRepair = next.context.attempt === 2 && !next.context.reconsider;
       if (!next.ok) {
-        // Cancellation and the phase deadline propagate; provider and budget errors
-        // fail the run only when no request can still produce a decision.
+        // Cancellation and the phase deadline propagate. Provider and budget errors
+        // only end the run when the last-resort step cannot build a decision either.
         if (signal.aborted) throw next.error;
-        lastFailure = { error: next.error };
+        if (failedRepair) launchFallback();
         continue;
       }
       const { evaluation } = next;
+      evaluations.push(evaluation);
       if (evaluation.decision && !evaluation.advisory) return evaluation.decision;
       if (evaluation.decision) {
-        if (fallback) continue; // Keep the first advisory decision.
+        if (advisory) continue; // Keep the first advisory decision.
         const budgetMs = Math.min(RECONSIDERATION_TIMEOUT_MS, deadlineAt - Date.now() - RECONSIDERATION_DEADLINE_MARGIN_MS);
         if (budgetMs < RECONSIDERATION_MIN_MS) return evaluation.decision;
-        fallback = { decision: evaluation.decision, until: Date.now() + budgetMs };
+        advisory = { decision: evaluation.decision, until: Date.now() + budgetMs };
         later(budgetMs, () => {});
         if (!secondAttemptStarted) {
           secondAttemptStarted = true;
@@ -457,21 +511,151 @@ async function coordinateClassification(
         }
         continue;
       }
-      lastFailure = { invalid: evaluation };
       if (!secondAttemptStarted && evaluation.context.attempt === 1) {
         secondAttemptStarted = true;
         launch({ attempt: 2, feedback: evaluation.feedback, previousCandidate: evaluation.candidate, reconsider: false }, false);
       }
+      if (failedRepair) launchFallback();
     }
   } finally {
     for (const timer of timers) clearTimeout(timer);
   }
+  signal.throwIfAborted();
   // A failed or malformed second attempt must not discard a valid first decision.
-  if (fallback) return keepFallback(lastFailure && 'error' in lastFailure ? 'error' : 'invalid');
-  if (lastFailure && 'error' in lastFailure) throw lastFailure.error;
-  const feedback = lastFailure?.invalid.feedback ?? [];
-  throw new ApiError(502, 'AGENT_CLASSIFICATION_INVALID',
-    `Classification could not produce a valid routing decision after one repair. Invalid fields: ${feedback.map(issue => issue.path || 'tool call').join(', ')}. Please retry the request.`);
+  if (advisory) return keepAdvisory(evaluations.some(item => item.context.attempt === 2) ? 'invalid' : 'error');
+  return options.lastResort(evaluations);
+}
+
+type LastResortMethod = 'route_recovery' | 'assembled' | 'defaults';
+const LAST_RESORT_REASON = 'The routing decision could not be determined from the model output.';
+const ROUTE_FIELDS = {
+  topic_research: ['researchBreadth', 'searchQuery', 'channelId', 'comparisonVideoIds', 'explicitSourceCount'],
+  inspect_video: ['videoId', 'comparisonVideoIds'],
+  finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
+} as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
+const SHARED_FIELDS = ['answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
+  'visualEvidence', 'visualRequirements'] as const satisfies readonly DefaultedClassificationField[];
+
+function candidateObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return undefined; }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
+  const scope = comparisonScopeIssues(decision, input, videoIds);
+  return scope.length ? scope : searchQueryNumberIssues(decision, input);
+}
+
+/**
+ * Builds a decision after every model attempt failed, without another model call.
+ * In order: recover a missing route from one candidate as returned, then assemble
+ * fields that are valid on their own with request-derived defaults, then use
+ * request defaults alone. Candidates from later attempts are preferred.
+ */
+function lastResortDecision(
+  evaluations: Evaluation[], input: CapabilityClassifierInput, videoIds: string[], channelIds: string[], explicitVideoIds: string[],
+): { decision: ClassifierDecision; method: LastResortMethod; defaultedFields: DefaultedClassificationField[] } {
+  const candidates = [...evaluations].sort((a, b) => b.context.attempt - a.context.attempt)
+    .flatMap(item => { const candidate = candidateObject(item.candidate); return candidate ? [candidate] : []; });
+  const validation = { allowMissingBreadth: true, suppliedVideoIds: videoIds };
+
+  for (const candidate of candidates) {
+    const parsed = validateClassifierDecision(candidate, { ...validation, recoverRoute: true });
+    if (parsed.success && parsed.defaultedFields.includes('route') && !semanticIssues(parsed.data, input, videoIds).length) {
+      return { decision: parsed.data, method: 'route_recovery', defaultedFields: parsed.defaultedFields };
+    }
+  }
+
+  const message = input.message.trim().slice(0, 500) || 'YouTube videos';
+  const usableVideoId = (value: unknown) => typeof value === 'string' && videoIds.includes(value) ? value : undefined;
+  const soleVideoId = videoIds.length === 1 ? videoIds[0] : undefined;
+  const validRoute = (candidate: Record<string, unknown>) => {
+    const route = classifierDecisionSchema.shape.route.safeParse(candidate.route);
+    if (!route.success) return undefined;
+    // An inspection without a usable video cannot run, so it does not decide the route.
+    return route.data === 'inspect_video' && !usableVideoId(candidate.videoId) && !soleVideoId ? undefined : route.data;
+  };
+  const defaultRoute = explicitVideoIds.length === 1 ? 'inspect_video' as const : 'topic_research' as const;
+  const route = candidates.map(validRoute).find(Boolean)
+    ?? candidates.map(candidate => inferMissingRoute(candidate, videoIds)).find(Boolean) ?? defaultRoute;
+  const sources = candidates.filter(candidate => candidate.route === undefined || candidate.route === route
+    || !classifierDecisionSchema.shape.route.safeParse(candidate.route).success);
+
+  const defaultedFields = new Set<DefaultedClassificationField>();
+  let usedCandidate = false;
+  const decision: Record<string, unknown> = { route };
+  if (!sources.some(candidate => candidate.route === route)) defaultedFields.add('route');
+  for (const field of [...SHARED_FIELDS, ...ROUTE_FIELDS[route]]) {
+    const shape = classifierDecisionSchema.shape[field] as z.ZodType;
+    for (const candidate of sources) {
+      if (candidate[field] === undefined || candidate[field] === null) continue;
+      const parsed = shape.safeParse(candidate[field]);
+      if (parsed.success && parsed.data !== undefined) { decision[field] = parsed.data; usedCandidate = true; break; }
+    }
+  }
+  const fill = (field: DefaultedClassificationField, value: unknown) => {
+    if (value === undefined) delete decision[field]; else decision[field] = value;
+    defaultedFields.add(field);
+  };
+  if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
+  const subjects = decision.comparisonVideoIds as string[] | undefined;
+  if (subjects) {
+    const kept = [...new Set(subjects.filter(id => videoIds.includes(id)))];
+    if (kept.length !== subjects.length) fill('comparisonVideoIds', kept.length >= 2 ? kept : undefined);
+  }
+  const fillDiscovery = () => {
+    if (decision.comparisonVideoIds) return;
+    if (decision.researchBreadth === undefined) fill('researchBreadth', 'focused');
+    if (decision.searchQuery === undefined) fill('searchQuery', message);
+  };
+  if (route === 'topic_research') {
+    fillDiscovery();
+    if (decision.channelId !== undefined && !channelIds.includes(decision.channelId as string)) fill('channelId', undefined);
+    if (decision.channelId === undefined && channelIds.length === 1) fill('channelId', channelIds[0]);
+  }
+  if (route === 'inspect_video' && !usableVideoId(decision.videoId)) fill('videoId', explicitVideoIds.length === 1 ? explicitVideoIds[0] : soleVideoId);
+  if (route === 'finalize') {
+    if (decision.responseIntent === undefined) fill('responseIntent', 'clarification');
+    if (decision.reason === undefined) fill('reason', LAST_RESORT_REASON);
+    if (decision.responseIntent === 'context_answer' && decision.contextScope === undefined) fill('contextScope', 'mixed');
+    if (decision.historySelection !== undefined && decision.contextScope === 'video') fill('historySelection', undefined);
+    // Finalization cannot fetch fresh data.
+    if (decision.refreshEvidence === true) fill('refreshEvidence', false);
+    if (decision.refreshDynamicData === true) fill('refreshDynamicData', false);
+  } else {
+    if (decision.visualEvidence === 'required' && decision.visualRequirements === undefined) fill('visualEvidence', 'helpful');
+    if (decision.visualEvidence === undefined) {
+      fill('visualEvidence', decision.visualRequirements ? 'required' : route === 'inspect_video' ? 'helpful' : 'none');
+    }
+    if (decision.visualEvidence !== 'required' && decision.visualRequirements !== undefined) fill('visualRequirements', undefined);
+  }
+
+  const accept = () => {
+    const parsed = validateClassifierDecision(decision, validation);
+    return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds) } : undefined;
+  };
+  let result = accept();
+  if (result?.issues.length) {
+    // Semantic checks failed on a model field: keep the request's own facts instead.
+    if (result.issues.some(issue => issue.path === 'comparisonVideoIds')) { fill('comparisonVideoIds', undefined); if (route === 'topic_research') fillDiscovery(); }
+    if (result.issues.some(issue => issue.path === 'searchQuery')) fill('searchQuery', message);
+    result = accept();
+  }
+  if (result && !result.issues.length) {
+    return { decision: result.parsed, method: usedCandidate ? 'assembled' : 'defaults', defaultedFields: [...defaultedFields] };
+  }
+
+  // Request defaults alone always validate. Semantic checks are skipped: the
+  // query is the user's own message, so it cannot have changed their facts.
+  const inspectId = explicitVideoIds.length === 1 ? explicitVideoIds[0] : undefined;
+  const fallback = inspectId
+    ? { route: 'inspect_video', answerDetail: 'standard', videoId: inspectId, visualEvidence: 'helpful' }
+    : { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused', searchQuery: message, visualEvidence: 'none',
+      ...(channelIds.length === 1 ? { channelId: channelIds[0] } : {}) };
+  return { decision: classifierDecisionSchema.parse(fallback), method: 'defaults',
+    defaultedFields: Object.keys(fallback) as DefaultedClassificationField[] };
 }
 
 function finishClassification(

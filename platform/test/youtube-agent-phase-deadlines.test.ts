@@ -99,24 +99,30 @@ it('still permits user cancellation during classification', async () => {
   expect(research.doGenerateCalls).toHaveLength(0);
 });
 
-it('times out classification at 20 seconds without starting research or finalization', async () => {
-  const { options, research, finalizer } = setup(90_000);
+it('builds a last-resort decision just before the 20 second limit when the classifier never answers', async () => {
+  const { options, controller } = setup(90_000);
   const run = executeResearchRun(options).then(() => 'completed', error => error.message);
-  await vi.advanceTimersByTimeAsync(20_000);
-  expect(await run).toBe('Classification phase timeout.');
+  await vi.advanceTimersByTimeAsync(19_749);
   expect(options.persistRoute).not.toHaveBeenCalled();
-  expect(research.doGenerateCalls).toHaveLength(0);
-  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(1);
+  // The request names one video, so the request defaults inspect it.
+  expect(options.persistRoute).toHaveBeenCalledWith(expect.objectContaining({ route: 'inspect_video', videoId: 'abcdefghijk' }));
+  expect(options.onCapabilityLoaded).toHaveBeenCalledWith('inspect_video', expect.any(Number));
+  controller.abort(new Error('Cancelled by user'));
+  expect(await run).toBe('Cancelled by user');
 });
 
 it('resumes classification with its saved deadline', async () => {
-  const { options } = setup(15_000);
+  const { options, controller } = setup(15_000);
   const classificationDeadlineAt = Date.now() + 5_000;
   const run = executeResearchRun({ ...options, classificationDeadlineAt }).then(() => 'completed', error => error.message);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(await run).toBe('Classification phase timeout.');
-  expect(options.onClassifying).toHaveBeenCalledExactlyOnceWith(classificationDeadlineAt);
+  await vi.advanceTimersByTimeAsync(4_749);
   expect(options.persistRoute).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(options.onClassifying).toHaveBeenCalledExactlyOnceWith(classificationDeadlineAt);
+  expect(options.persistRoute).toHaveBeenCalledWith(expect.objectContaining({ route: 'inspect_video' }));
+  controller.abort(new Error('Cancelled by user'));
+  expect(await run).toBe('Cancelled by user');
 });
 
 it('finalizes a classified rejection without research or evidence tools', async () => {

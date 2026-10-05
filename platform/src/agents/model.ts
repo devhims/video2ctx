@@ -18,6 +18,21 @@ export function estimateAgentModelCostMicros(usage: LanguageModelUsage): number 
   return estimateModelCostMicros(usage, AGENT_MODEL_PRICING);
 }
 
+export const CLASSIFIER_FALLBACK_TEXT_MODEL = 'deepseek-v4p1-flash';
+
+/**
+ * Classifier fallback for attempt 3, after both primary attempts failed. Uses
+ * Fireworks DeepSeek with reasoning disabled. Unavailable without a Fireworks key.
+ */
+export function createClassifierFallbackModel(
+  env: Env, sessionAffinity: string, metadata?: Record<string, string | number | boolean | null>,
+) {
+  if (!env.FIREWORKS_API_KEY?.trim()) return undefined;
+  // Generated Env types pin these vars to their wrangler values; the fallback overrides them for this model only.
+  return createAgentModel({ ...env, AGENT_TEXT_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: CLASSIFIER_FALLBACK_TEXT_MODEL } as unknown as Env,
+    sessionAffinity, 'low', { ...metadata, model_role: 'classifier', model_variant: 'fallback' });
+}
+
 export function createAgentModel(
   env: Env,
   sessionAffinity: string,
