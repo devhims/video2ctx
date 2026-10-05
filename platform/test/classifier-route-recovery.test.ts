@@ -116,6 +116,17 @@ describe('classifier fallback order', () => {
     expect([result.calls, result.fallbackCalls]).toEqual([2, 1]);
   });
 
+  it('still starts the fallback model when its deadline timer fires late', async () => {
+    const schedule = globalThis.setTimeout;
+    // Every timer fires 5 ms late, as an overloaded isolate might.
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) =>
+      schedule(handler, (ms ?? 0) + 5)) as typeof setTimeout);
+    const fallbackModel = rawClassifier(validTopic);
+    const result = await classify('Explain event sourcing', rawClassifier({ afterMs: 60_000 }), { fallbackModel, advanceMs: 12_000 });
+    expect(result.fallbackCalls).toBe(1);
+    expect(result.decision).toMatchObject({ searchQuery: 'event sourcing explained' });
+  });
+
   it('skips the fallback model when less than 8 seconds of the phase remain', async () => {
     const fallbackModel = rawClassifier(validTopic);
     const result = await classify('What is Mr beast upto these days', rawClassifier(production.topicResearch),
@@ -225,11 +236,49 @@ describe('classifier last resort', () => {
     expect(result.lastResort!.defaultedFields).toEqual(expect.arrayContaining(['route', 'searchQuery']));
   });
 
-  it('downgrades required visuals without requirements to helpful', async () => {
-    const result = await classify('What did the keynote presenters wear?', rawClassifier({ answerDetail: 'standard',
+  it('keeps required visuals mandatory, taking the requirements from the request when the model gave none', async () => {
+    const message = 'What did the keynote presenters wear?';
+    const result = await classify(message, rawClassifier({ answerDetail: 'standard',
       researchBreadth: 'focused', searchQuery: 'keynote presenter outfits', visualEvidence: 'required' }));
-    expect(result.decision).toMatchObject({ route: 'topic_research', visualEvidence: 'helpful', searchQuery: 'keynote presenter outfits' });
-    expect(result.lastResort!.defaultedFields).toContain('visualEvidence');
+    expect(result.decision).toMatchObject({ route: 'topic_research', visualEvidence: 'required', visualRequirements: [message],
+      useStoryboard: true, searchQuery: 'keynote presenter outfits' });
+    expect(result.lastResort!.defaultedFields).toContain('visualRequirements');
+  });
+
+  it('keeps required visuals even when the decision falls back to request defaults', async () => {
+    // A corrupted key blocks recovery; the candidate still said the answer needs images.
+    const result = await classify('What did the presenter wear in https://youtu.be/dQw4w9WgXcQ?',
+      rawClassifier({ answerDetail: 'standard', 'route<arg_key>': 'inspect_video', visualEvidence: 'required',
+        visualRequirements: ['presenter clothing'] }));
+    expect(result.decision).toMatchObject({ route: 'inspect_video', videoId: 'dQw4w9WgXcQ', visualEvidence: 'required',
+      visualRequirements: ['presenter clothing'] });
+  });
+
+  it('keeps a fresh-data requirement and chooses an executable route instead of finalizing', async () => {
+    // Finalize with a refresh is invalid; the last resort must not drop the refresh to make it valid.
+    const stale = { route: 'finalize', answerDetail: 'standard', responseIntent: 'context_answer', contextScope: 'video',
+      reason: 'Saved statistics answer this.', refreshDynamicData: true };
+    const inspection = await classify('How many likes does https://youtu.be/dQw4w9WgXcQ have right now?', rawClassifier(stale));
+    expect(inspection.decision).toMatchObject({ route: 'inspect_video', videoId: 'dQw4w9WgXcQ', refreshDynamicData: true });
+
+    const research = await classify('What are the current view counts for the top MrBeast videos?', rawClassifier(stale));
+    expect(research.decision).toMatchObject({ route: 'topic_research', refreshDynamicData: true,
+      searchQuery: 'What are the current view counts for the top MrBeast videos?' });
+  });
+
+  it.each([
+    ['an invalid candidate', [{ answerDetail: 'standard', videoId: 'tXcT3OE7G1g', visualEvidence: 'none', searchQuery: 'compare' }]],
+    ['no candidate at all', [{ error: 'provider down' }]],
+  ])('keeps both subjects of a follow-up comparison after %s', async (_case, steps) => {
+    const message = 'Compare the previous video with https://youtu.be/tXcT3OE7G1g';
+    const pending = classifyCapabilityWithModel({ message, model: rawClassifier(...(steps as Step[])),
+      conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: ['dQw4w9WgXcQ'],
+        user: 'Summarize https://youtu.be/dQw4w9WgXcQ', assistant: 'It is a music video.' }],
+      signal: new AbortController().signal });
+    await vi.advanceTimersByTimeAsync(0);
+    const decision = await pending;
+    expect(decision).toMatchObject({ route: 'topic_research', comparisonVideoIds: ['dQw4w9WgXcQ', 'tXcT3OE7G1g'] });
+    expect(decision).not.toHaveProperty('searchQuery');
   });
 
   it('uses request defaults alone when no request produced a candidate', async () => {

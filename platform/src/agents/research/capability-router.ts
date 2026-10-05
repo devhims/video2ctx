@@ -402,8 +402,11 @@ type ClassifierCall = (context: AttemptContext, requestId: string, hedged: boole
 export const CLASSIFIER_REQUEST_STALL_MS = 10_000;
 const CLASSIFIER_STALL_RETRY_MIN_MS = 5_000;
 // The fallback model's p95 latency in probes was 11 to 15 s. Start it only with
-// enough time left for a typical response, at the latest this long before the deadline.
+// at least this much of the phase left, enough for a typical response.
 export const CLASSIFIER_FALLBACK_MIN_MS = 8_000;
+// Schedule the deadline-driven start with headroom, so timer delay cannot push
+// it below the minimum and skip the fallback model entirely.
+const CLASSIFIER_FALLBACK_START_MS = CLASSIFIER_FALLBACK_MIN_MS + 500;
 // Build the last-resort decision this long before the phase deadline, so a
 // stalled request cannot turn a recoverable run into a timeout.
 const LAST_RESORT_MARGIN_MS = 250;
@@ -474,7 +477,7 @@ async function coordinateClassification(
   };
   try {
     launch({ attempt: 1, feedback: [], previousCandidate: undefined, reconsider: false }, false);
-    later(deadlineAt - CLASSIFIER_FALLBACK_MIN_MS - Date.now(), launchFallback);
+    later(deadlineAt - CLASSIFIER_FALLBACK_START_MS - Date.now(), launchFallback);
     later(deadlineAt - LAST_RESORT_MARGIN_MS - Date.now(), () => { lastResortDue = true; });
     while (true) {
       if (advisory && Date.now() >= advisory.until) return keepAdvisory('timeout');
@@ -571,91 +574,143 @@ function lastResortDecision(
   const message = input.message.trim().slice(0, 500) || 'YouTube videos';
   const usableVideoId = (value: unknown) => typeof value === 'string' && videoIds.includes(value) ? value : undefined;
   const soleVideoId = videoIds.length === 1 ? videoIds[0] : undefined;
+  const shape = classifierDecisionSchema.shape;
+  const firstValid = <K extends DefaultedClassificationField>(field: K, from = candidates) => {
+    for (const candidate of from) {
+      const parsed = (shape[field] as z.ZodType).safeParse(candidate[field]);
+      if (candidate[field] !== undefined && candidate[field] !== null && parsed.success && parsed.data !== undefined) return parsed.data as ClassifierDecision[K];
+    }
+    return undefined;
+  };
+
+  // Requirements any candidate stated, or the request implies, survive every fallback:
+  // fresh data needs an executable route, required visuals stay required, and a
+  // follow-up comparison keeps both of its subjects.
+  const constraints = {
+    refreshEvidence: candidates.some(candidate => candidate.refreshEvidence === true),
+    refreshDynamicData: candidates.some(candidate => candidate.refreshDynamicData === true),
+    visualsRequired: candidates.some(candidate => candidate.visualEvidence === 'required'),
+    visualRequirements: firstValid('visualRequirements') ?? [input.message.trim().slice(0, 200) || 'Requested visual facts'],
+    subjects: expectedComparisonSubjects(input),
+  };
+  const needsFreshData = constraints.refreshEvidence || constraints.refreshDynamicData;
+  const allowed = (route: ClassifierDecision['route'] | undefined) => route && !(route === 'finalize' && needsFreshData) ? route : undefined;
+  // A fixed comparison set is researched as one set, not as one inspected video.
+  const executable = (route: ClassifierDecision['route']) =>
+    route === 'inspect_video' && constraints.subjects.length ? 'topic_research' as const : route;
+
   const validRoute = (candidate: Record<string, unknown>) => {
-    const route = classifierDecisionSchema.shape.route.safeParse(candidate.route);
+    const route = shape.route.safeParse(candidate.route);
     if (!route.success) return undefined;
     // An inspection without a usable video cannot run, so it does not decide the route.
     return route.data === 'inspect_video' && !usableVideoId(candidate.videoId) && !soleVideoId ? undefined : route.data;
   };
-  const defaultRoute = explicitVideoIds.length === 1 ? 'inspect_video' as const : 'topic_research' as const;
-  const route = candidates.map(validRoute).find(Boolean)
-    ?? candidates.map(candidate => inferMissingRoute(candidate, videoIds)).find(Boolean) ?? defaultRoute;
+  const defaultRoute = explicitVideoIds.length === 1 && !constraints.subjects.length ? 'inspect_video' as const : 'topic_research' as const;
+  const route = executable(candidates.map(candidate => allowed(validRoute(candidate))).find(Boolean)
+    ?? candidates.map(candidate => allowed(inferMissingRoute(candidate, videoIds))).find(Boolean) ?? defaultRoute);
   const sources = candidates.filter(candidate => candidate.route === undefined || candidate.route === route
-    || !classifierDecisionSchema.shape.route.safeParse(candidate.route).success);
+    || !shape.route.safeParse(candidate.route).success);
 
   const defaultedFields = new Set<DefaultedClassificationField>();
-  let usedCandidate = false;
-  const decision: Record<string, unknown> = { route };
-  if (!sources.some(candidate => candidate.route === route)) defaultedFields.add('route');
-  for (const field of [...SHARED_FIELDS, ...ROUTE_FIELDS[route]]) {
-    const shape = classifierDecisionSchema.shape[field] as z.ZodType;
-    for (const candidate of sources) {
-      if (candidate[field] === undefined || candidate[field] === null) continue;
-      const parsed = shape.safeParse(candidate[field]);
-      if (parsed.success && parsed.data !== undefined) { decision[field] = parsed.data; usedCandidate = true; break; }
-    }
-  }
-  const fill = (field: DefaultedClassificationField, value: unknown) => {
+  const fillInto = (decision: Record<string, unknown>) => (field: DefaultedClassificationField, value: unknown) => {
+    if (decision[field] === value) return;
     if (value === undefined) delete decision[field]; else decision[field] = value;
     defaultedFields.add(field);
   };
-  if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
-  const subjects = decision.comparisonVideoIds as string[] | undefined;
+  const applyConstraints = (decision: Record<string, unknown>) => {
+    const fill = fillInto(decision);
+    if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
+    if (decision.route !== 'finalize') {
+      if (constraints.refreshEvidence) fill('refreshEvidence', true);
+      if (constraints.refreshDynamicData) fill('refreshDynamicData', true);
+      if (constraints.visualsRequired || decision.visualEvidence === 'required') {
+        fill('visualEvidence', 'required');
+        if (decision.visualRequirements === undefined) fill('visualRequirements', constraints.visualRequirements);
+      }
+      if (decision.visualEvidence === undefined) fill('visualEvidence', decision.route === 'inspect_video' ? 'helpful' : 'none');
+      if (decision.visualEvidence !== 'required' && decision.visualRequirements !== undefined) fill('visualRequirements', undefined);
+    }
+    const keepsSubjects = decision.route === 'topic_research'
+      || (decision.route === 'finalize' && decision.responseIntent === 'context_answer');
+    if (constraints.subjects.length && keepsSubjects) {
+      const current = (decision.comparisonVideoIds as string[] | undefined) ?? [];
+      fill('comparisonVideoIds', [...new Set([...constraints.subjects, ...current.filter(id => videoIds.includes(id))])].slice(0, 8));
+    }
+    if (decision.route === 'topic_research') {
+      if (decision.comparisonVideoIds) {
+        // A fixed video set skips discovery.
+        fill('researchBreadth', undefined);
+        fill('searchQuery', undefined);
+      } else {
+        if (decision.researchBreadth === undefined) fill('researchBreadth', 'focused');
+        if (decision.searchQuery === undefined) fill('searchQuery', message);
+      }
+    }
+  };
+  const accept = (decision: Record<string, unknown>) => {
+    const parsed = validateClassifierDecision(decision, validation);
+    return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds) } : undefined;
+  };
+
+  // Assemble fields that are valid on their own, then apply the constraints.
+  let usedCandidate = false;
+  const assembled: Record<string, unknown> = { route };
+  const fill = fillInto(assembled);
+  if (!sources.some(candidate => candidate.route === route)) defaultedFields.add('route');
+  for (const field of [...SHARED_FIELDS, ...ROUTE_FIELDS[route]]) {
+    const value = firstValid(field, sources);
+    if (value !== undefined) { assembled[field] = value; usedCandidate = true; }
+  }
+  const subjects = assembled.comparisonVideoIds as string[] | undefined;
   if (subjects) {
     const kept = [...new Set(subjects.filter(id => videoIds.includes(id)))];
     if (kept.length !== subjects.length) fill('comparisonVideoIds', kept.length >= 2 ? kept : undefined);
   }
-  const fillDiscovery = () => {
-    if (decision.comparisonVideoIds) return;
-    if (decision.researchBreadth === undefined) fill('researchBreadth', 'focused');
-    if (decision.searchQuery === undefined) fill('searchQuery', message);
-  };
   if (route === 'topic_research') {
-    fillDiscovery();
-    if (decision.channelId !== undefined && !channelIds.includes(decision.channelId as string)) fill('channelId', undefined);
-    if (decision.channelId === undefined && channelIds.length === 1) fill('channelId', channelIds[0]);
+    if (assembled.channelId !== undefined && !channelIds.includes(assembled.channelId as string)) fill('channelId', undefined);
+    if (assembled.channelId === undefined && channelIds.length === 1) fill('channelId', channelIds[0]);
   }
-  if (route === 'inspect_video' && !usableVideoId(decision.videoId)) fill('videoId', explicitVideoIds.length === 1 ? explicitVideoIds[0] : soleVideoId);
+  if (route === 'inspect_video' && !usableVideoId(assembled.videoId)) fill('videoId', explicitVideoIds.length === 1 ? explicitVideoIds[0] : soleVideoId);
   if (route === 'finalize') {
-    if (decision.responseIntent === undefined) fill('responseIntent', 'clarification');
-    if (decision.reason === undefined) fill('reason', LAST_RESORT_REASON);
-    if (decision.responseIntent === 'context_answer' && decision.contextScope === undefined) fill('contextScope', 'mixed');
-    if (decision.historySelection !== undefined && decision.contextScope === 'video') fill('historySelection', undefined);
-    // Finalization cannot fetch fresh data.
-    if (decision.refreshEvidence === true) fill('refreshEvidence', false);
-    if (decision.refreshDynamicData === true) fill('refreshDynamicData', false);
-  } else {
-    if (decision.visualEvidence === 'required' && decision.visualRequirements === undefined) fill('visualEvidence', 'helpful');
-    if (decision.visualEvidence === undefined) {
-      fill('visualEvidence', decision.visualRequirements ? 'required' : route === 'inspect_video' ? 'helpful' : 'none');
-    }
-    if (decision.visualEvidence !== 'required' && decision.visualRequirements !== undefined) fill('visualRequirements', undefined);
+    if (assembled.responseIntent === undefined) fill('responseIntent', 'clarification');
+    if (assembled.reason === undefined) fill('reason', LAST_RESORT_REASON);
+    if (assembled.responseIntent === 'context_answer' && assembled.contextScope === undefined) fill('contextScope', 'mixed');
+    if (assembled.historySelection !== undefined && assembled.contextScope === 'video') fill('historySelection', undefined);
   }
-
-  const accept = () => {
-    const parsed = validateClassifierDecision(decision, validation);
-    return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds) } : undefined;
-  };
-  let result = accept();
-  if (result?.issues.length) {
-    // Semantic checks failed on a model field: keep the request's own facts instead.
-    if (result.issues.some(issue => issue.path === 'comparisonVideoIds')) { fill('comparisonVideoIds', undefined); if (route === 'topic_research') fillDiscovery(); }
-    if (result.issues.some(issue => issue.path === 'searchQuery')) fill('searchQuery', message);
-    result = accept();
+  applyConstraints(assembled);
+  let result = accept(assembled);
+  if (result?.issues.some(issue => issue.path === 'searchQuery')) {
+    // The model's query changed the request's facts: search the request itself.
+    fill('searchQuery', message);
+    result = accept(assembled);
   }
   if (result && !result.issues.length) {
     return { decision: result.parsed, method: usedCandidate ? 'assembled' : 'defaults', defaultedFields: [...defaultedFields] };
   }
 
-  // Request defaults alone always validate. Semantic checks are skipped: the
-  // query is the user's own message, so it cannot have changed their facts.
-  const inspectId = explicitVideoIds.length === 1 ? explicitVideoIds[0] : undefined;
-  const fallback = inspectId
-    ? { route: 'inspect_video', answerDetail: 'standard', videoId: inspectId, visualEvidence: 'helpful' }
-    : { route: 'topic_research', answerDetail: 'standard', researchBreadth: 'focused', searchQuery: message, visualEvidence: 'none',
-      ...(channelIds.length === 1 ? { channelId: channelIds[0] } : {}) };
-  return { decision: classifierDecisionSchema.parse(fallback), method: 'defaults',
-    defaultedFields: Object.keys(fallback) as DefaultedClassificationField[] };
+  // Request defaults alone, still under the same constraints and checks.
+  const inspectId = explicitVideoIds.length === 1 && !constraints.subjects.length ? explicitVideoIds[0] : undefined;
+  const defaults: Record<string, unknown> = inspectId ? { route: 'inspect_video', videoId: inspectId }
+    : { route: 'topic_research', ...(channelIds.length === 1 && !constraints.subjects.length ? { channelId: channelIds[0] } : {}) };
+  defaultedFields.clear();
+  for (const field of Object.keys(defaults)) defaultedFields.add(field as DefaultedClassificationField);
+  applyConstraints(defaults);
+  const plain = accept(defaults);
+  if (plain && !plain.issues.length) return { decision: plain.parsed, method: 'defaults', defaultedFields: [...defaultedFields] };
+
+  // Nothing executable satisfies the request's own requirements, so ask the user.
+  const clarification = { route: 'finalize', responseIntent: 'clarification', reason: LAST_RESORT_REASON, answerDetail: 'standard' };
+  return { decision: classifierDecisionSchema.parse(clarification), method: 'defaults',
+    defaultedFields: Object.keys(clarification) as DefaultedClassificationField[] };
+}
+
+/** Subjects of the "compare this video with" follow-up form: the previous turn's video and the new one. */
+function expectedComparisonSubjects(input: CapabilityClassifierInput): string[] {
+  const explicit = extractYouTubeVideoIds(input.message);
+  const previous = (input.conversationHistory ?? []).at(-1)?.resourceIds ?? [];
+  return /\bcompare\s+(?:this|that|the previous|the earlier)\s+video\s+(?:with|to)\b/i.test(input.message)
+    && explicit.length === 1 && previous.length === 1 && previous[0] !== explicit[0]
+    ? [previous[0]!, explicit[0]!] : [];
 }
 
 function finishClassification(
@@ -727,11 +782,7 @@ function comparisonScopeIssues(
   const subjects = decision.comparisonVideoIds;
   // Guard the concrete follow-up form that previously passed schema validation
   // while silently dropping the prior video. Other phrasing is resolved by the classifier.
-  const explicit = extractYouTubeVideoIds(input.message);
-  const previous = (input.conversationHistory ?? []).at(-1)?.resourceIds ?? [];
-  const expected = /\bcompare\s+(?:this|that|the previous|the earlier)\s+video\s+(?:with|to)\b/i.test(input.message)
-    && explicit.length === 1 && previous.length === 1 && previous[0] !== explicit[0]
-    ? [previous[0]!, explicit[0]!] : [];
+  const expected = expectedComparisonSubjects(input);
   const missing = decision.route !== 'finalize' || decision.responseIntent === 'context_answer';
   if ((subjects && (new Set(subjects).size !== subjects.length || subjects.some(id => !videoIds.includes(id))))
     || (missing && expected.some(id => !subjects?.includes(id)))
