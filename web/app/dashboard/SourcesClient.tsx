@@ -59,12 +59,14 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [pendingInspection, setPendingInspection] = useState<{ type: EntityType; id: string; input: string } | null>(null);
   const [operationLabel, setOperationLabel] = useState('');
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState('');
   const [failedSaves, setFailedSaves] = useState<Array<SourceSave & { error: string }>>([]);
   const historyInput = useRef('');
+  const pendingInput = useRef<string | null>(null);
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const authenticated = Boolean(user) || demoEnabled;
@@ -116,6 +118,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   const openRecentSource = async (entry: Pick<RecentSource, 'id'>, savedProjectId?: string) => {
+    setPendingInspection(null);
     const controller = beginOperation('Loading saved source data…');
     try {
       const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(savedProjectId ? `/v1/projects/${encodeURIComponent(savedProjectId)}/sources/${encodeURIComponent(entry.id)}` : `/v1/sources/recent/${entry.id}`, { signal: controller.signal });
@@ -163,7 +166,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   }, []);
 
   const showRecentSources = useCallback(() => {
-    cancelOperation(); setInspector(null); setItems([]); setHasSearched(false);
+    cancelOperation(); setPendingInspection(null); setInspector(null); setItems([]); setHasSearched(false);
     setQuery(''); setTranscriptQuery(''); setError(''); setNotice('');
   }, [cancelOperation, setInspector, setItems, setHasSearched, setQuery, setTranscriptQuery]);
 
@@ -179,10 +182,28 @@ export default function SourcesClient({ active }: {active:boolean}) {
     window.addEventListener('keydown',shortcut);return()=>window.removeEventListener('keydown',shortcut);
   },[active]);
 
+  const clearLegacyLink = () => {
+    pendingInput.current = null; setPendingInspection(null);
+    const next = new URLSearchParams(params); next.delete('legacy'); next.delete('id'); next.delete('type');
+    router.replace(`/dashboard/sources${next.size ? `?${next}` : ''}`, { scroll: false });
+  };
+
   const runSearch = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!query.trim()) return;
     const input = query.trim();
+    if (pendingInspection && input === pendingInspection.input) {
+      if (loading) return;
+      const { type, id } = pendingInspection;
+      const openingSearch = params.toString();
+      const loaded = await inspect(type, id, undefined, 'youtube', selectedData, input);
+      // Requests may finish after navigation. Never replace a newer route with this old link.
+      if (loaded && window.location.pathname === '/dashboard/sources'
+        && new URLSearchParams(window.location.search).toString() === openingSearch) clearLegacyLink();
+      return;
+    }
+    setPendingInspection(null);
+    if (params.has('legacy')) clearLegacyLink();
     const controller = beginOperation('Resolving your query…');
     setHasSearched(true);
     setInspector(null);
@@ -277,7 +298,11 @@ export default function SourcesClient({ active }: {active:boolean}) {
           await rememberSource(historyInput.current, { kind: 'inspection', inspector: next });
         }
       }
-    } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.'); }
+      return !controller.signal.aborted;
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open this source.');
+      return false;
+    }
     finally { finishOperation(controller); }
   };
 
@@ -318,11 +343,23 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   useEffect(() => {
+    if (pendingInput.current && (!active || params.get('legacy') !== '1')) {
+      if (query === pendingInput.current) setQuery('');
+      pendingInput.current = null; setPendingInspection(null);
+    }
     if (!active) return;
+    setPendingInspection(null);
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
+    if (!saved && params.get('legacy') === '1' && id && (type === 'video' || type === 'channel' || type === 'playlist')) {
+      // Older rows have no restorable snapshot. Gate provider reads without enabling project auto-save.
+      showRecentSources();
+      const input = `https://www.youtube.com/${type === 'video' ? `watch?v=${encodeURIComponent(id)}` : type === 'playlist' ? `playlist?list=${encodeURIComponent(id)}` : `channel/${encodeURIComponent(id)}`}`;
+      pendingInput.current = input; setQuery(input); setPendingInspection({ type, id, input });
+      return; // Keep the pending source in the URL for reload and failed-request retry.
+    }
     if (q) { setQuery(q); searchInput.current?.focus(); }
-    if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
     if (saved && projectId) void openRecentSource({ id: saved }, projectId);
+    else if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
     if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
   }, [active, params, router]);
   const createProject = async (name:string) => {
@@ -401,9 +438,10 @@ export default function SourcesClient({ active }: {active:boolean}) {
               <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
-                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
-                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : 'Inspect'} <span aria-hidden='true'>→</span></button>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); setPendingInspection(null); if (params.has('legacy')) clearLegacyLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : pendingInspection ? 'Inspect using credits' : 'Inspect'} <span aria-hidden='true'>→</span></button>
                 </div>
+                {pendingInspection && <div className='source-refresh-row'><p role='status'>This project item has no saved source snapshot. Inspecting it fetches data and uses credits.</p>{!loading && <button type='button' onClick={() => { clearLegacyLink(); showRecentSources(); }}>Cancel</button>}</div>}
                 <fieldset className='source-data-picker'>
                   <legend>Include with each video</legend>
                   <div className='source-data-options'>

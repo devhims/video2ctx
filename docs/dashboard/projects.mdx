@@ -16,3 +16,9 @@ Projects are private to the signed-in account. API keys created by that account 
 <Note>
   Imports and AI research jobs can finish asynchronously. The API exposes job state even when the dashboard does not show every intermediate step.
 </Note>
+
+## Reopening saved items
+
+Project entries with a saved source snapshot reopen that data without a new provider request. Entries without a snapshot, including those created by standalone Save, show a credit notice and wait for **Inspect using credits**. You can cancel or go back without requesting data. Choosing to inspect one of these entries does not add another project row or enable automatic saving into that project.
+
+The existing **Save to project** and **Save playlist** actions still save the item and start their research import. This is separate from opening an existing item.

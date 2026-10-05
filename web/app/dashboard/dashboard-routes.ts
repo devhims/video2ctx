@@ -5,5 +5,5 @@ export function dashboardPath(section: DashboardSection) { return `/dashboard/${
 export function projectItemPath(projectId: string, item: ProjectItem) {
   return item.source_id
     ? `/dashboard/sources?project=${encodeURIComponent(projectId)}&saved=${encodeURIComponent(item.id)}`
-    : `/dashboard/sources?type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`;
+    : `/dashboard/sources?legacy=1&type=${item.entity_type}&id=${encodeURIComponent(item.entity_id)}`;
 }

@@ -1180,3 +1180,204 @@ test('Agent navigation is visible while Agent and Admin access checks are pendin
     await expect(page.getByRole('link', { name: 'Agent', exact: true })).toBeVisible();
   } finally { await scenario.clear(); }
 });
+
+for (const type of ['video', 'playlist'] as const) test(`QA 003 restores a saved ${type} snapshot without a billed fetch`, async ({ page }, testInfo) => {
+  const project = { id: 'qa003-project', name: 'Snapshot project', item_count: 1 };
+  const id = type === 'video' ? videoId : 'PLsavedplaylist';
+  const source = { id: 'qa003-recent', input: `https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : `playlist?list=${id}`}`,
+    title: `Saved ${type}`, kind: 'inspection', updatedAt: Date.now() };
+  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type, id,
+    data: { id, title: source.title, thumbnails: [], videos: [] }, ...(type === 'video' ? { transcript } : {}),
+    requestedData: type === 'video' ? ['transcript'] : [], dataErrors: {} } };
+  const item = { id: 'qa003-item', source_id: source.id, provider: 'youtube', entity_type: type, entity_id: id, title: source.title };
+  let providerReads = 0, writes = 0, restores = 0;
+  page.on('request', request => {
+    if (new URL(request.url()).searchParams.has('provider')) providerReads++;
+    if (request.method() === 'POST' && /\/v1\/(sources|imports|projects)(?:\/|\?|$)/.test(request.url())) writes++;
+  });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/${item.id}`, route => {
+    restores++; return route.fulfill({ json: { source, snapshot } });
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.goto(`/dashboard/projects?project=${project.id}`);
+      await page.getByRole('button', { name: new RegExp(`^${source.title}`) }).last().click();
+      await expect(page.getByRole('heading', { name: source.title, exact: true })).toBeVisible();
+      if (type === 'video') await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`qa003-${type}-restored-${attempt}.png`), fullPage: true });
+    }
+    expect(restores).toBe(2); expect(providerReads).toBe(0); expect(writes).toBe(0);
+  } finally { await scenario.clear(); }
+});
+
+for (const type of ['video', 'playlist'] as const) test(`QA 003 preserves the standalone ${type} save and import workflow`, async ({ page }) => {
+  const project = { id: 'qa003-save', name: 'Existing save destination', item_count: 0 };
+  const id = type === 'video' ? videoId : 'PLimport';
+  const itemWrites: unknown[] = [], imports: unknown[] = [];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { itemWrites.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { id: 'saved-item' } }); });
+  await page.route('**/api/platform/v1/imports', route => { imports.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { id: 'import-job' } }); });
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: type, provider: 'youtube', id } }));
+  if (type === 'playlist') await page.route(`**/api/platform/v1/playlists/${id}?**`, route => route.fulfill({ json: { id, title: 'Saved playlist', videos: [] } }));
+  try {
+    await page.goto('/dashboard/sources');
+    await page.getByRole('textbox', { name: /Video search or YouTube URL|Playlist URL detected/ }).fill(`https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : `playlist?list=${id}`}`);
+    await page.getByRole('button', { name: /^Inspect/ }).click();
+    await page.getByRole('button', { name: type === 'video' ? 'Save to project' : 'Save playlist', exact: true }).click();
+    await expect.poll(() => imports.length).toBe(1);
+    expect(itemWrites).toHaveLength(1);
+    expect(itemWrites[0]).toMatchObject({ provider: 'youtube', entityType: type, entityId: id });
+    if (type === 'video') expect(itemWrites[0]).toHaveProperty('content', '[0] Transcript arrived successfully.');
+    expect(imports[0]).toEqual({ provider: 'youtube', kind: type, entityId: id, projectId: project.id });
+  } finally { await scenario.clear(); }
+});
+
+for (const type of ['video', 'playlist', 'channel'] as const) test(`QA 003 legacy ${type} waits for an explicit billed inspection`, async ({ page }, testInfo) => {
+  const project = { id: 'qa003-legacy', name: 'Older sources', item_count: 1 };
+  const id = type === 'video' ? videoId : type === 'playlist' ? 'PLlegacy' : 'UClegacy';
+  const item = { id: 'old-item', provider: 'youtube', entity_type: type, entity_id: id, title: 'Older saved source' };
+  let providerReads = 0;
+  const saves: Array<{ projectId?: string }> = [];
+  const projectWrites: string[] = [];
+  page.on('request', request => { if (request.method() === 'POST' && /\/v1\/projects\//.test(request.url())) projectWrites.push(request.url()); });
+  page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() === 'POST') { saves.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: {} }); }
+    return route.fulfill({ json: { sources: [] } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  if (type !== 'video') await page.route(`**/api/platform/v1/${type === 'playlist' ? 'playlists' : 'channels'}/${id}?**`, route => route.fulfill({ json: { id, title: 'Explicitly loaded source', name: 'Explicitly loaded source', thumbnails: [], videos: [] } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Older saved source/ }).last().click();
+    await expect(page.getByText('This project item has no saved source snapshot. Inspecting it fetches data and uses credits.')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
+    expect(providerReads).toBe(0);
+    await expect(page.getByText('Adding sources to')).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
+    expect(providerReads).toBe(0);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toHaveCount(0);
+    await expect(page).not.toHaveURL(/legacy=1/);
+    expect(providerReads).toBe(0);
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Older saved source/ }).last().click();
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`qa003-legacy-${type}-notice.png`), fullPage: true });
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Older sources', exact: true })).toBeVisible();
+    expect(providerReads).toBe(0);
+    await page.getByRole('button', { name: /^Older saved source/ }).last().click();
+    await page.getByRole('button', { name: /^Inspect using credits/ }).click();
+    await expect(page.getByRole('heading', { name: type === 'video' ? 'Transcript deadline regression' : 'Explicitly loaded source', exact: true })).toBeVisible();
+    expect(providerReads).toBeGreaterThan(0);
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).not.toHaveProperty('projectId');
+    expect(projectWrites).toHaveLength(0);
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible();
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 clears a pending legacy inspection when another project opens Sources', async ({ page }) => {
+  let providerReads = 0;
+  page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
+  const project = { id: 'new-context', name: 'New context', item_count: 0 };
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
+  try {
+    await page.goto(`/dashboard/sources?legacy=1&type=video&id=${videoId}`);
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'New context 0 sources' }).click();
+    await page.getByRole('button', { name: 'Add sources', exact: true }).click();
+    await expect(page.getByText('Adding sources to')).toContainText('New context');
+    await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('');
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toHaveCount(0);
+    await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
+    expect(providerReads).toBe(0);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 keeps failed legacy channels retryable and removes the link after success', async ({ page }) => {
+  let reads = 0;
+  await page.route('**/api/platform/v1/channels/UClegacy?**', route => ++reads === 1
+    ? route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Temporary channel failure' } } })
+    : route.fulfill({ json: { id: 'UClegacy', name: 'Retried channel', title: 'Retried channel', thumbnails: [] } }));
+  await page.goto('/dashboard/sources?legacy=1&type=channel&id=UClegacy');
+  await page.getByRole('button', { name: /^Inspect using credits/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Temporary channel failure' })).toContainText('Temporary channel failure');
+  await expect(page).toHaveURL(/legacy=1/);
+  expect(reads).toBe(1);
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Retried channel', exact: true })).toBeVisible();
+  await expect(page).not.toHaveURL(/legacy=1/);
+  expect(reads).toBe(2);
+});
+
+test('QA 003 editing a legacy input prevents its old notice returning on reload', async ({ page }) => {
+  let providerReads = 0;
+  page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
+  await page.goto(`/dashboard/sources?legacy=1&type=video&id=${videoId}`);
+  await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill('A different topic');
+  await expect(page).not.toHaveURL(/legacy=1|[?&]id=/);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+  await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
+  expect(providerReads).toBe(0);
+});
+
+test('QA 003 keeps non-project inspection links working without a legacy gate', async ({ page }) => {
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  await page.goto(`/dashboard/sources?type=video&id=${videoId}`);
+  await expect(page.getByRole('heading', { name: 'Transcript deadline regression', exact: true })).toBeVisible();
+  await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
+});
+
+for (const destination of ['project', 'sources'] as const) test(`QA 003 background inspection cannot replace a newer ${destination} route`, async ({ page }) => {
+  const project = { id: 'keep-context', name: 'Keep this context', item_count: 0 };
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
+  let release = () => {}, finished = false;
+  const saves: Array<{ projectId?: string }> = [];
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, async route => {
+    await gate; await route.fulfill({ json: transcript });
+  });
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() === 'POST') { saves.push(route.request().postDataJSON()); finished = true; }
+    return route.fulfill({ json: route.request().method() === 'POST' ? {} : { sources: [] } });
+  });
+  try {
+    await page.goto(`/dashboard/sources?legacy=1&type=video&id=${videoId}`);
+    await page.getByRole('button', { name: /^Inspect using credits/ }).click();
+    await expect(page.getByRole('status', { name: 'Loading transcript' })).toBeVisible();
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Keep this context 0 sources' }).click();
+    if (destination === 'sources') {
+      await page.getByRole('button', { name: 'Add sources', exact: true }).click();
+      await expect(page).toHaveURL(/\/dashboard\/sources\?project=keep-context$/);
+    } else await expect(page).toHaveURL(/\/dashboard\/projects\?project=keep-context$/);
+    const expectedUrl = page.url();
+    const navigations: string[] = [];
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    release();
+    await expect.poll(() => finished).toBe(true);
+    // Observe the post-response route transition window, not provider timing.
+    await page.waitForTimeout(500);
+    expect(page.url()).toBe(expectedUrl);
+    expect(navigations.every(url => url === expectedUrl)).toBe(true);
+    expect(saves).toHaveLength(1);
+    expect(saves[0]).not.toHaveProperty('projectId');
+    if (destination === 'sources') await expect(page.getByText('Adding sources to')).toContainText('Keep this context');
+    else await expect(page.getByRole('heading', { name: 'Keep this context', exact: true })).toBeVisible();
+  } finally { release(); await scenario.clear(); }
+});
