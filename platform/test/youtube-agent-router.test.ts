@@ -364,7 +364,8 @@ describe('YouTube agent capability router', () => {
       let calls = 0;
       const model = new MockLanguageModelV4({ doGenerate: async () => {
         if (++calls > 1) return new Promise(() => {});
-        await new Promise(resolve => setTimeout(resolve, 15_000));
+        // Slow but under the stall limit, so the repair has too little time left to retry a stall.
+        await new Promise(resolve => setTimeout(resolve, 9_000));
         return { content: [{ type: 'tool-call', toolCallId: 'invalid', toolName: 'classify_request', input: '{}' }],
           finishReason: { unified: 'tool-calls', raw: undefined },
           usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -375,6 +376,93 @@ describe('YouTube agent capability router', () => {
       await vi.advanceTimersByTimeAsync(20_000);
       expect(await result).toBe('Classification phase timeout.');
       expect(calls).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('sends one fresh classifier request when the first stalls', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const answer = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'event sourcing explained' });
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async options => {
+        if (++calls === 1) return new Promise(() => {});
+        return answer.doGenerate(options);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(model.doGenerateCalls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research', researchBreadth: 'focused' });
+      expect(model.doGenerateCalls).toHaveLength(2);
+      // A stall is not a repair: the fresh request repeats the original prompt.
+      expect(model.doGenerateCalls[1]!.prompt).toEqual(model.doGenerateCalls[0]!.prompt);
+      // The phase ends with the decision, which aborts the abandoned request.
+      expect(model.doGenerateCalls[0]!.abortSignal?.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent_classification_request_stalled'));
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('keeps a slow first classifier response that answers after the fresh request starts', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const answer = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'event sourcing explained' });
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async options => {
+        if (++calls === 2) return new Promise(() => {});
+        await new Promise(resolve => setTimeout(resolve, 14_000));
+        return answer.doGenerate(options);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(14_000);
+      await expect(result).resolves.toMatchObject({ route: 'topic_research' });
+      expect(model.doGenerateCalls).toHaveLength(2);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('fails a stalled classification with the provider error when both requests fail', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: async () => {
+        const call = ++calls;
+        await new Promise(resolve => setTimeout(resolve, call === 1 ? 12_000 : 1_000));
+        throw new Error(`provider failure ${call}`);
+      } });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: new AbortController().signal })
+        .then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toContain('provider failure 1');
+      expect(model.doGenerateCalls).toHaveLength(2);
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('does not retry a stalled request when the outer phase deadline leaves too little time', async () => {
+    vi.useFakeTimers();
+    try {
+      const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model,
+        signal: new AbortController().signal, deadlineAt: Date.now() + 12_000 }).then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(await result).toBe('Classification phase timeout.');
+      expect(model.doGenerateCalls).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not retry a classifier request the caller cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const model = new MockLanguageModelV4({ doGenerate: async () => new Promise(() => {}) });
+      const result = classifyCapabilityWithModel({ message: 'Explain event sourcing', model, signal: controller.signal })
+        .then(() => 'completed', error => error.message);
+      await vi.advanceTimersByTimeAsync(5_000);
+      controller.abort(new Error('Cancelled by caller.'));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await result).toBe('Cancelled by caller.');
+      expect(model.doGenerateCalls).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
 
@@ -588,11 +676,11 @@ describe('YouTube agent capability router', () => {
       finishReason: { unified: 'tool-calls' as const, raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
       warnings: [] });
-    // First call answers after firstMs; the reconsideration runs `second`.
-    const model = (second: (signal?: AbortSignal) => Promise<never>, firstMs = 0) => {
+    // The first call answers at once; the reconsideration runs `second`.
+    const model = (second: (signal?: AbortSignal) => Promise<never>) => {
       let call = 0;
       return new MockLanguageModelV4({ doGenerate: async ({ abortSignal }) => {
-        if (call++ === 0) { await new Promise(resolve => setTimeout(resolve, firstMs)); return route('first'); }
+        if (call++ === 0) return route('first');
         return second(abortSignal);
       } });
     };
@@ -629,11 +717,18 @@ describe('YouTube agent capability router', () => {
     });
 
     it('skips reconsideration when too little classification time remains', async () => {
-      const classifier = model(async () => { throw new Error('must not be called'); }, 18_000);
+      let call = 0;
+      // A first response cannot take 18 s any more: it stalls at 10 s and the
+      // fresh request answers 8 s later, leaving no time to reconsider.
+      const classifier = new MockLanguageModelV4({ doGenerate: async () => {
+        if (call++ === 0) return new Promise<never>(() => {});
+        if (call === 2) { await new Promise(resolve => setTimeout(resolve, 8_000)); return route('first'); }
+        throw new Error('must not be called');
+      } });
       const run = classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
       await vi.advanceTimersByTimeAsync(18_000);
       await expect(run).resolves.toMatchObject({ visualEvidence: 'helpful' });
-      expect(classifier.doGenerateCalls).toHaveLength(1);
+      expect(classifier.doGenerateCalls).toHaveLength(2);
     });
 
     it('propagates user cancellation during reconsideration', async () => {

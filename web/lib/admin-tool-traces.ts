@@ -15,10 +15,13 @@ export const adminTraceDetailSchema=adminTraceCallSchema.extend({
     visualDiagnostics:z.record(z.string(),z.unknown()).optional(),
   }).optional(),
 });
-export const adminTraceRunSchema=z.object({runId:z.string().uuid(),userId:z.string(),sessionId:z.string().uuid(),status:z.string(),calls:z.array(adminTraceCallSchema)});
+// Terminal run error. Older API responses and summaries written before it was recorded omit it.
+export const adminTraceRunSchema=z.object({runId:z.string().uuid(),userId:z.string(),sessionId:z.string().uuid(),status:z.string(),
+  error:z.string().nullable().optional(),calls:z.array(adminTraceCallSchema)});
 export const adminTraceListSchema=z.object({runs:z.array(z.object({
   runId:z.string().uuid(),userId:z.string(),sessionId:z.string().uuid(),status:z.string(),
   startedAt:z.number(),updatedAt:z.number(),callCount:z.number(),failedCalls:z.number(),captureFailures:z.number(),
+  error:z.string().nullable().optional(),
 })),nextOffset:z.number().nullable()});
 export type AdminTraceRun=z.infer<typeof adminTraceRunSchema>;
 export type AdminTraceDetail=z.infer<typeof adminTraceDetailSchema>;

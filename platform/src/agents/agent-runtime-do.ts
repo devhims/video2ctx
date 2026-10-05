@@ -151,7 +151,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       queueCleanup:keys=>this.sessionStore.queueCleanup(keys), cleanup:()=>this.sessionStore.cleanup(),
       db:this.env.DB, metadata:runId=>{
         const run=this.readRun(runId);
-        return run ? {userId:run.user_id,sessionId:run.conversation_id,status:run.status} : undefined;
+        return run ? {userId:run.user_id,sessionId:run.conversation_id,status:run.status,
+          startedAt:run.created_at,updatedAt:run.updated_at,error:run.error} : undefined;
       }, retryIndex:()=>this.scheduleTraceRetry(), background:work=>this.ctx.waitUntil(work),
       cancelRetry:()=>this.cancelTraceRetry(),
       failureDiagnostics:(runId, toolCallId, startedAt)=>this.sql<{payload_json:string}>`

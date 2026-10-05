@@ -99,7 +99,7 @@ test('diagnostic traces require live admin sessions and export complete ordered 
     (trace_id,run_id,tool_call_id,user_id,session_id,tool_name,operation,source,run_status,status,started_at,finished_at,input_key,output_key,index_version,attempt,call_sequence,result_sequence)
     VALUES (?,?,?,?,?,'search_context','context','model','completed','completed',100,200,?,?,1,1,1,2)`)
     .bind(traceId,runId,'call-1',user.user.id,sessionId,inputKey,outputKey).run();
-  await env.DB.prepare(`INSERT INTO agent_trace_runs VALUES (?,?,?,'completed',100,200,1,0,0,1)`)
+  await env.DB.prepare(`INSERT INTO agent_trace_runs (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version) VALUES (?,?,?,'completed',100,200,1,0,0,1)`)
     .bind(runId,user.user.id,sessionId).run();
   const paths=[`/v1/admin/agent-traces`,`/v1/admin/agent-traces/${runId}`,`/v1/admin/agent-traces/${runId}/calls/${traceId}`,`/v1/admin/agent-traces/${runId}/export`];
   for (const path of paths) {
@@ -135,7 +135,7 @@ test('run status filters retain complete counts when call rows have mixed public
       VALUES (?,?,?,?,?,'context_read','context','model',?,'running',100,1,1,?)`)
       .bind(crypto.randomUUID(),runId,`call-${index}`,admin.user.id,sessionId,runStatus,index+1).run();
   }
-  await env.DB.prepare("INSERT INTO agent_trace_runs VALUES (?,?,?,'completed',100,200,2,0,0,1)").bind(runId,admin.user.id,sessionId).run();
+  await env.DB.prepare("INSERT INTO agent_trace_runs (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version) VALUES (?,?,?,'completed',100,200,2,0,0,1)").bind(runId,admin.user.id,sessionId).run();
   for (const q of [runId,sessionId,admin.user.id]) {
     const response=await request(`/v1/admin/agent-traces?q=${q}&status=completed`,{headers:{cookie:admin.cookie}});
     expect(await response.json()).toMatchObject({runs:[{runId,status:'completed',callCount:2}]});
@@ -144,6 +144,28 @@ test('run status filters retain complete counts when call rows have mixed public
   expect(await running.json()).toMatchObject({runs:[]});
   const detail=await request(`/v1/admin/agent-traces/${runId}`,{headers:{cookie:admin.cookie}});
   expect(await detail.json()).toMatchObject({status:'completed',calls:[{status:'interrupted'},{status:'interrupted'}]});
+});
+
+test('runs that ended before any tool call are listed and inspectable with their error',async()=>{
+  const admin=await session('trace-zero-call-admin@example.test');
+  await env.DB.prepare("UPDATE user SET role='admin' WHERE id=?").bind(admin.user.id).run();
+  const runId=crypto.randomUUID(),sessionId=crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO agent_trace_runs
+    (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version,error)
+    VALUES (?,?,?,'failed',100,20600,0,0,0,1,'Classification phase timeout.')`).bind(runId,admin.user.id,sessionId).run();
+  const list=await request(`/v1/admin/agent-traces?q=${runId}&status=failed`,{headers:{cookie:admin.cookie}});
+  expect(await list.json()).toMatchObject({runs:[{runId,status:'failed',callCount:0,error:'Classification phase timeout.'}]});
+  const detail=await request(`/v1/admin/agent-traces/${runId}`,{headers:{cookie:admin.cookie}});
+  expect(detail.status).toBe(200);
+  expect(await detail.json()).toEqual({runId,userId:admin.user.id,sessionId,status:'failed',
+    error:'Classification phase timeout.',calls:[]});
+  // Legacy summaries written before the error column report null.
+  const legacyRunId=crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO agent_trace_runs
+    (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version)
+    VALUES (?,?,?,'completed',100,200,0,0,0,1)`).bind(legacyRunId,admin.user.id,sessionId).run();
+  const legacy=await request(`/v1/admin/agent-traces?q=${legacyRunId}`,{headers:{cookie:admin.cookie}});
+  expect(await legacy.json()).toMatchObject({runs:[{runId:legacyRunId,error:null}]});
 });
 
 test('oversized exports fail before streaming or reading payloads',async()=>{

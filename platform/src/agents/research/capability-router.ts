@@ -143,14 +143,57 @@ export interface CapabilityClassifierInput {
   modelCallId?: string;
   /** Trusted line naming the run's date, so relative dates in searchQuery resolve correctly. */
   currentDate?: string;
+  /** Outer phase deadline, when the caller started the classification clock earlier. */
+  deadlineAt?: number;
 }
 
 export async function classifyCapabilityWithModel(
   input: CapabilityClassifierInput,
 ): Promise<CapabilityRouteDecision> {
-  const deadlineAt = Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS;
+  const deadlineAt = Math.min(Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS, input.deadlineAt ?? Infinity);
   return withRunDeadline(deadlineAt, input.signal,
     signal => classifyWithinDeadline({ ...input, signal }, deadlineAt), 'Classification phase timeout.');
+}
+
+// A classifier response normally arrives within a few seconds. The SDK only
+// retries error responses, so a request that never answers would otherwise
+// hold the whole phase. After the stall limit, send one fresh request and keep
+// the original running: whichever answers first wins, so a slow but live
+// response is not discarded. Hedge only while the fresh request still has a
+// useful share of the phase left. The loser is aborted when the phase ends.
+export const CLASSIFIER_REQUEST_STALL_MS = 10_000;
+const CLASSIFIER_STALL_RETRY_MIN_MS = 5_000;
+
+async function requestWithStallRetry<T>(
+  request: (signal: AbortSignal) => PromiseLike<T>,
+  signal: AbortSignal,
+  deadlineAt: number,
+  onStall: () => void,
+): Promise<T> {
+  if (deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return request(signal);
+  const first = Promise.resolve(request(signal));
+  first.catch(() => {}); // The hedge may win; a later rejection must not go unhandled.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<'stalled'>(resolve => { timer = setTimeout(() => resolve('stalled'), CLASSIFIER_REQUEST_STALL_MS); });
+  try {
+    const outcome = await Promise.race([first.then(value => ({ value })), stalled]);
+    if (outcome !== 'stalled') return outcome.value;
+  } finally {
+    clearTimeout(timer);
+  }
+  signal.throwIfAborted();
+  onStall();
+  const hedge = Promise.resolve(request(signal));
+  hedge.catch(() => {});
+  return firstFulfilled(first, hedge);
+}
+
+/** Resolves with the first success, or rejects with the last failure when both fail. */
+function firstFulfilled<T>(a: Promise<T>, b: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let failures = 0;
+    for (const pending of [a, b]) pending.then(resolve, error => { if (++failures === 2) reject(error); });
+  });
 }
 
 // An advisory reconsideration must finish before the phase deadline, so its
@@ -266,7 +309,11 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       }
     } else {
       assertModelCostAvailable(input.modelBudget);
-      result = await request(input.signal);
+      result = await requestWithStallRetry(request, input.signal, deadlineAt, () => {
+        console.warn(JSON.stringify({ event: 'agent_classification_request_stalled', modelCallId: callId, attempt,
+          stallMs: CLASSIFIER_REQUEST_STALL_MS }));
+        assertModelCostAvailable(input.modelBudget);
+      });
     }
 
     input.modelBudget?.recordUsage({

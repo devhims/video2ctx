@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { adminTraceDetailSchema, fetchAdminTrace } from './admin-tool-traces.ts';
+import { adminTraceDetailSchema, adminTraceListSchema, adminTraceRunSchema, fetchAdminTrace } from './admin-tool-traces.ts';
 
 const call = {
   traceId: '11111111-1111-4111-8111-111111111111', toolCallId: 'frames-call',
@@ -35,4 +35,14 @@ test('unrelated error fields remain excluded', () => {
   assert.deepEqual(adminTraceDetailSchema.parse({ ...call,
     error: { ...error, headers: { authorization: 'must not display' } },
   }).error, error);
+});
+
+test('runs that ended before any tool call parse with their error, and older responses without it still parse', () => {
+  const run = { runId: '33333333-3333-4333-8333-333333333333', userId: 'user', sessionId: '44444444-4444-4444-8444-444444444444', status: 'failed' };
+  assert.deepEqual(adminTraceRunSchema.parse({ ...run, error: 'Classification phase timeout.', calls: [] }),
+    { ...run, error: 'Classification phase timeout.', calls: [] });
+  assert.equal(adminTraceRunSchema.parse({ ...run, calls: [] }).error, undefined);
+  const summary = { ...run, startedAt: 1000, updatedAt: 21000, callCount: 0, failedCalls: 0, captureFailures: 0 };
+  const list = adminTraceListSchema.parse({ runs: [{ ...summary, error: 'Classification phase timeout.' }, { ...summary, error: null }, summary], nextOffset: null });
+  assert.deepEqual(list.runs.map(item => item.error), ['Classification phase timeout.', null, undefined]);
 });
