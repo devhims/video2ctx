@@ -13,7 +13,7 @@ import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics
 import { researchVideoTarget } from './research-plan';
 import { assertGroundedAnswerBlocks, transcriptSourceContext, TranscriptGroundingError } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
-import { answerOutputTokenLimit, finalizationOutputTokenLimit, FINALIZATION_CONTEXT_TIMEOUT_MS } from './answer-budget';
+import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
 import { FinalizationStallError, withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
@@ -727,7 +727,7 @@ async function runUnifiedFinalizer(options: {
   let prepared = prepareEvidence();
   // Gather context once, charged only to the main deadline. Answer retries below
   // reuse these results and never restart context collection.
-  const contextDeadlineAt = Math.min(options.deadlineAt, Date.now() + FINALIZATION_CONTEXT_TIMEOUT_MS);
+  const contextDeadlineAt = options.deadlineAt;
   let contextIncomplete = false;
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';

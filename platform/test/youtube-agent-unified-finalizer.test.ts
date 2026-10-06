@@ -155,7 +155,7 @@ it('charges context collection to the main budget once and gives only the answer
     let attempts = 0;
     const finalizer = new MockLanguageModelV4({
       doGenerate: async () => {
-        await new Promise(resolve => setTimeout(resolve, 8_000));
+        await new Promise(resolve => setTimeout(resolve, 14_000));
         return { content: [{ type: 'text', text: 'Stored context was collected once.' }],
           finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
       },
@@ -163,9 +163,9 @@ it('charges context collection to the main budget once and gives only the answer
     });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
-    await vi.advanceTimersByTimeAsync(7_999);
+    await vi.advanceTimersByTimeAsync(13_999);
     expect(finalizer.doStreamCalls).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(52_000);
+    await vi.advanceTimersByTimeAsync(46_000);
     expect(finalizer.doStreamCalls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(2);
     expect(finalizer.doStreamCalls).toHaveLength(2);
@@ -179,6 +179,44 @@ it('charges context collection to the main budget once and gives only the answer
       expect(call.tools ?? []).toHaveLength(0);
       expect(JSON.stringify(call.prompt)).toContain('Stored context was collected once.');
     }
+    expect(options.finalize).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
+});
+
+it('stops context at the main deadline and spends the retry allowance only on an answer', async () => {
+  vi.useFakeTimers();
+  try {
+    const { options, output } = setup('context_answer');
+    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', reason: 'Saved context.' };
+    options.onDraft = vi.fn();
+    const searchTools = vi.fn(async () => ({}));
+    options.session = { brief: () => ({ assets: [], memories: [] }), searchTools } as unknown as NonNullable<typeof options.session>;
+    let contextSignal: AbortSignal | undefined;
+    const finalizer = new MockLanguageModelV4({
+      doGenerate: async ({ abortSignal }) => {
+        contextSignal = abortSignal;
+        return new Promise(() => {});
+      },
+      doStream: async ({ abortSignal }) => scheduledAnswer(output, 19_000, abortSignal),
+    });
+    models.select.mockReturnValue(finalizer);
+    const run = executeResearchRun(options).then(() => 'completed', error => error.message);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(contextSignal?.aborted).toBe(false);
+    expect(finalizer.doStreamCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(contextSignal?.aborted).toBe(true);
+    expect(finalizer.doStreamCalls).toHaveLength(1);
+    expect(options.finalize).not.toHaveBeenCalled();
+    const request = finalizer.doStreamCalls[0]!.prompt.find(message => message.role === 'user');
+    const text = request?.content.find(part => part.type === 'text');
+    expect(JSON.parse(text?.text ?? '{}')).toHaveProperty('contextIncomplete', true);
+    expect(finalizer.doStreamCalls[0]!.tools ?? []).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(await run).toBe('completed');
+    expect(searchTools).toHaveBeenCalledOnce();
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+    expect(finalizer.doStreamCalls).toHaveLength(1);
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
@@ -827,7 +865,7 @@ it.each(['finalize', 'inspect_video'] as const)('loads both saved comparison tra
   expect(result.artifacts).toContainEqual({type:'research_coverage',data:{targetVideos:2,requiredVideos:2,reviewedVideos:2}});
 });
 
-it('stops stalled context gathering and still generates an answer', async () => {
+it('stops context gathering at the shared deadline and still generates a non-streaming answer', async () => {
   vi.useFakeTimers();
   try {
     const {options, classifier, output}=setup('context_answer');
@@ -839,7 +877,7 @@ it('stops stalled context gathering and still generates an answer', async () => 
     }});
     models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
     const run=executeResearchRun(options);
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(60_001);
     await run;
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
