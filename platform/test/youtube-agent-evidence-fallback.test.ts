@@ -105,3 +105,56 @@ it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('preserves skipped transc
   expect(result.warnings).toContainEqual(skipped.warnings[0]);
   expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(true);
 });
+
+describe('pinned video caption gap (QA 020)', () => {
+  const checkedAt = '2026-10-05T22:30:00.000Z';
+  const metadata = (captionAvailability: Record<string, unknown>, availability: Record<string, unknown> = { status: 'available' }): EvidencePacket => ({
+    packetId: 'metadata', kind: 'youtube_video',
+    sources: [{ id: 'youtube:video:jNQXAC9IVRw', provider: 'youtube', kind: 'video', videoId: 'jNQXAC9IVRw', title: 'Me at the zoo' }],
+    excerpts: [{ id: 'video:jNQXAC9IVRw:initial', sourceId: 'youtube:video:jNQXAC9IVRw', text: 'Me at the zoo' }],
+    artifacts: [{ type: 'youtube_video_metadata', data: { id: 'jNQXAC9IVRw', captionAvailability, availability } }],
+    warnings: [], usage: [],
+  });
+  const absent = metadata({ status: 'unavailable', languages: [], checkedAt });
+
+  it('explains metadata-confirmed caption absence with pinned-video wording', () => {
+    const result = evidenceFallback([absent], 'inspect_video', 'Finalization failed.', undefined,
+      { videoId: 'jNQXAC9IVRw', captionsUnavailable: true })!;
+    expect(result.answer).toContain('I retrieved metadata for the requested video');
+    expect(result.answer).toContain('Requested video, metadata only:');
+    expect(result.answer).not.toContain('potentially relevant videos');
+    expect(result.warnings[0]).toEqual({ code: 'CAPTIONS_UNAVAILABLE', videoId: 'jNQXAC9IVRw',
+      message: `YouTube metadata checked at ${checkedAt} reported no caption tracks for this video, so its transcript was not retrieved in this run. That observation does not prove captions are permanently unavailable.` });
+    expect(result.warnings.map(warning => warning.code)).toEqual(['CAPTIONS_UNAVAILABLE', 'PARTIAL_EVIDENCE', 'NO_CONTENT_EVIDENCE']);
+  });
+
+  it.each([
+    ['unknown caption status', metadata({ status: 'unknown', languages: [] }), { captionsUnavailable: false }],
+    ['a stale absence this run did not confirm', absent, { captionsUnavailable: false }],
+    ['an absence recorded only by a transcript error', metadata({ status: 'unknown', languages: [], checkedAt }), { captionsUnavailable: true }],
+  ])('adds no caption warning for %s', (_label, packet, access) => {
+    const result = evidenceFallback([packet], 'inspect_video', undefined, undefined, { videoId: 'jNQXAC9IVRw', ...access })!;
+    expect(result.warnings.map(warning => warning.code)).toEqual(['PARTIAL_EVIDENCE', 'NO_CONTENT_EVIDENCE']);
+  });
+
+  it('keeps a country restriction distinct from caption absence', () => {
+    const restricted = metadata({ status: 'unknown', languages: [] }, { status: 'available', restriction: 'region' });
+    const result = evidenceFallback([restricted], 'inspect_video', undefined, undefined,
+      { videoId: 'jNQXAC9IVRw', regionRestricted: true, captionsUnavailable: true })!;
+    expect(result.warnings.map(warning => warning.code)).toEqual(['REGION_RESTRICTED', 'PARTIAL_EVIDENCE', 'NO_CONTENT_EVIDENCE']);
+    expect(result.warnings[0]!.message).toContain('not evidence that captions are absent');
+  });
+
+  it('does not duplicate a skip already reported by the transcript tool', () => {
+    const skipped: EvidencePacket = { ...packet, packetId: 'skipped', sources: [], excerpts: [], artifacts: [], usage: [],
+      warnings: [{ code: 'CAPTIONS_UNAVAILABLE', videoId: 'jNQXAC9IVRw', message: 'Caption absence was already confirmed. Retrieval was skipped.' }] };
+    const result = evidenceFallback([absent, skipped], 'inspect_video', undefined, undefined, { videoId: 'jNQXAC9IVRw', captionsUnavailable: true })!;
+    expect(result.warnings.filter(warning => warning.code === 'CAPTIONS_UNAVAILABLE')).toEqual([skipped.warnings[0]]);
+  });
+
+  it('keeps discovery wording for topic research', () => {
+    const result = evidenceFallback([absent], 'topic_research')!;
+    expect(result.answer).toContain('I found potentially relevant videos');
+    expect(result.warnings.map(warning => warning.code)).toEqual(['PARTIAL_EVIDENCE', 'NO_CONTENT_EVIDENCE']);
+  });
+});

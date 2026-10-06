@@ -5,6 +5,8 @@ import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
 import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
+import { commentExcerpt, commentSearchText } from '../providers/youtube/comment-text';
+import { z } from 'zod';
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
@@ -25,6 +27,17 @@ export interface SessionAssetMigrationResult {
 export { memoryUpdateSchema } from '../contracts';
 export type MemoryUpdate = import('../contracts').MemoryUpdate;
 export type SessionAssetKind = 'transcript' | 'storyboard_manifest' | 'storyboard_sheet' | 'frame' | 'comments';
+/** One saved-comment read: a full provider page in common cases, bounded for long comments. */
+const COMMENT_READ_LIMIT = 20;
+const COMMENT_READ_CHARACTERS = 24_000;
+const savedCommentsSchema = z.object({
+  comments: z.array(z.object({
+    id: z.string(), text: z.string(), author: z.object({ name: z.string() }).passthrough(),
+    publishedTimeText: z.string().optional(), likeCountText: z.string().optional(), replyCount: z.number().optional(),
+    isPinned: z.boolean().optional(), isHearted: z.boolean().optional(),
+  }).passthrough()),
+  continuation: z.string().max(4_000).optional(),
+}).passthrough();
 export interface SessionAsset {
   version: string;
   kind: SessionAssetKind;
@@ -513,6 +526,7 @@ export class SessionEvidenceStore implements SessionAccess {
         nextOffset: offset + page.length < matching.length ? offset + page.length : undefined,
       };
     }
+    if (asset.kind === 'comments') return this.readComments(asset, offset, query);
     const packets = this.evidence(version);
     const selected = packets
       .flatMap((packet) => {
@@ -523,6 +537,56 @@ export class SessionEvidenceStore implements SessionAccess {
       })
       .slice(0, 4);
     return { packets: selected, needsInspection: selected.length === 0 };
+  }
+  /**
+   * Read a saved comment page from its asset, not from an earlier packet that may hold
+   * only part of it. Comments keep YouTube's order and asset-index citation IDs, and
+   * each read is bounded by count and characters, with nextOffset for the rest.
+   */
+  private async readComments(asset: SessionAsset, offset: number, query?: string) {
+    const generation = this.generation();
+    const packetId = `session:${asset.version}:comments:${offset}:${await sha256(query ?? '')}`;
+    const parsed = savedCommentsSchema.safeParse(await this.read(asset.version));
+    // Deletion or a session clear during either await must not return removed text.
+    if (!parsed.success || generation !== this.generation() || !this.has(asset.version))
+      throw new Error('Session asset is unavailable or deleted.');
+    const sourceId = `youtube:${asset.videoId}:comments`;
+    // Match the saved comment itself, not a shortened excerpt, and keep its page position.
+    const needle = query?.toLowerCase();
+    const matching = parsed.data.comments.flatMap((comment, index) =>
+      !needle || commentSearchText(comment).includes(needle) ? [{ comment, index }] : []);
+    const page: EvidencePacket['excerpts'] = [];
+    let characters = 0;
+    for (const { comment, index } of matching.slice(offset)) {
+      const excerpt = commentExcerpt(comment, query);
+      if (page.length >= COMMENT_READ_LIMIT || (page.length && characters + excerpt.text.length > COMMENT_READ_CHARACTERS)) break;
+      page.push({ id: `evidence:${asset.version}:${index}${excerpt.passageStart === undefined ? '' : `:at:${excerpt.passageStart}`}`,
+        sourceId, text: excerpt.text });
+      characters += excerpt.text.length;
+    }
+    const nextOffset = offset + page.length < matching.length ? offset + page.length : undefined;
+    const packet = evidencePacketSchema.parse({
+      packetId,
+      kind: 'youtube_comments',
+      assetVersions: [asset.version],
+      sources: [{ id: sourceId, provider: 'youtube', kind: 'comments', videoId: asset.videoId,
+        url: `https://www.youtube.com/watch?v=${asset.videoId}` }],
+      excerpts: page,
+      artifacts: [{ type: 'youtube_comments', title: `Saved comments for ${asset.videoId}`, data: {
+        savedCommentsRead: true, pageCount: parsed.data.comments.length, offset, returnedCount: page.length,
+        ...(query ? { matchingCount: matching.length } : {}), ...(nextOffset !== undefined ? { nextOffset } : {}),
+      } }],
+      ...(parsed.data.continuation ? { continuation: parsed.data.continuation } : {}),
+      warnings: [
+        ...(nextOffset !== undefined ? [{ code: 'COMMENTS_PAGE_PARTIAL', message:
+          `This read contains saved comments ${offset + 1} through ${offset + page.length} of ${matching.length}${query ? ' matching the query' : ''}. Read again with offset ${nextOffset} for the rest; do not claim unread comments.` }] : []),
+        ...(this.currentVersions().has(asset.version) ? [] : [{ code: 'SUPERSEDED_SESSION_EVIDENCE',
+          message: 'This evidence refers to an older stored comment page. Use the current version for current facts.' }]),
+      ],
+      usage: [],
+    });
+    this.savePacket(packet);
+    return { packets: [packet], nextOffset };
   }
   alias(key: string, version: string) {
     if (this.has(version)) this.sql.exec('INSERT OR REPLACE INTO session_asset_keys VALUES (?, ?)', key, version);

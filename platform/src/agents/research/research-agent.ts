@@ -24,7 +24,7 @@ import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
 import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
-import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
+import { evidenceFallback, hasContentEvidence, type PinnedVideoAccess } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_FINALIZATION_RETRY_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, finalizationHardDeadline, withRunDeadline } from '../runtime/deadline';
 import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../runtime/frame-budget';
@@ -515,6 +515,12 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     },
   };
   const visualRequired = visualEvidenceLevel(options.decision) === 'required';
+  // Access limits this run's metadata recorded for the pinned video, for fallback explanations.
+  const pinnedVideoAccess = (): PinnedVideoAccess | undefined => options.decision.route === 'inspect_video' ? {
+    videoId: options.decision.videoId,
+    captionsUnavailable: trackedContext.transcriptSelection?.unavailable.has(options.decision.videoId),
+    regionRestricted: trackedContext.transcriptSelection?.regionRestricted?.has(options.decision.videoId),
+  } : undefined;
   const visualRequirements = options.decision.visualRequirements ?? [];
   const hasVisualObservations = () => [...evidence.values()].some(packet =>
     packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
@@ -665,7 +671,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && transcriptRequested
       && !options.context.session?.brief().assets.some(asset=>asset.kind==='transcript'
         && (options.decision.route!=='inspect_video' || asset.videoId===options.decision.videoId))) {
-      const unavailable = evidenceFallback([...evidence.values()], options.decision.route, undefined, currentDurationNotice());
+      const unavailable = evidenceFallback([...evidence.values()], options.decision.route, undefined, currentDurationNotice(), pinnedVideoAccess());
       if (unavailable) {
         unavailable.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-unavailable:${options.context.runId}`, unavailable);
@@ -710,7 +716,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       if (modelFallbackExhaustion(finalizationError) || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
-      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
+      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice(), pinnedVideoAccess());
       if (partial) {
         partial.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-fallback:${options.context.runId}`, partial);
@@ -858,7 +864,7 @@ async function runUnifiedFinalizer(options: {
               return {assets:assets.slice(offset,offset+40),nextOffset:offset+40<assets.length ? offset+40 : undefined};
             },
           }),
-          ...(historyOnly ? {} : { read_session_evidence: tool({description:'Read persisted evidence by asset version. Transcript reads return up to 30 excerpts, with nextOffset for pagination. Optional query filters exact text case-insensitively. No provider call. A saved unit uses its existing cached price once per run; later pages and reads of it are free. Returned full evidence IDs are valid citations.',
+          ...(historyOnly ? {} : { read_session_evidence: tool({description:'Read persisted evidence by asset version. Transcript reads return up to 30 excerpts, with nextOffset for pagination. Comment reads return the saved page itself in YouTube order, up to 20 comments per read, with nextOffset when more remain; use them when a comment packet reports more saved comments than it shows. Optional query filters exact text case-insensitively. No provider call. A saved unit uses its existing cached price once per run; later pages and reads of it are free. Returned full evidence IDs are valid citations.',
             inputSchema:z.object({version:z.string().regex(/^[a-f0-9]{64}$/),offset:z.number().int().min(0).optional(),query:z.string().min(1).max(200).optional()}),
             execute:async ({version,offset,query}) => {
               options.context.signal.throwIfAborted();

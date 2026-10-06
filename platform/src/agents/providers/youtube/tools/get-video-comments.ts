@@ -1,13 +1,11 @@
-import type { Comment } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
+import { commentExcerptText } from '../comment-text';
 import type { AgentToolContext } from '../tool-context';
 import {
-  bounded,
   continuationSchema,
   executeProviderEvidence,
-  MAX_PROVIDER_ITEMS,
   meteredCredits,
   providerWarnings,
   safeIdPart,
@@ -21,6 +19,9 @@ export const getVideoCommentsInputSchema = z.object({
 });
 
 export type GetVideoCommentsInput = z.infer<typeof getVideoCommentsInputSchema>;
+
+/** A provider page is delivered whole, in YouTube's order. This only guards against an unexpectedly large page. */
+export const MAX_COMMENTS_PER_PACKET = 100;
 
 export function createGetVideoCommentsTool(context: AgentToolContext) {
   return tool({
@@ -49,7 +50,8 @@ export function executeGetVideoComments(
     credits: meteredCredits('comments'),
     packet: (value) => {
       const sourceId = `youtube:${parsed.videoId}:comments`;
-      const comments = value.comments.slice(0, MAX_PROVIDER_ITEMS);
+      const comments = value.comments.slice(0, MAX_COMMENTS_PER_PACKET);
+      const omitted = value.comments.length - comments.length;
       return {
         kind: 'youtube_comments' as const,
         sources: [{
@@ -62,37 +64,30 @@ export function executeGetVideoComments(
         excerpts: comments.map((comment, index) => ({
           id: `comment:${safeIdPart(comment.id)}:${index}`,
           sourceId,
-          text: summarizeComment(comment),
+          text: commentExcerptText(comment),
         })),
         artifacts: [{
           type: 'youtube_comments',
           title: `Comments for ${parsed.videoId}`,
           data: {
             returnedCount: comments.length,
+            pageCount: value.comments.length,
             totalCount: value.totalCount,
             complete: 'complete' in value ? value.complete : false,
             pagesFetched: 'pagesFetched' in value ? value.pagesFetched : 1,
           },
         }],
         continuation: value.continuation,
-        warnings: providerWarnings(
-          value.meta,
-          'PARTIAL_YOUTUBE_COMMENTS',
-          'YouTube returned partial comment data.',
-        ),
+        warnings: [
+          ...providerWarnings(
+            value.meta,
+            'PARTIAL_YOUTUBE_COMMENTS',
+            'YouTube returned partial comment data.',
+          ),
+          ...(omitted > 0 ? [{ code: 'COMMENTS_PAGE_TRUNCATED',
+            message: `This page returned ${value.comments.length} comments; only the first ${comments.length} are included.` }] : []),
+        ],
       };
     },
   });
-}
-
-function summarizeComment(comment: Comment): string {
-  return bounded([
-    comment.text,
-    `Author: ${comment.author.name}`,
-    comment.publishedTimeText ? `Published: ${comment.publishedTimeText}` : undefined,
-    comment.likeCountText ? `Likes: ${comment.likeCountText}` : undefined,
-    comment.replyCount === undefined ? undefined : `Replies: ${comment.replyCount}`,
-    comment.isPinned ? 'Pinned: yes' : undefined,
-    comment.isHearted ? 'Creator heart: yes' : undefined,
-  ].filter(Boolean).join('\n'));
 }

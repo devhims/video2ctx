@@ -13,15 +13,27 @@ export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean 
     && packet.excerpts.some(excerpt => excerpt.text.trim() && packet.sources.some(source => source.id === excerpt.sourceId)));
 }
 
+/** Current-run access facts for the pinned video of an inspection, recorded by get_video. */
+export interface PinnedVideoAccess {
+  videoId: string;
+  captionsUnavailable?: boolean;
+  regionRestricted?: boolean;
+}
+
 /** Preserve supported findings without pretending to complete a cross-source synthesis. */
 export function evidenceFallback(
   packets: readonly EvidencePacket[],
   intent: 'topic_research' | 'inspect_video',
   failureMessage?: string,
   durationNotice?: string,
+  pinned?: PinnedVideoAccess,
 ): FinalizeAnswerInput | null {
-  const accessWarnings = [...new Map(packets.flatMap(packet => packet.warnings)
-    .filter(warning => ['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(warning.code))
+  const packetWarnings = packets.flatMap(packet => packet.warnings)
+    .filter(warning => ['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(warning.code));
+  // A tool-reported limitation for the same video already explains the gap.
+  const pinnedWarnings = pinnedAccessWarnings(packets, pinned).filter(warning => !packetWarnings.some(existing =>
+    existing.code === warning.code && (existing.videoId === undefined || existing.videoId === warning.videoId)));
+  const accessWarnings = [...new Map([...packetWarnings, ...pinnedWarnings]
     .map(warning => [JSON.stringify(warning), warning])).values()];
   const blocks: string[] = [];
   const seen = new Set<string>();
@@ -32,17 +44,22 @@ export function evidenceFallback(
       return excerpt ? [`- ${safeText(source.title ?? 'Video source')} [cite:${excerpt.id}]`] : [];
     })).slice(0, 3);
     if (!links.length && !durationNotice) return null;
+    const pinnedVideo = intent === 'inspect_video';
     const explanation = links.length
-      ? 'I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.'
+      ? pinnedVideo
+        ? 'I retrieved metadata for the requested video, but could not review its content in this run. I cannot answer from its captions or visuals using the title and description alone.'
+        : 'I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.'
       : 'I could not analyze the requested video content in this run. I cannot give an evidence-backed summary without its content.';
     return {
       intent, confidence: 'low', citations: [], artifacts: [],
-      answer: `${durationNotice ? `${durationNotice}\n\n` : ''}${explanation}${links.length ? `\n\nSources to explore, not verified recommendations:\n${links.join('\n')}` : ''}`,
+      answer: `${durationNotice ? `${durationNotice}\n\n` : ''}${explanation}${links.length ? `\n\n${pinnedVideo
+        ? 'Requested video, metadata only:' : 'Sources to explore, not verified recommendations:'}\n${links.join('\n')}` : ''}`,
       warnings: [
       ...accessWarnings,
         { code: 'PARTIAL_EVIDENCE', message: 'Video content analysis did not complete; the requested answer is unavailable.' },
         { code: 'NO_CONTENT_EVIDENCE', message: links.length
-          ? 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.'
+          ? pinnedVideo ? 'Only metadata for the requested video was available. Its content has not been reviewed.'
+            : 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.'
           : 'No usable video content was available. The requested video has not been reviewed.' },
       ],
     };
@@ -81,4 +98,24 @@ export function evidenceFallback(
       { code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: failureMessage ?? 'Finalization did not produce an accepted answer. The response contains partial evidence only.' },
     ],
   };
+}
+
+/**
+ * Explain a transcript skipped because this run's metadata confirmed an access limit.
+ * Only the run's own recent observations qualify; unknown or stale caption status adds nothing.
+ */
+function pinnedAccessWarnings(packets: readonly EvidencePacket[], pinned?: PinnedVideoAccess): EvidencePacket['warnings'] {
+  if (!pinned) return [];
+  const metadata = packets.flatMap(packet => packet.artifacts)
+    .filter(artifact => artifact.type === 'youtube_video_metadata' && artifact.data.id === pinned.videoId)
+    .map(artifact => artifact.data as { availability?: { restriction?: unknown }; captionAvailability?: { status?: unknown; checkedAt?: unknown } });
+  // A run-recorded limit counts only when this video's metadata states it; transcript errors explain themselves.
+  if (pinned.regionRestricted && metadata.some(data => data.availability?.restriction === 'region')) return [{ code: 'REGION_RESTRICTED', videoId: pinned.videoId,
+    message: 'YouTube metadata confirmed a country restriction for this video on the current retrieval route, so its captions were not retrieved in this run. This is an access limitation, not evidence that captions are absent.' }];
+  if (!pinned.captionsUnavailable) return [];
+  const checkedAt = metadata.flatMap(data => data.captionAvailability?.status === 'unavailable'
+    && typeof data.captionAvailability.checkedAt === 'string' ? [data.captionAvailability.checkedAt] : []).sort().at(-1);
+  if (!checkedAt) return [];
+  return [{ code: 'CAPTIONS_UNAVAILABLE', videoId: pinned.videoId,
+    message: `YouTube metadata checked at ${checkedAt} reported no caption tracks for this video, so its transcript was not retrieved in this run. That observation does not prove captions are permanently unavailable.` }];
 }
