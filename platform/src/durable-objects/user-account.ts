@@ -2,7 +2,9 @@ import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
 import type { AgentRequest, AgentAdmission } from '../agents/contracts';
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
-import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, sourceIdSchema, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
+import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionPayload, sourceRevisionSchema, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
+
+export type SourceCondition = { sourceId: string; snapshot: SourceReference };
 
 const MAX_SEARCH_TEXT_LENGTH = 32_000;
 const MAX_TITLE_LENGTH = 80;
@@ -66,6 +68,34 @@ interface ProjectSourceRow extends Record<string, SqlStorageValue> {
   created_at: number;
 }
 
+interface PinRow extends Record<string, SqlStorageValue> {
+  source_id: string | null;
+  source_revision: string | null;
+  input: string;
+  title: string;
+  kind: RecentSource['kind'];
+  snapshot: string;
+  created_at: number;
+}
+
+/** The owned D1 item a pin may describe. */
+export interface PinIdentity { provider: string; type: string; id: string }
+
+export type PinResult = { ok: true; itemId: string; sourceId: string | null; sourceRevision: string }
+  | { ok: false; code: 'SOURCE_NOT_FOUND' | 'SOURCE_REVISION_MISMATCH' | 'SOURCE_IDENTITY_MISMATCH' };
+
+export interface StoredSourceReference {
+  origin: 'project-source' | 'pin' | 'recent';
+  source: RecentSource;
+  snapshot: SourceReference;
+  sourceRevision: string;
+}
+
+function matchesIdentity(snapshot: SourceReference, expected: PinIdentity): boolean {
+  return snapshot.kind === 'inspection' && snapshot.inspector.provider === expected.provider
+    && snapshot.inspector.type === expected.type && snapshot.inspector.id === expected.id;
+}
+
 interface SessionRow extends Record<string, SqlStorageValue> {
   conversation_id: string;
   title: string;
@@ -123,6 +153,7 @@ export class UserAccountDO extends DurableObject<Env> {
     this.ctx.storage.sql.exec('DELETE FROM agent_conversations');
     this.ctx.storage.sql.exec('DELETE FROM recent_sources');
     this.ctx.storage.sql.exec('DELETE FROM project_sources');
+    this.ctx.storage.sql.exec('DELETE FROM project_item_snapshots');
     // Keep only a tombstone so already-authenticated requests cannot recreate data.
   }
 
@@ -151,6 +182,29 @@ export class UserAccountDO extends DurableObject<Env> {
         (SELECT id FROM recent_sources ORDER BY updated_at DESC, rowid DESC LIMIT ?)`, RECENT_SOURCE_LIMIT);
     });
     return entry;
+  }
+
+  /** Compare the old references and retain an appended page and its optional project link atomically. */
+  async replaceSourceReferences(id: string, expected: SourceReference, value: SaveReferencedSource,
+    destination?: { projectId: string; itemId?: string }) {
+    this.assertActive();
+    const sourceId = sourceIdSchema.parse(id), input = saveReferencedSourceSchema.parse(value);
+    const project = destination ? z.string().uuid().parse(destination.projectId) : undefined;
+    const item = destination?.itemId ? sourceIdSchema.parse(destination.itemId) : undefined;
+    const expectedPayload = sourceRevisionPayload(expected);
+    const revision = await sourceRevision(input.snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.ctx.storage.sql.exec<{ source_key: string; snapshot: string }>(
+        'SELECT source_key, snapshot FROM recent_sources WHERE id = ?', sourceId).toArray()[0];
+      if (!row || row.source_key !== sourceIdentity(input) || sourceRevisionPayload(sourceReferenceSchema.parse(JSON.parse(row.snapshot))) !== expectedPayload) {
+        return { ok: false as const };
+      }
+      const source = this.saveSource(input);
+      if (project && item) this.writePin(project, item, source.id, revision, input);
+      const linked = project && !item ? this.linkSourceToProject(project, source.id) : null;
+      return { ok: true as const, source, sourceRevision: revision, linked };
+    });
   }
 
   listSources(): RecentSource[] {
@@ -198,15 +252,221 @@ export class UserAccountDO extends DurableObject<Env> {
     });
   }
 
-  getProjectSource(projectId: string, itemId: string): { source: RecentSource; snapshot: SourceReference } | null {
+  getProjectSource(projectId: string, itemId: string): { item: ProjectSourceItem; source: RecentSource; snapshot: SourceReference } | null {
     this.assertActive();
     const saved = this.ctx.storage.sql.exec<ProjectSourceRow>(
       'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND id = ?',
       z.string().uuid().parse(projectId), sourceIdSchema.parse(itemId),
     ).toArray()[0];
     if (!saved) return null;
-    return { source: { id: saved.source_id, input: saved.input, title: saved.title, kind: saved.kind, updatedAt: saved.created_at },
+    return { item: this.toProjectSourceItem(saved), source: { id: saved.source_id, input: saved.input, title: saved.title, kind: saved.kind, updatedAt: saved.created_at },
       snapshot: sourceReferenceSchema.parse(JSON.parse(saved.snapshot)) };
+  }
+
+  /**
+   * Explicit Save only. The sidecar is keyed by an existing D1 item and is
+   * never listed as another project row. A later explicit Save replaces it.
+   */
+  async pinProjectItem(projectId: string, itemId: string, value: SaveReferencedSource, expected: PinIdentity, condition?: SourceCondition): Promise<PinResult> {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
+    const input = saveReferencedSourceSchema.parse(value);
+    if (!matchesIdentity(input.snapshot, expected)) return { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
+    const revision = await sourceRevision(input.snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync((): PinResult => {
+      if (condition && !this.matchesSourceCondition(condition)) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      this.writePin(project, item, null, revision, input);
+      return { ok: true, itemId: item, sourceId: null, sourceRevision: revision };
+    });
+  }
+
+  /** Copy the exact Recent version that the browser displayed, or reject a newer replacement. */
+  async pinProjectItemFromRecent(projectId: string, itemId: string, sourceId: string, expectedRevision: string, expected: PinIdentity): Promise<PinResult> {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
+    const source = sourceIdSchema.parse(sourceId), revision = sourceRevisionSchema.parse(expectedRevision);
+    const read = () => this.ctx.storage.sql.exec<{ input: string; title: string; snapshot: string }>(
+      'SELECT input, title, snapshot FROM recent_sources WHERE id = ?', source,
+    ).toArray()[0];
+    const recent = read();
+    if (!recent) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+    const snapshot = sourceReferenceSchema.parse(JSON.parse(recent.snapshot));
+    if (await sourceRevision(snapshot) !== revision) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+    if (!matchesIdentity(snapshot, expected)) return { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
+    const payload = sourceRevisionPayload(snapshot);
+    this.assertActive();
+    // Hashing yields to other requests, so confirm the row still has the hashed references.
+    // A thumbnail cached in the meantime is cosmetic and does not make it a newer version.
+    return this.ctx.storage.transactionSync((): PinResult => {
+      const current = read();
+      const currentSnapshot = current ? sourceReferenceSchema.parse(JSON.parse(current.snapshot)) : null;
+      if (!current || !currentSnapshot || sourceRevisionPayload(currentSnapshot) !== payload) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      this.writePin(project, item, source, revision, { input: current.input, title: current.title, snapshot: currentSnapshot });
+      return { ok: true, itemId: item, sourceId: source, sourceRevision: revision };
+    });
+  }
+
+  /**
+   * Add sources mode when the project already holds this whole source as a D1 item:
+   * save Recent and retain the reference alongside that item in one transaction,
+   * instead of adding a project source row.
+   */
+  async saveSourceWithItemPin(value: SaveReferencedSource, projectId: string, itemId: string, expected: PinIdentity) {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
+    const input = saveReferencedSourceSchema.parse(value);
+    if (!matchesIdentity(input.snapshot, expected)) throw new Error('Saved source does not match the project item.');
+    const revision = await sourceRevision(input.snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync(() => {
+      const source = this.saveSource(input);
+      this.writePin(project, item, source.id, revision, input);
+      return { source, sourceRevision: revision };
+    });
+  }
+
+  /** Identity of a Recent entry without reordering Recent. */
+  peekSourceKey(sourceId: string): string | null {
+    this.assertActive();
+    return this.ctx.storage.sql.exec<{ source_key: string }>('SELECT source_key FROM recent_sources WHERE id = ?', sourceIdSchema.parse(sourceId)).toArray()[0]?.source_key ?? null;
+  }
+
+  /** D1 items in a project that retain this Recent entry, newest first; moments and whole sources alike. */
+  pinnedItemsForSource(projectId: string, sourceId: string): string[] {
+    this.assertActive();
+    return this.ctx.storage.sql.exec<{ item_id: string }>('SELECT item_id FROM project_item_snapshots WHERE project_id = ? AND source_id = ? ORDER BY created_at DESC LIMIT 50',
+      z.string().uuid().parse(projectId), sourceIdSchema.parse(sourceId)).toArray().map(row => row.item_id);
+  }
+
+  /** Link a Recent entry to an existing D1 whole-source item, copying its current references as linkSourceToProject does. */
+  async linkSourceToItem(projectId: string, sourceId: string, itemId: string, expected: PinIdentity): Promise<PinResult> {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId), source = sourceIdSchema.parse(sourceId);
+    const read = () => this.ctx.storage.sql.exec<{ input: string; title: string; snapshot: string }>('SELECT input, title, snapshot FROM recent_sources WHERE id = ?', source).toArray()[0];
+    const recent = read();
+    if (!recent) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+    const snapshot = sourceReferenceSchema.parse(JSON.parse(recent.snapshot));
+    if (!matchesIdentity(snapshot, expected)) return { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
+    const revision = await sourceRevision(snapshot), payload = sourceRevisionPayload(snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync((): PinResult => {
+      const current = read();
+      const currentSnapshot = current ? sourceReferenceSchema.parse(JSON.parse(current.snapshot)) : null;
+      if (!current || !currentSnapshot || sourceRevisionPayload(currentSnapshot) !== payload) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      this.writePin(project, item, source, revision, { input: current.input, title: current.title, snapshot: currentSnapshot });
+      return { ok: true, itemId: item, sourceId: source, sourceRevision: revision };
+    });
+  }
+
+  /** The existing project source row for one whole source, so a standalone Save reuses it instead of adding a D1 row. */
+  findProjectSourceItem(projectId: string, sourceKey: string): string | null {
+    this.assertActive();
+    return this.ctx.storage.sql.exec<{ id: string }>(
+      'SELECT id FROM project_sources WHERE project_id = ? AND source_key = ?',
+      z.string().uuid().parse(projectId), z.string().min(1).max(500).parse(sourceKey),
+    ).toArray()[0]?.id ?? null;
+  }
+
+  /**
+   * Explicit Save onto an existing project source row: replace its references
+   * with the exact Recent revision, or with a stored descriptor, keeping its ID.
+   */
+  async refreshProjectSource(projectId: string, itemId: string, value: SaveReferencedSource | { sourceId: string; sourceRevision: string }, expected: PinIdentity, condition?: SourceCondition): Promise<PinResult> {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
+    const readRow = () => this.ctx.storage.sql.exec<{ source_key: string }>('SELECT source_key FROM project_sources WHERE project_id = ? AND id = ?', project, item).toArray()[0];
+    const row = readRow();
+    if (!row) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+    let input: SaveReferencedSource, sourceId: string, recentText: string | null = null;
+    if ('sourceRevision' in value) {
+      sourceId = sourceIdSchema.parse(value.sourceId);
+      const recent = this.ctx.storage.sql.exec<{ input: string; title: string; snapshot: string }>('SELECT input, title, snapshot FROM recent_sources WHERE id = ?', sourceId).toArray()[0];
+      if (!recent) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+      const snapshot = sourceReferenceSchema.parse(JSON.parse(recent.snapshot));
+      if (await sourceRevision(snapshot) !== sourceRevisionSchema.parse(value.sourceRevision)) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      input = { input: recent.input, title: recent.title, snapshot }; recentText = sourceRevisionPayload(snapshot);
+    } else { input = saveReferencedSourceSchema.parse(value); sourceId = ''; }
+    if (!matchesIdentity(input.snapshot, expected) || sourceIdentity(input) !== row.source_key) return { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
+    const revision = await sourceRevision(input.snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync((): PinResult => {
+      if (!readRow()) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+      if (condition && !this.matchesSourceCondition(condition)) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      if (recentText !== null) {
+        // Compare references, not text: a thumbnail cached meanwhile is not a newer version.
+        const current = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?', sourceId).toArray()[0];
+        const currentSnapshot = current ? sourceReferenceSchema.parse(JSON.parse(current.snapshot)) : null;
+        if (!currentSnapshot || sourceRevisionPayload(currentSnapshot) !== recentText) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+        input = { ...input, snapshot: currentSnapshot };
+      }
+      this.ctx.storage.sql.exec(`UPDATE project_sources SET ${sourceId ? 'source_id = ?, ' : ''}input = ?, title = ?, snapshot = ? WHERE project_id = ? AND id = ?`,
+        ...(sourceId ? [sourceId] : []), input.input, input.title, JSON.stringify(sourceReferenceSchema.parse(input.snapshot)), project, item);
+      return { ok: true, itemId: item, sourceId: sourceId || null, sourceRevision: revision };
+    });
+  }
+
+  getProjectItemPin(projectId: string, itemId: string): StoredSourceReference | null {
+    this.assertActive();
+    const row = this.ctx.storage.sql.exec<PinRow>(
+      `SELECT source_id, source_revision, input, title, kind, snapshot, created_at
+       FROM project_item_snapshots WHERE project_id = ? AND item_id = ?`,
+      z.string().uuid().parse(projectId), sourceIdSchema.parse(itemId),
+    ).toArray()[0];
+    return row ? this.toStoredReference(row, 'pin', row.source_id ?? itemId) : null;
+  }
+
+  /**
+   * Read-only owned references for one source in one project, then Recent.
+   * Opening a project never reorders Recent or writes a reference.
+   */
+  async ownedSourceReferences(projectId: string, sourceKey: string): Promise<StoredSourceReference[]> {
+    this.assertActive();
+    const project = z.string().uuid().parse(projectId), key = z.string().min(1).max(500).parse(sourceKey);
+    const projectRows = this.ctx.storage.sql.exec<ProjectSourceRow>(
+      'SELECT id, source_id, input, title, kind, snapshot, created_at FROM project_sources WHERE project_id = ? AND source_key = ? ORDER BY created_at DESC',
+      project, key,
+    ).toArray();
+    const pins = this.ctx.storage.sql.exec<PinRow & { item_id: string }>(
+      `SELECT item_id, source_id, source_revision, input, title, kind, snapshot, created_at
+       FROM project_item_snapshots WHERE project_id = ? AND source_key = ? ORDER BY created_at DESC`, project, key,
+    ).toArray();
+    const recent = this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number; snapshot: string }>(
+      'SELECT id, input, title, kind, updated_at, snapshot FROM recent_sources WHERE source_key = ?', key,
+    ).toArray()[0];
+    const references = [
+      ...projectRows.map(row => ({ origin: 'project-source' as const, row: { ...row, source_revision: null }, sourceId: row.source_id })),
+      ...pins.map(row => ({ origin: 'pin' as const, row, sourceId: row.source_id ?? row.item_id })),
+      ...(recent ? [{ origin: 'recent' as const, row: { ...recent, source_id: recent.id, source_revision: null, created_at: recent.updated_at }, sourceId: recent.id }] : []),
+    ];
+    return Promise.all(references.map(async ({ origin, row, sourceId }) => {
+      const reference = this.toStoredReference(row, origin, sourceId);
+      return row.source_revision ? reference : { ...reference, sourceRevision: await sourceRevision(reference.snapshot) };
+    }));
+  }
+
+  /** Call only inside the transaction that writes the dependent references. */
+  private matchesSourceCondition(condition: SourceCondition): boolean {
+    const row = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?',
+      sourceIdSchema.parse(condition.sourceId)).toArray()[0];
+    return Boolean(row && sourceRevisionPayload(sourceReferenceSchema.parse(JSON.parse(row.snapshot))) === sourceRevisionPayload(condition.snapshot));
+  }
+
+  private writePin(project: string, item: string, sourceId: string | null, revision: string, input: SaveReferencedSource): void {
+    this.ctx.storage.sql.exec(`INSERT INTO project_item_snapshots
+      (project_id, item_id, source_id, source_revision, source_key, input, title, kind, snapshot, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, item_id) DO UPDATE SET source_id=excluded.source_id, source_revision=excluded.source_revision,
+        source_key=excluded.source_key, input=excluded.input, title=excluded.title,
+        kind=excluded.kind, snapshot=excluded.snapshot, created_at=excluded.created_at`,
+      project, item, sourceId, revision, sourceIdentity(input), input.input, input.title, input.snapshot.kind,
+      JSON.stringify(sourceReferenceSchema.parse(input.snapshot)), Date.now());
+  }
+
+  private toStoredReference(row: { source_id: string | null; source_revision: string | null; input: string; title: string; kind: RecentSource['kind']; snapshot: string; created_at: number }, origin: StoredSourceReference['origin'], sourceId: string): StoredSourceReference {
+    const snapshot = sourceReferenceSchema.parse(JSON.parse(row.snapshot));
+    return { origin, source: { id: sourceId, input: row.input, title: row.title, kind: row.kind, updatedAt: row.created_at },
+      snapshot, sourceRevision: row.source_revision ?? '' };
   }
 
   linkSourceToProject(projectId: string, sourceId: string): { item: ProjectSourceItem; added: boolean } | null {
@@ -258,7 +518,11 @@ export class UserAccountDO extends DurableObject<Env> {
 
   removeProjectSources(projectId: string): void {
     this.assertActive();
-    this.ctx.storage.sql.exec('DELETE FROM project_sources WHERE project_id = ?', z.string().uuid().parse(projectId));
+    const project = z.string().uuid().parse(projectId);
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec('DELETE FROM project_sources WHERE project_id = ?', project);
+      this.ctx.storage.sql.exec('DELETE FROM project_item_snapshots WHERE project_id = ?', project);
+    });
   }
 
   private toProjectSourceItem(row: ProjectSourceRow): ProjectSourceItem {
@@ -458,6 +722,12 @@ export class UserAccountDO extends DurableObject<Env> {
       kind TEXT NOT NULL, snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
       UNIQUE(project_id, source_key)
     )`);
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS project_item_snapshots (
+      project_id TEXT NOT NULL, item_id TEXT NOT NULL, source_id TEXT, source_revision TEXT NOT NULL, source_key TEXT NOT NULL,
+      input TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, snapshot TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY(project_id, item_id)
+    )`);
+    this.ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS project_item_snapshots_source_idx ON project_item_snapshots (project_id, source_key)');
     this.ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS project_sources_project_idx ON project_sources (project_id, created_at DESC)');
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS account_deletion (id INTEGER PRIMARY KEY)');
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_conversations (conversation_id TEXT PRIMARY KEY)');

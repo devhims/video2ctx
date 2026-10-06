@@ -56,3 +56,47 @@ Deploy the platform before the web application. No new binding or class migratio
 Project detail renders its known name and Add sources action before the source list resolves. The sidebar and project page share an account-scoped browser cache with a sixty-second freshness window. Hover and keyboard focus can start a read before opening. Stale lists stay visible during background refresh; successful source writes invalidate the affected project and supersede older in-flight reads. The cache lives only for the signed-in dashboard provider and is cleared on account changes or full reloads.
 
 Project selection follows the URL: `/dashboard/projects` always shows the list, while `?project=…` opens one project. Selection is not retained in dashboard draft state. Native history updates preserve immediate rendering and browser Back/Forward behavior; the shared source cache remains independent of navigation.
+
+## Opening saved project items
+
+Every project item, including legacy D1 rows and moments, opens through `GET /v1/projects/:id/sources/items/:itemId`. The browser-session route verifies project and item ownership, then restores from storage only. It makes no provider request, credit charge, import, indexing or write; Recent order and catalog request bookkeeping are untouched. Both outcomes return 200: `state: 'restored'` with the snapshot, or `state: 'unavailable'` with the item and its input. Links use `?openProject=…&saved=<itemId>`, never `project=`, so opening never turns on Add sources auto-save. Older `?project=…&saved=…` links are rewritten to `openProject` before opening.
+
+Standalone **Save to project** groups retained data. It keeps the D1 row and indexes the already-loaded transcript `content`, but starts no import or provider request. Playlist and channel saves retain the returned entity and member list; they do not fetch member transcripts. Repeating the same provider, type, entity and start time returns the existing row (`start_ms IS ?`), so whole-source retries no longer add duplicates while each moment, including `start_ms` 0, stays distinct. Both representations count: a standalone Save of a whole source that the project already holds as a project source row returns and refreshes that row, and Add sources auto-save or linking a Recent source into a project that already holds the whole source as a D1 item retains the reference with that item (Recent save and sidecar in one user-DO transaction). Existing duplicates are untouched. Project-scoped saves keep their separate path without an import. Save then calls `PUT /v1/projects/:id/sources/items/:itemId/snapshot` with the Recent `sourceId` and `sourceRevision` returned when that inspection was remembered. The revision fingerprints the selected asset references, dataset choices, errors and shared copies; the thumbnail URL that the history list caches lazily is excluded, so that enrichment never stales a receipt. The user DO copies that exact reference into `project_item_snapshots`, keyed by project and item and never listed as another row. A Recent entry whose references changed is rejected rather than silently pinned. When an open recovered from an owned reference, Save sends `savedRevision` instead. The platform resolves that fingerprint only among references owned by the account for this source in the current project, including Recent. It copies those references into the same item or project-source row and rejects a revision that is no longer owned. Recovery from raw storage has no revision. In that case, or when the browser's Recent save failed, it sends the dataset descriptor instead, which is resolved from stored data and requires the same saved evidence as recovery. If a pin fails, the browser keeps that project and item for "Retry retaining data" and announces "Saved to …" only after the pin succeeds.
+
+Restores read pins, project sources and owned references in that order. A video reference without its requested transcript also checks the project's private document. This keeps recovered saved text visible after a metadata-only pin is saved, without fabricating a caption track. A missing optional dataset keeps everything else visible. **Reload saved data** retries storage at no cost. Corrupt bytes and store errors are retryable failures, never evidence that data is absent. An item without usable references recovers only within the user's saved evidence: another owned reference to the same source (project source, pin or Recent entry, even if its bytes are gone), a private project document, or a successful project import. With that evidence the platform reads the newest stored catalog versions, the import workflow's transcript copy, a retention-expired source response, or the project's private Markdown, shown as saved text without an invented track or timing. Such recovery is `origin: 'storage'` with an `evidence` label and no `sourceRevision`: newer stored data, never presented as the original immutable snapshot. Content whose storage is genuinely absent is not recovered. A bookmark alone never exposes shared storage. When nothing is retained, the item shows an unavailable message and offers a storage-only retry. Project views have no paid recovery, refresh, or pagination controls. Opening a member of a saved result list uses its saved project item when present and otherwise explains that only the list was retained. The user can leave through Recent sources to begin a separate live inspection.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#ffffff','actorBkg':'#e2e8f0','actorTextColor':'#0f172a','actorBorder':'#64748b','signalColor':'#334155','signalTextColor':'#334155','sequenceNumberColor':'#ffffff','noteBkgColor':'#f1f5f9','noteTextColor':'#0f172a'}}}%%
+sequenceDiagram
+    autonumber
+    participant UI as Sources page
+    participant App as Platform
+    participant User as User DO
+    participant Store as D1, catalog and R2
+    UI->>App: Save: create or reuse the D1 item
+    UI->>App: Pin with Recent sourceId and sourceRevision
+    App->>User: Copy that exact reference into the item sidecar
+    UI->>App: Open a project item
+    App->>Store: Verify project and item ownership
+    App->>User: Read pin, project source or owned references
+    App->>Store: Hydrate retained versions, or recover within saved evidence
+    App-->>UI: Restored data, or unavailable with a free storage retry
+```
+
+Pins are deleted with their project and with the account. Deploy the platform before the web application; `UserAccountDO` creates the sidecar table on initialization and no D1 migration or new binding is required.
+
+Links from PR149 with `legacy=1&type&id` carry no item ID. They direct the user to open the item from its project and never offer a provider fetch. A background completion cannot replace a newer route.
+
+
+## Retaining comment pages
+
+The first comments response remains in `assets.comments`. Each additional page requested during a live inspection is retained in order in `commentPages`, as an immutable catalog reference. `POST /v1/sources/recent/:id/comments` accepts the owned Recent revision, the previous page's continuation, and an optional project destination. It verifies that the continuation follows the retained page and reads the exact immutable version in `pageReceipt`. The dashboard requests this receipt with `retain=true` when fetching another comments page. The platform signs the version returned by that fetch, binding its hash to the account, video and continuation. A later shared refresh cannot change which page a retry saves. Missing receipt versions fail without selecting a newer page. The user DO atomically compares the previous references, appends the page, and updates the project source or D1 sidecar when applicable. A lost successful response can be retried without duplicating the page. The retry must name the same page version.
+
+The dashboard blocks further pagination and Save while retention is pending. Retry saving repeats only the retention request, never the paid page fetch. Reads merge all retained pages in order and deduplicate comment IDs. Retrying another dataset passes an owned `commentsReceipt` so its save preserves the comment chain instead of selecting the latest shared first page. A successful explicit comments refresh in live Sources starts a new chain.
+
+Saving waits for all requested datasets to finish. Previously loaded pages that were never persisted by older dashboard versions cannot be reconstructed as the exact viewed version. Missing bytes remain unavailable; opening or retrying them from a project never spends credits.
+
+
+Ordinary saves that reuse a `commentsReceipt` carry the validated references into the account write. The transaction compares them with current Recent references immediately before saving Recent and the project link. Descriptor-based project pins perform the same check before writing. If another request has appended or refreshed the source, the stale save returns `409 SOURCE_REVISION_MISMATCH` and writes nothing. This check is separate from the earlier ownership and schema validation.
+
+Receipts use the existing authentication secret with a comments-specific signature payload. They are returned only to browser sessions and never enter shared R2 payloads. They have no time-based expiry; secret rotation invalidates outstanding receipts. Deploy the platform before the dashboard. Older tabs that omit `pageReceipt` must reload before loading more comments; retention never falls back to selecting the newest shared page.

@@ -1,10 +1,15 @@
-import { listProjectItems } from '../../lib/project-items';
+import { commentPageReceiptSchema, verifyCommentPageReceipt } from '../../lib/comment-page-receipt';
+import { videoResourceKey } from '../../lib/video-resources';
+import { listProjectItems, type ProjectItemRecord } from '../../lib/project-items';
 import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { userAccountInstanceName } from '../../agents/runtime/identity';
-import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdSchema } from '../../lib/source-history';
-import { referenceSource, restoreSource, sourceThumbnail } from '../../lib/source-history-storage';
+import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionSchema, type SaveSourceInput } from '../../lib/source-history';
+import { referenceSource, restoreSource, sourceThumbnail, appendSourceComments } from '../../lib/source-history-storage';
+import { entitlementEvidence, projectItemInput, recoverProjectItem, restoreProjectReference } from '../../lib/project-item-restore';
+import type { PinResult, SourceCondition } from '../../durable-objects/user-account';
+import { z } from 'zod';
 import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { App, ImportPayload } from '../../types';
 import {
   requireAccountPrincipal,
@@ -12,7 +17,7 @@ import {
   requireSessionPrincipal,
   requireUser,
 } from '../../middlewares/authentication';
-import { ApiError, asId, body, now, text } from '../../lib/http';
+import { ApiError, asId, body, now, sha256, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
 import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
@@ -73,17 +78,39 @@ sessionRoutes.get('/sources/recent', async (c) => {
 });
 
 sessionRoutes.post('/sources/recent', async (c) => {
-  if (!c.req.header('content-type')?.includes('application/json')) throw new ApiError(422, 'INVALID_CONTENT_TYPE', 'Expected application/json.');
-  const payload = await c.req.text();
-  if (new TextEncoder().encode(payload).byteLength > MAX_SOURCE_SNAPSHOT_BYTES) throw new ApiError(422, 'SOURCE_TOO_LARGE', 'This source is too large to add to recent sources.');
-  let json: unknown;
-  try { json = JSON.parse(payload); } catch { throw new ApiError(422, 'INVALID_JSON', 'The request body is not valid JSON.'); }
+  const json = await sourceJson(c.req.raw);
   const parsed = saveSourceSchema.safeParse(json);
   if (!parsed.success) throw new ApiError(422, 'INVALID_SOURCE', 'The recent source data is invalid.');
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
   if (parsed.data.projectId) await ownProject(c.env, requireUser(c).id, parsed.data.projectId);
-  const referenced = await referenceSource(c.env, parsed.data);
-  return c.json(await account.saveSourceWithProject(referenced, parsed.data.projectId), 201);
+  const { referenced, condition } = await referenceForSession(c, parsed.data);
+  const sourceRevisionValue = await sourceRevision(referenced.snapshot);
+  if (parsed.data.projectId && referenced.snapshot.kind === 'inspection') {
+    // Add sources into a project that already holds this whole source as a D1 item:
+    // retain the reference with that item rather than adding a second visible row.
+    const { inspector } = referenced.snapshot;
+    const existing = await wholeSourceItem(c.env, requireUser(c).id, parsed.data.projectId, inspector.provider, inspector.type, inspector.id);
+    if (existing) {
+      if (condition) {
+        const saved = await account.replaceSourceReferences(condition.sourceId, condition.snapshot, referenced,
+          { projectId: parsed.data.projectId, itemId: existing.id });
+        if (!saved.ok) throw sourceChanged();
+        return c.json({ source: saved.source, linked: { item: existing, added: false }, sourceRevision: saved.sourceRevision }, 201);
+      }
+      const saved = await account.saveSourceWithItemPin(referenced, parsed.data.projectId, existing.id,
+        { provider: inspector.provider, type: inspector.type, id: inspector.id });
+      return c.json({ source: saved.source, linked: { item: existing, added: false }, sourceRevision: saved.sourceRevision }, 201);
+    }
+  }
+  if (condition) {
+    const saved = await account.replaceSourceReferences(condition.sourceId, condition.snapshot, referenced,
+      parsed.data.projectId ? { projectId: parsed.data.projectId } : undefined);
+    if (!saved.ok) throw sourceChanged();
+    return c.json({ source: saved.source, linked: saved.linked, sourceRevision: saved.sourceRevision }, 201);
+  }
+  const saved = await account.saveSourceWithProject(referenced, parsed.data.projectId);
+  // The browser keeps this fingerprint so a later Save pins exactly this version.
+  return c.json({ ...saved, sourceRevision: sourceRevisionValue }, 201);
 });
 
 sessionRoutes.get('/sources/recent/:id', async (c) => {
@@ -92,7 +119,44 @@ sessionRoutes.get('/sources/recent/:id', async (c) => {
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
   const saved = await account.getSource(id);
   if (!saved) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This recent source was not found.');
-  return c.json({ source: saved.source, snapshot: await restoreSource(c.env, saved.snapshot) });
+  return c.json({ source: saved.source, snapshot: await restoreSource(c.env, saved.snapshot), sourceRevision: await sourceRevision(saved.snapshot) });
+});
+
+sessionRoutes.post('/sources/recent/:id/comments', async (c) => {
+  const parsedId = sourceIdSchema.safeParse(c.req.param('id'));
+  if (!parsedId.success) throw new ApiError(422, 'INVALID_SOURCE', 'The saved source ID is invalid.');
+  const id = parsedId.data;
+  const parsed = z.object({ sourceRevision: sourceRevisionSchema, pageReceipt: commentPageReceiptSchema, continuation: z.string().min(1).max(10_000),
+    projectId: sourceIdSchema.optional() }).strict().safeParse(await sourceJson(c.req.raw));
+  if (!parsed.success) throw new ApiError(422, 'INVALID_SOURCE', 'The saved comments request is invalid.');
+  const { sourceRevision: revision, continuation, projectId, pageReceipt } = parsed.data;
+  const user = requireUser(c);
+  if (projectId) await ownProject(c.env, user.id, projectId);
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const saved = await account.getSource(id);
+  if (!saved) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This saved source was not found.');
+  let snapshot = saved.snapshot;
+  if (snapshot.kind !== 'inspection' || snapshot.inspector.type !== 'video') throw new ApiError(422, 'INVALID_SOURCE', 'Expected a saved video.');
+  const asset = await verifyCommentPageReceipt(c.env, user.id,
+    videoResourceKey({ kind: 'comments', id: snapshot.inspector.id, continuation })!, pageReceipt);
+  if (await sourceRevision(snapshot) !== revision) {
+    // A lost successful response can retry the same append without adding the page twice.
+    const last = snapshot.kind === 'inspection' ? snapshot.inspector.commentPages?.at(-1) : undefined;
+    if (!last || last.variant !== asset.variant || last.contentHash !== asset.contentHash) {
+      throw new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved source changed. Reopen it before loading more comments.');
+    }
+    const previous = structuredClone(snapshot);
+    previous.inspector.commentPages!.pop();
+    if (!previous.inspector.commentPages!.length) delete previous.inspector.commentPages;
+    if (await sourceRevision(previous) !== revision) throw new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved source changed. Reopen it before loading more comments.');
+  } else snapshot = await appendSourceComments(c.env, snapshot, continuation, asset);
+  if (snapshot.kind !== 'inspection') throw new ApiError(422, 'INVALID_SOURCE', 'Expected a saved inspection.');
+  const identity = snapshot.inspector;
+  const existing = projectId ? await wholeSourceItem(c.env, user.id, projectId, identity.provider, identity.type, identity.id) : null;
+  const result = await account.replaceSourceReferences(id, saved.snapshot,
+    { input: saved.source.input, title: saved.source.title, snapshot }, projectId ? { projectId, ...(existing ? { itemId: existing.id } : {}) } : undefined);
+  if (!result.ok) throw new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved source changed. Reopen it before loading more comments.');
+  return c.json({ source: result.source, sourceRevision: result.sourceRevision });
 });
 
 sessionRoutes.get('/account', (c) => {
@@ -150,6 +214,116 @@ sessionRoutes.get('/projects/:id/sources/:itemId', async (c) => {
   return c.json({ source: saved.source, snapshot: await restoreSource(c.env, saved.snapshot) });
 });
 
+// Every project item opens here: ownership-checked, storage-only, free and write-free.
+sessionRoutes.get('/projects/:id/sources/items/:itemId', async (c) => {
+  const user = requireUser(c);
+  const projectId = asId(c.req.param('id'));
+  const itemId = c.req.param('itemId');
+  if (!sourceIdSchema.safeParse(itemId).success) throw new ApiError(422, 'INVALID_ID', 'Invalid project item ID.');
+  await ownProject(c.env, user.id, projectId);
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const linked = await account.getProjectSource(projectId, itemId);
+  if (linked) {
+    const restored = await restoreProjectReference(c.env, linked.snapshot, { userId: user.id, projectId,
+      item: { ...linked.item, start_ms: null, end_ms: null, note: '', tags_json: '[]' } });
+    if (restored) return c.json({ state: 'restored', item: linked.item, origin: 'project-source', recovered: false, source: linked.source,
+      sourceRevision: await sourceRevision(linked.snapshot), ...restored });
+    // The owned row is saved evidence: try other owned references and retained storage before asking to pay.
+    const key = sourceIdentity({ input: linked.source.input, title: linked.source.title, snapshot: linked.snapshot });
+    const references = await account.ownedSourceReferences(projectId, key);
+    const recovered = await recoverProjectItem(c.env, { userId: user.id, projectId, references, ownedRow: true, sourceInput: linked.source.input,
+      item: { ...linked.item, start_ms: null, end_ms: null, note: '', tags_json: '[]' } });
+    return c.json(recovered.state === 'restored' ? { ...recovered, item: linked.item } : { state: 'unavailable', item: linked.item, input: linked.source.input });
+  }
+  const item = await ownedProjectItem(c.env, user.id, projectId, itemId);
+  if (!item) throw new ApiError(404, 'ITEM_NOT_FOUND', 'This project item was not found.');
+  const pin = await account.getProjectItemPin(projectId, itemId);
+  if (pin) {
+    const restored = await restoreProjectReference(c.env, pin.snapshot, { userId: user.id, projectId, item });
+    if (restored) return c.json({ state: 'restored', item, origin: 'pin', recovered: false, source: pin.source,
+      sourceRevision: pin.sourceRevision, ...restored });
+  }
+  // A missing pointer, or a pin whose bytes are gone, is not proof that saved data is absent.
+  const input = projectItemInput(item);
+  const references = input ? await account.ownedSourceReferences(projectId, `youtube:${item.entity_type}:${item.entity_id}`) : [];
+  const recovered = await recoverProjectItem(c.env, { userId: user.id, projectId, item, references });
+  return c.json(recovered.state === 'restored' ? { ...recovered, item } : { state: 'unavailable', item, input });
+});
+
+/** Explicit Save only: attach owned references to the existing D1 item, never a second row. */
+sessionRoutes.put('/projects/:id/sources/items/:itemId/snapshot', async (c) => {
+  const user = requireUser(c);
+  const projectId = asId(c.req.param('id'));
+  const itemId = c.req.param('itemId');
+  if (!sourceIdSchema.safeParse(itemId).success) throw new ApiError(422, 'INVALID_ID', 'Invalid project item ID.');
+  const json = await sourceJson(c.req.raw);
+  await ownProject(c.env, user.id, projectId);
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  const item = await ownedProjectItem(c.env, user.id, projectId, itemId);
+  const savedReceipt = savedPinReceiptSchema.safeParse(json);
+  if (savedReceipt.success) {
+    const linked = item ? null : await account.getProjectSource(projectId, itemId);
+    const target = item ?? linked?.item;
+    if (!target) throw new ApiError(404, 'ITEM_NOT_FOUND', 'This project item was not found.');
+    if (!projectItemInput(target)) throw new ApiError(422, 'UNSUPPORTED_ITEM', 'This project item cannot retain a source snapshot.');
+    const identity = { provider: target.provider, type: target.entity_type, id: target.entity_id };
+    // A revision is only a selector. The account and project must still own matching references.
+    const references = await account.ownedSourceReferences(projectId, `${identity.provider}:${identity.type}:${identity.id}`);
+    const saved = references.find(reference => reference.sourceRevision === savedReceipt.data.savedRevision);
+    if (!saved) return pinResponse(c, { ok: false, code: 'SOURCE_REVISION_MISMATCH' });
+    const value = { input: saved.source.input, title: saved.source.title, snapshot: saved.snapshot };
+    return pinResponse(c, item ? await account.pinProjectItem(projectId, itemId, value, identity)
+      : await account.refreshProjectSource(projectId, itemId, value, identity));
+  }
+  if (!item) {
+    // A standalone Save that matched an existing project source row refreshes that row in place.
+    const linked = await account.getProjectSource(projectId, itemId);
+    if (!linked || linked.item.entity_type === 'search') throw new ApiError(404, 'ITEM_NOT_FOUND', 'This project item was not found.');
+    const receipt = pinReceiptSchema.safeParse(json);
+    const descriptor = receipt.success ? null : saveSourceSchema.omit({ projectId: true }).strict().safeParse(json);
+    if (descriptor && (!descriptor.success || descriptor.data.snapshot.kind !== 'inspection')) throw new ApiError(422, 'INVALID_SOURCE', 'The saved source data is invalid.');
+    const resolved = receipt.success ? null : await referenceForSession(c, descriptor!.data!);
+    const result = await account.refreshProjectSource(projectId, itemId,
+      receipt.success ? receipt.data : resolved!.referenced,
+      { provider: linked.item.provider, type: linked.item.entity_type, id: linked.item.entity_id }, resolved?.condition);
+    return pinResponse(c, result);
+  }
+  if (!projectItemInput(item)) throw new ApiError(422, 'UNSUPPORTED_ITEM', 'This project item cannot retain a source snapshot.');
+  const identity = { provider: item.provider, type: item.entity_type, id: item.entity_id };
+  const receipt = pinReceiptSchema.safeParse(json);
+  let result: PinResult;
+  if (receipt.success) {
+    result = await account.pinProjectItemFromRecent(projectId, itemId, receipt.data.sourceId, receipt.data.sourceRevision, identity);
+  } else {
+    // Only for a browser whose Recent save failed: resolve the same descriptor from stored data.
+    const descriptor = saveSourceSchema.omit({ projectId: true }).strict().safeParse(json);
+    if (!descriptor.success || descriptor.data.snapshot.kind !== 'inspection') throw new ApiError(422, 'INVALID_SOURCE', 'The saved source data is invalid.');
+    const { inspector } = descriptor.data.snapshot;
+    if (inspector.provider !== identity.provider || inspector.type !== identity.type || inspector.id !== identity.id) {
+      result = { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
+    } else {
+      // The same saved-evidence boundary as opening: a new bookmark alone cannot pin shared data.
+      const owned = await account.ownedSourceReferences(projectId, `youtube:${item.entity_type}:${item.entity_id}`);
+      const evidence = owned.length ? null : await entitlementEvidence(c.env, user.id, projectId, item);
+      if (evidence && !evidence.document && !evidence.imported) {
+        throw new ApiError(409, 'SOURCE_EVIDENCE_PENDING', 'Save this source to Recent successfully, then retry retaining its data.');
+      }
+      const resolved = await referenceForSession(c, descriptor.data);
+      result = await account.pinProjectItem(projectId, itemId, resolved.referenced, identity, resolved.condition);
+    }
+  }
+  return pinResponse(c, result);
+});
+
+function pinResponse(c: Context<App>, result: PinResult) {
+  if (!result.ok) {
+    if (result.code === 'SOURCE_NOT_FOUND') throw new ApiError(404, result.code, 'This recent source is no longer available. Inspect it again, then save.');
+    if (result.code === 'SOURCE_REVISION_MISMATCH') throw new ApiError(409, result.code, 'A newer inspection replaced this version. Inspect it again, then save.');
+    throw new ApiError(409, result.code, 'This saved data does not match the project item.');
+  }
+  return c.json({ itemId: result.itemId, sourceId: result.sourceId, sourceRevision: result.sourceRevision });
+}
+
 sessionRoutes.post('/projects/:id/sources', async (c) => {
   const user = requireUser(c);
   const projectId = asId(c.req.param('id'));
@@ -157,6 +331,22 @@ sessionRoutes.post('/projects/:id/sources', async (c) => {
   const input = await body<{ sourceId?: string }>(c.req.raw);
   if (!sourceIdSchema.safeParse(input.sourceId).success) throw new ApiError(422, 'INVALID_SOURCE_ID', 'A saved source ID is required.');
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+  // A project that already holds this whole source as a D1 item retains the reference with it.
+  const sourceKey = await account.peekSourceKey(input.sourceId!);
+  const [, provider, type, entityId] = /^(youtube):(video|playlist|channel):(.+)$/.exec(sourceKey ?? '') ?? [];
+  const existing = provider ? await wholeSourceItem(c.env, user.id, projectId, provider, type!, entityId!) : null;
+  if (existing) {
+    const result = await account.linkSourceToItem(projectId, input.sourceId!, existing.id, { provider: provider!, type: type!, id: entityId! });
+    if (!result.ok) throw new ApiError(result.code === 'SOURCE_NOT_FOUND' ? 404 : 409, result.code, 'This recent source could not be linked. Try again.');
+    return c.json({ item: existing, added: false }, 200);
+  }
+  if (!sourceKey) {
+    // After Recent eviction, a link already retained with the D1 whole source is still that item; moments stay distinct.
+    const pinnedItems = await account.pinnedItemsForSource(projectId, input.sourceId!);
+    const item = pinnedItems.length ? await c.env.DB.prepare(`SELECT * FROM project_items WHERE project_id=? AND user_id=? AND start_ms IS NULL
+      AND id IN (${pinnedItems.map(() => '?').join(',')}) ORDER BY created_at, id LIMIT 1`).bind(projectId, user.id, ...pinnedItems).first<ProjectItemRecord>() : null;
+    if (item) return c.json({ item, added: false }, 200);
+  }
   const linked = await account.linkSourceToProject(projectId, input.sourceId!);
   if (!linked) throw new ApiError(404, 'SOURCE_NOT_FOUND', 'This recent source was not found.');
   return c.json(linked, linked.added ? 201 : 200);
@@ -172,31 +362,49 @@ sessionRoutes.post('/projects/:id/items', async (c) => {
   const entityId = asId(input.entityId);
   const id = crypto.randomUUID();
   const startMs = finiteNumber(input.startMs);
-  await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO project_items
-     (id,project_id,user_id,provider,entity_type,entity_id,title,start_ms,end_ms,note,tags_json,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    id, projectId, user.id, provider.descriptor.id, entityType, entityId, text(input.title, 300), startMs,
-    finiteNumber(input.endMs), text(input.note, 5000), JSON.stringify(cleanTags(input.tags)), now()
-  ).run();
+  const title = text(input.title, 300);
+  // SQLite UNIQUE treats NULL start_ms values as distinct. Match with IS so a
+  // repeated whole-source Save or lost-response retry reuses its row, while every
+  // moment (including start 0) stays distinct from the whole source.
+  const identity = [projectId, user.id, provider.descriptor.id, entityType, entityId, startMs] as const;
+  const matching = () => c.env.DB.prepare(
+    `SELECT id FROM project_items WHERE project_id=? AND user_id=? AND provider=? AND entity_type=? AND entity_id=? AND start_ms IS ?
+     ORDER BY created_at, id LIMIT 1`,
+  ).bind(...identity).first<{ id: string }>();
   const content = text(input.content, 100_000);
-  if (content) {
+  const index = async (itemId: string) => {
+    if (!content) return;
     await c.env.TASKS.send({
       type: 'index-document',
-      idempotencyKey: `project-item:${id}`,
-      payload: {
-        provider: provider.descriptor.id,
-        userId: user.id,
-        projectId,
-        entityId,
-        title: text(input.title, 300),
-        content,
-        startMs,
-      },
+      // Retries of the same content deduplicate; newer content still refreshes the private copy.
+      idempotencyKey: `project-item:${itemId}:${await sha256(content)}`,
+      payload: { provider: provider.descriptor.id, userId: user.id, projectId, entityId, title, content, startMs },
     }, { contentType: 'json' });
+  };
+  // A whole source already saved as a project source row is the same visible entry.
+  if (startMs === null && !(await matching())) {
+    const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
+    const existingSource = await account.findProjectSourceItem(projectId, `${provider.descriptor.id}:${entityType}:${entityId}`);
+    if (existingSource) {
+      await index(existingSource);
+      return c.json({ id: existingSource, existing: true }, 200);
+    }
   }
-  return c.json({ id }, 201);
+  const inserted = await c.env.DB.prepare(
+    `INSERT OR IGNORE INTO project_items
+     (id,project_id,user_id,provider,entity_type,entity_id,title,start_ms,end_ms,note,tags_json,created_at)
+     SELECT ?,?,?,?,?,?,?,?,?,?,?,?
+     WHERE NOT EXISTS (SELECT 1 FROM project_items
+       WHERE project_id=? AND user_id=? AND provider=? AND entity_type=? AND entity_id=? AND start_ms IS ?)`
+  ).bind(
+    id, projectId, user.id, provider.descriptor.id, entityType, entityId, title, startMs,
+    finiteNumber(input.endMs), text(input.note, 5000), JSON.stringify(cleanTags(input.tags)), now(), ...identity,
+  ).run();
+  const created = inserted.meta.changes > 0;
+  const itemId = created ? id : (await matching())?.id;
+  if (!itemId) throw new ApiError(409, 'PROJECT_ITEM_CONFLICT', 'This project item could not be saved. Try again.');
+  await index(itemId);
+  return c.json(created ? { id: itemId } : { id: itemId, existing: true }, created ? 201 : 200);
 });
 
 sessionRoutes.delete('/projects/:id', async (c) => {
@@ -453,6 +661,45 @@ sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
 async function ownProject(env: Env, userId: string, projectId: string): Promise<void> {
   const project = await env.DB.prepare('SELECT 1 FROM projects WHERE id=? AND user_id=?').bind(projectId, userId).first();
   if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+}
+
+function ownedProjectItem(env: Env, userId: string, projectId: string, itemId: string): Promise<ProjectItemRecord | null> {
+  return env.DB.prepare('SELECT * FROM project_items WHERE id=? AND project_id=? AND user_id=?')
+    .bind(itemId, projectId, userId).first<ProjectItemRecord>();
+}
+
+/** The oldest whole-source D1 item for one source; moments never match. Historical duplicates stay untouched. */
+function wholeSourceItem(env: Env, userId: string, projectId: string, provider: string, type: string, entityId: string): Promise<ProjectItemRecord | null> {
+  return env.DB.prepare(`SELECT * FROM project_items WHERE project_id=? AND user_id=? AND provider=? AND entity_type=? AND entity_id=?
+    AND start_ms IS NULL ORDER BY created_at, id LIMIT 1`).bind(projectId, userId, provider, type, entityId).first<ProjectItemRecord>();
+}
+
+/** Reusing comments while another dataset changes must preserve the owned immutable page chain. */
+async function referenceForSession(c: Context<App>, input: SaveSourceInput) {
+  const receipt = input.snapshot.kind === 'inspection' ? input.snapshot.inspector.commentsReceipt : undefined;
+  if (!receipt) return { referenced: await referenceSource(c.env, input), condition: undefined };
+  const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(requireUser(c).id));
+  const saved = await account.getSource(receipt.sourceId);
+  if (!saved || await sourceRevision(saved.snapshot) !== receipt.sourceRevision) {
+    throw new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved comments changed. Reopen this source.');
+  }
+  const condition: SourceCondition = { sourceId: receipt.sourceId, snapshot: saved.snapshot };
+  return { referenced: await referenceSource(c.env, input, saved.snapshot), condition };
+}
+
+function sourceChanged() {
+  return new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved source changed. Reopen it before saving.');
+}
+
+const pinReceiptSchema = z.object({ sourceId: sourceIdSchema, sourceRevision: sourceRevisionSchema }).strict();
+const savedPinReceiptSchema = z.object({ savedRevision: sourceRevisionSchema }).strict();
+
+/** Size- and type-checked JSON for source-history writes. */
+async function sourceJson(request: Request): Promise<unknown> {
+  if (!request.headers.get('content-type')?.includes('application/json')) throw new ApiError(422, 'INVALID_CONTENT_TYPE', 'Expected application/json.');
+  const payload = await request.text();
+  if (new TextEncoder().encode(payload).byteLength > MAX_SOURCE_SNAPSHOT_BYTES) throw new ApiError(422, 'SOURCE_TOO_LARGE', 'This source is too large to add to recent sources.');
+  try { return JSON.parse(payload); } catch { throw new ApiError(422, 'INVALID_JSON', 'The request body is not valid JSON.'); }
 }
 
 function cleanTags(value: unknown): string[] {

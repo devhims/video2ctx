@@ -1,3 +1,5 @@
+import { issueCommentPageReceipt } from '../../lib/comment-page-receipt';
+import { videoResourceKey } from '../../lib/video-resources';
 import { Hono, type Context } from 'hono';
 import type { ChannelPlaylistSort, ChannelVideoSort, SearchFilters } from 'all-things-youtube';
 import type { App } from '../../types';
@@ -193,6 +195,9 @@ dataRoutes.get('/videos/:id/comments', async (c) => {
   const provider = providerFor(c);
   const id = asId(c.req.param('id'));
   const all = c.req.query('all') === 'true';
+  const retain = c.req.query('retain') === 'true';
+  if (retain && c.get('principal')?.method !== 'session') throw new ApiError(403, 'SESSION_REQUIRED', 'Comments retention requires a browser session.');
+  if (retain && all) throw new ApiError(422, 'INVALID_INPUT', 'Retain individual comments pages.');
   const refresh = refreshRequested(c);
   if (all) {
     return c.json(await meterOperation(c, {
@@ -208,8 +213,14 @@ dataRoutes.get('/videos/:id/comments', async (c) => {
       };
     }));
   }
-  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-comments`, 'comments', provider, () =>
-    provider.getComments(c.env, id, c.req.query('continuation'), refresh)));
+  const continuation = c.req.query('continuation');
+  return c.json(await cachedRead(c, `${provider.descriptor.id}-video-comments`, 'comments', provider, async () => {
+    const result = await provider.getComments(c.env, id, continuation, refresh);
+    if (!retain) return result;
+    const pageReceipt = await issueCommentPageReceipt(c.env, requireUser(c).id,
+      videoResourceKey({ kind: 'comments', id, continuation })!, result.catalogVersions);
+    return { ...result, value: { ...result.value, pageReceipt } };
+  }));
 });
 
 dataRoutes.get('/videos/:id/endscreen', async (c) => {
