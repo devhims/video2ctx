@@ -941,13 +941,14 @@ html:has(.craft) body {
 
 .craft-result-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   gap: var(--space-sm) var(--space-md);
 }
 
 .craft-sample-badge {
   flex-shrink: 0;
+  transform: translateY(3px);
   padding: 0.3rem 0.6rem;
   border: 1px solid var(--rule);
   border-radius: 999px;
