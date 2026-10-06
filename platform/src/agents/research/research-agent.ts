@@ -741,12 +741,23 @@ async function runUnifiedFinalizer(options: {
   // Read the first page deterministically. Ordinal questions cannot use keyword search.
   // This includes the original first message even beyond the recent-turn window.
   const historySelection = options.decision.route === 'finalize' ? options.decision.historySelection : undefined;
-  const historyPage = historyRequired && !contextExpired ? options.context.session?.readHistory?.(0, historySelection === 'first_user_message' || historySelection === 'all_user_messages' ? 'user' : undefined) : undefined;
+  const historyPage = historyRequired ? options.context.session?.readHistory?.(0, historySelection === 'first_user_message' || historySelection === 'all_user_messages' ? 'user' : undefined) : undefined;
   const contextMessages: ModelMessage[] = [];
   if (options.context.session && !conversational && contextExpired) {
-    // Recovery has only response time left. Existing evidence/history inputs
-    // remain usable, but prior context tool messages are not checkpointed.
+    // Recovery has only response time left. Restore saved comparison packets
+    // synchronously from SQLite, without repeating R2 reads or model work.
     contextIncomplete = true;
+    const assets = options.context.session.brief().assets;
+    for (const videoId of comparisonVideoIds) {
+      const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
+        .sort((a, b) => b.collectedAt - a.collectedAt)[0];
+      if (!asset || options.context.session.transcriptOverLimit?.(asset.version)) continue;
+      const packets = options.context.session.evidence(asset.version);
+      options.onEvidence?.(packets);
+      for (const packet of packets) {
+        if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
+      }
+    }
   } else if (options.context.session && !conversational) {
     try {
       const gathered = await withRunDeadline(contextDeadlineAt, options.context.signal, async signal => {
@@ -945,7 +956,7 @@ async function runUnifiedFinalizer(options: {
         } satisfies Parameters<typeof generateText>[0];
         if (!options.onDraft) return generateText(generationOptions);
 
-        const state: AgentDraft['state'] = attempt > 0 ? 'revising' : 'streaming';
+        const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
         options.onDraft({ answer: '', state });
         const streamed = streamText({ ...generationOptions, onChunk: ({ chunk }) => {
           if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;

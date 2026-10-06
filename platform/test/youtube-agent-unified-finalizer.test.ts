@@ -403,7 +403,6 @@ it('preserves the hard deadline when recovering inside the retry allowance', asy
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
     await vi.advanceTimersByTimeAsync(1);
     expect(searchTools).not.toHaveBeenCalled();
-    expect(readHistory).not.toHaveBeenCalled();
     expect(finalizer.doGenerateCalls).toHaveLength(0);
     expect(warnings).not.toHaveBeenCalled();
     const request = finalizer.doStreamCalls[0]!.prompt.find(message => message.role === 'user');
@@ -830,6 +829,35 @@ it.each(['The', "I'll look up the full message history to find your exact first 
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:output.blocks[0]!.text}));
 });
 
+it('recovers an exact-first-message request with a synchronous history read inside the response allowance', async () => {
+  vi.useFakeTimers();
+  try {
+    const { options, output } = setup('context_answer');
+    const original = 'Please explain the first video in Spanish.';
+    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'history',
+      historySelection: 'first_user_message', reason: 'Read stored messages.' };
+    options.finalizationDeadlineAt = Date.now() - 5_000;
+    const readHistory = vi.fn(() => ({ messages: [{ role: 'user', text: original }] }));
+    const searchTools = vi.fn(async () => ({}));
+    options.session = { brief: () => ({ assets: [], memories: [] }), readHistory, searchTools } as unknown as NonNullable<typeof options.session>;
+    const drafts: Array<{ answer: string; state: string }> = [];
+    options.onDraft = draft => drafts.push(draft);
+    const finalizer = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => scheduledAnswer({
+      ...output, blocks: [{ text: `Your first message was: ${original}`, evidenceIds: [] }],
+    }, 1_000, abortSignal) });
+    models.select.mockReturnValue(finalizer);
+    const run = executeResearchRun(options).then(() => 'completed', error => error.message);
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(await run).toBe('completed');
+    expect(readHistory).toHaveBeenCalledWith(0, 'user');
+    expect(searchTools).not.toHaveBeenCalled();
+    expect(finalizer.doGenerateCalls).toHaveLength(0);
+    expect(JSON.stringify(finalizer.doStreamCalls[0]!.prompt)).toContain(original);
+    expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
+    expect(options.finalize).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
+});
+
 it('reads the exact first user message before generation and blocks video escalation for history', async () => {
   const {options,classifier,output} = setup('context_answer');
   options.message='What was my exact first message in this conversation?';
@@ -904,8 +932,9 @@ it('repairs a truncated comparison after the old 40-second cutoff', async () => 
 });
 
 
-it.each(['finalize', 'inspect_video'] as const)('loads both saved comparison transcripts and repairs a one-sided %s answer without provider retrieval', async route => {
+it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved comparison transcripts for %s without provider retrieval', async route => {
   const {options, classifier} = setup('context_answer');
+  const recovered = route === 'recovered';
   const ids = ['abcdefghijk', 'lmnopqrstuv'];
   const versions = ['a'.repeat(64), 'b'.repeat(64)];
   const packets: EvidencePacket[] = ids.map((videoId, index) => ({packetId:`saved:${index}`,kind:'youtube_transcript',
@@ -913,15 +942,18 @@ it.each(['finalize', 'inspect_video'] as const)('loads both saved comparison tra
     excerpts:[{id:`evidence:${versions[index]}:0`,sourceId:`source:${index}`,text:`The video explains method ${index + 1}.`}],
     artifacts:[{type:'youtube_complete_transcript',data:{requiresAnalysis:false}}],warnings:[],usage:[],assetVersions:[versions[index]!] }));
   const readTranscriptEvidence = vi.fn(async version => ({packets:[packets[versions.indexOf(version)]!]}));
+  const readEvidence = vi.fn();
+  const searchTools = vi.fn(async () => ({}));
   options.message='Compare the earlier video with this new one.';
-  options.persistedRoute=route === 'finalize' ? {route,responseIntent:'context_answer',contextScope:'video',reason:'Saved transcripts.',comparisonVideoIds:ids}
+  options.persistedRoute=route !== 'inspect_video' ? {route:'finalize',responseIntent:'context_answer',contextScope:'video',reason:'Saved transcripts.',comparisonVideoIds:ids}
     : {route,videoId:ids[1]!,useStoryboard:false,comparisonVideoIds:ids};
-  options.finalizationDeadlineAt=Date.now()+60_000;
+  options.finalizationDeadlineAt=Date.now()+(recovered ? -5_000 : 60_000);
   options.session={brief:()=>({assets:ids.map((videoId,index)=>({version:versions[index],kind:'transcript',videoId,current:true,collectedAt:1,details:{}})),memories:[]}),
-    readTranscriptEvidence,readEvidence:vi.fn(),searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+    evidence:(version: string)=>packets.filter(packet=>packet.assetVersions?.includes(version)),
+    readTranscriptEvidence,readEvidence,searchTools} as unknown as NonNullable<typeof options.session>;
   let attempts=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
-    expect(readTranscriptEvidence).toHaveBeenCalledTimes(2);
+    expect(readTranscriptEvidence).toHaveBeenCalledTimes(recovered ? 0 : 2);
     const answer=call.responseFormat?.type==='json';
     if (answer) {
       expect(JSON.stringify(call.prompt)).toContain('method 1');
@@ -929,14 +961,19 @@ it.each(['finalize', 'inspect_video'] as const)('loads both saved comparison tra
     }
     return {content:[{type:'text',text:answer?JSON.stringify({confidence:'medium',warnings:[],blocks:[
       {text:'The first video explains method 1.',evidenceIds:['ref_1']},
-      ...(attempts++ ? [{text:'The second video explains method 2.',evidenceIds:['ref_2']}] : []),
+      ...(attempts++ || recovered ? [{text:'The second video explains method 2.',evidenceIds:['ref_2']}] : []),
     ]}):'Context is ready.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
   }});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
   options.finalize=vi.fn(async(_id,input)=>buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
     {userId:'user',creditsRemaining:100},input,packets,0));
   await executeResearchRun(options);
-  expect(attempts).toBe(2);
+  expect(attempts).toBe(recovered ? 1 : 2);
+  if (recovered) {
+    expect(finalizer.doGenerateCalls).toHaveLength(1);
+    expect(readEvidence).not.toHaveBeenCalled();
+    expect(searchTools).not.toHaveBeenCalled();
+  }
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   const result=await vi.mocked(options.finalize).mock.results[0]!.value;
   expect(result.citations).toMatchObject(ids.map(videoId=>({videoId})));

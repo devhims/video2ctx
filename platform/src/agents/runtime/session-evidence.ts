@@ -60,7 +60,7 @@ export interface SessionBrief {
 export interface SessionAccess {
   brief(): SessionBrief;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
-  evidence(): EvidencePacket[];
+  evidence(version?: string): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
   transcriptOverLimit?(version: string): VideoTooLongError | undefined;
