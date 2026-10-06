@@ -5,7 +5,11 @@ const WORKERS_AI_CAPACITY_PATTERN = /(?:\b3040\b|capacity (?:is )?temporarily ex
 
 export function normalizeAgentExecutionError(error: unknown): unknown {
   const exhausted = modelFallbackExhaustion(error);
-  if (exhausted) return new ApiError(503, exhausted.code, exhausted.message);
+  if (exhausted) return new ApiError(
+    503,
+    exhausted.code,
+    "We're having trouble processing your request right now, even after retrying automatically. Please try again in a few minutes.",
+  );
   if (!isWorkersAiCapacityError(error)) return error;
   return new ApiError(
     503,
