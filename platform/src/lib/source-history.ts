@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sha256 } from './http';
 
 export const RECENT_SOURCE_LIMIT = 30;
 export const MAX_SOURCE_SNAPSHOT_BYTES = 16_000;
@@ -58,6 +59,24 @@ export type SourceReference = z.infer<typeof sourceReferenceSchema>;
 export type SaveReferencedSource = z.infer<typeof saveReferencedSourceSchema>;
 export interface RecentSource {
   id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number; thumbnailUrl?: string;
+}
+
+export const sourceRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+/**
+ * Canonical identity of one saved reference set: selected assets, dataset choices,
+ * errors and shared copies. Parsing gives a stable key order. The thumbnail URL is
+ * a cosmetic cache that the history list may add later, so it is not part of it.
+ */
+export function sourceRevisionPayload(snapshot: SourceReference): string {
+  const parsed = sourceReferenceSchema.parse(snapshot);
+  if (parsed.kind === 'inspection') delete parsed.inspector.thumbnailUrl;
+  return JSON.stringify(parsed);
+}
+
+/** Fingerprint of one immutable reference set; see sourceRevisionPayload. */
+export function sourceRevision(snapshot: SourceReference): Promise<string> {
+  return sha256(sourceRevisionPayload(snapshot));
 }
 
 export function sourceIdentity(input: SaveReferencedSource): string {

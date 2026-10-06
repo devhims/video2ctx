@@ -17,7 +17,7 @@ import { Icon } from './DashboardSidebar';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { SOURCES_HOME_EVENT } from './dashboard-routes';
 
-import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, Inspector, RecentSource, SourceSnapshot } from './research-types';
+import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, ProjectItem, Inspector, RecentSource, SourceSnapshot } from './research-types';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
   transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
@@ -39,7 +39,28 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   else delete inspector.dataErrors[option];
 }
 
-type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string };
+type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string; method?: 'POST' | 'PUT'; retains?: boolean };
+type SourceReceipt = { sourceId: string; sourceRevision: string };
+type ProjectRestore = { item: ProjectItem } & ({ state: 'restored'; origin: 'pin' | 'project-source' | 'recent' | 'storage'; recovered: boolean;
+  source: RecentSource; snapshot: SourceSnapshot; sourceRevision?: string; savedText?: string; missingData: string[] }
+  | { state: 'unavailable'; input?: string | null });
+/** The saved project item currently shown. It only chooses the explicit Save destination; it never enables auto-save. */
+type OpenedItem = { projectId: string; itemId: string; kind: 'project-source' | 'item'; entity: string; startMs: number | null; retained: boolean; generation: number };
+type PendingInspection = { type: EntityType | 'search'; id: string; input: string; reason: 'legacy' | 'missing' };
+const PENDING_LINK_PARAMS = ['legacy', 'id', 'type', 'openProject', 'saved'];
+
+function sourceRequest(snapshot: SourceSnapshot) {
+  return snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
+    : { kind: snapshot.kind, inspector: {
+      provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
+      requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
+      loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
+    } };
+}
+
+function entityInput(type: EntityType, id: string) {
+  return `https://www.youtube.com/${type === 'video' ? `watch?v=${encodeURIComponent(id)}` : type === 'playlist' ? `playlist?list=${encodeURIComponent(id)}` : `channel/${encodeURIComponent(id)}`}`;
+}
 
 export default function SourcesClient({ active }: {active:boolean}) {
   const params = useSearchParams();
@@ -52,14 +73,17 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [hasSearched, setHasSearched] = useDashboardDraft('source-searched', false);
   const projectsResource = useAccountResource('projects', []);
   const { data: projects } = projectsResource;
-  const projectId = params.get('project');
+  // Opening saved content must never enable the independent Add sources mode.
+  const projectId = params.has('saved') || params.has('openProject') ? null : params.get('project');
   const projectName = projects.find(project => project.id === projectId)?.name ?? 'project';
   const [inspector, setInspector] = useDashboardDraft<Inspector | null>('source-inspector', null);
   const [transcriptQuery, setTranscriptQuery] = useDashboardDraft('transcript-query', '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [pendingInspection, setPendingInspection] = useState<{ type: EntityType; id: string; input: string } | null>(null);
+  const [pendingInspection, setPendingInspection] = useState<PendingInspection | null>(null);
+  const [opened, setOpened] = useState<OpenedItem | null>(null);
+  const [saving, setSaving] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -67,6 +91,13 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [failedSaves, setFailedSaves] = useState<Array<SourceSave & { error: string }>>([]);
   const historyInput = useRef('');
   const pendingInput = useRef<string | null>(null);
+  const openedItem = useRef<OpenedItem | null>(null);
+  const retryAction = useRef<(() => Promise<unknown>) | null>(null);
+  // Each displayed inspection has a generation; its Recent receipt pins exactly that version.
+  const inspectionGeneration = useRef(0);
+  const sourceReceipt = useRef<{ generation: number; receipt: SourceReceipt } | null>(null);
+  const pendingSourceSave = useRef<{ generation: number; promise: Promise<unknown> } | null>(null);
+  const savingSource = useRef(false);
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const authenticated = Boolean(user) || demoEnabled;
@@ -88,48 +119,60 @@ export default function SourcesClient({ active }: {active:boolean}) {
     return () => controller.abort();
   }, [active, authenticated, loadHistory]);
 
-  const persistSource = async (save: SourceSave) => {
+  const persistSource = async <T extends { source?: RecentSource; sourceRevision?: string }>(save: SourceSave): Promise<T | null> => {
     try {
-      const { source } = await api<{ source?: RecentSource }>(save.path, { method: 'POST', body: save.body });
+      const response = await api<T>(save.path, { method: save.method ?? 'POST', body: save.body });
+      const { source } = response;
       if (source) setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
       setFailedSaves(current => current.filter(item => item.id !== save.id));
       if (save.projectId) {
         void cache.projectDetails.invalidate(save.projectId);
         // Reconcile counts even when a retry follows a lost successful response.
         void projectsResource.refresh();
-        setNotice(`Added to ${save.projectName}`);
+        setNotice(save.retains ? `Saved to ${save.projectName}` : `Added to ${save.projectName}`);
       }
+      return response;
     } catch (cause) {
       const failed = { ...save, error: cause instanceof Error ? cause.message : 'Could not save this source.' };
       setFailedSaves(current => [...current.filter(item => item.id !== save.id), failed]);
+      return null;
     }
   };
 
-  const rememberSource = async (input: string, snapshot: SourceSnapshot) => {
-    const request = snapshot.kind === 'search' ? { kind: snapshot.kind, selectedData: snapshot.selectedData }
-      : { kind: snapshot.kind, inspector: {
-        provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
-        requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
-        loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
-      } };
-    await persistSource({ id: crypto.randomUUID(), input, projectId, projectName, path: '/v1/sources/recent',
-      body: JSON.stringify({ input, snapshot: request, ...(projectId ? { projectId } : {}) }),
+  const rememberSource = async (input: string, snapshot: SourceSnapshot, destination: { id: string | null; name: string } = { id: projectId, name: projectName }) => {
+    const generation = inspectionGeneration.current;
+    const promise = persistSource<{ source?: RecentSource; sourceRevision?: string }>({ id: crypto.randomUUID(), input, projectId: destination.id, projectName: destination.name, path: '/v1/sources/recent',
+      body: JSON.stringify({ input, snapshot: sourceRequest(snapshot), ...(destination.id ? { projectId: destination.id } : {}) }),
     });
+    if (snapshot.kind === 'inspection') pendingSourceSave.current = { generation, promise };
+    const saved = await promise;
+    // Only the inspection still on screen may supply the version that Save pins.
+    if (snapshot.kind === 'inspection' && inspectionGeneration.current === generation) {
+      sourceReceipt.current = saved?.source && saved.sourceRevision ? { generation, receipt: { sourceId: saved.source.id, sourceRevision: saved.sourceRevision } } : null;
+    }
   };
 
-  const openRecentSource = async (entry: Pick<RecentSource, 'id'>, savedProjectId?: string) => {
-    setPendingInspection(null);
+  /** A new displayed inspection: earlier Recent receipts no longer describe what is on screen. */
+  const nextInspection = () => {
+    sourceReceipt.current = null; pendingSourceSave.current = null;
+    return ++inspectionGeneration.current;
+  };
+
+  const forgetOpenedItem = () => { openedItem.current = null; setOpened(null); };
+
+  const openRecentSource = async (entry: Pick<RecentSource, 'id'>) => {
+    setPendingInspection(null); forgetOpenedItem();
     const controller = beginOperation('Loading saved source data…');
     try {
-      const { source, snapshot } = await api<{ source: RecentSource; snapshot: SourceSnapshot }>(savedProjectId ? `/v1/projects/${encodeURIComponent(savedProjectId)}/sources/${encodeURIComponent(entry.id)}` : `/v1/sources/recent/${entry.id}`, { signal: controller.signal });
+      const { source, snapshot, sourceRevision } = await api<{ source: RecentSource; snapshot: SourceSnapshot; sourceRevision?: string }>(`/v1/sources/recent/${entry.id}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
+      const generation = nextInspection();
+      if (sourceRevision) sourceReceipt.current = { generation, receipt: { sourceId: source.id, sourceRevision } };
       setQuery(source.input); historyInput.current = source.input; setTranscriptQuery('');
-      if (!savedProjectId) {
-        setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
-        if (projectId) void persistSource({ id: crypto.randomUUID(), input: source.input, projectId, projectName,
-          path: `/v1/projects/${encodeURIComponent(projectId)}/sources`, body: JSON.stringify({ sourceId: source.id }),
-        });
-      }
+      setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
+      if (projectId) void persistSource({ id: crypto.randomUUID(), input: source.input, projectId, projectName,
+        path: `/v1/projects/${encodeURIComponent(projectId)}/sources`, body: JSON.stringify({ sourceId: source.id }),
+      });
       if (snapshot.kind === 'search') {
         setSelectedData(snapshot.selectedData); setItems(snapshot.items); setInspector(null); setHasSearched(true);
       } else {
@@ -140,10 +183,66 @@ export default function SourcesClient({ active }: {active:boolean}) {
     finally { finishOperation(controller); }
   };
 
+  /** True while the address is still the link that started this work. */
+  const isCurrentLink = (openingSearch: string) => window.location.pathname === '/dashboard/sources'
+    && new URLSearchParams(window.location.search).toString() === openingSearch;
+
+  /** Replace the address only while it is still the link that started this work. */
+  const replaceIfCurrent = (openingSearch: string, remove: string[]) => {
+    if (!isCurrentLink(openingSearch)) return;
+    const next = new URLSearchParams(openingSearch); remove.forEach(name => next.delete(name));
+    router.replace(`/dashboard/sources${next.size ? `?${next}` : ''}`, { scroll: false });
+  };
+
+  /** Every saved project item opens from storage for free. Nothing here fetches from YouTube. */
+  const openProjectItem = async (openProject: string, itemId: string, openingSearch: string) => {
+    setPendingInspection(null); forgetOpenedItem(); pendingInput.current = null;
+    const controller = beginOperation('Loading saved source data…');
+    setInspector(null); setItems([]); setHasSearched(false); setNotice('');
+    try {
+      const result = await api<ProjectRestore>(`/v1/projects/${encodeURIComponent(openProject)}/sources/items/${encodeURIComponent(itemId)}`, { signal: controller.signal });
+      // A free open that finishes after navigation must not repaint a newer page or project context.
+      if (controller.signal.aborted || !isCurrentLink(openingSearch)) return;
+      const generation = nextInspection();
+      const context: OpenedItem = { projectId: openProject, itemId, kind: result.item.source_id ? 'project-source' : 'item',
+        entity: `${result.item.entity_type}:${result.item.entity_id}`, startMs: result.item.start_ms ?? null,
+        retained: result.state === 'restored' && !result.recovered, generation };
+      openedItem.current = context; setOpened(context);
+      if (result.state === 'unavailable') {
+        // Rare: nothing is retained. Keep the link for reload and wait for an explicit, credit-labeled inspection.
+        const input = result.input ?? '';
+        setQuery(input);
+        if (!input) { setError('This project item cannot be opened in Sources.'); return; }
+        pendingInput.current = input;
+        setPendingInspection({ type: result.item.entity_type, id: result.item.entity_type === 'search' ? '' : result.item.entity_id, input, reason: 'missing' });
+        return;
+      }
+      if (result.origin === 'recent' && result.sourceRevision) sourceReceipt.current = { generation, receipt: { sourceId: result.source.id, sourceRevision: result.sourceRevision } };
+      setQuery(result.source.input); historyInput.current = result.source.input; setTranscriptQuery('');
+      if (result.snapshot.kind === 'search') {
+        setSelectedData(result.snapshot.selectedData); setItems(result.snapshot.items); setInspector(null); setHasSearched(true);
+      } else {
+        const { item } = result;
+        setItems([]); setHasSearched(false); setSelectedData(result.snapshot.inspector.requestedData.length ? result.snapshot.inspector.requestedData : ['transcript']);
+        setInspector({ ...result.snapshot.inspector, ...(result.savedText ? { savedText: result.savedText } : {}),
+          ...(item.start_ms != null ? { savedMoment: { startMs: item.start_ms, note: item.note } } : {}) });
+      }
+      if (result.missingData.length) setNotice('Some saved data is not available. Fetching it again uses credits.');
+      else if (result.origin === 'storage') setNotice('Recovered from data already stored for this saved item.');
+      replaceIfCurrent(openingSearch, PENDING_LINK_PARAMS);
+    } catch (cause) {
+      if (isAbortError(cause) || !isCurrentLink(openingSearch)) return;
+      setError(cause instanceof Error ? cause.message : 'Could not open this project item.');
+      // Storage failures are retryable, never treated as missing data.
+      retryAction.current = () => openProjectItem(openProject, itemId, openingSearch);
+    } finally { finishOperation(controller); }
+  };
+
   const beginOperation = useCallback((label: string) => {
     operationController.current?.abort();
     const controller = new AbortController();
     operationController.current = controller;
+    retryAction.current = null;
     setOperationLabel(label); setLoading(true); setError('');
     return controller;
   }, []);
@@ -167,6 +266,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   const showRecentSources = useCallback(() => {
     cancelOperation(); setPendingInspection(null); setInspector(null); setItems([]); setHasSearched(false);
+    openedItem.current = null; setOpened(null); retryAction.current = null;
     setQuery(''); setTranscriptQuery(''); setError(''); setNotice('');
   }, [cancelOperation, setInspector, setItems, setHasSearched, setQuery, setTranscriptQuery]);
 
@@ -182,28 +282,34 @@ export default function SourcesClient({ active }: {active:boolean}) {
     window.addEventListener('keydown',shortcut);return()=>window.removeEventListener('keydown',shortcut);
   },[active]);
 
-  const clearLegacyLink = () => {
+  const hasPendingLink = (search: URLSearchParams) => search.get('legacy') === '1' || search.has('saved');
+
+  /** Leave the pending link: the user cancelled, edited the input, or explicitly inspected it. */
+  const clearPendingLink = () => {
     pendingInput.current = null; setPendingInspection(null);
-    const next = new URLSearchParams(params); next.delete('legacy'); next.delete('id'); next.delete('type');
+    const next = new URLSearchParams(params); PENDING_LINK_PARAMS.forEach(name => next.delete(name));
     router.replace(`/dashboard/sources${next.size ? `?${next}` : ''}`, { scroll: false });
   };
 
   const runSearch = async (event?: FormEvent) => {
     event?.preventDefault();
+    retryAction.current = null;
     if (!query.trim()) return;
     const input = query.trim();
-    if (pendingInspection && input === pendingInspection.input) {
+    if (pendingInspection && input === pendingInspection.input && pendingInspection.type !== 'search') {
       if (loading) return;
       const { type, id } = pendingInspection;
       const openingSearch = params.toString();
-      const loaded = await inspect(type, id, undefined, 'youtube', selectedData, input);
+      // An explicit, credit-labeled inspection. Its data goes to Recent only; Save can retain it later.
+      const loaded = await inspect(type, id, undefined, 'youtube', selectedData, input, true);
       // Requests may finish after navigation. Never replace a newer route with this old link.
-      if (loaded && window.location.pathname === '/dashboard/sources'
-        && new URLSearchParams(window.location.search).toString() === openingSearch) clearLegacyLink();
+      if (loaded) { pendingInput.current = null; setPendingInspection(null); replaceIfCurrent(openingSearch, PENDING_LINK_PARAMS); }
       return;
     }
+    // Includes a lost saved search, which reruns only now, after the explicit click.
+    forgetOpenedItem();
     setPendingInspection(null);
-    if (params.has('legacy')) clearLegacyLink();
+    if (hasPendingLink(params)) clearPendingLink();
     const controller = beginOperation('Resolving your query…');
     setHasSearched(true);
     setInspector(null);
@@ -280,9 +386,12 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   const inspect = async (
     type: EntityType, id: string, activeController?: AbortController,
-    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData, input?: string,
+    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData, input?: string, fromOpenedItem = false,
   ) => {
     const controller = activeController ?? beginOperation('Fetching your selected data…');
+    // An explicit fetch for an opened item keeps that item as the Save destination; anything else does not.
+    if (!fromOpenedItem) forgetOpenedItem();
+    nextInspection();
     historyInput.current = input ?? `https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : type === 'playlist' ? `playlist?list=${id}` : `channel/${id}`}`;
     setError('');
     try {
@@ -310,6 +419,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     if (!inspector || loading) return;
     setNotice('');
     const controller = beginOperation('Refreshing video data…');
+    nextInspection();
     const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
     try {
       await loadVideoData(next, ['metadata', ...next.requestedData.filter(option => option !== 'channel')], controller, true);
@@ -324,6 +434,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const refreshComments = async () => {
     if (!inspector || loading) return;
     const controller = beginOperation('Fetching current comments…');
+    nextInspection();
     try {
       await loadVideoData({ ...inspector, dataErrors: { ...inspector.dataErrors } }, ['comments'], controller);
     } catch (cause) {
@@ -334,6 +445,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const retrySourceData = async () => {
     if (!inspector || loading) return;
     const controller = beginOperation('Retrying failed source requests…');
+    nextInspection();
     const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
     try {
       await loadVideoData(next, retryableSourceDatasets(next.dataErrors), controller);
@@ -343,23 +455,33 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   useEffect(() => {
-    if (pendingInput.current && (!active || params.get('legacy') !== '1')) {
+    if (pendingInput.current && (!active || !hasPendingLink(params))) {
       if (query === pendingInput.current) setQuery('');
       pendingInput.current = null; setPendingInspection(null);
     }
     if (!active) return;
     setPendingInspection(null);
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
-    if (!saved && params.get('legacy') === '1' && id && (type === 'video' || type === 'channel' || type === 'playlist')) {
-      // Older rows have no restorable snapshot. Gate provider reads without enabling project auto-save.
+    if (saved) {
+      const openProject = params.get('openProject');
+      if (!openProject && params.get('project')) {
+        // Older snapshot links carried project=, which also meant Add sources. Open without that mode.
+        const next = new URLSearchParams(params); next.set('openProject', params.get('project')!); next.delete('project');
+        router.replace(`/dashboard/sources?${next}`, { scroll: false });
+        return;
+      }
+      // The link stays until the item is shown, so reload and unavailable retries keep working.
+      if (openProject) { void openProjectItem(openProject, saved, params.toString()); return; }
+    }
+    if (params.get('legacy') === '1' && id && (type === 'video' || type === 'channel' || type === 'playlist')) {
+      // Links from before saved items opened from storage carry no item ID. Gate provider reads.
       showRecentSources();
-      const input = `https://www.youtube.com/${type === 'video' ? `watch?v=${encodeURIComponent(id)}` : type === 'playlist' ? `playlist?list=${encodeURIComponent(id)}` : `channel/${encodeURIComponent(id)}`}`;
-      pendingInput.current = input; setQuery(input); setPendingInspection({ type, id, input });
+      const input = entityInput(type, id);
+      pendingInput.current = input; setQuery(input); setPendingInspection({ type, id, input, reason: 'legacy' });
       return; // Keep the pending source in the URL for reload and failed-request retry.
     }
     if (q) { setQuery(q); searchInput.current?.focus(); }
-    if (saved && projectId) void openRecentSource({ id: saved }, projectId);
-    else if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
+    if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
     if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
   }, [active, params, router]);
   const createProject = async (name:string) => {
@@ -368,29 +490,59 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   const saveInspector = async () => {
-    if (!inspector) return;
+    if (!inspector || savingSource.current) return;
+    const current = inspector, input = historyInput.current, generation = inspectionGeneration.current;
+    const snapshot: SourceSnapshot = { kind: 'inspection', inspector: current };
     if (projectId) {
-      await rememberSource(historyInput.current, { kind: 'inspection', inspector });
+      await rememberSource(input, snapshot);
       return;
     }
+    const openedHere = openedItem.current?.entity === `${current.type}:${current.id}` ? openedItem.current : null;
+    savingSource.current = true; setSaving(true);
     try {
       await cache.load('projects');
       if (cache.read('projects').error) throw new Error(cache.read('projects').error);
-      const project = cache.read('projects').data?.[0] ?? await createProject('Research inbox');
-      const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
-      await api(`/v1/projects/${project.id}/items`, {
-        method: 'POST', body: JSON.stringify({
-          provider: inspector.provider, entityType: inspector.type, entityId: inspector.id, title,
-          content: inspector.transcript?.segments.map((segment) => `[${segment.startMs}] ${segment.text}`).join('\n'),
-        }),
+      const list = cache.read('projects').data ?? [];
+      // An opened item saves back to its own project. If that project is missing from the list, keep the
+      // explicit target and let the owned API reject it rather than silently writing another project.
+      const project = openedHere
+        ? list.find(entry => entry.id === openedHere.projectId) ?? { id: openedHere.projectId, name: 'its project' }
+        : list[0] ?? await createProject('Research inbox');
+      if (openedHere?.kind === 'project-source') {
+        // Already a project source row: refresh that same row rather than adding a second one.
+        if (openedHere.retained && openedHere.generation === generation) setNotice(`Already saved in ${project.name}`);
+        else await rememberSource(input, snapshot, { id: project.id, name: project.name });
+        return;
+      }
+      const title = String(current.data.title ?? current.data.name ?? current.id);
+      // A reopened moment keeps its own item: same start time, and its existing content and note are left alone.
+      const moment = openedHere?.kind === 'item' && openedHere.startMs !== null ? openedHere.startMs : null;
+      const saved = await api<{ id: string; existing?: boolean }>(`/v1/projects/${encodeURIComponent(project.id)}/items`, {
+        method: 'POST', body: JSON.stringify(moment !== null
+          ? { provider: current.provider, entityType: current.type, entityId: current.id, title, startMs: moment }
+          : { provider: current.provider, entityType: current.type, entityId: current.id, title,
+            content: current.transcript?.segments.map((segment) => `[${segment.startMs}] ${segment.text}`).join('\n') }),
       });
       void cache.projectDetails.invalidate(project.id);
-      setNotice(`Saved to ${project.name}`);
+      if (openedHere?.kind === 'item' && openedHere.itemId === saved.id && openedHere.retained && openedHere.generation === generation) {
+        setNotice(`Already saved in ${project.name}`);
+      } else {
+        // Pin exactly what is displayed: wait for this inspection's Recent save, then copy its revision.
+        const pendingSave = pendingSourceSave.current;
+        if (pendingSave?.generation === generation) await pendingSave.promise;
+        const receipt = sourceReceipt.current?.generation === generation ? sourceReceipt.current.receipt : null;
+        // Success is announced only once the saved data is retained; a failure keeps this item's retry.
+        await persistSource({ id: crypto.randomUUID(), input, projectId: project.id, projectName: project.name, method: 'PUT', retains: true,
+          path: `/v1/projects/${encodeURIComponent(project.id)}/sources/items/${encodeURIComponent(saved.id)}/snapshot`,
+          body: JSON.stringify(receipt ?? { input, snapshot: sourceRequest(snapshot) }) });
+      }
+      // The import is independent of retained data and starts even if pinning failed.
       await api('/v1/imports', {
-        method: 'POST', body: JSON.stringify({ provider: inspector.provider, kind: inspector.type, entityId: inspector.id, projectId: project.id }),
+        method: 'POST', body: JSON.stringify({ provider: current.provider, kind: current.type, entityId: current.id, projectId: project.id }),
       });
       await projectsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
+    finally { savingSource.current = false; setSaving(false); }
   };
 
   const addMonitor = async () => {
@@ -433,15 +585,20 @@ export default function SourcesClient({ active }: {active:boolean}) {
         <div className='workspace-view'>
           <>
             {projectId && <div className='source-project-context' role='status'>Adding sources to <strong>{projectName}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(projectId)}`}>View project</Link></div>}
+            {!projectId && opened && <div className='source-project-context' role='status'>Opened from <strong>{projects.find(project => project.id === opened.projectId)?.name ?? 'project'}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(opened.projectId)}`}>View project</Link></div>}
             <section className='source-studio' aria-labelledby='source-studio-title'>
               <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={showRecentSources}>Recent sources</button>}</header>
               <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
-                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); setPendingInspection(null); if (params.has('legacy')) clearLegacyLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
-                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : pendingInspection ? 'Inspect using credits' : 'Inspect'} <span aria-hidden='true'>→</span></button>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); setPendingInspection(null); if (hasPendingLink(params)) clearPendingLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : pendingInspection ? pendingInspection.type === 'search' ? 'Search using credits' : 'Inspect using credits' : 'Inspect'} <span aria-hidden='true'>→</span></button>
                 </div>
-                {pendingInspection && <div className='source-refresh-row'><p role='status'>This project item has no saved source snapshot. Inspecting it fetches data and uses credits.</p>{!loading && <button type='button' onClick={() => { clearLegacyLink(); showRecentSources(); }}>Cancel</button>}</div>}
+                {pendingInspection && <div className='source-refresh-row'><p role='status'>{pendingInspection.reason === 'legacy'
+                  ? 'This project item has no saved source snapshot. Inspecting it fetches data and uses credits.'
+                  : pendingInspection.type === 'search'
+                    ? 'This saved search’s results are no longer stored. Searching again uses credits.'
+                    : 'This project item’s saved data is no longer stored. Inspecting it again fetches data and uses credits.'}</p>{!loading && <button type='button' onClick={() => { clearPendingLink(); showRecentSources(); }}>Cancel</button>}</div>}
                 <fieldset className='source-data-picker'>
                   <legend>Include with each video</legend>
                   <div className='source-data-options'>
@@ -464,15 +621,15 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
             {(loading || error || notice) && <div className='source-feedback'>
               {loading && <div className='source-operation-loading'><SourceSkeleton label={operationLabel} lines={2} /><button type='button' onClick={cancelOperation}>Cancel</button></div>}
-              {error && <div className='alert error' role='alert'><span>{error}</span>{query.trim() && <button onClick={() => void runSearch()}>Retry</button>}</div>}
+              {error && <div className='alert error' role='alert'><span>{error}</span>{(retryAction.current || query.trim()) && <button onClick={() => { const retry = retryAction.current; retryAction.current = null; void (retry ? retry() : runSearch()); }}>Retry</button>}</div>}
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
             {failedSaves.map(save => <div key={save.id} className='source-project-save-error alert error' role='alert'>
-              <span>Could not save {save.input}{save.projectId ? ` to ${save.projectName}` : ''}: {save.error}</span>
-              <button type='button' onClick={() => void persistSource(save)}>Retry saving</button>
+              <span>{save.retains ? `Saved ${save.input} to ${save.projectName}, but its data is not retained yet: ${save.error}` : <>Could not save {save.input}{save.projectId ? ` to ${save.projectName}` : ''}: {save.error}</>}</span>
+              <button type='button' onClick={() => void persistSource(save)}>{save.retains ? 'Retry retaining data' : 'Retry saving'}</button>
             </div>)}
             {inspector ? (
-              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} saving={saving} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); forgetOpenedItem(); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
             ) : (
               hasSearched || loading || items.length ? <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
               : <section className='source-results' aria-labelledby='recent-sources-title'>
@@ -550,13 +707,13 @@ function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, f
   </section>;
 }
 
-function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retrying, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; onRefresh: () => void; retrying: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
+function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retrying, saving, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; onRefresh: () => void; retrying: boolean; saving: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
   const metadataLoading = Boolean(inspector.loadingData?.includes('metadata')) && !inspector.data.title;
   const refreshing = inspector.loadingData?.some(dataset => inspector.refreshData?.includes(dataset));
-  const savedData = [inspector.data, inspector.transcript, inspector.comments].some(value => {
+  const savedData = Boolean(inspector.savedText) || [inspector.data, inspector.transcript, inspector.comments].some(value => {
     const state = (value as { freshness?: { state?: string } } | undefined)?.freshness?.state;
     return state === 'stored' || state === 'stale';
   });
@@ -598,11 +755,11 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
     }
   };
 
-  if (inspector.type === 'playlist') return <PlaylistInspector inspector={inspector} onClose={onClose} onSave={onSave} onOpenVideo={onOpenVideo} />;
+  if (inspector.type === 'playlist') return <PlaylistInspector inspector={inspector} saving={saving} onClose={onClose} onSave={onSave} onOpenVideo={onOpenVideo} />;
   if (inspector.type !== 'video') return <section className='inspector'><div className='inspector-head'><button className='back' onClick={onClose}>← Back to Sources</button></div><div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{String(inspector.data.description ?? '').slice(0,160)}</p></div></div><CatalogEntity inspector={inspector} /></section>;
 
   return <section className='source-inspector' aria-labelledby='source-detail-title'>
-    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={saving || inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
     <header className='source-detail-head'>
       <div>
         <p className='panel-label'>Video result</p>
@@ -616,10 +773,12 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
       <a href={String(inspector.data.url ?? `https://youtube.com/watch?v=${inspector.id}`)} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
     </header>
 
+    {inspector.savedMoment ? <p className='source-data-warning' role='note'>Saved moment at {formatTime(inspector.savedMoment.startMs)}{inspector.savedMoment.note ? ` · ${inspector.savedMoment.note}` : ''}</p> : null}
+
     {savedData || refreshing ? <div className='source-refresh-row'>
-      <span role='status'>{refreshing ? 'Refreshing data from YouTube…' : 'Showing saved data'}</span>
+      <span role='status'>{refreshing ? 'Refreshing data from YouTube…' : 'Showing saved data · refreshing uses credits'}</span>
       <button type='button' onClick={onRefresh} disabled={retrying || commentsLoading}
-        title='Fetch video details and the selected transcript and comments again from YouTube'>
+        title='Fetch video details and the selected transcript and comments again from YouTube. This uses credits.'>
         {refreshing ? 'Refreshing…' : 'Refresh data'}
       </button>
     </div> : null}
@@ -632,20 +791,21 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
 
     {panelOptions.length ? <>
       <div className='source-data-tabs' role='tablist' aria-label='Fetched video data'>
-        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => { setActivePanel(option); if (option === 'comments' && !retrying && !commentsLoading) onOpenComments(); }}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
+        {panelOptions.map((option) => <button key={option} type='button' role='tab' aria-selected={activePanel === option} className={activePanel === option ? 'active' : ''} onClick={() => setActivePanel(option)}>{SOURCE_DATA_OPTIONS[option].shortLabel}<span>{option === 'transcript' ? inspector.transcript?.segments.length ?? 0 : commentPage?.comments.length ?? 0}</span></button>)}
       </div>
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error={commentsError} onLoadMore={() => void loadMoreComments()} /> : null}
+        {/* Selecting a tab only shows saved data; fetching comments is a separate, credit-labeled action. */}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error={commentsError} onLoadMore={() => void loadMoreComments()} onLoad={retrying ? undefined : onOpenComments} /> : null}
       </section>
     </> : null}
 
-    {!retrying && retryableSourceDatasets(inspector.dataErrors).length > 0 ? <div className='source-retry-actions'><button type='button' onClick={onRetry}><ArrowClockwiseIcon size={16} aria-hidden='true' />Retry failed requests</button></div> : null}
+    {!retrying && retryableSourceDatasets(inspector.dataErrors).length > 0 ? <div className='source-retry-actions'><button type='button' onClick={onRetry}><ArrowClockwiseIcon size={16} aria-hidden='true' />Retry failed requests using credits</button></div> : null}
     <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />
   </section>;
 }
 
-function PlaylistInspector({ inspector, onClose, onSave, onOpenVideo }: { inspector: Inspector; onClose: () => void; onSave: () => void; onOpenVideo: (id: string) => void }) {
+function PlaylistInspector({ inspector, saving, onClose, onSave, onOpenVideo }: { inspector: Inspector; saving: boolean; onClose: () => void; onSave: () => void; onOpenVideo: (id: string) => void }) {
   const title = String(inspector.data.title ?? 'YouTube playlist');
   const channel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const videos = (inspector.data.videos ?? []) as SearchItem[];
@@ -654,7 +814,7 @@ function PlaylistInspector({ inspector, onClose, onSave, onOpenVideo }: { inspec
   const returnedCount = videos.length;
 
   return <section className='source-inspector playlist-inspector' aria-labelledby='playlist-detail-title'>
-    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onSave}><Icon name='plus' size={15} />Save playlist</button></div></div>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onSave} disabled={saving}><Icon name='plus' size={15} />Save playlist</button></div></div>
     <header className='source-detail-head'>
       <div><p className='panel-label'>Playlist result</p><h2 id='playlist-detail-title'>{title}</h2><p>{[channel?.name, String(inspector.data.videoCountText ?? `${returnedCount} videos returned`)].filter(Boolean).join(' · ')}</p></div>
       <a href={playlistUrl} target='_blank' rel='noreferrer'>Open on YouTube ↗</a>
@@ -724,7 +884,12 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
   if (inspector.loadingData?.includes('transcript') && (!inspector.transcript || inspector.dataErrors.transcript)) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
   if (captionsUnavailable(inspector.dataErrors.transcript) && !inspector.transcript) return <HistoryEmptyState title='No captions available' description='This video does not have captions available on YouTube, so there is no transcript to display.' />;
-  if (inspector.dataErrors.transcript && !inspector.transcript) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
+  if (inspector.dataErrors.transcript && !inspector.transcript && !inspector.savedText) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
+  if (!inspector.transcript && inspector.savedText) return <>
+    {/* Only the project's own saved text survives: no track, timing ranges or completeness are claimed. */}
+    <header className='source-panel-head'><div><h3>Saved transcript text</h3><p>From this project’s saved copy. Caption track details were not retained.</p></div></header>
+    <pre className='source-saved-text'>{inspector.savedText}</pre>
+  </>;
   if (!inspector.transcript) return <p className='source-data-unavailable'>No caption track was returned.</p>;
   return <>
     {inspector.dataErrors.transcript ? <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript} Showing the previously loaded transcript.</p> : null}
@@ -735,9 +900,10 @@ function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscri
   </>;
 }
 
-function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, onLoadMore }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void }) {
+function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, onLoadMore, onLoad }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void; onLoad?: () => void }) {
   if (initialError && !page) return <p role='alert' className='source-data-unavailable'>{initialError}</p>;
   const comments = page?.comments ?? [];
+  if (!page && !loading && onLoad) return <div className='source-data-unavailable'><p>No comments are saved for this video.</p><button type='button' onClick={onLoad}>Load comments using credits</button></div>;
   if (!comments.length) return <>{initialError ? <p role='alert' className='source-data-unavailable'>{initialError}</p> : null}<p className='source-data-unavailable'>No public comments were returned.</p></>;
   return <>
     {initialError ? <p role='alert' className='source-data-unavailable'>{initialError} Showing the previously loaded comments.</p> : null}
@@ -750,7 +916,7 @@ function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, on
     })}</ol>
     <div className='source-comments-pagination'>
       <span>{page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
-      {page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page</button> : null}
+      {page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page using credits</button> : null}
     </div>
     {error ? <p className='source-data-warning' role='alert'>{error}</p> : null}
   </>;

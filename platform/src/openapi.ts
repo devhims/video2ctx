@@ -53,6 +53,7 @@ const queryParameter = (name: string, description: string, schema: Schema, requi
 });
 
 const privateSecurity = [{ sessionCookie: [] }, { demoUser: [] }];
+const sourceRevisionResponse = { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Fingerprint of one immutable saved reference set.' } as const;
 const browserSessionSecurity = [{ sessionCookie: [] }];
 const personalAccessSecurity = [
   { sessionCookie: [] },
@@ -1097,9 +1098,10 @@ export const openApiDocument = {
       },
       post: {
         tags: ['Projects'], operationId: 'saveRecentSource', summary: 'Remember a Sources search or inspection', security: privateSecurity,
-        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data. An optional projectId saves the project reference in the same user-storage transaction.',
+        description: 'Stores the input and references in the user Durable Object. Provider data is read from existing shared storage. This does not fetch YouTube data. An optional projectId saves the project reference in the same user-storage transaction. If that project already holds the same whole source as a project item, the reference is retained with that item instead of adding a second row.',
         requestBody: jsonBody(z.toJSONSchema(saveSourceSchema, { target: 'openapi-3.0' })),
-        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource'), linked: { anyOf: [schemaRef('ProjectSourceLink'), { type: 'null' }] } } }),
+        responses: { '201': jsonResponse('Source remembered.', { type: 'object', properties: { source: schemaRef('RecentSource'), linked: { anyOf: [schemaRef('ProjectSourceLink'), { type: 'null' }] },
+          sourceRevision: sourceRevisionResponse } }),
           '409': jsonResponse('Provider data is not yet present in shared storage.', schemaRef('Error')), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
@@ -1109,7 +1111,7 @@ export const openApiDocument = {
         description: 'Loads the user-owned references, hydrates shared immutable assets, and moves the entry to the top of history. No provider request or credit charge is made.',
         parameters: [pathParameter('id', 'Recent source UUID.')],
         responses: { '200': jsonResponse('Saved source and displayed data.', { type: 'object', properties: {
-          source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }),
+          source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }), sourceRevision: sourceRevisionResponse,
         } }), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
@@ -1173,13 +1175,63 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'addProjectItem',
         summary: 'Save material to a project',
+        description: 'Repeating the same provider, type, entity ID and start time returns the existing item instead of adding a duplicate. A whole source (no startMs) and each moment, including startMs 0, are distinct items.',
         security: accountSecurity,
         parameters: [idParameter],
         requestBody: jsonBody(schemaRef('CreateProjectItemRequest')),
         responses: {
           '201': jsonResponse('Project item created.', schemaRef('IdResponse')),
+          '200': jsonResponse('The matching project item already existed.', { type: 'object', required: ['id', 'existing'], properties: {
+            id: { type: 'string' }, existing: { type: 'boolean', enum: [true] },
+          } }),
           ...standardErrors,
           '404': responseRef('NotFound'),
+        },
+      },
+    },
+    '/v1/projects/{id}/sources/items/{itemId}': {
+      get: {
+        tags: ['Projects'], operationId: 'openProjectItem', summary: 'Open any saved project item from storage', security: privateSecurity,
+        description: 'Verifies project and item ownership, then restores retained data from storage only. It makes no provider request, credit charge, import, indexing or write. Items without retained references are recovered only from the user’s own saved references, project document or successful project import. Missing data is reported as state unavailable or as missingData, not as an error.',
+        parameters: [idParameter, pathParameter('itemId', 'Project item UUID from the project detail response.')],
+        responses: {
+          '200': jsonResponse('Restored or unavailable project item.', { oneOf: [
+            { type: 'object', required: ['state', 'item', 'origin', 'recovered', 'source', 'snapshot', 'missingData'], properties: {
+              state: { type: 'string', enum: ['restored'] }, item: schemaRef('ProjectItem'),
+              origin: { type: 'string', enum: ['pin', 'project-source', 'recent', 'storage'] }, recovered: { type: 'boolean' },
+              evidence: { type: 'string', enum: ['saved-reference', 'project-source', 'project-document', 'project-import'],
+                description: 'For origin storage: the saved evidence that permitted recovery from the newest stored data, which is not the original pinned version.' },
+              source: schemaRef('RecentSource'), snapshot: z.toJSONSchema(sourceSnapshotSchema, { target: 'openapi-3.0' }),
+              sourceRevision: sourceRevisionResponse,
+              savedText: { type: 'string', description: 'Text from the project’s private saved copy when no structured transcript is retained.' },
+              missingData: { type: 'array', items: { type: 'string', enum: ['metadata', 'transcript', 'comments', 'channel'] } },
+            } },
+            { type: 'object', required: ['state', 'item'], properties: {
+              state: { type: 'string', enum: ['unavailable'] }, item: schemaRef('ProjectItem'),
+              input: { type: 'string', nullable: true, description: 'Source to inspect again with credits after explicit confirmation.' },
+            } },
+          ] }),
+          '404': responseRef('NotFound'), ...standardErrors,
+        },
+      },
+    },
+    '/v1/projects/{id}/sources/items/{itemId}/snapshot': {
+      put: {
+        tags: ['Projects'], operationId: 'pinProjectItemSnapshot', summary: 'Retain saved data for a project item', security: privateSecurity,
+        description: 'Copies the exact Recent version identified by sourceId and sourceRevision, or resolves a dataset descriptor from already-stored data when the Recent save failed. Verifies the owned item’s provider, type and entity. A stale revision is rejected. Creates no additional project row and makes no provider request.',
+        parameters: [idParameter, pathParameter('itemId', 'Project item UUID.')],
+        requestBody: jsonBody({ oneOf: [
+          { type: 'object', required: ['sourceId', 'sourceRevision'], additionalProperties: false, properties: {
+            sourceId: { type: 'string', format: 'uuid' }, sourceRevision: sourceRevisionResponse,
+          } },
+          z.toJSONSchema(saveSourceSchema.omit({ projectId: true }), { target: 'openapi-3.0' }),
+        ] }),
+        responses: {
+          '200': jsonResponse('Saved data retained.', { type: 'object', required: ['itemId', 'sourceRevision'], properties: {
+            itemId: { type: 'string', format: 'uuid' }, sourceId: { type: 'string', format: 'uuid', nullable: true }, sourceRevision: sourceRevisionResponse,
+          } }),
+          '409': jsonResponse('The revision was replaced, the identity does not match, or provider data is not yet stored.', schemaRef('Error')),
+          '404': responseRef('NotFound'), ...standardErrors,
         },
       },
     },
@@ -1198,7 +1250,7 @@ export const openApiDocument = {
         tags: ['Projects'],
         operationId: 'linkProjectSource',
         summary: 'Add a saved Sources search or inspection to a project',
-        description: 'Keeps a user-owned reference to the shared source assets even after the recent Sources list rotates.',
+        description: 'Keeps a user-owned reference to the shared source assets even after the recent Sources list rotates. If the project already holds the same whole source as a project item, the reference is retained with that item and no new row is added.',
         security: privateSecurity,
         parameters: [idParameter],
         requestBody: jsonBody({ type: 'object', required: ['sourceId'], properties: {

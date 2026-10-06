@@ -19,6 +19,8 @@ Projects are private to the signed-in account. API keys created by that account 
 
 ## Reopening saved items
 
-Project entries with a saved source snapshot reopen that data without a new provider request. Entries without a snapshot, including those created by standalone Save, show a credit notice and wait for **Inspect using credits**. You can cancel or go back without requesting data. Choosing to inspect one of these entries does not add another project row or enable automatic saving into that project.
+Opening a saved project item restores its stored data without a YouTube request or credit charge. **Save to project** and **Save playlist** keep the saved content with the project item, so later opens show exactly the version you saved. An older item opens from data already stored for your project when that data is still available. Such recovered data is the newest stored copy, so it may be newer than the version you originally saw, and it is marked as recovered. If an optional dataset, such as comments, was not kept, the rest stays visible and that dataset offers a credit-labeled fetch. Opening an item never turns on automatic saving into the project.
 
-The existing **Save to project** and **Save playlist** actions still save the item and start their research import. This is separate from opening an existing item.
+In the rare case that nothing for an item is stored any more, Sources shows a credit notice and waits for **Inspect using credits**. You can cancel or go back without requesting data. That inspection appears in Recent sources; choose **Save to project** afterwards to keep it with the item. Refreshing data, loading comments and retrying a failed dataset also use credits and say so.
+
+Saving the same video, playlist or channel again, including from **Add sources** in a project that already has it, returns the existing item instead of adding a duplicate. Saved moments stay separate items. The standalone **Save to project** and **Save playlist** workflow continues to start the existing research import; adding sources from within a project does not start one, as before.

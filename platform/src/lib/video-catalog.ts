@@ -1,7 +1,7 @@
 import { MAX_STORYBOARD_SHEETS } from '../agents/providers/youtube/storyboard';
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { VerifiedImage } from './verified-image';
-import { sha256 } from './http';
+import { ApiError, sha256 } from './http';
 import { mapInBatches, FRAME_IO_CONCURRENCY, EVIDENCE_IO_CONCURRENCY } from './map-in-batches';
 
 export interface VideoAssetKey {
@@ -113,6 +113,33 @@ export class VideoCatalog {
     return row ? this.readRow<T>(row, verifyImages) : null;
   }
 
+  /** Saved-item reads distinguish absent bytes from corruption or store failures, without request bookkeeping. */
+  async readSourceVersion<T>(reference: VideoAssetReference): Promise<StoredVideoAsset<T> | null> {
+    const row = await this.db.prepare(`SELECT * FROM video_asset_versions
+      WHERE video_id=? AND kind=? AND variant=? AND content_hash=?`)
+      .bind(reference.videoId, reference.kind, reference.variant, reference.contentHash).first<AssetRow>();
+    return row ? this.readRow<T>(row, false, true) : null;
+  }
+
+  /** Newest retained version for a compatibility restore, checking only a bounded recent history. */
+  async readSourceSaved<T>(key: VideoAssetKey, historyLimit = 5): Promise<StoredVideoAsset<T> | null> {
+    const current = await this.db.prepare('SELECT * FROM video_assets WHERE video_id=? AND kind=? AND variant=?')
+      .bind(key.videoId, key.kind, key.variant).first<AssetRow>();
+    if (current) {
+      const value = await this.readRow<T>(current, false, true);
+      if (value) return value;
+    }
+    const versions = await this.db.prepare(`SELECT * FROM video_asset_versions
+      WHERE video_id=? AND kind=? AND variant=? AND state='ready' AND content_hash<>?
+      ORDER BY fetched_at DESC, content_hash LIMIT ?`)
+      .bind(key.videoId, key.kind, key.variant, current?.content_hash ?? '', Math.min(20, Math.max(1, historyLimit))).all<AssetRow>();
+    for (const row of versions.results) {
+      const value = await this.readRow<T>(row, false, true);
+      if (value) return value;
+    }
+    return null;
+  }
+
   /** Reuse a historical import when no current public source is available. */
   async readSaved<T>(key: VideoAssetKey, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
     const current = await this.read<T>(key, verifyImages);
@@ -156,11 +183,14 @@ export class VideoCatalog {
     return values;
   }
 
-  private async readRow<T>(row: AssetRow, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
+  private async readRow<T>(row: AssetRow, verifyImages = false, strict = false): Promise<StoredVideoAsset<T> | null> {
     const object = await visualSpan('catalog_r2', () => { countVisualWork('catalogR2Gets'); return this.bucket.get(row.object_key); });
     if (!object) return null;
     const payload = await object.text();
-    if ((await sha256(payload)) !== row.content_hash) return null;
+    if ((await sha256(payload)) !== row.content_hash) {
+      if (strict) throw new ApiError(500, 'SOURCE_ASSET_INVALID', 'Saved source data could not be verified.');
+      return null;
+    }
     try {
       const verifiedImages: VerifiedImage[] | undefined = verifyImages ? [] : undefined;
       const raw = JSON.parse(payload) as Json;

@@ -44,9 +44,11 @@ The UI loads these requests concurrently:
 
 ### Saving a source
 
-1. The UI uses the most recent project or creates a “Research inbox” with `POST /v1/projects`.
-2. It saves the source with `POST /v1/projects/:id/items`.
-3. It starts durable ingestion with `POST /v1/imports`. Import failure is currently non-blocking for the initial save.
+1. The UI uses the project the item was opened from, otherwise the most recent project, or creates a “Research inbox” with `POST /v1/projects`.
+2. It saves the source with `POST /v1/projects/:id/items`. A repeated whole-source or moment save returns the existing item (`200`, `existing: true`), including a whole source the project already holds as a project source row.
+3. It retains the displayed data with `PUT /v1/projects/:id/sources/items/:itemId/snapshot`, copying the exact Recent revision. A failure keeps a retry for that project and item.
+4. It starts durable ingestion with `POST /v1/imports`, whether or not step 3 succeeded. Import failure is currently non-blocking for the initial save. Adding sources from within a project (`POST /v1/sources/recent` with `projectId`) is a separate path without an import; when the project already holds that whole source as an item, the reference is retained with it.
+5. Opening any project item later uses `GET /v1/projects/:id/sources/items/:itemId`, which reads storage only and is free.
 
 ### Trend planning
 

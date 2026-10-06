@@ -57,4 +57,33 @@ Project detail renders its known name and Add sources action before the source l
 
 Project selection follows the URL: `/dashboard/projects` always shows the list, while `?project=…` opens one project. Selection is not retained in dashboard draft state. Native history updates preserve immediate rendering and browser Back/Forward behavior; the shared source cache remains independent of navigation.
 
-Legacy project-item links carry `legacy=1` rather than an automatic project save context. Sources preserves their type and ID while awaiting an explicit, credit-labeled inspection, including across reload and failed-request retry. Cancelling or editing the input removes the pending link; changing routes clears the pending UI and its prefilled input. A background completion cannot replace a newer route. Successful inspection updates Recent sources only, as before. Existing snapshot links still use project item IDs and hydrate saved references without provider requests. Standalone Save/import/indexing behavior is unchanged. This guard is a web-only change and needs no platform deployment or migration.
+## Opening saved project items
+
+Every project item, including legacy D1 rows and moments, opens through `GET /v1/projects/:id/sources/items/:itemId`. The browser-session route verifies project and item ownership, then restores from storage only. It makes no provider request, credit charge, import, indexing or write; Recent order and catalog request bookkeeping are untouched. Both outcomes return 200: `state: 'restored'` with the snapshot, or `state: 'unavailable'` with the item and its input. Links use `?openProject=…&saved=<itemId>`, never `project=`, so opening never turns on Add sources auto-save. Older `?project=…&saved=…` links are rewritten to `openProject` before opening.
+
+Standalone **Save to project** keeps its original D1 row, transcript `content` indexing and import, including playlist and channel member imports. Repeating the same provider, type, entity and start time returns the existing row (`start_ms IS ?`), so whole-source retries no longer add duplicates while each moment, including `start_ms` 0, stays distinct. Both representations count: a standalone Save of a whole source that the project already holds as a project source row returns and refreshes that row, and Add sources auto-save or linking a Recent source into a project that already holds the whole source as a D1 item retains the reference with that item (Recent save and sidecar in one user-DO transaction). Existing duplicates are untouched. Project-scoped saves keep their separate path without an import. Save then calls `PUT /v1/projects/:id/sources/items/:itemId/snapshot` with the Recent `sourceId` and `sourceRevision` returned when that inspection was remembered. The revision fingerprints the selected asset references, dataset choices, errors and shared copies; the thumbnail URL that the history list caches lazily is excluded, so that enrichment never stales a receipt. The user DO copies that exact reference into `project_item_snapshots`, keyed by project and item and never listed as another row. A Recent entry whose references changed is rejected rather than silently pinned. Only when the browser's Recent save failed does it send the dataset descriptor instead, which is resolved from stored data and requires the same saved evidence as recovery. A failed pin does not block the import; the browser keeps that project and item for "Retry retaining data" and announces "Saved to …" only after the pin succeeds.
+
+Restores read pins, project sources and owned references in that order. A missing optional dataset keeps everything else visible and marks that dataset with a credit-labeled retry. Corrupt bytes and store errors are retryable failures, never evidence that data is absent. An item without usable references recovers only within the user's saved evidence: another owned reference to the same source (project source, pin or Recent entry, even if its bytes are gone), a private project document, or a successful project import. With that evidence the platform reads the newest stored catalog versions, the import workflow's transcript copy, a retention-expired source response, or the project's private Markdown, shown as saved text without an invented track or timing. Such recovery is `origin: 'storage'` with an `evidence` label and no `sourceRevision`: newer stored data, never presented as the original immutable snapshot. Content whose storage is genuinely absent is not recovered. A bookmark alone never exposes shared storage. When nothing is retained, the item waits for **Inspect using credits** (or **Search using credits** for a lost saved search). Cancel and Back never fetch. That paid result goes to Recent only; a later explicit Save can pin it to the same item.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#ffffff','actorBkg':'#e2e8f0','actorTextColor':'#0f172a','actorBorder':'#64748b','signalColor':'#334155','signalTextColor':'#334155','sequenceNumberColor':'#ffffff','noteBkgColor':'#f1f5f9','noteTextColor':'#0f172a'}}}%%
+sequenceDiagram
+    autonumber
+    participant UI as Sources page
+    participant App as Platform
+    participant User as User DO
+    participant Store as D1, catalog and R2
+    UI->>App: Save: create or reuse the D1 item
+    UI->>App: Pin with Recent sourceId and sourceRevision
+    App->>User: Copy that exact reference into the item sidecar
+    UI->>App: Start the unchanged import
+    UI->>App: Open a project item
+    App->>Store: Verify project and item ownership
+    App->>User: Read pin, project source or owned references
+    App->>Store: Hydrate retained versions, or recover within saved evidence
+    App-->>UI: Restored data, or unavailable with an explicit paid action
+```
+
+Pins are deleted with their project and with the account. Deploy the platform before the web application; `UserAccountDO` creates the sidecar table on initialization and no D1 migration or new binding is required.
+
+Links from PR149 with `legacy=1&type&id` carry no item ID. They keep that release's explicit, credit-labeled gate, including reload, failed-request retry, Cancel and edited-input handling. A background completion cannot replace a newer route.

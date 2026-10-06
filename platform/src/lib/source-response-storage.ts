@@ -1,4 +1,4 @@
-import { safeErrorLog, sha256 } from './http';
+import { ApiError, safeErrorLog, sha256 } from './http';
 import type { YouTubeCacheEntry } from './youtube-cache-coordinator';
 
 const SOURCE_RESOURCE_TYPES = new Set(['channel-v5', 'playlist-v2', 'search-v3']);
@@ -44,4 +44,26 @@ export async function readSourceResponse<T>(env: Env, cacheKey: string, resource
     console.warn({ event: 'source_response_read_failed', resourceType, ...safeErrorLog(error) });
     return null;
   }
+}
+
+/**
+ * Saved-item restores must not mistake a storage failure or corrupt payload for
+ * absent data. Absent responses return null; failures throw. A retention-expired
+ * copy is returned only when the caller has already established saved evidence.
+ */
+export async function readSourceResponseStrict<T>(env: Env, cacheKey: string, resourceType: string, honorRetention = true):
+  Promise<{ value: T; fetchedAt: number } | null> {
+  if (!env.VIDEO_ASSETS || !SOURCE_RESOURCE_TYPES.has(resourceType)) return null;
+  const object = await env.VIDEO_ASSETS.get(await responseKey(cacheKey));
+  if (!object) return null;
+  let entry: Record<string, unknown>;
+  try { entry = JSON.parse(await object.text()) as Record<string, unknown>; }
+  catch { throw new ApiError(500, 'SOURCE_ASSET_INVALID', 'Saved source data could not be verified.'); }
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.version !== 1 || entry.resourceType !== resourceType
+    || typeof entry.fetchedAt !== 'number' || !Number.isFinite(entry.fetchedAt)
+    || typeof entry.retainedUntil !== 'number' || !entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) {
+    throw new ApiError(500, 'SOURCE_ASSET_INVALID', 'Saved source data could not be verified.');
+  }
+  if (honorRetention && entry.retainedUntil <= Date.now()) return null;
+  return { value: entry.value as T, fetchedAt: entry.fetchedAt };
 }

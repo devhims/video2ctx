@@ -784,14 +784,15 @@ test('adding sources from a project saves the search and opened video in that pr
     projectItems.push({ id, source_id: id, provider: 'youtube', entity_type: input.snapshot.kind === 'search' ? 'search' : 'video', entity_id: id, title });
     return route.fulfill({ status: 201, json: { source: { id, input: input.input, title, kind: input.snapshot.kind, updatedAt: Date.now() } } });
   });
-  await page.route(`**/api/platform/v1/projects/${projectId}/sources/*`, route => {
+  await page.route(`**/api/platform/v1/projects/${projectId}/sources/items/*`, route => {
     const id = route.request().url().split('/').at(-1)!;
     const source = sources.get(id)!;
     const snapshot = source.kind === 'search'
       ? { kind: 'search', selectedData: ['transcript'], items: [{ provider: 'youtube', type: 'video', id: videoId, title: 'Codex tips video', thumbnails: [] }] }
       : { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId,
         data: { id: videoId, title: 'Codex tips video', thumbnails: [] }, requestedData: ['transcript'], dataErrors: {} } };
-    return route.fulfill({ json: { source: { id, ...source, updatedAt: Date.now() }, snapshot } });
+    return route.fulfill({ json: { state: 'restored', origin: 'project-source', recovered: false, missingData: [],
+      item: projectItems.find(item => item.id === id), source: { id, ...source, updatedAt: Date.now() }, snapshot } });
   });
   await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query } }));
   await page.route('**/api/platform/v1/search?**', route => route.fulfill({ json: { results: [{
@@ -1181,111 +1182,341 @@ test('Agent navigation is visible while Agent and Admin access checks are pendin
   } finally { await scenario.clear(); }
 });
 
-for (const type of ['video', 'playlist'] as const) test(`QA 003 restores a saved ${type} snapshot without a billed fetch`, async ({ page }, testInfo) => {
-  const project = { id: 'qa003-project', name: 'Snapshot project', item_count: 1 };
-  const id = type === 'video' ? videoId : 'PLsavedplaylist';
-  const source = { id: 'qa003-recent', input: `https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : `playlist?list=${id}`}`,
-    title: `Saved ${type}`, kind: 'inspection', updatedAt: Date.now() };
-  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type, id,
-    data: { id, title: source.title, thumbnails: [], videos: [] }, ...(type === 'video' ? { transcript } : {}),
-    requestedData: type === 'video' ? ['transcript'] : [], dataErrors: {} } };
-  const item = { id: 'qa003-item', source_id: source.id, provider: 'youtube', entity_type: type, entity_id: id, title: source.title };
-  let providerReads = 0, writes = 0, restores = 0;
+/** Provider requests are the paid generic reads; source and project writes would alter saved data. */
+function watchQa003(page: Page) {
+  const counts = { provider: 0, writes: [] as string[] };
   page.on('request', request => {
-    if (new URL(request.url()).searchParams.has('provider')) providerReads++;
-    if (request.method() === 'POST' && /\/v1\/(sources|imports|projects)(?:\/|\?|$)/.test(request.url())) writes++;
+    const url = new URL(request.url());
+    if (url.searchParams.has('provider')) counts.provider++;
+    if (request.method() !== 'GET' && /\/api\/platform\/v1\/(sources|projects|imports)/.test(url.pathname)) counts.writes.push(`${request.method()} ${url.pathname}`);
   });
-  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
-  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
-  await page.route(`**/api/platform/v1/projects/${project.id}/sources/${item.id}`, route => {
-    restores++; return route.fulfill({ json: { source, snapshot } });
-  });
-  try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await page.goto(`/dashboard/projects?project=${project.id}`);
-      await page.getByRole('button', { name: new RegExp(`^${source.title}`) }).last().click();
-      await expect(page.getByRole('heading', { name: source.title, exact: true })).toBeVisible();
-      if (type === 'video') await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
-      await page.screenshot({ path: testInfo.outputPath(`qa003-${type}-restored-${attempt}.png`), fullPage: true });
-    }
-    expect(restores).toBe(2); expect(providerReads).toBe(0); expect(writes).toBe(0);
-  } finally { await scenario.clear(); }
-});
+  return counts;
+}
 
-for (const type of ['video', 'playlist'] as const) test(`QA 003 preserves the standalone ${type} save and import workflow`, async ({ page }) => {
-  const project = { id: 'qa003-save', name: 'Existing save destination', item_count: 0 };
-  const id = type === 'video' ? videoId : 'PLimport';
-  const itemWrites: unknown[] = [], imports: unknown[] = [];
+const QA003_MISSING_NOTICE = 'This project item’s saved data is no longer stored. Inspecting it again fetches data and uses credits.';
+const QA003_STORED = { state: 'stored', fetchedAt: '2026-10-05T00:00:00Z' };
+
+for (const type of ['video', 'playlist'] as const) test(`QA 003 standalone ${type} Save keeps its import, retains the exact version and reopens it free after reload`, async ({ page }, testInfo) => {
+  const project = { id: '0f9a7c1e-6b2d-4e8a-9c3f-1d2e3f4a5b6c', name: 'Snapshot project', item_count: 0 };
+  const id = type === 'video' ? videoId : 'PLsavedplaylist';
+  const input = type === 'video' ? `https://www.youtube.com/watch?v=${id}` : `https://www.youtube.com/playlist?list=${id}`;
+  const source = { id: 'e1f0a3b2-0c51-4c61-9e64-3c1b2c3d4e5f', input, title: `Saved ${type}`, kind: 'inspection', updatedAt: Date.now() };
+  const sourceRevision = 'a'.repeat(64);
+  const item = { id: '7d2c9a10-5e4b-4f7a-8c3d-2b1a0f9e8d7c', provider: 'youtube', entity_type: type, entity_id: id, title: source.title };
+  const snapshot = { kind: 'inspection', inspector: { provider: 'youtube', type, id,
+    data: { id, title: source.title, thumbnails: [], videos: [], freshness: QA003_STORED }, ...(type === 'video' ? { transcript } : {}),
+    requestedData: type === 'video' ? ['transcript'] : [], dataErrors: {} } };
+  let saved = false, opens = 0;
+  const itemWrites: unknown[] = [], pins: Array<{ method: string; body: unknown }> = [], imports: unknown[] = [];
+  const counts = watchQa003(page);
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
-  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { itemWrites.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { id: 'saved-item' } }); });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: saved ? [item] : [] } }));
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    expect(route.request().postDataJSON()).not.toHaveProperty('projectId');
+    return route.fulfill({ status: 201, json: { source, linked: null, sourceRevision } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => {
+    itemWrites.push(route.request().postDataJSON()); saved = true;
+    return route.fulfill({ status: 201, json: { id: item.id } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}/snapshot`, route => {
+    pins.push({ method: route.request().method(), body: route.request().postDataJSON() });
+    return route.fulfill({ json: { itemId: item.id, sourceId: source.id, sourceRevision } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => {
+    opens++;
+    return route.fulfill({ json: { state: 'restored', origin: 'pin', recovered: false, missingData: [], item, source, snapshot, sourceRevision } });
+  });
   await page.route('**/api/platform/v1/imports', route => { imports.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { id: 'import-job' } }); });
   await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
-  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: type, provider: 'youtube', id } }));
-  if (type === 'playlist') await page.route(`**/api/platform/v1/playlists/${id}?**`, route => route.fulfill({ json: { id, title: 'Saved playlist', videos: [] } }));
+  if (type === 'playlist') {
+    await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'playlist', provider: 'youtube', id } }));
+    await page.route(`**/api/platform/v1/playlists/${id}?**`, route => route.fulfill({ json: { id, title: 'Fresh playlist', videos: [] } }));
+  }
   try {
     await page.goto('/dashboard/sources');
-    await page.getByRole('textbox', { name: /Video search or YouTube URL|Playlist URL detected/ }).fill(`https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : `playlist?list=${id}`}`);
+    await page.getByRole('textbox', { name: /Video search or YouTube URL|Playlist URL detected/ }).fill(input);
     await page.getByRole('button', { name: /^Inspect/ }).click();
     await page.getByRole('button', { name: type === 'video' ? 'Save to project' : 'Save playlist', exact: true }).click();
+    await expect(page.getByText(`Saved to ${project.name}`)).toBeVisible();
     await expect.poll(() => imports.length).toBe(1);
+    // The original item, indexing content and import payload are unchanged; the pin copies the exact Recent revision.
     expect(itemWrites).toHaveLength(1);
     expect(itemWrites[0]).toMatchObject({ provider: 'youtube', entityType: type, entityId: id });
     if (type === 'video') expect(itemWrites[0]).toHaveProperty('content', '[0] Transcript arrived successfully.');
+    expect(pins).toEqual([{ method: 'PUT', body: { sourceId: source.id, sourceRevision } }]);
     expect(imports[0]).toEqual({ provider: 'youtube', kind: type, entityId: id, projectId: project.id });
+    const readsAfterSave = counts.provider, writesAfterSave = counts.writes.length;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await page.goto(`/dashboard/projects?project=${project.id}`);
+      if (attempt === 1) await page.reload();
+      await page.getByRole('button', { name: new RegExp(`^${source.title}`) }).last().click();
+      await expect(page.getByRole('heading', { name: source.title, exact: true })).toBeVisible();
+      if (type === 'video') await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+      await expect(page).toHaveURL(/\/dashboard\/sources$/);
+      await expect(page.getByText('Adding sources to')).toHaveCount(0);
+      await expect(page.getByText(`Opened from ${project.name}`)).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`qa003-${type}-reopened-${attempt}.png`), fullPage: true });
+    }
+    expect(opens).toBe(2);
+    expect(counts.provider).toBe(readsAfterSave);
+    expect(counts.writes).toHaveLength(writesAfterSave);
   } finally { await scenario.clear(); }
 });
 
-for (const type of ['video', 'playlist', 'channel'] as const) test(`QA 003 legacy ${type} waits for an explicit billed inspection`, async ({ page }, testInfo) => {
-  const project = { id: 'qa003-legacy', name: 'Older sources', item_count: 1 };
-  const id = type === 'video' ? videoId : type === 'playlist' ? 'PLlegacy' : 'UClegacy';
-  const item = { id: 'old-item', provider: 'youtube', entity_type: type, entity_id: id, title: 'Older saved source' };
-  let providerReads = 0;
-  const saves: Array<{ projectId?: string }> = [];
-  const projectWrites: string[] = [];
-  page.on('request', request => { if (request.method() === 'POST' && /\/v1\/projects\//.test(request.url())) projectWrites.push(request.url()); });
-  page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
+test('QA 003 older items restore partial datasets, saved text and moments free, and selecting Comments never fetches', async ({ page }, testInfo) => {
+  const project = { id: '9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', name: 'Recovered sources', item_count: 2 };
+  const legacy = { id: '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Recovered video' };
+  const moment = { id: '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Saved moment', start_ms: 0, note: 'Opening' };
+  const missing = 'This saved data is not available. Fetching it again uses credits.';
+  const counts = watchQa003(page);
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
-  await page.route('**/api/platform/v1/sources/recent', route => {
-    if (route.request().method() === 'POST') { saves.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: {} }); }
-    return route.fulfill({ json: { sources: [] } });
-  });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [legacy, moment] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${legacy.id}`, route => route.fulfill({ json: {
+    state: 'restored', origin: 'storage', recovered: true, missingData: ['transcript'], savedText: '[0] Saved line\n[1500] Second line', item: legacy,
+    source: { id: legacy.id, input: `https://www.youtube.com/watch?v=${videoId}`, title: legacy.title, kind: 'inspection', updatedAt: Date.now() },
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript', 'comments'],
+      data: { id: videoId, title: legacy.title, thumbnails: [], freshness: QA003_STORED },
+      comments: { videoId, comments: [{ id: 'comment-1', text: 'Saved comment', author: { name: 'Viewer', thumbnails: [] } }], meta: transcript.meta, freshness: QA003_STORED },
+      dataErrors: { transcript: missing } } },
+  } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${moment.id}`, route => route.fulfill({ json: {
+    state: 'restored', origin: 'pin', recovered: false, missingData: [], item: moment,
+    source: { id: moment.id, input: `https://www.youtube.com/watch?v=${videoId}`, title: moment.title, kind: 'inspection', updatedAt: Date.now() },
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+      data: { id: videoId, title: moment.title, thumbnails: [], freshness: QA003_STORED }, transcript: { ...transcript, freshness: QA003_STORED }, dataErrors: {} } },
+  } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Recovered video/ }).last().click();
+    await expect(page.getByRole('heading', { name: legacy.title, exact: true })).toBeVisible();
+    await expect(page.getByText('Saved transcript text')).toBeVisible();
+    await expect(page.getByText('[1500] Second line')).toBeVisible();
+    await expect(page.getByText('Some saved data is not available. Fetching it again uses credits.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry failed requests using credits' })).toBeVisible();
+    await page.getByRole('tab', { name: /Comments/ }).click();
+    await expect(page.getByText('Saved comment')).toBeVisible();
+    await page.getByRole('tab', { name: /Transcript/ }).click();
+    await page.getByRole('tab', { name: /Comments/ }).click();
+    await page.screenshot({ path: testInfo.outputPath('qa003-recovered-partial.png'), fullPage: true });
+    expect(counts.provider).toBe(0);
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Saved moment/ }).last().click();
+    await expect(page.getByText('Saved moment at 0:00 · Opening')).toBeVisible();
+    await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+    expect(counts.provider).toBe(0);
+    expect(counts.writes).toEqual([]);
+  } finally { await scenario.clear(); }
+});
+
+for (const type of ['video', 'playlist', 'channel'] as const) test(`QA 003 a ${type} whose storage is truly missing waits for an explicit credit-labeled fetch`, async ({ page }, testInfo) => {
+  const project = { id: '3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f', name: 'Older sources', item_count: 1 };
+  const id = type === 'video' ? videoId : type === 'playlist' ? 'PLlegacy' : 'UClegacy';
+  const input = type === 'video' ? `https://www.youtube.com/watch?v=${id}` : type === 'playlist' ? `https://www.youtube.com/playlist?list=${id}` : `https://www.youtube.com/channel/${id}`;
+  const item = { id: '4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a', provider: 'youtube', entity_type: type, entity_id: id, title: 'Older saved source' };
+  const recent = { id: '5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b', input, title: 'Explicitly loaded source', kind: 'inspection', updatedAt: Date.now() };
+  let opens = 0;
+  const saves: Array<{ projectId?: string }> = [], pins: Array<{ url: string; body: unknown }> = [], itemWrites: unknown[] = [];
+  const counts = watchQa003(page);
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
   await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => { opens++; return route.fulfill({ json: { state: 'unavailable', item, input } }); });
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    saves.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { source: recent, linked: null, sourceRevision: 'b'.repeat(64) } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { itemWrites.push(route.request().postDataJSON()); return route.fulfill({ json: { id: item.id, existing: true } }); });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}/snapshot`, route => {
+    pins.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    return route.fulfill({ json: { itemId: item.id, sourceId: recent.id, sourceRevision: 'b'.repeat(64) } });
+  });
+  await page.route('**/api/platform/v1/imports', route => route.fulfill({ status: 202, json: { id: 'import-job' } }));
   await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   if (type !== 'video') await page.route(`**/api/platform/v1/${type === 'playlist' ? 'playlists' : 'channels'}/${id}?**`, route => route.fulfill({ json: { id, title: 'Explicitly loaded source', name: 'Explicitly loaded source', thumbnails: [], videos: [] } }));
   try {
     await page.goto(`/dashboard/projects?project=${project.id}`);
     await page.getByRole('button', { name: /^Older saved source/ }).last().click();
-    await expect(page.getByText('This project item has no saved source snapshot. Inspecting it fetches data and uses credits.')).toBeVisible();
+    await expect(page.getByText(QA003_MISSING_NOTICE)).toBeVisible();
     await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
-    expect(providerReads).toBe(0);
     await expect(page.getByText('Adding sources to')).toHaveCount(0);
+    await expect(page.getByText(`Opened from ${project.name}`)).toBeVisible();
+    expect(counts.provider).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath(`qa003-missing-${type}-notice.png`), fullPage: true });
     await page.reload();
-    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
-    expect(providerReads).toBe(0);
+    await expect(page.getByText(QA003_MISSING_NOTICE)).toBeVisible();
+    expect(opens).toBe(2);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toHaveCount(0);
-    await expect(page).not.toHaveURL(/legacy=1/);
-    expect(providerReads).toBe(0);
+    await expect(page).not.toHaveURL(/saved=/);
     await page.goto(`/dashboard/projects?project=${project.id}`);
     await page.getByRole('button', { name: /^Older saved source/ }).last().click();
     await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`qa003-legacy-${type}-notice.png`), fullPage: true });
     await page.goBack();
-    await expect(page.getByRole('heading', { name: 'Older sources', exact: true })).toBeVisible();
-    expect(providerReads).toBe(0);
+    await expect(page.getByRole('heading', { name: project.name, exact: true })).toBeVisible();
+    expect(counts.provider).toBe(0);
+    expect(counts.writes).toEqual([]);
     await page.getByRole('button', { name: /^Older saved source/ }).last().click();
     await page.getByRole('button', { name: /^Inspect using credits/ }).click();
     await expect(page.getByRole('heading', { name: type === 'video' ? 'Transcript deadline regression' : 'Explicitly loaded source', exact: true })).toBeVisible();
-    expect(providerReads).toBeGreaterThan(0);
+    expect(counts.provider).toBeGreaterThan(0);
+    // The paid data goes to Recent only: no project row and no auto-save context.
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]).not.toHaveProperty('projectId');
-    expect(projectWrites).toHaveLength(0);
-    await page.goto(`/dashboard/projects?project=${project.id}`);
-    await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible();
+    await expect(page).not.toHaveURL(/saved=|openProject=|[?&]project=/);
+    expect(counts.writes.filter(write => write.includes('/projects/'))).toEqual([]);
+    if (type === 'video') {
+      // An explicit Save afterwards retains this exact version on the same item.
+      await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+      await expect(page.getByText(`Saved to ${project.name}`)).toBeVisible();
+      expect(itemWrites).toHaveLength(1);
+      expect(pins).toEqual([{ url: expect.stringContaining(`/sources/items/${item.id}/snapshot`), body: { sourceId: recent.id, sourceRevision: 'b'.repeat(64) } }]);
+    }
   } finally { await scenario.clear(); }
 });
 
-test('QA 003 clears a pending legacy inspection when another project opens Sources', async ({ page }) => {
+test('QA 003 a failed pin keeps its project and item for retry, never claims retained data early, and still imports', async ({ page }) => {
+  const project = { id: '6f7a8b9c-0d1e-4f2a-9b3c-5d6e7f8a9b0c', name: 'Retry destination', item_count: 0 };
+  const itemId = '7a8b9c0d-1e2f-4a3b-8c4d-6e7f8a9b0c1d';
+  const source = { id: '8b9c0d1e-2f3a-4b4c-9d5e-7f8a9b0c1d2e', input: `https://www.youtube.com/watch?v=${videoId}`, title: 'Retried video', kind: 'inspection', updatedAt: Date.now() };
+  const pins: Array<{ url: string; body: unknown }> = [], imports: unknown[] = [];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route('**/api/platform/v1/sources/recent', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 201, json: { source, linked: null, sourceRevision: 'c'.repeat(64) } }) : route.fulfill({ json: { sources: [] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => route.fulfill({ status: 201, json: { id: itemId } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${itemId}/snapshot`, route => {
+    pins.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    return pins.length === 1
+      ? route.fulfill({ status: 503, json: { error: { code: 'SOURCE_STORAGE_UNAVAILABLE', message: 'Storage is busy' } } })
+      : route.fulfill({ json: { itemId, sourceId: source.id, sourceRevision: 'c'.repeat(64) } });
+  });
+  await page.route('**/api/platform/v1/imports', route => { imports.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { id: 'import-job' } }); });
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto('/dashboard/sources');
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+    await page.getByRole('button', { name: /^Inspect/ }).click();
+    await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'but its data is not retained yet: Storage is busy' })).toBeVisible();
+    await expect.poll(() => imports.length).toBe(1);
+    await expect(page.getByText(`Saved to ${project.name}`, { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Retry retaining data' }).click();
+    await expect(page.getByText(`Saved to ${project.name}`, { exact: true })).toBeVisible();
+    expect(pins).toHaveLength(2);
+    expect(pins[1]).toEqual(pins[0]);
+    expect(pins[0]!.url).toContain(`/projects/${project.id}/sources/items/${itemId}/snapshot`);
+    expect(imports).toEqual([{ provider: 'youtube', kind: 'video', entityId: videoId, projectId: project.id }]);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 a storage failure while opening is a retryable error, never a paid prompt', async ({ page }) => {
+  const project = { id: '9c0d1e2f-3a4b-4c5d-8e6f-8a9b0c1d2e3f', name: 'Outage project', item_count: 1 };
+  const item = { id: '0d1e2f3a-4b5c-4d6e-9f7a-9b0c1d2e3f4a', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Briefly unavailable' };
+  let opens = 0;
+  const counts = watchQa003(page);
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => ++opens === 1
+    ? route.fulfill({ status: 503, json: { error: { code: 'SOURCE_STORAGE_UNAVAILABLE', message: 'Saved source storage is unavailable. Try again.' } } })
+    : route.fulfill({ json: { state: 'restored', origin: 'pin', recovered: false, missingData: [], item,
+      source: { id: item.id, input: `https://www.youtube.com/watch?v=${videoId}`, title: item.title, kind: 'inspection', updatedAt: Date.now() },
+      snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+        data: { id: videoId, title: item.title, thumbnails: [], freshness: QA003_STORED }, transcript, dataErrors: {} } } } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Briefly unavailable/ }).last().click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Saved source storage is unavailable' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    expect(opens).toBe(2);
+    expect(counts.provider).toBe(0);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 a lost saved search waits for an explicit search with credits', async ({ page }) => {
+  const project = { id: '1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b', name: 'Search project', item_count: 1 };
+  const item = { id: '2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c', source_id: '3a4b5c6d-7e8f-4a9b-8c0d-2e3f4a5b6c7d', provider: 'youtube', entity_type: 'search', entity_id: 'search', title: 'lost query' };
+  let searches = 0;
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => route.fulfill({ json: { state: 'unavailable', item, input: 'lost query' } }));
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query: 'lost query' } }));
+  await page.route('**/api/platform/v1/search?**', route => { searches++; return route.fulfill({ json: { results: [{ provider: 'youtube', type: 'video', id: videoId, title: 'Found again', thumbnails: [] }] } }); });
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^lost query/ }).last().click();
+    await expect(page.getByText('This saved search’s results are no longer stored. Searching again uses credits.')).toBeVisible();
+    expect(searches).toBe(0);
+    await page.getByRole('button', { name: /^Search using credits/ }).click();
+    await expect(page.getByRole('button', { name: /Found again/ })).toBeVisible();
+    expect(searches).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 older snapshot links with project= open the saved item without Add sources mode', async ({ page }) => {
+  const project = { id: '4b5c6d7e-8f9a-4b0c-9d1e-3f4a5b6c7d8e', name: 'Linked project', item_count: 1 };
+  const item = { id: '5c6d7e8f-9a0b-4c1d-8e2f-4a5b6c7d8e9f', source_id: '6d7e8f9a-0b1c-4d2e-9f3a-5b6c7d8e9f0a', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Bookmarked snapshot' };
+  let opens = 0;
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => { opens++; return route.fulfill({ json: {
+    state: 'restored', origin: 'project-source', recovered: false, missingData: [], item,
+    source: { id: item.source_id, input: `https://www.youtube.com/watch?v=${videoId}`, title: item.title, kind: 'inspection', updatedAt: Date.now() },
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+      data: { id: videoId, title: item.title, thumbnails: [], freshness: QA003_STORED }, transcript, dataErrors: {} } } } }); });
+  try {
+    await page.goto(`/dashboard/sources?project=${project.id}&saved=${item.id}`);
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    await expect(page.getByText('Adding sources to')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard\/sources$/);
+    expect(opens).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+for (const destination of ['project', 'sources'] as const) test(`QA 003 a saved item that finishes opening after navigation cannot replace the newer ${destination} route`, async ({ page }) => {
+  const source = { id: '7e8f9a0b-1c2d-4e3f-8a4b-6c7d8e9f0a1b', name: 'Source project', item_count: 1 };
+  const target = { id: '8f9a0b1c-2d3e-4f4a-9b5c-7d8e9f0a1b2c', name: 'Keep this context', item_count: 0 };
+  const item = { id: '9a0b1c2d-3e4f-4a5b-8c6d-8e9f0a1b2c3d', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Slow saved item' };
+  let release = () => {}, finished = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [source, target] } } } });
+  await page.route(`**/api/platform/v1/projects/${source.id}`, route => route.fulfill({ json: { ...source, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${target.id}`, route => route.fulfill({ json: { ...target, items: [] } }));
+  await page.route(`**/api/platform/v1/projects/${source.id}/sources/items/${item.id}`, async route => {
+    await gate; finished = true;
+    await route.fulfill({ json: { state: 'restored', origin: 'pin', recovered: false, missingData: [], item,
+      source: { id: item.id, input: `https://www.youtube.com/watch?v=${videoId}`, title: item.title, kind: 'inspection', updatedAt: Date.now() },
+      snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+        data: { id: videoId, title: item.title, thumbnails: [], freshness: QA003_STORED }, transcript, dataErrors: {} } } } });
+  });
+  try {
+    await page.goto(`/dashboard/projects?project=${source.id}`);
+    const opening = page.waitForRequest(request => request.url().includes(`/sources/items/${item.id}`));
+    await page.getByRole('button', { name: /^Slow saved item/ }).last().click();
+    await expect(page).toHaveURL(/saved=/);
+    // Navigate only once the free open is actually in flight.
+    await opening;
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'Keep this context 0 sources' }).click();
+    if (destination === 'sources') {
+      await page.getByRole('button', { name: 'Add sources', exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/dashboard/sources\\?project=${target.id}$`));
+    } else await expect(page).toHaveURL(new RegExp(`/dashboard/projects\\?project=${target.id}$`));
+    const expectedUrl = page.url();
+    const navigations: string[] = [];
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    release();
+    await expect.poll(() => finished).toBe(true);
+    await page.waitForTimeout(500);
+    expect(page.url()).toBe(expectedUrl);
+    expect(navigations.every(url => url === expectedUrl)).toBe(true);
+    if (destination === 'sources') await expect(page.getByText('Adding sources to')).toContainText(target.name);
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toHaveCount(0);
+  } finally { release(); await scenario.clear(); }
+});
+
+test('QA 003 links from before item IDs still gate provider reads and clear when another project opens Sources', async ({ page }) => {
   let providerReads = 0;
   page.on('request', request => { if (new URL(request.url()).searchParams.has('provider')) providerReads++; });
   const project = { id: 'new-context', name: 'New context', item_count: 0 };
@@ -1293,6 +1524,7 @@ test('QA 003 clears a pending legacy inspection when another project opens Sourc
   await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
   try {
     await page.goto(`/dashboard/sources?legacy=1&type=video&id=${videoId}`);
+    await expect(page.getByText('This project item has no saved source snapshot. Inspecting it fetches data and uses credits.')).toBeVisible();
     await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toBeVisible();
     await page.getByRole('link', { name: 'Projects', exact: true }).click();
     await page.getByRole('button', { name: 'New context 0 sources' }).click();
@@ -1300,7 +1532,6 @@ test('QA 003 clears a pending legacy inspection when another project opens Sourc
     await expect(page.getByText('Adding sources to')).toContainText('New context');
     await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('');
     await expect(page.getByRole('button', { name: /^Inspect using credits/ })).toHaveCount(0);
-    await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
     expect(providerReads).toBe(0);
   } finally { await scenario.clear(); }
 });
@@ -1330,19 +1561,19 @@ test('QA 003 editing a legacy input prevents its old notice returning on reload'
   await expect(page).not.toHaveURL(/legacy=1|[?&]id=/);
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
-  await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
+  await expect(page.getByText(/no saved source snapshot/)).toHaveCount(0);
   expect(providerReads).toBe(0);
 });
 
-test('QA 003 keeps non-project inspection links working without a legacy gate', async ({ page }) => {
+test('QA 003 keeps non-project inspection links working without a credit gate', async ({ page }) => {
   await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
   await page.goto(`/dashboard/sources?type=video&id=${videoId}`);
   await expect(page.getByRole('heading', { name: 'Transcript deadline regression', exact: true })).toBeVisible();
   await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
-  await expect(page.getByText(/This project item has no saved source snapshot/)).toHaveCount(0);
+  await expect(page.getByText(/uses credits\.$/)).toHaveCount(0);
 });
 
-for (const destination of ['project', 'sources'] as const) test(`QA 003 background inspection cannot replace a newer ${destination} route`, async ({ page }) => {
+for (const destination of ['project', 'sources'] as const) test(`QA 003 a paid inspection that finishes after navigation cannot replace the newer ${destination} route`, async ({ page }) => {
   const project = { id: 'keep-context', name: 'Keep this context', item_count: 0 };
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
   await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
@@ -1380,4 +1611,149 @@ for (const destination of ['project', 'sources'] as const) test(`QA 003 backgrou
     if (destination === 'sources') await expect(page.getByText('Adding sources to')).toContainText('Keep this context');
     else await expect(page.getByRole('heading', { name: 'Keep this context', exact: true })).toBeVisible();
   } finally { release(); await scenario.clear(); }
+});
+
+function qa003Restored(item: Record<string, unknown>, title: string, origin = 'pin') {
+  return { state: 'restored', origin, recovered: false, missingData: [], item,
+    source: { id: item.id, input: `https://www.youtube.com/watch?v=${videoId}`, title, kind: 'inspection', updatedAt: Date.now() },
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+      data: { id: videoId, title, thumbnails: [], freshness: QA003_STORED }, transcript: { ...transcript, freshness: QA003_STORED }, dataErrors: {} } } };
+}
+
+test('QA 003 Save of a reopened moment keeps that moment’s own item instead of a whole-source row', async ({ page }) => {
+  const project = { id: '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e', name: 'Moment project', item_count: 1 };
+  const moment = { id: '1c2d3e4f-5a6b-4c7d-9e8f-0a1b2c3d4e5f', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Opening moment', start_ms: 0, note: 'Opening' };
+  const itemWrites: unknown[] = [], pins: string[] = [];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [moment] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${moment.id}`, route => route.fulfill({ json: { ...qa003Restored(moment, moment.title, 'storage'), recovered: true, evidence: 'project-import' } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { itemWrites.push(route.request().postDataJSON()); return route.fulfill({ json: { id: moment.id, existing: true } }); });
+  await page.route('**/api/platform/v1/projects/*/sources/items/*/snapshot', route => { pins.push(route.request().url()); return route.fulfill({ json: { itemId: moment.id, sourceId: null, sourceRevision: 'd'.repeat(64) } }); });
+  await page.route('**/api/platform/v1/imports', route => route.fulfill({ status: 202, json: { id: 'import-job' } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.getByRole('button', { name: /^Opening moment/ }).last().click();
+    await expect(page.getByText('Saved moment at 0:00 · Opening')).toBeVisible();
+    await expect(page.getByText('Recovered from data already stored for this saved item.')).toBeVisible();
+    await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+    await expect(page.getByText(`Saved to ${project.name}`)).toBeVisible();
+    // Same start time, no whole-source content: the server returns the existing moment, which is pinned.
+    expect(itemWrites).toEqual([{ provider: 'youtube', entityType: 'video', entityId: videoId, title: moment.title, startMs: 0 }]);
+    expect(pins).toEqual([expect.stringContaining(`/projects/${project.id}/sources/items/${moment.id}/snapshot`)]);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 Save keeps the opened project as its target even when that project disappears, writing nowhere else', async ({ page }) => {
+  const origin = { id: '2d3e4f5a-6b7c-4d8e-8f9a-1b2c3d4e5f6a', name: 'Origin project', item_count: 1 };
+  const other = { id: '3e4f5a6b-7c8d-4e9f-9a0b-2c3d4e5f6a7b', name: 'Other project', item_count: 0 };
+  const item = { id: '4f5a6b7c-8d9e-4f0a-8b1c-3d4e5f6a7b8c', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Origin item' };
+  const writes: string[] = [];
+  page.on('request', request => { if (request.method() !== 'GET' && /\/api\/platform\/v1\/(projects|imports|sources)/.test(request.url())) writes.push(new URL(request.url()).pathname); });
+  let originListed = true;
+  const scenario = await accountScenario(page, { responses: {} });
+  await page.route('**/api/platform/v1/projects', route => route.request().method() === 'GET'
+    ? route.fulfill({ json: { projects: originListed ? [origin, other] : [other] } }) : route.fallback());
+  await page.route(`**/api/platform/v1/projects/${origin.id}`, route => route.fulfill({ json: { ...origin, items: [item] } }));
+  await page.route(`**/api/platform/v1/projects/${origin.id}/sources/items/${item.id}`, route => route.fulfill({ json: qa003Restored(item, item.title) }));
+  await page.route(`**/api/platform/v1/projects/${origin.id}/items`, route => route.fulfill({ status: 404, json: { error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${origin.id}`);
+    await page.getByRole('button', { name: /^Origin item/ }).last().click();
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    originListed = false;
+    await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Project not found.' })).toBeVisible();
+    expect(writes).toEqual([`/api/platform/v1/projects/${origin.id}/items`]);
+    expect(writes.some(path => path.includes(other.id))).toBe(false);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 a standalone Save into a project that already has the source reuses that row and retains data on it', async ({ page }) => {
+  const project = { id: '5a6b7c8d-9e0f-4a1b-9c2d-4e5f6a7b8c9d', name: 'Has source', item_count: 1 };
+  const existing = '6b7c8d9e-0f1a-4b2c-8d3e-5f6a7b8c9d0e';
+  const source = { id: '7c8d9e0f-1a2b-4c3d-9e4f-6a7b8c9d0e1f', input: `https://www.youtube.com/watch?v=${videoId}`, title: 'Already linked', kind: 'inspection', updatedAt: Date.now() };
+  const pins: Array<{ url: string; body: unknown }> = [], imports: unknown[] = [];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route('**/api/platform/v1/sources/recent', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 201, json: { source, linked: null, sourceRevision: 'e'.repeat(64) } }) : route.fulfill({ json: { sources: [] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => route.fulfill({ json: { id: existing, existing: true } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${existing}/snapshot`, route => {
+    pins.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    return route.fulfill({ json: { itemId: existing, sourceId: source.id, sourceRevision: 'e'.repeat(64) } });
+  });
+  await page.route('**/api/platform/v1/imports', route => { imports.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { id: 'import-job' } }); });
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto('/dashboard/sources');
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+    await page.getByRole('button', { name: /^Inspect/ }).click();
+    await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+    await expect(page.getByText(`Saved to ${project.name}`)).toBeVisible();
+    expect(pins).toEqual([{ url: expect.stringContaining(`/sources/items/${existing}/snapshot`), body: { sourceId: source.id, sourceRevision: 'e'.repeat(64) } }]);
+    await expect.poll(() => imports.length).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 Add sources into a project that already has the D1 whole source keeps one row and opens it from storage', async ({ page }) => {
+  const project = { id: '8d9e0f1a-2b3c-4d4e-8f5a-7b8c9d0e1f2a', name: 'Existing D1 project', item_count: 1 };
+  const item = { id: '9e0f1a2b-3c4d-4e5f-9a6b-8c9d0e1f2a3b', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Transcript deadline regression' };
+  const source = { id: '0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c', input: `https://www.youtube.com/watch?v=${videoId}`, title: item.title, kind: 'inspection', updatedAt: Date.now() };
+  const saves: Array<{ projectId?: string }> = [], writes: string[] = [];
+  let opens = 0;
+  page.on('request', request => { if (request.method() !== 'GET' && /\/api\/platform\/v1\/(projects|imports)/.test(request.url())) writes.push(new URL(request.url()).pathname); });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    saves.push(route.request().postDataJSON());
+    // The platform retains this inspection with the existing D1 item instead of adding a project source row.
+    return route.fulfill({ status: 201, json: { source, linked: { item, added: false }, sourceRevision: 'f'.repeat(64) } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => { opens++; return route.fulfill({ json: qa003Restored(item, item.title) }); });
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  try {
+    await page.goto(`/dashboard/sources?project=${project.id}`);
+    await expect(page.getByText('Adding sources to')).toContainText(project.name);
+    await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(source.input);
+    await page.getByRole('button', { name: /^Inspect/ }).click();
+    await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toMatchObject({ projectId: project.id });
+    await expect(page.getByText(`Added to ${project.name}`)).toBeVisible();
+    // No standalone item write, link or import is added by the browser.
+    expect(writes).toEqual([]);
+    await page.getByRole('link', { name: 'View project', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible();
+    await page.getByRole('button', { name: new RegExp(`^${item.title}`) }).last().click();
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    expect(opens).toBe(1);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 003 opening a Recent source in Add sources mode links it to the existing D1 whole source without a new row', async ({ page }) => {
+  const project = { id: '1a2b3c4d-5e6f-4a7b-9c8d-0e1f2a3b4c5e', name: 'Linking project', item_count: 1 };
+  const item = { id: '2b3c4d5e-6f7a-4b8c-8d9e-1f2a3b4c5d6f', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Linked D1 source' };
+  const source = { id: '3c4d5e6f-7a8b-4c9d-9e0f-2a3b4c5d6e7a', input: `https://www.youtube.com/watch?v=${videoId}`, title: item.title, kind: 'inspection', updatedAt: Date.now() };
+  const links: unknown[] = [], writes: string[] = [];
+  let providerReads = 0;
+  page.on('request', request => {
+    if (new URL(request.url()).searchParams.has('provider')) providerReads++;
+    if (request.method() !== 'GET' && /\/api\/platform\/v1\/(projects\/[^/]+\/items|imports|sources\/recent)/.test(request.url())) writes.push(new URL(request.url()).pathname);
+  });
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item] } }));
+  await page.route('**/api/platform/v1/sources/recent', route => route.fulfill({ json: { sources: [source] } }));
+  await page.route(`**/api/platform/v1/sources/recent/${source.id}`, route => route.fulfill({ json: { source, sourceRevision: 'a'.repeat(64),
+    snapshot: qa003Restored(item, item.title).snapshot } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources`, route => { links.push(route.request().postDataJSON()); return route.fulfill({ json: { item, added: false } }); });
+  try {
+    await page.goto(`/dashboard/sources?project=${project.id}`);
+    await page.getByRole('button', { name: new RegExp(item.title) }).first().click();
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    await expect.poll(() => links.length).toBe(1);
+    expect(links[0]).toEqual({ sourceId: source.id });
+    await expect(page.getByText(`Added to ${project.name}`)).toBeVisible();
+    expect(writes).toEqual([]);
+    expect(providerReads).toBe(0);
+  } finally { await scenario.clear(); }
 });

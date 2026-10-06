@@ -3214,6 +3214,7 @@
         ],
         "operationId": "addProjectItem",
         "summary": "Save material to a project",
+        "description": "Repeating the same provider, type, entity ID and start time returns the existing item instead of adding a duplicate. A whole source (no startMs) and each moment, including startMs 0, are distinct items.",
         "security": [
           {
             "bearerApiKey": []
@@ -3254,6 +3255,31 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "The matching project item already existed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "existing"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "existing": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           "201": {
             "description": "Project item created.",
             "content": {

@@ -73,6 +73,8 @@ export type Inspector = {
   transcript?: Transcript;
   comments?: CommentPage;
   channel?: ChannelInfo;
+  savedText?: string;
+  savedMoment?: { startMs: number; endMs?: number | null; note?: string };
 };
 export type SourceSnapshot = { kind: 'search'; selectedData: SourceDataOption[]; items: SearchItem[] }
   | { kind: 'inspection'; inspector: Inspector };
