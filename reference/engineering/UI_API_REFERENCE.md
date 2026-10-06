@@ -47,8 +47,8 @@ The UI loads these requests concurrently:
 1. The UI uses the project the item was opened from, otherwise the most recent project, or creates a “Research inbox” with `POST /v1/projects`.
 2. It saves the source with `POST /v1/projects/:id/items`. A repeated whole-source or moment save returns the existing item (`200`, `existing: true`), including a whole source the project already holds as a project source row.
 3. It retains the displayed data with `PUT /v1/projects/:id/sources/items/:itemId/snapshot`, copying the exact Recent revision. A failure keeps a retry for that project and item.
-4. It starts durable ingestion with `POST /v1/imports`, whether or not step 3 succeeded. Import failure is currently non-blocking for the initial save. Adding sources from within a project (`POST /v1/sources/recent` with `projectId`) is a separate path without an import; when the project already holds that whole source as an item, the reference is retained with it.
-5. Opening any project item later uses `GET /v1/projects/:id/sources/items/:itemId`, which reads storage only and is free.
+4. Saving starts no import or provider fetch. Adding sources from within a project (`POST /v1/sources/recent` with `projectId`) retains references with the existing whole-source item when present. Extra comments pages are retained through `POST /v1/sources/recent/:id/comments`; storage retries never repeat the provider request.
+5. Opening any project item later uses `GET /v1/projects/:id/sources/items/:itemId`, which reads storage only and is free. Missing data offers only a storage retry, with no paid recovery.
 
 ### Trend planning
 
@@ -335,8 +335,7 @@ Parameters:
 How it works:
 
 - Uses YouTube continuation tokens and normalizes comment/thread data.
-- The UI currently requests `all=true` but only displays the first three comments.
-- Full comment collections are cached for 15 minutes.
+- Live Sources exposes continuation-based pagination and retains each requested page. Saved project views show all retained pages without fetching more.
 - Internal reply/newest continuation bookkeeping is removed from the public response.
 
 ## Project and ingestion APIs
@@ -543,8 +542,8 @@ The APIs are versioned, typed internally, and published as OpenAPI 3.1 at `/open
 
 1. Request and response types are duplicated between `web/app/page.tsx` and the platform implementation.
 2. The OpenAPI document is maintained alongside the route code, but it does not yet generate the web client or enforce runtime schema validation.
-3. The UI starts import jobs but does not use `GET /v1/jobs/:id` to report durable progress or failure.
-4. Pagination tokens exist for search, browse, channel, playlist, and comments, but the UI does not expose “load more” flows.
+3. Explicit API import jobs expose progress through `GET /v1/jobs/:id`. Dashboard project saves do not start imports.
+4. The dashboard exposes comments pagination. Other browse and discovery pagination remains available through the API.
 5. The UI hard-codes demo headers and credit copy instead of loading session/usage state through a formal client.
 
 A strong next step is to generate the web client and shared types from the OpenAPI contract, add runtime schema validation, and add contract tests at the Next.js proxy boundary.

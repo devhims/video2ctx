@@ -1115,6 +1115,18 @@ export const openApiDocument = {
         } }), '404': responseRef('NotFound'), ...standardErrors },
       },
     },
+    '/v1/sources/recent/{id}/comments': {
+      post: {
+        tags: ['Projects'], operationId: 'appendRecentSourceComments', summary: 'Retain another fetched comments page', security: privateSecurity,
+        description: 'Appends the stored page following an owned source revision. Preserves earlier immutable pages and optionally updates the owned project link. Does not fetch provider data or charge credits. Retrying a completed append is idempotent.',
+        parameters: [pathParameter('id', 'Recent source UUID.')],
+        requestBody: jsonBody({ type: 'object', required: ['sourceRevision', 'continuation'], additionalProperties: false, properties: {
+          sourceRevision: sourceRevisionResponse, continuation: { type: 'string', minLength: 1, maxLength: 10000 }, projectId: { type: 'string', format: 'uuid' },
+        } }),
+        responses: { '200': jsonResponse('Comments page retained.', { type: 'object', properties: { source: schemaRef('RecentSource'), sourceRevision: sourceRevisionResponse } }),
+          '409': jsonResponse('The source changed, the page is not stored, or the continuation does not match.', schemaRef('Error')), '404': responseRef('NotFound'), ...standardErrors },
+      },
+    },
     '/v1/projects': {
       get: {
         tags: ['Projects'],
@@ -1208,7 +1220,7 @@ export const openApiDocument = {
             } },
             { type: 'object', required: ['state', 'item'], properties: {
               state: { type: 'string', enum: ['unavailable'] }, item: schemaRef('ProjectItem'),
-              input: { type: 'string', nullable: true, description: 'Source to inspect again with credits after explicit confirmation.' },
+              input: { type: 'string', nullable: true, description: 'Original source input for display. Missing saved data must be retried from storage without provider calls or credits.' },
             } },
           ] }),
           '404': responseRef('NotFound'), ...standardErrors,

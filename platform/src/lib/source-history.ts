@@ -4,6 +4,7 @@ import { sha256 } from './http';
 export const RECENT_SOURCE_LIMIT = 30;
 export const MAX_SOURCE_SNAPSHOT_BYTES = 16_000;
 export const sourceIdSchema = z.string().uuid();
+export const sourceRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const dataset = z.enum(['transcript', 'comments', 'channel']);
 const metadata = z.object({ source: z.string(), fetchedAt: z.string(), partial: z.boolean(), warnings: z.array(z.string()) }).passthrough();
 const thumbnails = z.array(z.object({ url: z.string(), width: z.number().optional(), height: z.number().optional() }));
@@ -18,6 +19,7 @@ const inspector = z.object({
     track: z.object({ name: z.string(), kind: z.string(), languageCode: z.string() }).passthrough(),
     segments: z.array(z.object({ text: z.string(), startMs: z.number(), endMs: z.number(), durationMs: z.number() }).passthrough()),
   }).passthrough().optional(),
+  commentPagesLoaded: z.number().int().positive().optional(),
   comments: z.object({ videoId: z.string(), comments: z.array(record), meta: metadata,
     totalCount: z.number().optional(), continuation: z.string().optional() }).passthrough().optional(),
   channel: z.object({ id: z.string(), name: z.string(), thumbnails, url: z.string(), meta: metadata,
@@ -38,9 +40,23 @@ export const sourceSnapshotSchema = z.discriminatedUnion('kind', [
 export const saveSourceSchema = z.object({ projectId: z.string().uuid().optional(), input: z.string().trim().min(1).max(500), snapshot: z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('search'), selectedData: z.array(dataset).min(1) }),
   z.object({ kind: z.literal('inspection'), inspector: inspector.pick({ provider: true, type: true, id: true, requestedData: true, dataErrors: true })
-    .extend({ loadedData: z.array(z.enum(['metadata', 'transcript', 'comments', 'channel'])) }) }),
+    .extend({ loadedData: z.array(z.enum(['metadata', 'transcript', 'comments', 'channel'])),
+      commentsReceipt: z.object({ sourceId: sourceIdSchema, sourceRevision: sourceRevisionSchema }).optional() }) }),
 ]) });
 export type SourceSnapshot = z.infer<typeof sourceSnapshotSchema>;
+export const sourceCommentPageSchema = inspector.shape.comments.unwrap();
+export type SourceCommentPage = z.infer<typeof sourceCommentPageSchema>;
+
+/** Merge only retained pages, preserving their order and removing overlapping comment IDs. */
+export function mergeSourceCommentPages(pages: SourceCommentPage[]): SourceCommentPage {
+  const last = pages[pages.length - 1]!;
+  const comments = new Map<string, SourceCommentPage['comments'][number]>();
+  pages.forEach((page, pageIndex) => page.comments.forEach((comment, index) => {
+    comments.set(typeof comment.id === 'string' ? comment.id : `${pageIndex}:${index}`, comment);
+  }));
+  return { ...last, comments: [...comments.values()], totalCount: [...pages].reverse().find(page => page.totalCount != null)?.totalCount, meta: { ...last.meta,
+    warnings: [...new Set(pages.flatMap(page => page.meta.warnings))], partial: pages.some(page => page.meta.partial) } };
+}
 export type SaveSourceInput = z.infer<typeof saveSourceSchema>;
 const assetReference = z.object({ videoId: z.string(), kind: z.string(), variant: z.string(), contentHash: z.string() });
 const sharedReference = z.string().regex(/^youtube\/source-history\/[a-f0-9]{64}\.json$/);
@@ -50,6 +66,7 @@ export const sourceReferenceSchema = z.discriminatedUnion('kind', [
     provider: z.literal('youtube'), type: z.enum(['video', 'playlist', 'channel']), id: z.string(),
     requestedData: z.array(dataset), dataErrors: inspector.shape.dataErrors,
     assets: z.partialRecord(z.enum(['metadata', 'transcript', 'comments']), assetReference),
+    commentPages: z.array(assetReference).optional(),
     entity: sharedReference.optional(), channel: sharedReference.optional(),
     thumbnailUrl: z.string().url().optional(),
   }) }),
@@ -60,8 +77,6 @@ export type SaveReferencedSource = z.infer<typeof saveReferencedSourceSchema>;
 export interface RecentSource {
   id: string; input: string; title: string; kind: SourceSnapshot['kind']; updatedAt: number; thumbnailUrl?: string;
 }
-
-export const sourceRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 /**
  * Canonical identity of one saved reference set: selected assets, dataset choices,

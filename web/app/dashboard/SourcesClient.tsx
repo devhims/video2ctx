@@ -28,7 +28,7 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   const providerQuery = `provider=${encodeURIComponent(inspector.provider)}`;
   const result = await loadSourceData(async () => {
     if (option === 'transcript') inspector.transcript = await api<Transcript>(`/v1/videos/${encodeURIComponent(inspector.id)}/transcript?${providerQuery}${refresh ? '&refresh=true' : ''}`, { signal });
-    if (option === 'comments') inspector.comments = await api<CommentPage>(`/v1/videos/${encodeURIComponent(inspector.id)}/comments?${providerQuery}&refresh=true`, { signal });
+    if (option === 'comments') { inspector.comments = await api<CommentPage>(`/v1/videos/${encodeURIComponent(inspector.id)}/comments?${providerQuery}&refresh=true`, { signal }); inspector.commentPagesLoaded = 1; delete inspector.commentsReceipt; }
     if (option === 'channel') {
       const channelId = String((inspector.data.channel as { id?: string } | undefined)?.id ?? '');
       if (!channelId) throw new Error('The video response did not include a channel ID.');
@@ -39,14 +39,13 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
   else delete inspector.dataErrors[option];
 }
 
-type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string; method?: 'POST' | 'PUT'; retains?: boolean };
+type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string; method?: 'POST' | 'PUT'; retains?: boolean; generation?: number; comments?: boolean };
 type SourceReceipt = { sourceId: string; sourceRevision: string } | { savedRevision: string };
 type ProjectRestore = { item: ProjectItem } & ({ state: 'restored'; origin: 'pin' | 'project-source' | 'recent' | 'storage'; recovered: boolean;
   source: RecentSource; snapshot: SourceSnapshot; sourceRevision?: string; savedText?: string; missingData: string[] }
   | { state: 'unavailable'; input?: string | null });
 /** The saved project item currently shown. It only chooses the explicit Save destination; it never enables auto-save. */
 type OpenedItem = { projectId: string; itemId: string; kind: 'project-source' | 'item'; entity: string; startMs: number | null; retained: boolean; generation: number };
-type PendingInspection = { type: EntityType | 'search'; id: string; input: string; reason: 'legacy' | 'missing' };
 const PENDING_LINK_PARAMS = ['legacy', 'id', 'type', 'openProject', 'saved'];
 
 function sourceRequest(snapshot: SourceSnapshot) {
@@ -54,12 +53,9 @@ function sourceRequest(snapshot: SourceSnapshot) {
     : { kind: snapshot.kind, inspector: {
       provider: snapshot.inspector.provider, type: snapshot.inspector.type, id: snapshot.inspector.id,
       requestedData: snapshot.inspector.requestedData, dataErrors: snapshot.inspector.dataErrors,
+      ...(snapshot.inspector.comments && snapshot.inspector.commentsReceipt ? { commentsReceipt: snapshot.inspector.commentsReceipt } : {}),
       loadedData: ['metadata', ...(['transcript', 'comments', 'channel'] as const).filter(field => snapshot.inspector[field])],
     } };
-}
-
-function entityInput(type: EntityType, id: string) {
-  return `https://www.youtube.com/${type === 'video' ? `watch?v=${encodeURIComponent(id)}` : type === 'playlist' ? `playlist?list=${encodeURIComponent(id)}` : `channel/${encodeURIComponent(id)}`}`;
 }
 
 export default function SourcesClient({ active }: {active:boolean}) {
@@ -81,8 +77,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [pendingInspection, setPendingInspection] = useState<PendingInspection | null>(null);
+  const [commentsRetaining, setCommentsRetaining] = useState(false);
   const [opened, setOpened] = useState<OpenedItem | null>(null);
+  const projectView = Boolean(opened || params.has('saved'));
   const [saving, setSaving] = useState(false);
   const [operationLabel, setOperationLabel] = useState('');
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
@@ -90,13 +87,12 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const [historyError, setHistoryError] = useState('');
   const [failedSaves, setFailedSaves] = useState<Array<SourceSave & { error: string }>>([]);
   const historyInput = useRef('');
-  const pendingInput = useRef<string | null>(null);
   const openedItem = useRef<OpenedItem | null>(null);
   const retryAction = useRef<(() => Promise<unknown>) | null>(null);
   // Each displayed inspection has a generation; its Recent receipt pins exactly that version.
   const inspectionGeneration = useRef(0);
   const sourceReceipt = useRef<{ generation: number; receipt: SourceReceipt } | null>(null);
-  const pendingSourceSave = useRef<{ generation: number; promise: Promise<unknown> } | null>(null);
+  const pendingSourceSave = useRef<{ generation: number; promise: Promise<{ source?: RecentSource; sourceRevision?: string } | null> } | null>(null);
   const savingSource = useRef(false);
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -123,6 +119,12 @@ export default function SourcesClient({ active }: {active:boolean}) {
     try {
       const response = await api<T>(save.path, { method: save.method ?? 'POST', body: save.body });
       const { source } = response;
+      if (save.generation === inspectionGeneration.current && source && response.sourceRevision) {
+        sourceReceipt.current = { generation: save.generation, receipt: { sourceId: source.id, sourceRevision: response.sourceRevision } };
+        const commentsReceipt = { sourceId: source.id, sourceRevision: response.sourceRevision };
+        setInspector(current => current?.comments ? { ...current, commentsReceipt } : current);
+        if (save.comments) setCommentsRetaining(false);
+      }
       if (source) setRecentSources(current => [source, ...current.filter(item => item.id !== source.id)].slice(0, 30));
       setFailedSaves(current => current.filter(item => item.id !== save.id));
       if (save.projectId) {
@@ -141,7 +143,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   const rememberSource = async (input: string, snapshot: SourceSnapshot, destination: { id: string | null; name: string } = { id: projectId, name: projectName }) => {
     const generation = inspectionGeneration.current;
-    const promise = persistSource<{ source?: RecentSource; sourceRevision?: string }>({ id: crypto.randomUUID(), input, projectId: destination.id, projectName: destination.name, path: '/v1/sources/recent',
+    const promise = persistSource<{ source?: RecentSource; sourceRevision?: string }>({ id: crypto.randomUUID(), input, generation, projectId: destination.id, projectName: destination.name, path: '/v1/sources/recent',
       body: JSON.stringify({ input, snapshot: sourceRequest(snapshot), ...(destination.id ? { projectId: destination.id } : {}) }),
     });
     if (snapshot.kind === 'inspection') pendingSourceSave.current = { generation, promise };
@@ -155,13 +157,15 @@ export default function SourcesClient({ active }: {active:boolean}) {
   /** A new displayed inspection: earlier Recent receipts no longer describe what is on screen. */
   const nextInspection = () => {
     sourceReceipt.current = null; pendingSourceSave.current = null;
+    setCommentsRetaining(false);
     return ++inspectionGeneration.current;
   };
 
   const forgetOpenedItem = () => { openedItem.current = null; setOpened(null); };
 
   const openRecentSource = async (entry: Pick<RecentSource, 'id'>) => {
-    setPendingInspection(null); forgetOpenedItem();
+    forgetOpenedItem();
+    if (hasPendingLink(params)) clearPendingLink();
     const controller = beginOperation('Loading saved source data…');
     try {
       const { source, snapshot, sourceRevision } = await api<{ source: RecentSource; snapshot: SourceSnapshot; sourceRevision?: string }>(`/v1/sources/recent/${entry.id}`, { signal: controller.signal });
@@ -177,7 +181,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         setSelectedData(snapshot.selectedData); setItems(snapshot.items); setInspector(null); setHasSearched(true);
       } else {
         setItems([]); setHasSearched(false); setSelectedData(snapshot.inspector.requestedData.length ? snapshot.inspector.requestedData : ['transcript']);
-        setInspector(snapshot.inspector);
+        setInspector({ ...snapshot.inspector, ...(sourceRevision ? { commentsReceipt: { sourceId: source.id, sourceRevision } } : {}) });
       }
     } catch (cause) { if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not open recent source.'); }
     finally { finishOperation(controller); }
@@ -196,7 +200,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   /** Every saved project item opens from storage for free. Nothing here fetches from YouTube. */
   const openProjectItem = async (openProject: string, itemId: string, openingSearch: string) => {
-    setPendingInspection(null); forgetOpenedItem(); pendingInput.current = null;
+    if (openedItem.current?.projectId !== openProject || openedItem.current.itemId !== itemId) forgetOpenedItem();
     const controller = beginOperation('Loading saved source data…');
     setInspector(null); setItems([]); setHasSearched(false); setNotice('');
     try {
@@ -209,12 +213,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
         retained: result.state === 'restored' && !result.recovered, generation };
       openedItem.current = context; setOpened(context);
       if (result.state === 'unavailable') {
-        // Rare: nothing is retained. Keep the link for reload and wait for an explicit, credit-labeled inspection.
-        const input = result.input ?? '';
-        setQuery(input);
-        if (!input) { setError('This project item cannot be opened in Sources.'); return; }
-        pendingInput.current = input;
-        setPendingInspection({ type: result.item.entity_type, id: result.item.entity_type === 'search' ? '' : result.item.entity_id, input, reason: 'missing' });
+        setQuery('');
+        setError('Saved data is currently unavailable. Retry loading from storage at no cost.');
+        retryAction.current = () => openProjectItem(openProject, itemId, openingSearch);
         return;
       }
       if (result.sourceRevision) sourceReceipt.current = { generation, receipt: { savedRevision: result.sourceRevision } };
@@ -227,7 +228,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         setInspector({ ...result.snapshot.inspector, ...(result.savedText ? { savedText: result.savedText } : {}),
           ...(item.start_ms != null ? { savedMoment: { startMs: item.start_ms, note: item.note } } : {}) });
       }
-      if (result.missingData.length) setNotice('Some saved data is not available. Fetching it again uses credits.');
+      if (result.missingData.length) setNotice('Some saved data is currently unavailable. Retry loading from storage at no cost.');
       else if (result.origin === 'storage') setNotice('Recovered from data already stored for this saved item.');
       replaceIfCurrent(openingSearch, PENDING_LINK_PARAMS);
     } catch (cause) {
@@ -265,10 +266,15 @@ export default function SourcesClient({ active }: {active:boolean}) {
   }, []);
 
   const showRecentSources = useCallback(() => {
-    cancelOperation(); setPendingInspection(null); setInspector(null); setItems([]); setHasSearched(false);
+    cancelOperation(); setCommentsRetaining(false); setInspector(null); setItems([]); setHasSearched(false);
     openedItem.current = null; setOpened(null); retryAction.current = null;
     setQuery(''); setTranscriptQuery(''); setError(''); setNotice('');
-  }, [cancelOperation, setInspector, setItems, setHasSearched, setQuery, setTranscriptQuery]);
+    const next = new URLSearchParams(window.location.search);
+    if (next.has('saved') || next.has('legacy')) {
+      PENDING_LINK_PARAMS.forEach(name => next.delete(name));
+      router.replace(`/dashboard/sources${next.size ? `?${next}` : ''}`, { scroll: false });
+    }
+  }, [cancelOperation, setInspector, setItems, setHasSearched, setQuery, setTranscriptQuery, router]);
 
   useEffect(() => {
     window.addEventListener(SOURCES_HOME_EVENT, showRecentSources);
@@ -286,7 +292,6 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   /** Leave the pending link: the user cancelled, edited the input, or explicitly inspected it. */
   const clearPendingLink = () => {
-    pendingInput.current = null; setPendingInspection(null);
     const next = new URLSearchParams(params); PENDING_LINK_PARAMS.forEach(name => next.delete(name));
     router.replace(`/dashboard/sources${next.size ? `?${next}` : ''}`, { scroll: false });
   };
@@ -296,19 +301,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     retryAction.current = null;
     if (!query.trim()) return;
     const input = query.trim();
-    if (pendingInspection && input === pendingInspection.input && pendingInspection.type !== 'search') {
-      if (loading) return;
-      const { type, id } = pendingInspection;
-      const openingSearch = params.toString();
-      // An explicit, credit-labeled inspection. Its data goes to Recent only; Save can retain it later.
-      const loaded = await inspect(type, id, undefined, 'youtube', selectedData, input, true);
-      // Requests may finish after navigation. Never replace a newer route with this old link.
-      if (loaded) { pendingInput.current = null; setPendingInspection(null); replaceIfCurrent(openingSearch, PENDING_LINK_PARAMS); }
-      return;
-    }
-    // Includes a lost saved search, which reruns only now, after the explicit click.
     forgetOpenedItem();
-    setPendingInspection(null);
     if (hasPendingLink(params)) clearPendingLink();
     const controller = beginOperation('Resolving your query…');
     setHasSearched(true);
@@ -386,11 +379,10 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   const inspect = async (
     type: EntityType, id: string, activeController?: AbortController,
-    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData, input?: string, fromOpenedItem = false,
+    provider: ProviderId = 'youtube', requestedData: SourceDataOption[] = selectedData, input?: string,
   ) => {
     const controller = activeController ?? beginOperation('Fetching your selected data…');
-    // An explicit fetch for an opened item keeps that item as the Save destination; anything else does not.
-    if (!fromOpenedItem) forgetOpenedItem();
+    forgetOpenedItem();
     nextInspection();
     historyInput.current = input ?? `https://www.youtube.com/${type === 'video' ? `watch?v=${id}` : type === 'playlist' ? `playlist?list=${id}` : `channel/${id}`}`;
     setError('');
@@ -415,8 +407,61 @@ export default function SourcesClient({ active }: {active:boolean}) {
     finally { finishOperation(controller); }
   };
 
+  const reloadOpenedItem = () => {
+    const item = openedItem.current;
+    if (item) return openProjectItem(item.projectId, item.itemId, new URLSearchParams(window.location.search).toString());
+  };
+
+  const openVideo = async (id: string, provider: ProviderId = 'youtube') => {
+    const item = openedItem.current;
+    if (!item) { await inspect('video', id, undefined, provider, selectedData); return; }
+    const openingSearch = new URLSearchParams(window.location.search).toString();
+    try {
+      const project = await api<{ items: ProjectItem[] }>(`/v1/projects/${encodeURIComponent(item.projectId)}`);
+      if (openedItem.current !== item || !isCurrentLink(openingSearch)) return;
+      const video = project.items.find(entry => entry.provider === provider && entry.entity_type === 'video' && entry.entity_id === id && entry.start_ms == null)
+        ?? project.items.find(entry => entry.provider === provider && entry.entity_type === 'video' && entry.entity_id === id);
+      if (!video) { setNotice('This video has no saved data in this project. Only the result list was saved.'); return; }
+      router.push(`/dashboard/sources?openProject=${encodeURIComponent(item.projectId)}&saved=${encodeURIComponent(video.id)}`);
+    } catch (cause) { if (openedItem.current === item && isCurrentLink(openingSearch)) setError(cause instanceof Error ? cause.message : 'Could not load saved project sources.'); }
+  };
+
+  const loadMoreComments = async () => {
+    if (!inspector || openedItem.current || loading || commentsRetaining || !inspector.comments?.continuation) return;
+    const current = inspector, input = historyInput.current;
+    const controller = beginOperation('Loading another comments page…');
+    try {
+      const pending = pendingSourceSave.current;
+      if (pending?.generation === inspectionGeneration.current) await pending.promise;
+      if (!sourceReceipt.current || !('sourceId' in sourceReceipt.current.receipt)) {
+        await rememberSource(input, { kind: 'inspection', inspector: current });
+      }
+      if (controller.signal.aborted) return;
+      const receipt = sourceReceipt.current?.receipt;
+      if (!receipt || !('sourceId' in receipt)) throw new Error('Save the current comments before loading another page. Retry saving the source.');
+      const continuation = current.comments!.continuation!;
+      const page = await api<CommentPage>(`/v1/videos/${encodeURIComponent(current.id)}/comments?provider=${encodeURIComponent(current.provider)}&${new URLSearchParams({ continuation, refresh: 'true' })}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const comments = new Map(current.comments!.comments.map(comment => [comment.id, comment]));
+      page.comments.forEach(comment => comments.set(comment.id, comment));
+      const generation = nextInspection();
+      setInspector({ ...current, comments: { ...page, comments: [...comments.values()], totalCount: page.totalCount ?? current.comments!.totalCount, meta: { ...page.meta,
+        warnings: [...new Set([...current.comments!.meta.warnings, ...page.meta.warnings])], partial: current.comments!.meta.partial || page.meta.partial } },
+        commentPagesLoaded: (current.commentPagesLoaded ?? 1) + 1 });
+      setCommentsRetaining(true);
+      const promise = persistSource<{ source?: RecentSource; sourceRevision?: string }>({ id: crypto.randomUUID(), input, generation, comments: true,
+        projectId, projectName, path: `/v1/sources/recent/${encodeURIComponent(receipt.sourceId)}/comments`,
+        body: JSON.stringify({ sourceRevision: receipt.sourceRevision, continuation, ...(projectId ? { projectId } : {}) }) });
+      pendingSourceSave.current = { generation, promise };
+      await promise;
+    } catch (cause) {
+      if (!isAbortError(cause)) setError(cause instanceof Error ? cause.message : 'Could not load another comments page.');
+    } finally { finishOperation(controller); }
+  };
+
   const refreshVideoData = async () => {
-    if (!inspector || loading) return;
+    if (openedItem.current) { await reloadOpenedItem(); return; }
+    if (!inspector || loading || commentsRetaining) return;
     setNotice('');
     const controller = beginOperation('Refreshing video data…');
     nextInspection();
@@ -432,7 +477,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   const refreshComments = async () => {
-    if (!inspector || loading) return;
+    if (openedItem.current) { await reloadOpenedItem(); return; }
+    if (!inspector || loading || commentsRetaining) return;
     const controller = beginOperation('Fetching current comments…');
     nextInspection();
     try {
@@ -443,7 +489,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   const retrySourceData = async () => {
-    if (!inspector || loading) return;
+    if (openedItem.current) { await reloadOpenedItem(); return; }
+    if (!inspector || loading || commentsRetaining) return;
     const controller = beginOperation('Retrying failed source requests…');
     nextInspection();
     const next = { ...inspector, dataErrors: { ...inspector.dataErrors } };
@@ -455,12 +502,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   useEffect(() => {
-    if (pendingInput.current && (!active || !hasPendingLink(params))) {
-      if (query === pendingInput.current) setQuery('');
-      pendingInput.current = null; setPendingInspection(null);
-    }
     if (!active) return;
-    setPendingInspection(null);
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
     if (saved) {
       const openProject = params.get('openProject');
@@ -474,11 +516,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
       if (openProject) { void openProjectItem(openProject, saved, params.toString()); return; }
     }
     if (params.get('legacy') === '1' && id && (type === 'video' || type === 'channel' || type === 'playlist')) {
-      // Links from before saved items opened from storage carry no item ID. Gate provider reads.
       showRecentSources();
-      const input = entityInput(type, id);
-      pendingInput.current = input; setQuery(input); setPendingInspection({ type, id, input, reason: 'legacy' });
-      return; // Keep the pending source in the URL for reload and failed-request retry.
+      setError('Open this saved source from its project to load stored data at no cost.');
+      return;
     }
     if (q) { setQuery(q); searchInput.current?.focus(); }
     if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
@@ -490,8 +530,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   const saveInspector = async () => {
-    if (!inspector || savingSource.current) return;
+    if (!inspector || savingSource.current || loading || commentsRetaining) return;
     const current = inspector, input = historyInput.current, generation = inspectionGeneration.current;
+    const receiptAtSave = sourceReceipt.current;
     const snapshot: SourceSnapshot = { kind: 'inspection', inspector: current };
     if (projectId) {
       await rememberSource(input, snapshot);
@@ -511,7 +552,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
       const retain = async (itemId: string) => {
         const pendingSave = pendingSourceSave.current;
         if (pendingSave?.generation === generation) await pendingSave.promise;
-        const receipt = sourceReceipt.current?.generation === generation ? sourceReceipt.current.receipt : null;
+        const receipt = receiptAtSave?.generation === generation ? receiptAtSave.receipt
+          : sourceReceipt.current?.generation === generation ? sourceReceipt.current.receipt : null;
         await persistSource({ id: crypto.randomUUID(), input, projectId: project.id, projectName: project.name, method: 'PUT', retains: true,
           path: `/v1/projects/${encodeURIComponent(project.id)}/sources/items/${encodeURIComponent(itemId)}/snapshot`,
           body: JSON.stringify(receipt ?? { input, snapshot: sourceRequest(snapshot) }) });
@@ -538,10 +580,6 @@ export default function SourcesClient({ active }: {active:boolean}) {
         // Copy the displayed Recent or recovered revision; keep the same request for a failed-save retry.
         await retain(saved.id);
       }
-      // The import is independent of retained data and starts even if pinning failed.
-      await api('/v1/imports', {
-        method: 'POST', body: JSON.stringify({ provider: current.provider, kind: current.type, entityId: current.id, projectId: project.id }),
-      });
       await projectsResource.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save source.'); }
     finally { savingSource.current = false; setSaving(false); }
@@ -589,18 +627,13 @@ export default function SourcesClient({ active }: {active:boolean}) {
             {projectId && <div className='source-project-context' role='status'>Adding sources to <strong>{projectName}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(projectId)}`}>View project</Link></div>}
             {!projectId && opened && <div className='source-project-context' role='status'>Opened from <strong>{projects.find(project => project.id === opened.projectId)?.name ?? 'project'}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(opened.projectId)}`}>View project</Link></div>}
             <section className='source-studio' aria-labelledby='source-studio-title'>
-              <header className={pageStyles.intro}><h2 id='source-studio-title'>Search or paste a YouTube link</h2>{(inspector || hasSearched) && <button className={pageStyles.textAction} onClick={showRecentSources}>Recent sources</button>}</header>
-              <form onSubmit={runSearch} className='source-studio-form'>
+              <header className={pageStyles.intro}><h2 id='source-studio-title'>{projectView ? 'Saved project source' : 'Search or paste a YouTube link'}</h2>{(projectView || inspector || hasSearched) && <button className={pageStyles.textAction} onClick={showRecentSources}>Recent sources</button>}</header>
+              {!projectView && <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
-                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); setPendingInspection(null); if (hasPendingLink(params)) clearPendingLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
-                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : pendingInspection ? pendingInspection.type === 'search' ? 'Search using credits' : 'Inspect using credits' : 'Inspect'} <span aria-hidden='true'>→</span></button>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); if (hasPendingLink(params)) clearPendingLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <button disabled={loading || !query.trim()}>{loading ? 'Working…' : 'Inspect'} <span aria-hidden='true'>→</span></button>
                 </div>
-                {pendingInspection && <div className='source-refresh-row'><p role='status'>{pendingInspection.reason === 'legacy'
-                  ? 'This project item has no saved source snapshot. Inspecting it fetches data and uses credits.'
-                  : pendingInspection.type === 'search'
-                    ? 'This saved search’s results are no longer stored. Searching again uses credits.'
-                    : 'This project item’s saved data is no longer stored. Inspecting it again fetches data and uses credits.'}</p>{!loading && <button type='button' onClick={() => { clearPendingLink(); showRecentSources(); }}>Cancel</button>}</div>}
                 <fieldset className='source-data-picker'>
                   <legend>Include with each video</legend>
                   <div className='source-data-options'>
@@ -618,12 +651,12 @@ export default function SourcesClient({ active }: {active:boolean}) {
                     })}
                   </div>
                 </fieldset>
-              </form>
+              </form>}
             </section>
 
             {(loading || error || notice) && <div className='source-feedback'>
               {loading && <div className='source-operation-loading'><SourceSkeleton label={operationLabel} lines={2} /><button type='button' onClick={cancelOperation}>Cancel</button></div>}
-              {error && <div className='alert error' role='alert'><span>{error}</span>{(retryAction.current || query.trim()) && <button onClick={() => { const retry = retryAction.current; retryAction.current = null; void (retry ? retry() : runSearch()); }}>Retry</button>}</div>}
+              {error && <div className='alert error' role='alert'><span>{error}</span>{(retryAction.current || query.trim()) && <button onClick={() => { const retry = retryAction.current; retryAction.current = null; void (retry ? retry() : openedItem.current ? reloadOpenedItem() : runSearch()); }}>Retry</button>}</div>}
               {notice && <div className='alert success' role='status'><span>{notice}</span><button aria-label='Dismiss notification' onClick={() => setNotice('')}>×</button></div>}
             </div>}
             {failedSaves.map(save => <div key={save.id} className='source-project-save-error alert error' role='alert'>
@@ -631,9 +664,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
               <button type='button' onClick={() => void persistSource(save)}>{save.retains ? 'Retry retaining data' : 'Retry saving'}</button>
             </div>)}
             {inspector ? (
-              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} saving={saving} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); forgetOpenedItem(); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void inspect('video', id, undefined, inspector.provider, selectedData)} />
+              <InspectorPanel key={`${inspector.provider}-${inspector.type}-${inspector.id}-${inspector.requestedData.join('-')}`} inspector={inspector} retrying={loading} saving={saving || commentsRetaining} savedProject={Boolean(opened)} onLoadMoreComments={() => void loadMoreComments()} onReloadSaved={() => void reloadOpenedItem()} onRetry={() => void retrySourceData()} onOpenComments={() => void refreshComments()} onRefresh={() => void refreshVideoData()} segments={filteredSegments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} onClose={() => { cancelOperation(); setInspector(null); forgetOpenedItem(); }} onSave={() => void saveInspector()} onMonitor={() => void addMonitor()} onOpenVideo={(id) => void openVideo(id, inspector.provider)} />
             ) : (
-              hasSearched || loading || items.length ? <VideoSearchResults items={items} onInspect={(id, provider) => void inspect('video', id, undefined, provider, selectedData)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
+              hasSearched || loading || items.length ? <VideoSearchResults items={items} onInspect={(id, provider) => void openVideo(id, provider)} onStart={() => searchInput.current?.focus()} loading={loading} hasSearched={hasSearched} failed={Boolean(error)} />
               : <section className='source-results' aria-labelledby='recent-sources-title'>
                 <header><h2 id='recent-sources-title'>Recent sources</h2></header>
                 {historyLoading && !recentSources.length ? <RecentSourcesSkeleton /> : null}
@@ -709,7 +742,7 @@ function VideoSearchResults({ items, onInspect, onStart, loading, hasSearched, f
   </section>;
 }
 
-function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retrying, saving, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; onRefresh: () => void; retrying: boolean; saving: boolean; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
+function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retrying, saving, savedProject, onLoadMoreComments, onReloadSaved, segments, transcriptQuery, setTranscriptQuery, onClose, onSave, onMonitor, onOpenVideo }: { inspector: Inspector; onRetry: () => void; onOpenComments: () => void; onRefresh: () => void; retrying: boolean; saving: boolean; savedProject: boolean; onLoadMoreComments: () => void; onReloadSaved: () => void; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value:string)=>void; onClose:()=>void; onSave:()=>void; onMonitor:()=>void; onOpenVideo:(id:string)=>void }) {
   const title = String(inspector.data.title ?? inspector.data.name ?? inspector.id);
   const videoChannel = inspector.data.channel as { id?: string; name?: string; url?: string } | undefined;
   const panelOptions = inspector.requestedData.filter((option) => option !== 'channel');
@@ -720,48 +753,15 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
     return state === 'stored' || state === 'stale';
   });
   const [activePanel, setActivePanel] = useState<SourceDataOption>(panelOptions[0] ?? 'channel');
-  const [commentPage, setCommentPage] = useState(inspector.comments);
-  const [commentPagesLoaded, setCommentPagesLoaded] = useState(inspector.comments ? 1 : 0);
-  const [commentsLoading, setCommentsLoading] = useState(false);
-  const [commentsError, setCommentsError] = useState('');
-  useEffect(() => { setCommentPage(inspector.comments); setCommentPagesLoaded(inspector.comments ? 1 : 0); setCommentsError(''); }, [inspector.comments]);
-
-  const loadMoreComments = async () => {
-    const continuation = commentPage?.continuation;
-    if (!continuation || commentsLoading) return;
-    setCommentsLoading(true);
-    setCommentsError('');
-    try {
-      const params = new URLSearchParams({ continuation, refresh: 'true' });
-      const page = await api<CommentPage>(`/v1/videos/${encodeURIComponent(inspector.id)}/comments?provider=${encodeURIComponent(inspector.provider)}&${params}`);
-      setCommentPage((current) => {
-        if (!current) return page;
-        const comments = new Map(current.comments.map((comment) => [comment.id, comment]));
-        page.comments.forEach((comment) => comments.set(comment.id, comment));
-        return {
-          ...page,
-          comments: [...comments.values()],
-          totalCount: page.totalCount ?? current.totalCount,
-          meta: {
-            ...page.meta,
-            warnings: [...new Set([...current.meta.warnings, ...page.meta.warnings])],
-            partial: current.meta.partial || page.meta.partial,
-          },
-        };
-      });
-      setCommentPagesLoaded((count) => count + 1);
-    } catch (cause) {
-      setCommentsError(cause instanceof Error ? cause.message : 'Could not load the next comments page.');
-    } finally {
-      setCommentsLoading(false);
-    }
-  };
+  const commentPage = inspector.comments;
+  const commentPagesLoaded = inspector.commentPagesLoaded ?? (commentPage ? 1 : 0);
+  const commentsLoading = retrying || saving;
 
   if (inspector.type === 'playlist') return <PlaylistInspector inspector={inspector} saving={saving} onClose={onClose} onSave={onSave} onOpenVideo={onOpenVideo} />;
   if (inspector.type !== 'video') return <section className='inspector'><div className='inspector-head'><button className='back' onClick={onClose}>← Back to Sources</button></div><div className='entity-title'><div><span className={`type-pill ${inspector.type}`}>{inspector.type}</span><h2>{title}</h2><p>{String(inspector.data.description ?? '').slice(0,160)}</p></div></div><CatalogEntity inspector={inspector} /></section>;
 
   return <section className='source-inspector' aria-labelledby='source-detail-title'>
-    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={saving || inspector.loadingData?.includes('transcript')}><Icon name='plus' size={15} />Save to project</button></div></div>
+    <div className='source-inspector-toolbar'><button className='back' onClick={onClose}>← Back to results</button><div><button onClick={onMonitor}><Icon name='monitor' size={15} />Monitor channel</button><button onClick={onSave} disabled={saving || retrying}><Icon name='plus' size={15} />Save to project</button></div></div>
     <header className='source-detail-head'>
       <div>
         <p className='panel-label'>Video result</p>
@@ -777,7 +777,7 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
 
     {inspector.savedMoment ? <p className='source-data-warning' role='note'>Saved moment at {formatTime(inspector.savedMoment.startMs)}{inspector.savedMoment.note ? ` · ${inspector.savedMoment.note}` : ''}</p> : null}
 
-    {savedData || refreshing ? <div className='source-refresh-row'>
+    {savedProject ? <div className='source-refresh-row'><span role='status'>Showing saved project data · no credits used</span><button type='button' onClick={onReloadSaved} disabled={retrying}>Reload saved data</button></div> : savedData || refreshing ? <div className='source-refresh-row'>
       <span role='status'>{refreshing ? 'Refreshing data from YouTube…' : 'Showing saved data · refreshing uses credits'}</span>
       <button type='button' onClick={onRefresh} disabled={retrying || commentsLoading}
         title='Fetch video details and the selected transcript and comments again from YouTube. This uses credits.'>
@@ -798,12 +798,12 @@ function InspectorPanel({ inspector, onRetry, onOpenComments, onRefresh, retryin
       <section className='source-data-panel' role='tabpanel'>
         {activePanel === 'transcript' ? <TranscriptDataPanel inspector={inspector} segments={segments} transcriptQuery={transcriptQuery} setTranscriptQuery={setTranscriptQuery} /> : null}
         {/* Selecting a tab only shows saved data; fetching comments is a separate, credit-labeled action. */}
-        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error={commentsError} onLoadMore={() => void loadMoreComments()} onLoad={retrying ? undefined : onOpenComments} /> : null}
+        {activePanel === 'comments' && inspector.loadingData?.includes('comments') && !commentPage ? <SourceSkeleton label='Loading comments' variant='panel' lines={6} /> : activePanel === 'comments' ? <CommentsDataPanel initialError={inspector.dataErrors.comments} page={commentPage} pagesLoaded={commentPagesLoaded} loading={commentsLoading || Boolean(inspector.loadingData?.includes('comments'))} error='' savedProject={savedProject} onLoadMore={onLoadMoreComments} onLoad={retrying || savedProject ? undefined : onOpenComments} /> : null}
       </section>
     </> : null}
 
-    {!retrying && retryableSourceDatasets(inspector.dataErrors).length > 0 ? <div className='source-retry-actions'><button type='button' onClick={onRetry}><ArrowClockwiseIcon size={16} aria-hidden='true' />Retry failed requests using credits</button></div> : null}
-    <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />
+    {!savedProject && !retrying && retryableSourceDatasets(inspector.dataErrors).length > 0 ? <div className='source-retry-actions'><button type='button' onClick={onRetry} disabled={saving}><ArrowClockwiseIcon size={16} aria-hidden='true' />Retry failed requests using credits</button></div> : null}
+    {!savedProject && <SourceApiGuide inspector={inspector} channelId={videoChannel?.id} />}
   </section>;
 }
 
@@ -902,7 +902,7 @@ function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscri
   </>;
 }
 
-function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, onLoadMore, onLoad }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; onLoadMore: () => void; onLoad?: () => void }) {
+function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, savedProject, onLoadMore, onLoad }: { initialError?: string; page?: CommentPage; pagesLoaded: number; loading: boolean; error: string; savedProject: boolean; onLoadMore: () => void; onLoad?: () => void }) {
   if (initialError && !page) return <p role='alert' className='source-data-unavailable'>{initialError}</p>;
   const comments = page?.comments ?? [];
   if (!page && !loading && onLoad) return <div className='source-data-unavailable'><p>No comments are saved for this video.</p><button type='button' onClick={onLoad}>Load comments using credits</button></div>;
@@ -917,8 +917,8 @@ function CommentsDataPanel({ initialError, page, pagesLoaded, loading, error, on
       return <li key={String(comment.id ?? index)} data-reply={comment.id.includes('.')}><div>{avatar ? <img src={avatar.url} alt='' /> : <span aria-hidden='true'>{String(author?.name ?? 'Viewer').slice(0, 1).toUpperCase()}</span>}<b>{author?.name ?? 'Viewer'}</b>{comment.isPinned ? <em>pinned</em> : null}{comment.isHearted ? <em>hearted</em> : null}</div><p>{String(comment.text ?? '')}</p><small>{[comment.publishedTimeText, comment.likeCountText ? `${comment.likeCountText} likes` : '', comment.replyCount ? `${comment.replyCount} replies` : '', comment.id.includes('.') ? 'reply' : ''].filter(Boolean).map(String).join(' · ')}</small></li>;
     })}</ol>
     <div className='source-comments-pagination'>
-      <span>{page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
-      {page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page using credits</button> : null}
+      <span>{savedProject ? 'All retained comment pages are shown.' : page?.continuation ? 'More comments are available.' : 'All available comment pages are loaded.'}</span>
+      {!savedProject && page?.continuation ? <button type='button' disabled={loading} aria-busy={loading} onClick={onLoadMore}>Load next page using credits</button> : null}
     </div>
     {error ? <p className='source-data-warning' role='alert'>{error}</p> : null}
   </>;

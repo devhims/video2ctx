@@ -3,7 +3,7 @@ import { videoCatalog } from './video-catalog';
 import { videoResourceKey } from './video-resources';
 import { readSourceResponseStrict } from './source-response-storage';
 import { withYouTubeMetadata } from './youtube';
-import { sourceSnapshotSchema, type RecentSource, type SourceReference, type SourceSnapshot } from './source-history';
+import { sourceSnapshotSchema, sourceCommentPageSchema, mergeSourceCommentPages, type RecentSource, type SourceReference, type SourceSnapshot } from './source-history';
 import type { ProjectItemRecord } from './project-items';
 import type { StoredSourceReference } from '../durable-objects/user-account';
 
@@ -13,7 +13,7 @@ import type { StoredSourceReference } from '../durable-objects/user-account';
  * dataset; corrupt bytes and store failures throw so they stay retryable errors.
  */
 
-export const MISSING_DATA_MESSAGE = 'This saved data is not available. Fetching it again uses credits.';
+export const MISSING_DATA_MESSAGE = 'This saved data is currently unavailable. Retry loading from storage at no cost.';
 type Dataset = 'metadata' | 'transcript' | 'comments' | 'channel';
 const SUPPORTED = new Set(['video', 'playlist', 'channel']);
 
@@ -59,10 +59,13 @@ export async function restoreReference(env: Env, reference: SourceReference, tit
     const items = await readShared(env, reference.results);
     return items === null ? null : { snapshot: sourceSnapshotSchema.parse({ kind: 'search', selectedData: reference.selectedData, items }), missingData: [] };
   }
-  const { assets, entity, channel, thumbnailUrl: _thumbnail, ...source } = reference.inspector;
+  const { assets, entity, channel, commentPages, thumbnailUrl: _thumbnail, ...source } = reference.inspector;
   const missing: Dataset[] = [];
   const restored: Record<string, unknown> = { ...source, dataErrors: { ...source.dataErrors } };
   const dataErrors = restored.dataErrors as Record<string, string>;
+  for (const field of Object.keys(dataErrors)) {
+    if (dataErrors[field] === 'This saved data is not available. Fetching it again uses credits.') dataErrors[field] = MISSING_DATA_MESSAGE;
+  }
   let available = false;
   if (entity) {
     const data = await readShared(env, entity);
@@ -83,6 +86,17 @@ export async function restoreReference(env: Env, reference: SourceReference, tit
       restored[field === 'metadata' ? 'data' : field] = storedValue(stored);
       available = true;
     }));
+  }
+  const pages = restored.comments ? [sourceCommentPageSchema.parse(restored.comments)] : [];
+  for (const asset of commentPages ?? []) {
+    const saved = await catalogFor(env).readSourceVersion(asset);
+    if (!saved) { if (!missing.includes('comments')) missing.push('comments'); continue; }
+    pages.push(sourceCommentPageSchema.parse(saved.value));
+    available = true;
+  }
+  if (pages.length) {
+    restored.comments = mergeSourceCommentPages(pages);
+    restored.commentPagesLoaded = pages.length;
   }
   // Playlists and channels have nothing useful to show without their entity payload.
   if (!available || (source.type !== 'video' && missing.includes('metadata'))) return null;

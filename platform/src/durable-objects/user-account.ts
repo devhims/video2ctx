@@ -182,6 +182,29 @@ export class UserAccountDO extends DurableObject<Env> {
     return entry;
   }
 
+  /** Compare the old references and retain an appended page and its optional project link atomically. */
+  async replaceSourceReferences(id: string, expected: SourceReference, value: SaveReferencedSource,
+    destination?: { projectId: string; itemId?: string }) {
+    this.assertActive();
+    const sourceId = sourceIdSchema.parse(id), input = saveReferencedSourceSchema.parse(value);
+    const project = destination ? z.string().uuid().parse(destination.projectId) : undefined;
+    const item = destination?.itemId ? sourceIdSchema.parse(destination.itemId) : undefined;
+    const expectedPayload = sourceRevisionPayload(expected);
+    const revision = await sourceRevision(input.snapshot);
+    this.assertActive();
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.ctx.storage.sql.exec<{ source_key: string; snapshot: string }>(
+        'SELECT source_key, snapshot FROM recent_sources WHERE id = ?', sourceId).toArray()[0];
+      if (!row || row.source_key !== sourceIdentity(input) || sourceRevisionPayload(sourceReferenceSchema.parse(JSON.parse(row.snapshot))) !== expectedPayload) {
+        return { ok: false as const };
+      }
+      const source = this.saveSource(input);
+      if (project && item) this.writePin(project, item, source.id, revision, input);
+      else if (project) this.linkSourceToProject(project, source.id);
+      return { ok: true as const, source, sourceRevision: revision };
+    });
+  }
+
   listSources(): RecentSource[] {
     this.assertActive();
     return this.ctx.storage.sql.exec<{ id: string; input: string; title: string; kind: RecentSource['kind']; updated_at: number; thumbnail_url: string | null }>(

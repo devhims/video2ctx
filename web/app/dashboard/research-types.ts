@@ -72,6 +72,8 @@ export type Inspector = {
   refreshData?: Array<SourceDataOption | 'metadata'>;
   transcript?: Transcript;
   comments?: CommentPage;
+  commentPagesLoaded?: number;
+  commentsReceipt?: { sourceId: string; sourceRevision: string };
   channel?: ChannelInfo;
   savedText?: string;
   savedMoment?: { startMs: number; endMs?: number | null; note?: string };

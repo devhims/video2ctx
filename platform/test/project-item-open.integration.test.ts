@@ -11,7 +11,7 @@ import type { App, AuthPrincipal } from '../src/types';
 import type { SaveReferencedSource } from '../src/lib/source-history';
 const env = workerEnv as Env;
 
-const MISSING = 'This saved data is not available. Fetching it again uses credits.';
+const MISSING = 'This saved data is currently unavailable. Retry loading from storage at no cost.';
 const json = { 'content-type': 'application/json' };
 
 function sourceApp(userId: string, method: AuthPrincipal['method'] = 'session') {
@@ -667,4 +667,96 @@ test('a recovered project source saves the selected revision into its existing r
   expect(after.body).toMatchObject({ origin: 'project-source', recovered: false,
     sourceRevision: before.body.sourceRevision, snapshot: { inspector: { transcript: { text: 'Recovered displayed transcript' } } } });
   expect(await account.projectSourceCounts()).toEqual([{ projectId, count: 1 }]);
+});
+
+
+test('comment pages stay pinned through refresh, retries and Recent eviction', async () => {
+  const { projectId, app, account } = await owner('retained-comment-pages');
+  const id = videoId();
+  await storeVideo(id);
+  const page = (ids: string[], continuation?: string) => ({ videoId: id, comments: ids.map(id => ({ id, text: id })),
+    ...(continuation ? { continuation } : {}), meta: { source: 'youtube', fetchedAt: new Date().toISOString(), warnings: [], partial: false } });
+  await saveVideoResource(env, { kind: 'comments', id }, page(['first', 'overlap'], 'page-two'), Date.now(), 60_000);
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'page-two' }, page(['overlap', 'second'], 'page-three'), Date.now(), 60_000);
+  const descriptor = inspection(id, ['metadata', 'transcript', 'comments']);
+  descriptor.snapshot.inspector.requestedData.push('comments');
+  const remembered = await app.request('/sources/recent', { method: 'POST', headers: json, body: JSON.stringify({ ...descriptor, projectId }) }, env);
+  const initial = await remembered.json() as { source: { id: string }; sourceRevision: string };
+  const append = (body: unknown, target = app) => target.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json, body: JSON.stringify(body) }, readOnlyEnv());
+  const request = { sourceRevision: initial.sourceRevision, continuation: 'page-two', projectId };
+  const response = await append(request);
+  expect(response.status).toBe(200);
+  const saved = await response.json() as { sourceRevision: string };
+  expect(saved.sourceRevision).not.toBe(initial.sourceRevision);
+  // A lost successful response can be retried without appending twice or using a provider.
+  expect((await append(request)).status).toBe(200);
+  const restored = await (await app.request(`/sources/recent/${initial.source.id}`, {}, readOnlyEnv())).json() as any;
+  expect(restored.snapshot.inspector.commentPagesLoaded).toBe(2);
+  expect(restored.snapshot.inspector.comments.comments.map((comment: { id: string }) => comment.id)).toEqual(['first', 'overlap', 'second']);
+  expect((await append({ ...request, continuation: 'unrelated' })).status).toBe(409);
+  const foreign = await owner('foreign-comment-pages');
+  expect((await append({ sourceRevision: saved.sourceRevision, continuation: 'page-three' }, foreign.app)).status).toBe(404);
+  expect((await append({ ...request, projectId: foreign.projectId })).status).toBe(404);
+  expect((await append(request, sourceApp((await owner('api-comment-pages')).userId, 'api-key'))).status).toBe(403);
+  const projectSource = (await account.listProjectSources(projectId))[0]!;
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'page-two' }, page(['newer unseen comments']), Date.now() + 1000, 60_000);
+  // Retrying another dataset must not replace the retained page chain with the latest shared page.
+  const retainedDescriptor = { ...descriptor, snapshot: { ...descriptor.snapshot, inspector: { ...descriptor.snapshot.inspector,
+    commentsReceipt: { sourceId: initial.source.id, sourceRevision: saved.sourceRevision } } } };
+  const retained = await app.request('/sources/recent', { method: 'POST', headers: json, body: JSON.stringify(retainedDescriptor) }, readOnlyEnv());
+  expect(retained.status).toBe(201);
+  const afterRetry = await (await app.request(`/sources/recent/${initial.source.id}`, {}, readOnlyEnv())).json() as any;
+  expect(afterRetry.snapshot.inspector.comments.comments.map((comment: { id: string }) => comment.id)).toEqual(['first', 'overlap', 'second']);
+  expect(afterRetry.snapshot.inspector.commentPagesLoaded).toBe(2);
+  const foreignReceipt = await foreign.app.request('/sources/recent', { method: 'POST', headers: json, body: JSON.stringify(retainedDescriptor) }, readOnlyEnv());
+  expect(foreignReceipt.status).toBe(409);
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DELETE FROM recent_sources'); });
+  const opened = await open(app, projectId, projectSource.id);
+  expect(opened.body.snapshot.inspector.comments.comments.map((comment: { id: string }) => comment.id)).toEqual(['first', 'overlap', 'second']);
+  expect(opened.body.snapshot.inspector.commentPagesLoaded).toBe(2);
+  const reference = (await account.getProjectSource(projectId, projectSource.id))!.snapshot;
+  if (reference.kind !== 'inspection') throw new Error('Expected an inspection');
+  await env.VIDEO_ASSETS.delete(await objectKey(reference.inspector.commentPages![0]!.contentHash));
+  const partial = await open(app, projectId, projectSource.id);
+  expect(partial.body).toMatchObject({ state: 'restored', missingData: ['comments'] });
+  expect(partial.body.snapshot.inspector.comments.comments.map((comment: { id: string }) => comment.id)).toEqual(['first', 'overlap']);
+  expect(partial.body.snapshot.inspector.dataErrors.comments).toBe(MISSING);
+});
+
+
+test('appending comments to a D1 item rolls back Recent when pinning fails', async () => {
+  const { projectId, app, account } = await owner('comments-pin-rollback');
+  const id = videoId();
+  await storeVideo(id);
+  const page = (text: string, continuation?: string) => ({ videoId: id, comments: [{ id: text, text }], continuation,
+    meta: { source: 'youtube', fetchedAt: new Date().toISOString(), warnings: [], partial: false } });
+  await saveVideoResource(env, { kind: 'comments', id }, { ...page('first', 'next'), totalCount: 200 }, Date.now(), 60_000);
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'next' }, page('second', 'not-stored'), Date.now(), 60_000);
+  const item = await addItem(app, projectId, { entityType: 'video', entityId: id });
+  const descriptor = inspection(id, ['metadata', 'comments']);
+  descriptor.snapshot.inspector.requestedData = ['comments'];
+  const initial = await (await app.request('/sources/recent', { method: 'POST', headers: json,
+    body: JSON.stringify({ ...descriptor, projectId }) }, env)).json() as { source: { id: string }; sourceRevision: string };
+  const append = (revision: string, continuation = 'next') => app.request(`/sources/recent/${initial.source.id}/comments`, {
+    method: 'POST', headers: json, body: JSON.stringify({ sourceRevision: revision, continuation, projectId }),
+  }, readOnlyEnv());
+  const before = (await account.getSource(initial.source.id))!.snapshot;
+  await runInDurableObject(account, (_instance, state) => {
+    state.storage.sql.exec(`CREATE TRIGGER reject_comment_pin BEFORE INSERT ON project_item_snapshots BEGIN SELECT RAISE(ABORT, 'injected pin failure'); END`);
+  });
+  expect((await append(initial.sourceRevision)).status).toBe(500);
+  expect((await account.getSource(initial.source.id))!.snapshot).toEqual(before);
+  expect((await open(app, projectId, item.id)).body.snapshot.inspector.commentPagesLoaded).toBe(1);
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DROP TRIGGER reject_comment_pin'); });
+  const committed = await append(initial.sourceRevision);
+  expect(committed.status).toBe(200);
+  const revision = (await committed.json() as { sourceRevision: string }).sourceRevision;
+  const opened = await open(app, projectId, item.id);
+  expect(opened.body.snapshot.inspector.commentPagesLoaded).toBe(2);
+  expect(opened.body.snapshot.inspector.comments.totalCount).toBe(200);
+  expect(await account.projectSourceCounts()).toEqual([]);
+  // A concurrent save using the old reference cannot overwrite the appended pages.
+  expect(await account.replaceSourceReferences(initial.source.id, before, { input: descriptor.input, title: 'Stale save', snapshot: before })).toEqual({ ok: false });
+  expect((await append(revision, 'not-stored')).status).toBe(409);
+  expect((await open(app, projectId, item.id)).body.sourceRevision).toBe(revision);
 });

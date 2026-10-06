@@ -3,7 +3,7 @@ title: "Projects and saved research"
 description: "Keep related sources and evidence together."
 ---
 
-Projects organize sources you want to revisit. Saving an inspected source stores its identity and selected content in your account, then starts the import path used by research tools.
+Projects organize sources you want to revisit. Saving an inspected source keeps the requested data in your account and groups it with related sources. Saving and reopening retained data do not use credits or start another import.
 
 <Steps>
   <Step title="Inspect a source">Open a video, channel, or playlist from Sources.</Step>
@@ -13,14 +13,12 @@ Projects organize sources you want to revisit. Saving an inspected source stores
 
 Projects are private to the signed-in account. API keys created by that account can access the same projects and credit balance.
 
-<Note>
-  Imports and AI research jobs can finish asynchronously. The API exposes job state even when the dashboard does not show every intermediate step.
-</Note>
-
 ## Reopening saved items
 
-Opening a saved project item restores its stored data without a YouTube request or credit charge. **Save to project** and **Save playlist** keep the saved content with the project item, so later opens show exactly the version you saved. An older item opens from data already stored for your project when that data is still available. Such recovered data is the newest stored copy, so it may be newer than the version you originally saw, and it is marked as recovered. If an optional dataset, such as comments, was not kept, the rest stays visible and that dataset offers a credit-labeled fetch. Opening an item never turns on automatic saving into the project.
+Opening a saved project item reads storage without a YouTube request or credit charge. **Save to project** and **Save playlist** retain the version you viewed, including every comments page you loaded and successfully saved. Items stay available after they leave Recent sources.
 
-In the rare case that nothing for an item is stored any more, Sources shows a credit notice and waits for **Inspect using credits**. You can cancel or go back without requesting data. That inspection appears in Recent sources; choose **Save to project** afterwards to keep it with the item. Refreshing data, loading comments and retrying a failed dataset also use credits and say so.
+Older items can recover data already stored for your project. Recovered content is marked because it may be newer than the version originally viewed. If some data is missing, the available content stays visible. **Reload saved data** retries storage at no cost. If nothing is available, the item shows an unavailable message and a free retry. There is no paid recovery action in a saved project view.
 
-Saving the same video, playlist or channel again, including from **Add sources** in a project that already has it, returns the existing item instead of adding a duplicate. Saved moments stay separate items. The standalone **Save to project** and **Save playlist** workflow continues to start the existing research import; adding sources from within a project does not start one, as before.
+A saved search or playlist retains its result list. Opening a listed video uses its saved project item when available. A video that was never inspected and saved has no retained transcript or comments. New inspections and requests for new data are separate actions in Sources and can use credits.
+
+Saving the same video, playlist or channel again, including through **Add sources**, updates the existing whole-source item instead of adding a duplicate. Saved moments stay separate. Saving does not import playlist or channel members automatically.

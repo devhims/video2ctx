@@ -47,6 +47,7 @@ Called by the video2ctx web application or an explicit signed-in account action.
 | `GET` | `/v1/sources/recent` | `listRecentSources` | List recent Sources inputs | `sessionCookie` or `demoUser` | Browser-session only. Lists inputs belonging to the authenticated user without exposing shared asset references. |
 | `POST` | `/v1/sources/recent` | `saveRecentSource` | Remember a Sources search or inspection | `sessionCookie` or `demoUser` | Browser-session only. Resolves existing provider assets server-side; never accepts client-supplied R2 keys or video payloads. |
 | `GET` | `/v1/sources/recent/{id}` | `getRecentSource` | Restore saved Sources data | `sessionCookie` or `demoUser` | Browser-session only. Verifies user ownership before reading the saved shared references. |
+| `POST` | `/v1/sources/recent/{id}/comments` | `appendRecentSourceComments` | Retain another fetched comments page | `sessionCookie` or `demoUser` | Browser-session only. Verify the owned revision and continuation chain; retain an already-stored comments page without provider calls or credits. Optional project links verify ownership. |
 
 ## Callbacks and signed links
 
