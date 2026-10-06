@@ -198,7 +198,9 @@ it('moves concurrent visual and transcript calls to DeepSeek when any role detec
   await vi.advanceTimersByTimeAsync(5_001);
   expect((await task).map(result => result.text)).toEqual(['ok', 'ok', 'ok']);
   expect(fallback.doGenerateCalls).toHaveLength(3);
-  expect(diagnostics.filter(event => event.reason === 'run_fallback')).toHaveLength(2);
+  expect(diagnostics.filter(event => event.reason === 'run_fallback')).toEqual([
+    expect.objectContaining({ outcome: 'canceled' }), expect.objectContaining({ outcome: 'canceled' }),
+  ]);
   expect(primary.doGenerateCalls[0]!.abortSignal!.aborted).toBe(false);
   expect(separate.state.fallback).toBe(false);
   await vi.advanceTimersByTimeAsync(5_001);

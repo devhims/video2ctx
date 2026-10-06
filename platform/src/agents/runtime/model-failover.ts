@@ -1,4 +1,4 @@
-import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageModelV4Usage } from '@ai-sdk/provider';
 import { RetryError } from 'ai';
 import { failureDetails } from './diagnostics';
 
@@ -64,6 +64,18 @@ class RunModelFallback extends Error {
 }
 
 const managedModels = new WeakMap<object, ModelFailoverState>();
+interface ModelRequestObserver {
+  onStart: (requestId: string) => void;
+  onUsage: (observation: { requestId: string; modelId: string; usage: LanguageModelV4Usage }) => void;
+}
+const requestObservers = new WeakMap<object, ModelRequestObserver>();
+
+/** Observe non-streamed provider requests, including responses discarded after abort. */
+export function observeModelRequests(model: unknown, observer: ModelRequestObserver): boolean {
+  if (!hasModelFailover(model)) return false;
+  requestObservers.set(model as object, observer);
+  return true;
+}
 const activePrimaryAttempts = new WeakMap<ModelFailoverState, Set<AbortController>>();
 export function hasModelFailover(model: unknown): boolean {
   return typeof model === 'object' && model !== null && managedModels.has(model);
@@ -127,7 +139,7 @@ export function withModelFailover(options: {
     console.log(JSON.stringify({ ...event, event: 'agent_model_failover', phase: event.event, runId: options.runId }));
     state.onDiagnostic?.(event);
   };
-  const attempt = (model: LanguageModelV4, params: LanguageModelV4CallOptions, callId: string, streaming: boolean) => {
+  const attempt = (model: LanguageModelV4, params: LanguageModelV4CallOptions, callId: string, streaming: boolean, attemptId = crypto.randomUUID()) => {
     params.abortSignal?.throwIfAborted();
     const controller = new AbortController();
     if (model === primary) {
@@ -137,7 +149,7 @@ export function withModelFailover(options: {
     }
     const signal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
     const startedAt = Date.now();
-    const fields = { callId, attemptId: crypto.randomUUID(), modelId: model.modelId, role, serviceTier: 'priority' as const };
+    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: 'priority' as const };
     let firstContentAt: number | undefined;
     let lastContentAt: number | undefined;
     let usageAvailable = false;
@@ -161,7 +173,7 @@ export function withModelFailover(options: {
       clearTimeout(total); clearTimeout(idle);
       const details = failureDetails(error);
       emit({ event: 'attempt_finished', ...fields,
-        outcome: params.abortSignal?.aborted || (error instanceof ModelAttemptTimeout && error.reason === 'phase_budget')
+        outcome: params.abortSignal?.aborted || error instanceof RunModelFallback || (error instanceof ModelAttemptTimeout && error.reason === 'phase_budget')
           ? 'canceled' : error ? 'failed' : 'succeeded',
         reason: error instanceof RunModelFallback ? 'run_fallback'
           : error instanceof ModelAttemptTimeout ? error.reason : error ? 'provider_error' : undefined,
@@ -202,10 +214,19 @@ export function withModelFailover(options: {
     async doGenerate(params) {
       const callId = crypto.randomUUID();
       const failures: unknown[] = [];
+      const observer = requestObservers.get(model);
       for (const candidate of state.fallback ? [fallback] : [primary, fallback]) {
-        const current = attempt(candidate, params, callId, false);
+        params.abortSignal?.throwIfAborted();
+        const requestId = crypto.randomUUID();
+        observer?.onStart(requestId);
+        const current = attempt(candidate, params, callId, false, requestId);
         try {
-          const result = await abortable(candidate.doGenerate({ ...params, abortSignal: current.signal }), current.signal);
+          // Accounting belongs to the provider promise, not the abort race that chooses a result.
+          const requested = Promise.resolve(candidate.doGenerate({ ...params, abortSignal: current.signal })).then(result => {
+            observer?.onUsage({ requestId, modelId: result.response?.modelId ?? candidate.modelId, usage: result.usage });
+            return result;
+          });
+          const result = await abortable(requested, current.signal);
           current.markUsage(); current.finish();
           return result;
         } catch (error) {

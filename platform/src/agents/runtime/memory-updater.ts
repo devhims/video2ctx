@@ -2,6 +2,7 @@ import { generateText, NoObjectGeneratedError, Output, type LanguageModel, type 
 import { z } from 'zod';
 import type { AgentCitation } from '../contracts';
 import { withRunDeadline } from './deadline';
+import { observeModelRequests } from './model-failover';
 import { memoryId, type MemoryChange, type SessionMemory } from './session-evidence';
 
 /** Jobs record this version. A job created by another updater version is skipped, not reinterpreted. */
@@ -11,12 +12,12 @@ export const MEMORY_UPDATE_MAX_ATTEMPTS = 2;
 export const MEMORY_UPDATE_TIMEOUT_MS = 20_000;
 export const MEMORY_UPDATE_MAX_OUTPUT_TOKENS = 800;
 /**
- * Estimated cost allowance per bounded memory generation, including fallback, used for admission only. A call is admitted
+ * Estimated cost allowance per provider request, used for admission only. A call is admitted
  * when observed run cost plus this allowance for every started-but-unobserved call and
  * for the new call fits the run limit. Prompt and output bounds keep a call well under
  * this at current pricing, but it is an estimate, not a provider-enforced ceiling.
  */
-export const MEMORY_UPDATE_COST_RESERVE_MICROS = 10_000;
+export const MEMORY_UPDATE_COST_RESERVE_MICROS = 20_000;
 const MAX_CHANGES = 4;
 const MAX_MEMORIES = 40;
 const MAX_MEMORY_CHARACTERS = 8_000;
@@ -154,11 +155,11 @@ export function validateMemoryDelta(
   return { changes, rejected };
 }
 
-export interface MemoryUsageObservation { usage: LanguageModelUsage; modelId?: string }
+export interface MemoryUsageObservation { usage: LanguageModelUsage; modelId?: string; requestId?: string }
 export const MEMORY_UPDATE_TIMEOUT_MESSAGE = 'Memory update deadline exceeded.';
 
 /**
- * One provider call with SDK retries disabled, under an application-owned wall-clock
+ * One generation with at most one model fallback and SDK retries disabled, under an application-owned wall-clock
  * deadline. The deadline rejects even if the provider ignores abort, so callers never
  * wait longer than timeoutMs and never receive a late delta. A provider that responds
  * after the deadline still reports its usage through onUsage; the caller decides
@@ -170,13 +171,25 @@ export async function generateMemoryDelta(options: {
   input: MemoryUpdaterInput;
   signal: AbortSignal;
   onUsage: (observation: MemoryUsageObservation) => void;
+  onRequestStart?: (requestId?: string) => void;
   timeoutMs?: number;
 }): Promise<{ changes: MemoryChange[]; rejected: number }> {
   const projection = projectMemoryUpdaterInput(options.input);
   const { system, prompt } = memoryUpdaterPrompt(projection);
   const timeoutMs = options.timeoutMs ?? MEMORY_UPDATE_TIMEOUT_MS;
+  const observedRequests = observeModelRequests(options.model, {
+    onStart: requestId => options.onRequestStart?.(requestId),
+    onUsage: ({ requestId, modelId, usage }) => options.onUsage({ requestId, modelId, usage: {
+      inputTokens: usage.inputTokens.total, outputTokens: usage.outputTokens.total,
+      totalTokens: usage.inputTokens.total === undefined || usage.outputTokens.total === undefined
+        ? undefined : usage.inputTokens.total + usage.outputTokens.total,
+      inputTokenDetails: { noCacheTokens: usage.inputTokens.noCache, cacheReadTokens: usage.inputTokens.cacheRead, cacheWriteTokens: usage.inputTokens.cacheWrite },
+      outputTokenDetails: { textTokens: usage.outputTokens.text, reasoningTokens: usage.outputTokens.reasoning },
+    } }),
+  });
   return withRunDeadline(Date.now() + timeoutMs, options.signal, async signal => {
     try {
+      if (!observedRequests) options.onRequestStart?.();
       const result = await generateText({
         model: options.model,
         system,
@@ -189,11 +202,11 @@ export async function generateMemoryDelta(options: {
         abortSignal: signal,
         timeout: { totalMs: timeoutMs },
       });
-      options.onUsage({ usage: result.usage, modelId: result.response.modelId });
+      if (!observedRequests) options.onUsage({ usage: result.usage, modelId: result.response.modelId });
       // A result arriving after the deadline is discarded by the race below.
       return validateMemoryDelta(result.output, projection, new Set(options.input.memories.map(memory => memory.id)));
     } catch (error) {
-      if (NoObjectGeneratedError.isInstance(error) && error.usage) {
+      if (!observedRequests && NoObjectGeneratedError.isInstance(error) && error.usage) {
         options.onUsage({ usage: error.usage, modelId: error.response?.modelId });
       }
       throw error;
