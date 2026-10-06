@@ -120,6 +120,22 @@ test('charges overlapping frame and sheet selections once per call with a new as
   });
 });
 
+test('charges a saved comment page once per run across its older packet, page reads and query reads', async () => {
+  await withLedger('comment-reads', create => {
+    const ledger = create();
+    const comments = (id: string) => packet(id, [v(40)], { kind: 'youtube_comments' });
+    expect(credits(ledger.deliver('run', 'inherited_subject', [comments('packet:old-run:comments')], lookup))).toBe(1);
+    for (const id of [`session:${v(40)}:comments:0:q0`, `session:${v(40)}:comments:20:q0`, `session:${v(40)}:comments:0:needle`]) {
+      const again = ledger.deliver('run', 'read_session_evidence', [comments(id)], lookup);
+      expect(again.admitted).toHaveLength(1);
+      expect(credits(again)).toBe(0);
+    }
+    expect(credits(ledger.deliver('run-2', 'read_session_evidence', [comments(`session:${v(40)}:comments:0:q0`)], lookup))).toBe(1);
+    // A deleted page is not delivered.
+    expect(ledger.deliver('run', 'read_session_evidence', [packet('gone', [v(99)], { kind: 'youtube_comments' })], lookup).unavailable).toHaveLength(1);
+  });
+});
+
 test('charges each comments page and historical metadata snapshot once', async () => {
   await withLedger('pages', create => {
     const ledger = create();

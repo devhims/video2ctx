@@ -532,6 +532,28 @@ describe('YouTube AgentCore loop control', () => {
     }));
   });
 
+  it('explains a metadata-confirmed caption gap for a pinned video when finalization fails (QA 020)', async () => {
+    const context = inspectContext();
+    const video = vi.mocked(context.provider.video);
+    const base = await video('abcdefghijk');
+    const checkedAt = new Date().toISOString();
+    video.mockImplementation(async () => ({ ...base, value: { ...base.value, hasCaptions: false,
+      captionAvailability: { status: 'unavailable', languages: [], checkedAt } } }) as never);
+    const research = new MockLanguageModelV4({ doGenerate: async () => modelResult({ toolCallId: 'done', toolName: 'finalize_answer',
+      input: JSON.stringify({ intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [],
+        blocks: [{ text: 'Captions are unavailable.', evidenceIds: ['video:abcdefghijk:initial-video_abcdefghijk'] }] }) }) });
+    const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('generation failed'); } });
+    const result = await runResearchAgentWithModel({ model: research, finalizationModel,
+      message: 'Retrieve its available caption transcript and give two timestamped bullets.',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context });
+    expect(result.finishReason).toBe('evidence-fallback');
+    const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+    expect(input.answer).toContain('I retrieved metadata for the requested video');
+    expect(input.warnings).toContainEqual(expect.objectContaining({ code: 'CAPTIONS_UNAVAILABLE', videoId: 'abcdefghijk',
+      message: expect.stringContaining(`checked at ${checkedAt}`) }));
+    expect(input.warnings).toContainEqual(expect.objectContaining({ code: 'NO_CONTENT_EVIDENCE' }));
+  });
+
   it('handles a fresh all-transcript timeout without synthesizing discovery metadata', async () => {
     vi.useFakeTimers();
     try {

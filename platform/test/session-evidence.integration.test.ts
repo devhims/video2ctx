@@ -1062,3 +1062,100 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
       }
     }
   }));
+
+test('reads every saved comment of an older 12-comment packet page from its asset, with paging, query, citations and deletion', async () =>
+  within('saved-comment-pages', async (store, reopen) => {
+    const page = (count: number, text = (index: number) => `Comment ${index + 1} about limits`) => ({
+      videoId: id, replyContinuations: [], totalCount: 5000, continuation: 'next-page', meta: transcript().meta,
+      comments: Array.from({ length: count }, (_, index) => ({ id: `c${index}`, text: text(index),
+        author: { name: `@viewer${index + 1}`, thumbnails: [] }, likeCountText: '1', isPinned: false, isHearted: false, replies: [] })),
+    });
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page(25) }));
+    const saved = await sessionProvider(p, store).comments(id);
+    const version = saved.assetVersions![0]!;
+    // An older packet kept only 12 of the saved page's comments.
+    const legacy: EvidencePacket = { packetId: 'packet:old-run:comments', kind: 'youtube_comments', assetVersions: [version],
+      sources: [{ id: `youtube:${id}:comments`, provider: 'youtube', kind: 'comments', videoId: id }],
+      excerpts: Array.from({ length: 12 }, (_, index) => ({ id: `comment:c${index}:${index}`, sourceId: `youtube:${id}:comments`,
+        text: `Comment ${index + 1} about limits\nAuthor: @viewer${index + 1}` })),
+      artifacts: [{ type: 'youtube_comments', data: { returnedCount: 12, totalCount: 5000 } }], warnings: [], usage: [] };
+    store.savePacket(legacy);
+
+    const first = await reopen().readEvidence(version);
+    expect(first.nextOffset).toBe(20);
+    expect(first.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual(Array.from({ length: 20 }, (_, index) => `evidence:${version}:${index}`));
+    expect(first.packets[0]!.excerpts[0]!.text).toBe('Author: @viewer1\nLikes: 1\nComment 1 about limits');
+    expect(first.packets[0]).toMatchObject({ kind: 'youtube_comments', assetVersions: [version], continuation: 'next-page' });
+    expect(first.packets[0]!.warnings).toContainEqual(expect.objectContaining({ code: 'COMMENTS_PAGE_PARTIAL' }));
+    const rest = await reopen().readEvidence(version, 20);
+    expect(rest.nextOffset).toBeUndefined();
+    expect(rest.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([20, 21, 22, 23, 24].map(index => `evidence:${version}:${index}`));
+    // Query reads keep asset-index IDs, so overlapping reads cite the same comment identically.
+    const query = await reopen().readEvidence(version, 0, 'COMMENT 13 ');
+    expect(query.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([`evidence:${version}:12`]);
+
+    // Both new and historical citations resolve.
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 },
+    { intent: 'inspect_video', answer: `Viewer 21 agrees [cite:evidence:${version}:20] [cite:comment:c0:0]`, confidence: 'medium',
+      citations: [], artifacts: [], warnings: [] }, [legacy, ...reopen().evidence(version)], 0);
+    expect(result.citations.map(citation => citation.excerpt)).toEqual([
+      'Author: @viewer21\nLikes: 1\nComment 21 about limits', 'Comment 1 about limits\nAuthor: @viewer1']);
+
+    await reopen().delete(version);
+    await expect(reopen().readEvidence(version)).rejects.toThrow('Session asset is unavailable or deleted.');
+  }));
+
+test('bounds a saved-comment read by characters and reports the rest', async () =>
+  within('saved-comment-characters', async store => {
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { videoId: id, replyContinuations: [], meta: transcript().meta,
+      comments: Array.from({ length: 20 }, (_, index) => ({ id: `c${index}`, text: `${index} `.padEnd(3_000, 'x'),
+        author: { name: `@viewer${index + 1}`, thumbnails: [] }, isPinned: false, isHearted: false, replies: [] })) } }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const read = await store.readEvidence(version);
+    const excerpts = read.packets[0]!.excerpts;
+    expect(excerpts.length).toBeLessThan(20);
+    expect(excerpts.reduce((sum, excerpt) => sum + excerpt.text.length, 0)).toBeLessThanOrEqual(24_000);
+    expect(excerpts.every(excerpt => /\[Comment truncated: first \d+ of 3000 characters shown\.\]$/.test(excerpt.text))).toBe(true);
+    expect(read.nextOffset).toBe(excerpts.length);
+  }));
+
+test('matches a saved-comment query against the whole saved comment and shows the matching passage', async () =>
+  within('saved-comment-query', async store => {
+    const p = provider();
+    const long = `${'a'.repeat(2_500)} NEEDLE appears late ${'b'.repeat(500)}`;
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { videoId: id, replyContinuations: [], meta: transcript().meta,
+      comments: [{ id: 'short', text: 'First comment', author: { name: '@first', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] },
+        { id: 'long', text: long, author: { name: '@second', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] }] } }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const read = await store.readEvidence(version, 0, 'needle');
+    const [excerpt] = read.packets[0]!.excerpts;
+    expect(read.packets[0]!.excerpts).toHaveLength(1);
+    expect(excerpt!.id).toMatch(new RegExp(`^evidence:${version}:1:at:\\d+$`));
+    expect(excerpt!.text).toMatch(/^Author: @second\n\[Passage of a longer comment: characters \d+-\d+ of 3021\.\] /);
+    expect(excerpt!.text).toContain('NEEDLE appears late');
+    expect(excerpt!.text.length).toBeLessThanOrEqual(800);
+    // Attribution also matches; the default excerpt keeps the comment start.
+    expect((await store.readEvidence(version, 0, '@first')).packets[0]!.excerpts.map(item => item.id)).toEqual([`evidence:${version}:0`]);
+  }));
+
+test.each(['asset', 'session'] as const)('never returns saved comments deleted while the read digest is pending (%s deletion)', async scope =>
+  within(`saved-comment-digest-${scope}`, async store => {
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { videoId: id, replyContinuations: [], meta: transcript().meta,
+      comments: [{ id: 'c', text: 'Soon deleted', author: { name: '@viewer', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] }] } }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let started = false;
+    const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (...args: Parameters<typeof digest>) => {
+      // Delete once, inside the read's digest; nested digests pass through.
+      if (!started) { started = true; await store.delete(scope === 'asset' ? version : undefined); }
+      return digest(...args);
+    });
+    try {
+      await expect(store.readEvidence(version)).rejects.toThrow('Session asset is unavailable or deleted.');
+    } finally { spy.mockRestore(); }
+    expect(store.evidence(version)).toEqual([]);
+  }));

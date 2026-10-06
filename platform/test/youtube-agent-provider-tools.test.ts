@@ -94,6 +94,26 @@ describe('YouTube agent provider-operation tools', () => {
     await executeGetVideoComments({ videoId: 'abcdefghijk', all: true } as never, toolContext(provider), 'comments-all');
     expect(provider.comments).toHaveBeenCalledWith('abcdefghijk', { continuation: undefined });
   });
+  it('keeps a whole comments page in rank order with attribution and marks long comments', async () => {
+    const provider = providerFixture();
+    const long = 'Calculus finally clicked. '.repeat(120);
+    provider.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
+      videoId: 'abcdefghijk', totalCount: 5000, continuation: 'next', meta: meta(), replyContinuations: [],
+      comments: Array.from({ length: 23 }, (_, index) => ({
+        id: `c${index}`, author: { name: `@viewer${index + 1}`, thumbnails: [] }, text: index === 0 ? long : `Comment ${index + 1}`,
+        likeCountText: '3', replyCount: 0, isPinned: false, isHearted: false, replies: [],
+      })),
+    } })) as never;
+    const packet = await executeGetVideoComments({ videoId: 'abcdefghijk' }, toolContext(provider), 'comments-page');
+    expect(packet.excerpts).toHaveLength(23);
+    expect(packet.excerpts.map(excerpt => excerpt.text.split('\n')[0])).toEqual(Array.from({ length: 23 }, (_, index) => `Author: @viewer${index + 1}`));
+    expect(packet.excerpts[1]!.text).toBe('Author: @viewer2\nLikes: 3\nReplies: 0\nComment 2');
+    expect(packet.excerpts[0]!.text.length).toBeLessThanOrEqual(2_000);
+    expect(packet.excerpts[0]!.text).toMatch(new RegExp(`\\[Comment truncated: first \\d+ of ${long.trim().length} characters shown\\.\\]$`));
+    expect(packet.artifacts[0]!.data).toMatchObject({ returnedCount: 23, pageCount: 23 });
+    expect(packet.warnings).toEqual([]);
+    expect(evidencePacketForModel(packet).excerpts).toHaveLength(23);
+  });
   it('maps each added tool wrapper to exactly one provider operation', async () => {
     const provider = providerFixture();
     const context = toolContext(provider);
