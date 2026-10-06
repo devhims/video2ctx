@@ -2415,6 +2415,16 @@
             }
           },
           {
+            "name": "retain",
+            "in": "query",
+            "required": false,
+            "description": "Browser-session only. Include a signed receipt for retaining this exact page. Not supported with all=true.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
             "name": "refresh",
             "in": "query",
             "required": false,
@@ -2480,6 +2490,9 @@
           "402": {
             "$ref": "#/components/responses/InsufficientCredits"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -2488,6 +2501,16 @@
           },
           "500": {
             "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "description": "The fetched response has no retained version available for a receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "x-video2ctx-audience": "consumer"
@@ -5823,6 +5846,11 @@
               "type": "object",
               "additionalProperties": true
             }
+          },
+          "pageReceipt": {
+            "type": "string",
+            "pattern": "^v1\\.[a-f0-9]{64}\\.[a-f0-9]{64}$",
+            "description": "Account-bound receipt for this exact stored page, returned only for a browser-session retain=true request."
           },
           "totalCount": {
             "type": "integer",

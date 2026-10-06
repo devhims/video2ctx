@@ -440,8 +440,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
       const receipt = sourceReceipt.current?.receipt;
       if (!receipt || !('sourceId' in receipt)) throw new Error('Save the current comments before loading another page. Retry saving the source.');
       const continuation = current.comments!.continuation!;
-      const page = await api<CommentPage>(`/v1/videos/${encodeURIComponent(current.id)}/comments?provider=${encodeURIComponent(current.provider)}&${new URLSearchParams({ continuation, refresh: 'true' })}`, { signal: controller.signal });
+      const page = await api<CommentPage>(`/v1/videos/${encodeURIComponent(current.id)}/comments?provider=${encodeURIComponent(current.provider)}&${new URLSearchParams({ continuation, refresh: 'true', retain: 'true' })}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
+      if (!page.pageReceipt) throw new Error('The comments response did not include its saved version. Reload Sources after the platform update.');
       const comments = new Map(current.comments!.comments.map(comment => [comment.id, comment]));
       page.comments.forEach(comment => comments.set(comment.id, comment));
       const generation = nextInspection();
@@ -451,7 +452,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
       setCommentsRetaining(true);
       const promise = persistSource<{ source?: RecentSource; sourceRevision?: string }>({ id: crypto.randomUUID(), input, generation, comments: true,
         projectId, projectName, path: `/v1/sources/recent/${encodeURIComponent(receipt.sourceId)}/comments`,
-        body: JSON.stringify({ sourceRevision: receipt.sourceRevision, continuation, ...(projectId ? { projectId } : {}) }) });
+        body: JSON.stringify({ sourceRevision: receipt.sourceRevision, continuation, pageReceipt: page.pageReceipt, ...(projectId ? { projectId } : {}) }) });
       pendingSourceSave.current = { generation, promise };
       await promise;
     } catch (cause) {

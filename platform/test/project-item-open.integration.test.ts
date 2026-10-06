@@ -3,13 +3,15 @@ import { describe, expect, test } from 'vitest';
 import { Hono } from 'hono';
 import { jsonError, sha256 } from '../src/lib/http';
 import { sessionRoutes } from '../src/routes/session/session.index';
-import { saveVideoResource } from '../src/lib/video-resources';
+import { issueCommentPageReceipt } from '../src/lib/comment-page-receipt';
+import { videoCatalog } from '../src/lib/video-catalog';
+import { videoResourceKey, saveVideoResource } from '../src/lib/video-resources';
 import { referenceSource } from '../src/lib/source-history-storage';
 import { createProjectExport } from '../src/lib/exports';
 import { userAccountInstanceName } from '../src/agents/runtime/identity';
 import type { App, AuthPrincipal } from '../src/types';
 import type { SaveReferencedSource } from '../src/lib/source-history';
-const env = workerEnv as Env;
+const env = { ...workerEnv, BETTER_AUTH_SECRET: 'test-comment-receipt-secret' } as Env;
 
 const MISSING = 'This saved data is currently unavailable. Retry loading from storage at no cost.';
 const json = { 'content-type': 'application/json' };
@@ -39,6 +41,12 @@ async function owner(prefix: string) {
     .bind(projectId, userId, 'Research', '', stamp, stamp).run();
   const account = env.USER_ACCOUNT.getByName(await userAccountInstanceName(userId));
   return { userId, projectId, app: sourceApp(userId), account };
+}
+
+async function commentReceipt(userId: string, id: string, continuation: string) {
+  const key = videoResourceKey({ kind: 'comments', id, continuation })!;
+  const stored = await videoCatalog(env)!.readSourceSaved(key);
+  return issueCommentPageReceipt(env, userId, key, stored?.catalogVersions ?? [{ ...key, contentHash: 'f'.repeat(64) }]);
 }
 
 function videoId() { return crypto.randomUUID().replace(/-/g, '').slice(0, 11); }
@@ -671,7 +679,7 @@ test('a recovered project source saves the selected revision into its existing r
 
 
 test('comment pages stay pinned through refresh, retries and Recent eviction', async () => {
-  const { projectId, app, account } = await owner('retained-comment-pages');
+  const { userId, projectId, app, account } = await owner('retained-comment-pages');
   const id = videoId();
   await storeVideo(id);
   const page = (ids: string[], continuation?: string) => ({ videoId: id, comments: ids.map(id => ({ id, text: id })),
@@ -683,7 +691,7 @@ test('comment pages stay pinned through refresh, retries and Recent eviction', a
   const remembered = await app.request('/sources/recent', { method: 'POST', headers: json, body: JSON.stringify({ ...descriptor, projectId }) }, env);
   const initial = await remembered.json() as { source: { id: string }; sourceRevision: string };
   const append = (body: unknown, target = app) => target.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json, body: JSON.stringify(body) }, readOnlyEnv());
-  const request = { sourceRevision: initial.sourceRevision, continuation: 'page-two', projectId };
+  const request = { sourceRevision: initial.sourceRevision, continuation: 'page-two', projectId, pageReceipt: await commentReceipt(userId, id, 'page-two') };
   const response = await append(request);
   expect(response.status).toBe(200);
   const saved = await response.json() as { sourceRevision: string };
@@ -693,9 +701,10 @@ test('comment pages stay pinned through refresh, retries and Recent eviction', a
   const restored = await (await app.request(`/sources/recent/${initial.source.id}`, {}, readOnlyEnv())).json() as any;
   expect(restored.snapshot.inspector.commentPagesLoaded).toBe(2);
   expect(restored.snapshot.inspector.comments.comments.map((comment: { id: string }) => comment.id)).toEqual(['first', 'overlap', 'second']);
-  expect((await append({ ...request, continuation: 'unrelated' })).status).toBe(409);
+  expect((await append({ ...request, continuation: 'unrelated' })).status).toBe(403);
+  expect((await append({ ...request, pageReceipt: `${request.pageReceipt.slice(0, 68)}${'0'.repeat(64)}` })).status).toBe(403);
   const foreign = await owner('foreign-comment-pages');
-  expect((await append({ sourceRevision: saved.sourceRevision, continuation: 'page-three' }, foreign.app)).status).toBe(404);
+  expect((await append({ ...request, sourceRevision: saved.sourceRevision, continuation: 'page-three' }, foreign.app)).status).toBe(404);
   expect((await append({ ...request, projectId: foreign.projectId })).status).toBe(404);
   expect((await append(request, sourceApp((await owner('api-comment-pages')).userId, 'api-key'))).status).toBe(403);
   const projectSource = (await account.listProjectSources(projectId))[0]!;
@@ -725,7 +734,7 @@ test('comment pages stay pinned through refresh, retries and Recent eviction', a
 
 
 test('appending comments to a D1 item rolls back Recent when pinning fails', async () => {
-  const { projectId, app, account } = await owner('comments-pin-rollback');
+  const { userId, projectId, app, account } = await owner('comments-pin-rollback');
   const id = videoId();
   await storeVideo(id);
   const page = (text: string, continuation?: string) => ({ videoId: id, comments: [{ id: text, text }], continuation,
@@ -737,8 +746,8 @@ test('appending comments to a D1 item rolls back Recent when pinning fails', asy
   descriptor.snapshot.inspector.requestedData = ['comments'];
   const initial = await (await app.request('/sources/recent', { method: 'POST', headers: json,
     body: JSON.stringify({ ...descriptor, projectId }) }, env)).json() as { source: { id: string }; sourceRevision: string };
-  const append = (revision: string, continuation = 'next') => app.request(`/sources/recent/${initial.source.id}/comments`, {
-    method: 'POST', headers: json, body: JSON.stringify({ sourceRevision: revision, continuation, projectId }),
+  const append = async (revision: string, continuation = 'next') => app.request(`/sources/recent/${initial.source.id}/comments`, {
+    method: 'POST', headers: json, body: JSON.stringify({ sourceRevision: revision, continuation, projectId, pageReceipt: await commentReceipt(userId, id, continuation) }),
   }, readOnlyEnv());
   const before = (await account.getSource(initial.source.id))!.snapshot;
   await runInDurableObject(account, (_instance, state) => {
@@ -759,4 +768,93 @@ test('appending comments to a D1 item rolls back Recent when pinning fails', asy
   expect(await account.replaceSourceReferences(initial.source.id, before, { input: descriptor.input, title: 'Stale save', snapshot: before })).toEqual({ ok: false });
   expect((await append(revision, 'not-stored')).status).toBe(409);
   expect((await open(app, projectId, item.id)).body.sourceRevision).toBe(revision);
+});
+
+
+for (const { destination, operation } of [
+  { destination: 'recent', operation: 'save' }, { destination: 'project-source', operation: 'save' }, { destination: 'item', operation: 'save' },
+  { destination: 'project-source', operation: 'pin' }, { destination: 'item', operation: 'pin' },
+] as const) test(`${operation} cannot overwrite a concurrently appended page in ${destination}`, async () => {
+  const { userId, projectId, app, account } = await owner('interleaved-save');
+  const id = videoId();
+  await storeVideo(id);
+  const page = (text: string, continuation?: string) => ({ videoId: id, comments: [{ id: text, text }], continuation,
+    meta: { source: 'youtube', fetchedAt: new Date().toISOString(), warnings: [], partial: false } });
+  await saveVideoResource(env, { kind: 'comments', id }, page('first', 'next'), Date.now(), 60_000);
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'next' }, page('second'), Date.now(), 60_000);
+  const item = destination === 'item' ? await addItem(app, projectId, { entityType: 'video', entityId: id }) : null;
+  const descriptor = inspection(id, ['metadata', 'comments']);
+  descriptor.snapshot.inspector.requestedData = ['comments'];
+  const project = destination === 'recent' ? {} : { projectId };
+  const initial = await (await app.request('/sources/recent', { method: 'POST', headers: json,
+    body: JSON.stringify({ ...descriptor, ...project }) }, env)).json() as { source: { id: string }; sourceRevision: string };
+  let release = () => {}, entered = () => {};
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let blocked = false;
+  const gatedEnv = { ...readOnlyEnv(), VIDEO_ASSETS: new Proxy(env.VIDEO_ASSETS, { get(target, property) {
+    if (property === 'get') return async (key: string) => {
+      const result = await target.get(key);
+      if (!blocked) { blocked = true; entered(); await gate; }
+      return result;
+    };
+    const value = Reflect.get(target, property);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } }) };
+  const targetItemId = item?.id ?? (await account.listProjectSources(projectId))[0]?.id;
+  const stale = app.request(operation === 'pin' ? `/projects/${projectId}/sources/items/${targetItemId}/snapshot` : '/sources/recent',
+    { method: operation === 'pin' ? 'PUT' : 'POST', headers: json, body: JSON.stringify({ ...descriptor, ...(operation === 'save' ? project : {}),
+    snapshot: { ...descriptor.snapshot, inspector: { ...descriptor.snapshot.inspector,
+      commentsReceipt: { sourceId: initial.source.id, sourceRevision: initial.sourceRevision } } } }) }, gatedEnv);
+  try {
+    await waiting;
+    const append = await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json,
+      body: JSON.stringify({ sourceRevision: initial.sourceRevision, continuation: 'next', ...project, pageReceipt: await commentReceipt(userId, id, 'next') }) }, readOnlyEnv());
+    expect(append.status).toBe(200);
+    release();
+    expect((await stale).status).toBe(409);
+    const recent = await (await app.request(`/sources/recent/${initial.source.id}`, {}, readOnlyEnv())).json() as any;
+    expect(recent.snapshot.inspector.comments.comments.map((comment: { text: string }) => comment.text)).toEqual(['first', 'second']);
+    if (destination !== 'recent') {
+      const projectItem = item?.id ?? (await account.listProjectSources(projectId))[0]!.id;
+      expect((await open(app, projectId, projectItem)).body.snapshot.inspector.commentPagesLoaded).toBe(2);
+    }
+  } finally { release(); await stale; }
+});
+
+test('a retention retry pins the fetched page even after the shared page changes', async () => {
+  const { app, userId } = await owner('exact-page-retry');
+  const id = videoId();
+  await storeVideo(id);
+  const page = (text: string, continuation?: string) => ({ videoId: id, comments: [{ id: text, text }], continuation,
+    meta: { source: 'youtube', fetchedAt: new Date().toISOString(), warnings: [], partial: false } });
+  await saveVideoResource(env, { kind: 'comments', id }, page('first', 'next'), Date.now(), 60_000);
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'next' }, page('displayed'), Date.now(), 60_000);
+  const descriptor = inspection(id, ['metadata', 'comments']);
+  const initial = await (await app.request('/sources/recent', { method: 'POST', headers: json, body: JSON.stringify(descriptor) }, env)).json() as { source: { id: string }; sourceRevision: string };
+  const pageReceipt = await commentReceipt(userId, id, 'next');
+  const request = { sourceRevision: initial.sourceRevision, continuation: 'next', pageReceipt };
+  const unavailable = { ...readOnlyEnv(), VIDEO_ASSETS: new Proxy(env.VIDEO_ASSETS, { get(target, property) {
+    if (property === 'get') return () => { throw new Error('Temporary R2 failure'); };
+    const value = Reflect.get(target, property);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } }) };
+  expect((await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json,
+    body: JSON.stringify(request) }, unavailable)).status).toBe(500);
+  // Another request refreshes the shared continuation before this page's retention succeeds.
+  await saveVideoResource(env, { kind: 'comments', id, continuation: 'next' }, page('not displayed'), Date.now() + 1000, 60_000);
+  const retained = await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json,
+    body: JSON.stringify(request) }, readOnlyEnv());
+  expect(retained.status).toBe(200);
+  const restored = await (await app.request(`/sources/recent/${initial.source.id}`, {}, readOnlyEnv())).json() as any;
+  expect(restored.snapshot.inspector.comments.comments.map((comment: { text: string }) => comment.text)).toEqual(['first', 'displayed']);
+  // A response-lost retry recognizes only the exact page that was committed.
+  expect((await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json, body: JSON.stringify(request) }, readOnlyEnv())).status).toBe(200);
+  const newerReceipt = await commentReceipt(userId, id, 'next');
+  expect((await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json,
+    body: JSON.stringify({ ...request, pageReceipt: newerReceipt }) }, readOnlyEnv())).status).toBe(409);
+  const foreign = await owner('foreign-page-receipt');
+  const forged = await commentReceipt(foreign.userId, id, 'next');
+  expect((await app.request(`/sources/recent/${initial.source.id}/comments`, { method: 'POST', headers: json,
+    body: JSON.stringify({ ...request, pageReceipt: forged }) }, readOnlyEnv())).status).toBe(403);
 });

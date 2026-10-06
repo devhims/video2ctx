@@ -4,6 +4,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionPayload, sourceRevisionSchema, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
 
+export type SourceCondition = { sourceId: string; snapshot: SourceReference };
+
 const MAX_SEARCH_TEXT_LENGTH = 32_000;
 const MAX_TITLE_LENGTH = 80;
 const MAX_PREVIEW_LENGTH = 240;
@@ -200,8 +202,8 @@ export class UserAccountDO extends DurableObject<Env> {
       }
       const source = this.saveSource(input);
       if (project && item) this.writePin(project, item, source.id, revision, input);
-      else if (project) this.linkSourceToProject(project, source.id);
-      return { ok: true as const, source, sourceRevision: revision };
+      const linked = project && !item ? this.linkSourceToProject(project, source.id) : null;
+      return { ok: true as const, source, sourceRevision: revision, linked };
     });
   }
 
@@ -265,15 +267,18 @@ export class UserAccountDO extends DurableObject<Env> {
    * Explicit Save only. The sidecar is keyed by an existing D1 item and is
    * never listed as another project row. A later explicit Save replaces it.
    */
-  async pinProjectItem(projectId: string, itemId: string, value: SaveReferencedSource, expected: PinIdentity): Promise<PinResult> {
+  async pinProjectItem(projectId: string, itemId: string, value: SaveReferencedSource, expected: PinIdentity, condition?: SourceCondition): Promise<PinResult> {
     this.assertActive();
     const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
     const input = saveReferencedSourceSchema.parse(value);
     if (!matchesIdentity(input.snapshot, expected)) return { ok: false, code: 'SOURCE_IDENTITY_MISMATCH' };
     const revision = await sourceRevision(input.snapshot);
     this.assertActive();
-    this.writePin(project, item, null, revision, input);
-    return { ok: true, itemId: item, sourceId: null, sourceRevision: revision };
+    return this.ctx.storage.transactionSync((): PinResult => {
+      if (condition && !this.matchesSourceCondition(condition)) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
+      this.writePin(project, item, null, revision, input);
+      return { ok: true, itemId: item, sourceId: null, sourceRevision: revision };
+    });
   }
 
   /** Copy the exact Recent version that the browser displayed, or reject a newer replacement. */
@@ -367,7 +372,7 @@ export class UserAccountDO extends DurableObject<Env> {
    * Explicit Save onto an existing project source row: replace its references
    * with the exact Recent revision, or with a stored descriptor, keeping its ID.
    */
-  async refreshProjectSource(projectId: string, itemId: string, value: SaveReferencedSource | { sourceId: string; sourceRevision: string }, expected: PinIdentity): Promise<PinResult> {
+  async refreshProjectSource(projectId: string, itemId: string, value: SaveReferencedSource | { sourceId: string; sourceRevision: string }, expected: PinIdentity, condition?: SourceCondition): Promise<PinResult> {
     this.assertActive();
     const project = z.string().uuid().parse(projectId), item = sourceIdSchema.parse(itemId);
     const readRow = () => this.ctx.storage.sql.exec<{ source_key: string }>('SELECT source_key FROM project_sources WHERE project_id = ? AND id = ?', project, item).toArray()[0];
@@ -387,6 +392,7 @@ export class UserAccountDO extends DurableObject<Env> {
     this.assertActive();
     return this.ctx.storage.transactionSync((): PinResult => {
       if (!readRow()) return { ok: false, code: 'SOURCE_NOT_FOUND' };
+      if (condition && !this.matchesSourceCondition(condition)) return { ok: false, code: 'SOURCE_REVISION_MISMATCH' };
       if (recentText !== null) {
         // Compare references, not text: a thumbnail cached meanwhile is not a newer version.
         const current = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?', sourceId).toArray()[0];
@@ -437,6 +443,13 @@ export class UserAccountDO extends DurableObject<Env> {
       const reference = this.toStoredReference(row, origin, sourceId);
       return row.source_revision ? reference : { ...reference, sourceRevision: await sourceRevision(reference.snapshot) };
     }));
+  }
+
+  /** Call only inside the transaction that writes the dependent references. */
+  private matchesSourceCondition(condition: SourceCondition): boolean {
+    const row = this.ctx.storage.sql.exec<{ snapshot: string }>('SELECT snapshot FROM recent_sources WHERE id = ?',
+      sourceIdSchema.parse(condition.sourceId)).toArray()[0];
+    return Boolean(row && sourceRevisionPayload(sourceReferenceSchema.parse(JSON.parse(row.snapshot))) === sourceRevisionPayload(condition.snapshot));
   }
 
   private writePin(project: string, item: string, sourceId: string | null, revision: string, input: SaveReferencedSource): void {

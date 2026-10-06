@@ -1762,7 +1762,7 @@ for (const failFirst of [false, true]) test(`saved comment pages survive project
   const source = { id: 'e730c10d-9db4-41e9-96b5-88647d3302d0', input: `https://youtube.com/watch?v=${videoId}`, title: 'Retained comments', kind: 'inspection', updatedAt: Date.now() };
   const item = { id: 'e24c5fc2-8ac8-46eb-b85b-ac0c600b1cb0', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: source.title };
   const first = { videoId, comments: [{ id: 'first', text: 'First retained comment' }], continuation: 'page-two', meta: transcript.meta };
-  const second = { videoId, comments: [{ id: 'second', text: 'Second retained comment' }], continuation: 'page-three', meta: transcript.meta };
+  const second = { videoId, pageReceipt: `v1.${'c'.repeat(64)}.${'d'.repeat(64)}`, comments: [{ id: 'second', text: 'Second retained comment' }], continuation: 'page-three', meta: transcript.meta };
   let commentReads = 0, storageReads = 0;
   let releaseComments = () => {};
   const firstComments = new Promise<void>(resolve => { releaseComments = resolve; });
@@ -1819,7 +1819,7 @@ for (const failFirst of [false, true]) test(`saved comment pages survive project
     await page.getByRole('button', { name: 'Save to project', exact: true }).click();
     await expect(page.getByText(`Saved to ${project.name}`)).toBeVisible();
     expect(commentReads).toBe(2);
-    expect(appends).toEqual(Array.from({ length: failFirst ? 2 : 1 }, () => ({ sourceRevision: 'a'.repeat(64), continuation: 'page-two' })));
+    expect(appends).toEqual(Array.from({ length: failFirst ? 2 : 1 }, () => ({ sourceRevision: 'a'.repeat(64), continuation: 'page-two', pageReceipt: second.pageReceipt })));
     expect(pins).toEqual([{ sourceId: source.id, sourceRevision: 'b'.repeat(64) }]);
     const providerBeforeOpen = counts.provider;
     await page.goto(`/dashboard/sources?openProject=${project.id}&saved=${item.id}`);

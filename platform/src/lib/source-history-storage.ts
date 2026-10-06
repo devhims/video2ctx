@@ -131,7 +131,7 @@ export async function restoreSource(env: Env, reference: SourceReference): Promi
 }
 
 /** Append an already-fetched page to an owned immutable chain. Never calls a provider. */
-export async function appendSourceComments(env: Env, reference: SourceReference, continuation: string): Promise<SourceReference> {
+export async function appendSourceComments(env: Env, reference: SourceReference, continuation: string, asset: VideoAssetReference): Promise<SourceReference> {
   if (reference.kind !== 'inspection' || reference.inspector.type !== 'video' || !reference.inspector.assets.comments) {
     throw new ApiError(409, 'SOURCE_COMMENTS_MISSING', 'Save the first comments page before adding another page.');
   }
@@ -143,9 +143,10 @@ export async function appendSourceComments(env: Env, reference: SourceReference,
   if (!previous || sourceCommentPageSchema.parse(previous.value).continuation !== continuation) {
     throw new ApiError(409, 'SOURCE_COMMENTS_MISMATCH', 'This page does not follow the saved comments. Reopen the saved source.');
   }
-  const saved = await catalog.readSourceSaved(videoResourceKey({ kind: 'comments', id: source.id, continuation })!);
-  const asset = saved?.catalogVersions?.[0];
-  if (!saved || !asset) throw new ApiError(409, 'SOURCE_ASSET_NOT_SAVED', 'The comments page is not stored yet. Retry saving it.');
+  const expected = videoResourceKey({ kind: 'comments', id: source.id, continuation })!;
+  if (asset.videoId !== expected.videoId || asset.kind !== expected.kind || asset.variant !== expected.variant) throw new ApiError(409, 'SOURCE_COMMENTS_MISMATCH', 'The comments version does not match this page.');
+  const saved = await catalog.readSourceVersion(asset);
+  if (!saved) throw new ApiError(409, 'SOURCE_ASSET_NOT_SAVED', 'The comments page is not stored yet. Retry saving it.');
   if (sourceCommentPageSchema.parse(saved.value).videoId !== source.id) throw new ApiError(500, 'SOURCE_ASSET_INVALID', 'Saved comments could not be verified.');
   return { ...reference, inspector: { ...source, commentPages: [...(source.commentPages ?? []), asset] } };
 }

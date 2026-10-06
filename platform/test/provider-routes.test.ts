@@ -103,3 +103,29 @@ describe('explicit video refresh', () => {
     expect(meterOperation).not.toHaveBeenCalled();
   });
 });
+
+
+describe('comments page receipts', () => {
+  afterEach(() => vi.restoreAllMocks());
+  test('signs the exact returned catalog version only when retention is requested', async () => {
+    const { verifyCommentPageReceipt } = await import('../src/lib/comment-page-receipt');
+    const env = { BETTER_AUTH_SECRET: 'test-receipt-key' } as Env;
+    const asset = { videoId: 'abcdefghijk', kind: 'comments', variant: JSON.stringify({ continuation: 'next' }), contentHash: 'a'.repeat(64) };
+    const provider = getProvider('youtube');
+    vi.spyOn(provider, 'getComments').mockResolvedValue({ cacheStatus: 'miss', value: { videoId: asset.videoId, comments: [] }, catalogVersions: [asset] } as never);
+    const response = await app.request('/v1/videos/abcdefghijk/comments?provider=youtube&continuation=next&refresh=true&retain=true', {}, env, executionContext);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { pageReceipt: string };
+    expect(await verifyCommentPageReceipt(env, 'test-user', asset, body.pageReceipt)).toEqual(asset);
+    await expect(verifyCommentPageReceipt(env, 'another-user', asset, body.pageReceipt)).rejects.toMatchObject({ status: 403 });
+    await expect(verifyCommentPageReceipt(env, 'test-user', { ...asset, videoId: 'zyxwvutsrqp' }, body.pageReceipt)).rejects.toMatchObject({ status: 403 });
+    const ordinary = await app.request('/v1/videos/abcdefghijk/comments?provider=youtube&continuation=next', {}, env, executionContext);
+    expect(await ordinary.json()).not.toHaveProperty('pageReceipt');
+  });
+  test('does not invent a receipt when the response has no saved version', async () => {
+    vi.spyOn(getProvider('youtube'), 'getComments').mockResolvedValue({ cacheStatus: 'miss', value: { videoId: 'abcdefghijk', comments: [] } } as never);
+    const response = await app.request('/v1/videos/abcdefghijk/comments?provider=youtube&retain=true', {}, { BETTER_AUTH_SECRET: 'test-key' } as Env, executionContext);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: 'SOURCE_ASSET_NOT_SAVED' } });
+  });
+});

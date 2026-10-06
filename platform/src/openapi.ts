@@ -2,6 +2,7 @@ import { toolCallDetailSchema } from './agents/runtime/tool-call-trace';
 import { storedExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
+import { commentPageReceiptSchema } from './lib/comment-page-receipt';
 import { saveSourceSchema, sourceSnapshotSchema } from './lib/source-history';
 import { compactAgentRunSchema } from './agents/response';
 import { agentRunProgressSchema } from './agents/runtime/run-progress';
@@ -977,6 +978,7 @@ export const openApiDocument = {
         security: dataSecurity,
         parameters: [
           providerParameter,
+          queryParameter('retain', 'Browser-session only. Include a signed receipt for retaining this exact page. Not supported with all=true.', { type: 'boolean', default: false }),
           queryParameter('refresh', 'Fetch again and save a new version. Default reuses saved data regardless of age. A failed explicit refresh returns an error.', { type: 'boolean', default: false }),
           pathParameter('id', 'Provider video ID.', 'dQw4w9WgXcQ'),
           queryParameter('continuation', 'Opaque pagination token.', { type: 'string' }),
@@ -990,6 +992,8 @@ export const openApiDocument = {
           '200': meteredJsonResponse('A comment page or collection.', schemaRef('CommentResponse')),
           '401': responseRef('Unauthorized'),
           '402': responseRef('InsufficientCredits'),
+          '403': responseRef('Forbidden'),
+          '503': jsonResponse('The fetched response has no retained version available for a receipt.', schemaRef('Error')),
           '404': responseRef('NotFound'),
           '422': responseRef('ValidationError'),
           '500': responseRef('ServerError'),
@@ -1118,10 +1122,10 @@ export const openApiDocument = {
     '/v1/sources/recent/{id}/comments': {
       post: {
         tags: ['Projects'], operationId: 'appendRecentSourceComments', summary: 'Retain another fetched comments page', security: privateSecurity,
-        description: 'Appends the stored page following an owned source revision. Preserves earlier immutable pages and optionally updates the owned project link. Does not fetch provider data or charge credits. Retrying a completed append is idempotent.',
+        description: 'Appends the exact immutable page identified by its account-bound signed receipt following an owned source revision. Preserves earlier immutable pages and optionally updates the owned project link. Does not fetch provider data or charge credits. Retrying a completed append is idempotent.',
         parameters: [pathParameter('id', 'Recent source UUID.')],
-        requestBody: jsonBody({ type: 'object', required: ['sourceRevision', 'continuation'], additionalProperties: false, properties: {
-          sourceRevision: sourceRevisionResponse, continuation: { type: 'string', minLength: 1, maxLength: 10000 }, projectId: { type: 'string', format: 'uuid' },
+        requestBody: jsonBody({ type: 'object', required: ['sourceRevision', 'continuation', 'pageReceipt'], additionalProperties: false, properties: {
+          sourceRevision: sourceRevisionResponse, pageReceipt: z.toJSONSchema(commentPageReceiptSchema, { target: 'openapi-3.0' }), continuation: { type: 'string', minLength: 1, maxLength: 10000 }, projectId: { type: 'string', format: 'uuid' },
         } }),
         responses: { '200': jsonResponse('Comments page retained.', { type: 'object', properties: { source: schemaRef('RecentSource'), sourceRevision: sourceRevisionResponse } }),
           '409': jsonResponse('The source changed, the page is not stored, or the continuation does not match.', schemaRef('Error')), '404': responseRef('NotFound'), ...standardErrors },
@@ -2225,6 +2229,7 @@ export const openApiDocument = {
         required: ['videoId', 'comments', 'meta'],
         properties: {
           videoId: { type: 'string' }, comments: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          pageReceipt: { ...z.toJSONSchema(commentPageReceiptSchema, { target: 'openapi-3.0' }), description: 'Account-bound receipt for this exact stored page, returned only for a browser-session retain=true request.' },
           totalCount: { type: 'integer', minimum: 0, description: 'Total comments reported by YouTube when available.' },
           continuation: { type: 'string' }, complete: { type: 'boolean' },
           pagesFetched: { type: 'integer' }, topLevelCount: { type: 'integer' }, replyCount: { type: 'integer' },

@@ -23,6 +23,7 @@ export type CommentRecord = {
   isHearted?: boolean;
 };
 export type CommentPage = {
+  pageReceipt?: string;
   videoId: string;
   comments: CommentRecord[];
   totalCount?: number;
