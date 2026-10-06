@@ -31,7 +31,11 @@ test('initial capture stores embedded images and native R2 conditional writes pr
   if (live.channel.status === 'ready') live.channel.channel.thumbnails = [thumbnail];
   if (live.comments.status === 'ready') live.comments.comments[0]!.author.thumbnails = [thumbnail];
   vi.mocked(loadLandingInspection).mockResolvedValue(live);
-  vi.stubGlobal('fetch', vi.fn(async () => new Response('hello', { headers: { 'content-type': 'image/png' } })));
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Exercise Workers' native request validation before supplying image bytes.
+    new Request(input, init);
+    return new Response('hello', { headers: { 'content-type': 'image/png' } });
+  }));
   const pending: Promise<unknown>[] = [];
   const result = await inspectLandingVideo(bindings, id, 'https://sample.test/inspect', work => { pending.push(work); });
   await Promise.all(pending);
@@ -41,5 +45,27 @@ test('initial capture stores embedded images and native R2 conditional writes pr
   expect(await (await bindings.VIDEO_ASSETS.get(key))?.json()).toEqual(result);
   expect(await bindings.VIDEO_ASSETS.put(key, 'replacement', { onlyIf: { etagDoesNotMatch: '*' } })).toBeNull();
   expect(await (await bindings.VIDEO_ASSETS.get(key))?.json()).toEqual(result);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test.each([301, 302, 303, 307, 308])('rejects image redirect %i without following it or saving an incomplete snapshot', async status => {
+  const id = 'Vyb-sTrY_Y8';
+  const live = inspection(id);
+  live.video.thumbnails = [{ url: 'https://i.ytimg.com/redirect.jpg' }];
+  if (live.channel.status === 'ready') live.channel.channel.thumbnails = [];
+  if (live.comments.status === 'ready') live.comments.comments = [];
+  vi.mocked(loadLandingInspection).mockResolvedValue(live);
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    expect(request.redirect).toBe('manual');
+    return new Response('redirect', { status, headers: {
+      location: 'https://untrusted.example/image.jpg', 'content-type': 'image/png',
+    } });
+  }));
+  const pending: Promise<unknown>[] = [];
+  const result = await inspectLandingVideo(bindings, id, 'https://sample.test/inspect', work => { pending.push(work); });
+  await Promise.all(pending);
+  expect(result).toEqual(live);
+  expect(await bindings.VIDEO_ASSETS.get(`landing-samples/v1/${id}.json`)).toBeNull();
   expect(fetch).toHaveBeenCalledTimes(1);
 });
