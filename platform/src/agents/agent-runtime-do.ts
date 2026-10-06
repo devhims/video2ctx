@@ -660,6 +660,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
         deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
+        registerRetrievedAsset: (claim, version) => {
+          this.assertRunActive(runId);
+          this.evidenceLedger.registerAssetClaim(runId, claim, version);
+        },
         deliveredPacketIds: this.evidenceLedger.deliveredPacketIds(runId),
         modelBudget,
         modelCallPrefix,
@@ -1302,7 +1306,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     await this.sessionStore.delete();
     this.sessionStore.search.clearHistory();
     for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
+      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
       'agent_trace_run_index', 'agent_trace_publish_order']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }

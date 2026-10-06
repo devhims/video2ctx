@@ -14,6 +14,7 @@ export function sessionProvider(
   provider: YouTubeAgentProvider,
   store: SessionEvidenceStore,
   refresh = false,
+  onRetrieved?: (claim: string, version: string) => void,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
   // Resource keys this run retrieved from the provider, with the claim of that paid
@@ -44,6 +45,7 @@ export function sessionProvider(
       const saved = store.transcriptOverLimitForKey(key);
       if (saved) throw saved;
       const fresh = (refresh && !refreshed.has(key)) || !!options?.refresh;
+      let retrievalClaim: string | undefined;
       const result = await store.retrieve(
         key,
         'transcript',
@@ -54,6 +56,7 @@ export function sessionProvider(
           // Reject before saving, so an over-limit transcript never becomes a session asset.
           if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, fetched.value, store.maxVideoSeconds);
           const claim = crypto.randomUUID();
+          retrievalClaim = claim;
           claims.set(key, claim);
           return { ...fetched, providerClaim: claim };
         },
@@ -69,6 +72,8 @@ export function sessionProvider(
           !value.meta.partial &&
           value.segments.length > 0 &&
           value.segments.some((segment) => segment.text.trim().length > 0),
+        undefined,
+        version => { if (retrievalClaim) onRetrieved?.(retrievalClaim, version); },
       );
       // A transcript saved before the limit existed is reused without the loader above.
       if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, result.value, store.maxVideoSeconds);
@@ -95,6 +100,7 @@ export function sessionProvider(
     comments: async (id, options = {}) => {
       const key = `comments:${id}:${options.all ?? false}:${options.continuation ?? ''}`;
       const fresh = (refresh && !refreshed.has(key)) || !!options.refresh;
+      let retrievalClaim: string | undefined;
       const result = await store.retrieve(
         key,
         'comments',
@@ -103,10 +109,13 @@ export function sessionProvider(
         async () => {
           const fetched = await provider.comments(id, { ...options, refresh: fresh });
           const claim = crypto.randomUUID();
+          retrievalClaim = claim;
           claims.set(key, claim);
           return { ...fetched, providerClaim: claim };
         },
         (value) => ({ count: value.comments.length, complete: 'complete' in value ? value.complete : false }),
+        undefined, undefined,
+        version => { if (retrievalClaim) onRetrieved?.(retrievalClaim, version); },
       );
       if (result.assetVersions?.length) refreshed.add(key);
       return claimed(result, [key]);
@@ -204,6 +213,7 @@ export function sessionProvider(
                   }),
                   undefined,
                   options.signal,
+                  version => onRetrieved?.(storyboardClaim!, version),
                 );
                 refreshed.add(key);
                 claims.set(key, storyboardClaim!);
@@ -302,6 +312,7 @@ export function sessionProvider(
                   }),
                   undefined,
                   signal,
+                  version => onRetrieved?.(framesClaim!, version),
                 );
                 refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
                 claims.set(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`, framesClaim!);

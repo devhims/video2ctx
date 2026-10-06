@@ -1,6 +1,10 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
+import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
+import { sessionProvider } from '../src/agents/runtime/session-provider';
+import type { SessionEvidenceStore } from '../src/agents/runtime/session-evidence';
 import {
   RunEvidenceLedger,
   packetChargeUnits,
@@ -9,6 +13,7 @@ import {
 } from '../src/agents/runtime/evidence-billing';
 
 const VIDEO = 'abcdefghijk';
+
 const OTHER = 'bcdefghijkl';
 const v = (n: number) => n.toString(16).padStart(64, '0');
 
@@ -293,7 +298,8 @@ type RuntimeInternals = {
   deliverEvidence(runId: string, source: string, packets: EvidencePacket[]): { admitted: EvidencePacket[]; withheld: EvidencePacket[] };
   deliverSavedAssets(runId: string, versions: string[]): void;
   finalizeRun(runId: string, toolId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
-  sessionStore: { savePacket(packet: EvidencePacket): void };
+  sessionStore: SessionEvidenceStore;
+  evidenceLedger: RunEvidenceLedger;
   sql: <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
 };
 
@@ -462,9 +468,10 @@ test('dashboard, Sources and saved-run reads stay outside run billing', async ()
 
 test('account deletion clears every per-run billing table', async () => {
   const { runtime, runIds: [runId] } = await seedRuns('account-deletion');
-  const tables = ['agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims'];
+  const tables = ['agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims'];
   await runInDurableObject(runtime, async (instance, state) => {
     const runtimeInternals = instance as unknown as RuntimeInternals;
+    runtimeInternals.evidenceLedger.registerAssetClaim(runId!, 'paid', v(2));
     runtimeInternals.deliverEvidence(runId!, 'read_session_evidence', [packet('read', [v(1)])]);
     await runtimeInternals.performEvidenceTool(runId!, execution('fetch', { assetVersions: [v(2)],
       usage: [{ operation: 'transcript', credits: 1, cacheStatus: 'miss', claims: ['paid'] }] }));
@@ -475,5 +482,159 @@ test('account deletion clears every per-run billing table', async () => {
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
     for (const table of tables) expect(state.storage.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`).one().count, table).toBe(0);
+  });
+});
+
+test('registered retrievals cover saved reads across restart and keep a cached charge on failure', async () => {
+  await withLedger('registered-restart', create => {
+    let tools = 0;
+    const ledger = create(22, () => tools);
+    ledger.registerAssetClaim('run', 'fetch', v(11));
+    ledger.registerAssetClaim('run', 'fetch', v(12));
+    expect(ledger.deliverAssets('run', 'saved_analysis', [v(11)], lookup).map(r => r.credits)).toEqual([1]);
+    const restarted = create(22, () => tools);
+    expect(credits(restarted.deliver('run', 'search_context', [packet('read', [v(12)])], lookup))).toBe(0);
+    // If the fetch fails, the observed saved input still costs one cached operation.
+    expect(restarted.committed('run')).toBe(1);
+    const result = restarted.recordTool('run', 'get_video_frames', packet('fetched', [v(11), v(12)], {
+      kind: 'youtube_frames', excerpts: [], usage: [{ operation: 'frames', cacheStatus: 'miss', credits: 2, claims: ['fetch'] }],
+    }), lookup);
+    tools += result.credits;
+    expect(restarted.committed('run')).toBe(2);
+    expect(restarted.receipts('run').map(r => [r.price, r.credits])).toEqual([['fresh', 2]]);
+  });
+});
+
+test('an identical refresh does not absorb an earlier saved read charge', async () => {
+  await withLedger('registered-refresh', create => {
+    let tools = 0;
+    const ledger = create(22, () => tools);
+    ledger.deliver('run', 'read_session_evidence', [packet('old', [v(1)])], lookup);
+    ledger.registerAssetClaim('run', 'refresh', v(1));
+    tools += ledger.recordTool('run', 'get_video_transcript', packet('fresh', [v(1)], {
+      usage: [{ operation: 'transcript', cacheStatus: 'miss', credits: 1, claims: ['refresh'] }],
+    }), lookup).credits;
+    expect(ledger.committed('run')).toBe(2);
+    expect(ledger.receipts('run').map(r => r.price)).toEqual(['cached', 'fresh']);
+  });
+});
+
+test('empty saved text stays uncharged but visual handles and fresh work keep their prices', async () => {
+  await withLedger('empty-text-visual', create => {
+    const ledger = create();
+    for (const reuse of ['session', 'run'] as const) {
+      for (const [kind, operation, version] of [
+        ['youtube_transcript', 'transcript', v(1)], ['youtube_comments', 'comments', v(40)],
+      ] as const) {
+        const run = `${reuse}:${kind}`;
+        const usage = [{ operation, credits: 1, cacheStatus: 'hit' as const, reuse }];
+        expect(ledger.recordTool(run, 'read', packet('empty', [version], { kind, excerpts: [], usage }), lookup).credits).toBe(0);
+        expect(ledger.recordTool(run, 'read', packet('nonempty', [version], { kind, usage }), lookup).credits).toBe(1);
+      }
+    }
+    for (const [kind, operation, version] of [
+      ['youtube_frames', 'frames', v(11)], ['youtube_storyboard', 'storyboard', v(21)],
+    ] as const) {
+      expect(ledger.recordTool(kind, 'visual', packet('handles', [version], { kind, excerpts: [],
+        usage: [{ operation, credits: 1, cacheStatus: 'hit', reuse: 'session' }],
+      }), lookup).credits).toBe(1);
+    }
+    expect(ledger.recordTool('fresh-empty', 'get_video_transcript', packet('fresh', [v(1)], { excerpts: [],
+      usage: [{ operation: 'transcript', credits: 1, cacheStatus: 'miss' }],
+    }), lookup).credits).toBe(1);
+  });
+});
+
+test('a retry replaces an unconsumed failed retrieval claim for identical content', async () => {
+  await withLedger('replaced-claim', create => {
+    let tools = 0;
+    const ledger = create(22, () => tools);
+    ledger.registerAssetClaim('run', 'failed-fetch', v(1));
+    ledger.registerAssetClaim('run', 'retry', v(1));
+    ledger.deliver('run', 'search_context', [packet('read', [v(1)])], lookup);
+    tools += ledger.recordTool('run', 'get_video_transcript', packet('retried', [v(1)], {
+      usage: [{ operation: 'transcript', cacheStatus: 'miss', credits: 1, claims: ['retry'] }],
+    }), lookup).credits;
+    expect(ledger.committed('run')).toBe(1);
+    expect(ledger.receipts('run').map(r => r.price)).toEqual(['fresh']);
+  });
+});
+
+test('saved transcript retrieval beyond the last page must be free', async () => {
+  const { runtime, runIds: [runId] } = await seedRuns('empty-saved-page');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    const context = {
+      runId: runId!, signal: new AbortController().signal,
+      transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript: async () => ({ sessionReused: true, cacheStatus: 'hit', assetVersions: [v(1)], value: {
+        videoId: VIDEO, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+        segments: [{ text: 'Saved passage.', startMs: 0, endMs: 1000, durationMs: 1000 }],
+        text: 'Saved passage.', meta: { source: 'allthingsyoutube', partial: false, warnings: [] },
+      } }) },
+      executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
+    } as unknown as AgentToolContext;
+    const result = await executeGetVideoTranscript({ videoId: VIDEO, offset: 5000 }, context, 'empty-page');
+    expect(result.excerpts).toEqual([]);
+    expect(result.usage[0]!.credits).toBe(0);
+    expect(internals.sql`SELECT * FROM agent_evidence_deliveries WHERE run_id = ${runId!}`).toEqual([]);
+    const nonempty = await executeGetVideoTranscript({ videoId: VIDEO }, context, 'first-real-page');
+    expect(nonempty.usage[0]!.credits).toBe(1);
+  });
+});
+
+test('saved input delivery while its provider tool finishes must share its charge', async () => {
+  const { runtime, runIds: [runId] } = await seedRuns('analysis-delivery-race');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    let finish!: (packet: EvidencePacket) => void;
+    const running = internals.performEvidenceTool(runId!, execution('frames-provider', {
+      kind: 'youtube_frames', assetVersions: [v(11)], usage: [{ operation: 'frames', credits: 2, cacheStatus: 'miss', claims: ['frames-claim'] }],
+    }, () => new Promise<EvidencePacket>(resolve => { finish = resolve; }), 'get_video_frames'));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    // Assets have been pinned and are visible while the retrieval tool saves its previews.
+    internals.evidenceLedger.registerAssetClaim(runId!, 'frames-claim', v(11));
+    internals.deliverSavedAssets(runId!, [v(11)]);
+    finish(packet('frames-provider', [v(11)], { kind: 'youtube_frames',
+      usage: [{ operation: 'frames', credits: 2, cacheStatus: 'miss', claims: ['frames-claim'] }] }));
+    await running;
+    const charges = internals.sql<{ credits: number }>`SELECT credits FROM agent_evidence_charges WHERE run_id = ${runId!}`;
+    expect(charges.reduce((sum, row) => sum + row.credits, 0)).toBe(2);
+  });
+});
+
+test('search reading a newly pinned transcript before tool completion must not charge twice', async () => {
+  const { runtime, runIds: [runId] } = await seedRuns('search-delivery-race');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    const store = internals.sessionStore;
+    const wrapped = sessionProvider({ transcript: async () => ({ cacheStatus: 'miss', value: {
+      videoId: VIDEO, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+      segments: [{ text: 'Distinct transcript passage.', startMs: 0, endMs: 1000, durationMs: 1000 }], text: 'Distinct transcript passage.',
+      meta: { source: 'allthingsyoutube', fetchedAt: '2026-10-06T00:00:00Z', partial: false, warnings: [] },
+    } }) } as unknown as AgentToolContext['provider'], store, false,
+      (claim, version) => internals.evidenceLedger.registerAssetClaim(runId!, claim, version));
+    let version: string | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const context = {
+      runId: runId!, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { transcript: async () => {
+        const fetched = await wrapped.transcript(VIDEO);
+        version = fetched.assetVersions![0];
+        await gate;
+        return fetched;
+      } },
+      executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
+    } as unknown as AgentToolContext;
+    const running = executeGetVideoTranscript({ videoId: VIDEO }, context, 'pending-transcript');
+    await vi.waitFor(() => expect(version).toBeDefined());
+    const found = await store.search.searchEvidence(store, 'Distinct transcript passage');
+    expect(found.packets.length).toBeGreaterThan(0);
+    internals.deliverEvidence(runId!, 'search_context', found.packets);
+    release();
+    await running;
+    const charges = internals.sql<{ credits: number }>`SELECT credits FROM agent_evidence_charges WHERE run_id = ${runId!}`;
+    expect(charges.reduce((sum, row) => sum + row.credits, 0)).toBe(1);
   });
 });

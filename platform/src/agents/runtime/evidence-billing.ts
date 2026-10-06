@@ -184,6 +184,9 @@ export class RunEvidenceLedger {
     // has not completed hold one provisional charge row until it does.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS agent_evidence_claims (
       run_id TEXT NOT NULL, claim_id TEXT NOT NULL, PRIMARY KEY (run_id, claim_id))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS agent_evidence_asset_claims (
+      run_id TEXT NOT NULL, asset_key TEXT NOT NULL, claim_id TEXT NOT NULL,
+      PRIMARY KEY (run_id, asset_key))`);
     if (!this.sql.exec<{ name: string }>('PRAGMA table_info(agent_evidence_charges)').toArray().some(column => column.name === 'cover_json')) {
       this.sql.exec('ALTER TABLE agent_evidence_charges ADD COLUMN cover_json TEXT');
     }
@@ -225,6 +228,32 @@ export class RunEvidenceLedger {
     if (holds && !holds.size) this.#holds.delete(runId);
   }
 
+  /** Register inside the asset publication, before searches or analysts can read it. */
+  registerAssetClaim(runId: string, claim: string, version: string): void {
+    const key = `asset:${version}`;
+    // A refresh of previously delivered content is a separate paid operation.
+    if (this.isDelivered(runId, key)) return;
+    this.sql.exec(`INSERT INTO agent_evidence_asset_claims VALUES (?, ?, ?)
+      ON CONFLICT(run_id, asset_key) DO UPDATE SET claim_id=excluded.claim_id`, runId, key, claim);
+  }
+
+  private assetClaims(runId: string, keys: readonly string[]): string[] | undefined {
+    const claims: string[] = [];
+    for (const key of keys) {
+      const row = this.sql.exec<{ claim_id: string }>(
+        'SELECT claim_id FROM agent_evidence_asset_claims WHERE run_id=? AND asset_key=?', runId, key).toArray()[0];
+      if (!row) return undefined;
+      claims.push(row.claim_id);
+    }
+    return [...new Set(claims)];
+  }
+
+  /** A joined read needs one provisional charge only when none of its claims cover it yet. */
+  private uncoveredClaims(runId: string, claims: readonly string[]): string[] {
+    const unsettled = [...new Set(claims)].filter(claim => !this.claimSettled(runId, claim));
+    return unsettled.some(claim => this.provisional(runId, claim)) ? [] : unsettled;
+  }
+
   private isDelivered(runId: string, assetKey: string): boolean {
     return this.sql.exec('SELECT 1 FROM agent_evidence_deliveries WHERE run_id=? AND asset_key=?', runId, assetKey)
       .toArray().length > 0;
@@ -253,15 +282,21 @@ export class RunEvidenceLedger {
   ): EvidenceChargeReceipt[] | undefined {
     const charged = mapped.units.filter(unit => !chargedUnits.has(unit.key)
       && unit.assetKeys.some(key => !this.isDelivered(runId, key)));
-    const cost = charged.reduce((sum, unit) => sum + cachedPrice(unit.operation), 0);
-    if (cost > remaining) return undefined;
+    const plans = charged.map(unit => {
+      const claims = this.assetClaims(runId, unit.assetKeys.filter(key => !this.isDelivered(runId, key)));
+      const pending = claims ? this.uncoveredClaims(runId, claims) : undefined;
+      return { unit, pending, cost: pending?.length === 0 ? 0 : cachedPrice(unit.operation) };
+    });
+    if (plans.reduce((sum, plan) => sum + plan.cost, 0) > remaining) return undefined;
     this.markDelivered(runId, mapped.assetKeys, now);
-    return charged.map(unit => {
+    return plans.flatMap(({ unit, pending, cost }) => {
       chargedUnits.add(unit.key);
+      if (!cost) return [];
       const receipt: EvidenceChargeReceipt = { source, operation: unit.operation, price: 'cached',
-        credits: cachedPrice(unit.operation), ...(unit.videoId ? { videoId: unit.videoId } : {}) };
-      this.insertReceipt(runId, receipt, unit.key, 'delivery', now);
-      return receipt;
+        credits: cost, ...(unit.videoId ? { videoId: unit.videoId } : {}) };
+      if (pending?.length) this.insertProvisional(runId, pending[0]!, pending.slice(1), receipt, now);
+      else this.insertReceipt(runId, receipt, unit.key, 'delivery', now);
+      return [receipt];
     });
   }
 
@@ -370,20 +405,26 @@ export class RunEvidenceLedger {
     const mapped = packetChargeUnits(packet, lookup) ?? { assetKeys: [`packet:${packet.packetId}`], units: [] };
     // Saved assets are judged by their priced units, so a manifest alone never charges.
     const reusedKeys = packet.assetVersions?.length ? mapped.units.flatMap(unit => unit.assetKeys) : mapped.assetKeys;
-    const reusesNewAsset = reusedKeys.some(key => !this.isDelivered(runId, key));
+    // Text reads with no passages deliver nothing. Visual retrievals deliberately
+    // return saved image handles without excerpts and still count as evidence.
+    const emptySavedText = packet.excerpts.length === 0
+      && packet.kind !== 'youtube_frames' && packet.kind !== 'youtube_storyboard';
+    const unseenKeys = reusedKeys.filter(key => !this.isDelivered(runId, key));
+    const reusesNewAsset = !emptySavedText && unseenKeys.length > 0;
+    const assetClaims = this.assetClaims(runId, unseenKeys);
     const receipts: EvidenceChargeReceipt[] = [];
     const videoId = singleVideo(packet);
     const usage = packet.usage.map(entry => {
       let credits = entry.credits;
-      if (entry.reuse === 'run' && isDataOperation(entry.operation)) {
+      const claims = entry.claims ?? assetClaims;
+      if (entry.reuse && (entry.reuse === 'run' || claims?.length) && isDataOperation(entry.operation)) {
         credits = 0;
-        const unsettled = [...new Set(entry.claims ?? [])].filter(claim => !this.claimSettled(runId, claim));
-        const pending = unsettled.filter(claim => !this.provisional(runId, claim));
-        if (!entry.claims?.length && reusesNewAsset) credits = cachedPrice(entry.operation);
-        else if (reusesNewAsset && unsettled.length && pending.length === unsettled.length) {
+        const pending = this.uncoveredClaims(runId, claims ?? []);
+        if (!claims?.length && reusesNewAsset) credits = cachedPrice(entry.operation);
+        else if (reusesNewAsset && pending.length) {
           const receipt: EvidenceChargeReceipt = { source: toolName, operation: entry.operation, price: 'cached',
             credits: cachedPrice(entry.operation), ...(videoId ? { videoId } : {}) };
-          this.insertProvisional(runId, pending[0]!, unsettled.slice(1), receipt, now);
+          this.insertProvisional(runId, pending[0]!, pending.slice(1), receipt, now);
           receipts.push(receipt);
         }
       } else if (entry.reuse) {
@@ -400,7 +441,7 @@ export class RunEvidenceLedger {
       }
       return { ...entry, credits };
     });
-    this.markDelivered(runId, mapped.assetKeys, now);
+    if (!emptySavedText || packet.usage.some(entry => !entry.reuse)) this.markDelivered(runId, mapped.assetKeys, now);
     return { packet: { ...packet, usage }, credits: usage.reduce((sum, entry) => sum + entry.credits, 0), receipts };
   }
 

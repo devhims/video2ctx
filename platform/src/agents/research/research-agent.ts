@@ -118,6 +118,7 @@ export async function executeResearchRun(options: {
   /** Admits saved and inherited content before delivery, billing it once per run. */
   deliverEvidence?: DeliverEvidence;
   deliverSavedAssets?: AgentToolContext['deliverSavedAssets'];
+  registerRetrievedAsset?: (claim: string, version: string) => void;
   /** Packets this run already received, restored without another charge after a restart. */
   deliveredPacketIds?: ReadonlySet<string>;
   modelBudget: AgentModelCostBudget;
@@ -205,7 +206,7 @@ export async function executeResearchRun(options: {
   // that have already arrived. The research context also limits active models.
   const analysisLimiter = new ConcurrencyLimiter(4);
   const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence) : upstream, decision);
+  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     createAgentModel(options.env, options.sessionAffinity, 'low', {
       ...modelMetadata,

@@ -562,14 +562,16 @@ export class SessionEvidenceStore implements SessionAccess {
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean = () => true,
     signal?: AbortSignal,
+    /** Synchronous billing provenance, published with provider-loaded assets only. */
+    onRetained?: (version: string) => void,
   ): Promise<CachedResult<T>> {
     // Cancellation belongs to this waiter. The shared provider still coalesces
     // extraction; a canceled waiter must never publish session references.
-    if (signal) return this.resolve(key, kind, videoId, fresh, load, describe, accept, signal);
+    if (signal) return this.resolve(key, kind, videoId, fresh, load, describe, accept, signal, onRetained);
     const pendingKey = `${this.generation()}:${key}:${fresh}`;
     const existing = this.pending.get(pendingKey);
     if (existing) return existing.then((result) => ({ ...result, sessionReused: true })) as Promise<CachedResult<T>>;
-    const promise = this.resolve(key, kind, videoId, fresh, load, describe, accept);
+    const promise = this.resolve(key, kind, videoId, fresh, load, describe, accept, undefined, onRetained);
     this.pending.set(pendingKey, promise);
     try {
       return await promise;
@@ -586,6 +588,8 @@ export class SessionEvidenceStore implements SessionAccess {
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean,
     signal?: AbortSignal,
+    /** Synchronous billing provenance, published with provider-loaded assets only. */
+    onRetained?: (version: string) => void,
   ): Promise<CachedResult<T>> {
     signal?.throwIfAborted();
     const generation = this.generation();
@@ -610,6 +614,7 @@ export class SessionEvidenceStore implements SessionAccess {
         signal?.throwIfAborted();
         if (stored === null || generation !== this.generation() || !this.has(version))
           throw new Error('Session assets changed during retrieval. Retry the request.');
+        onRetained?.(version);
         this.alias(key, version);
         return { ...result, ...(stored ? { verifiedImages: this.catalog?.verifiedImages(stored) } : {}), assetVersions: [version] };
       }
@@ -633,6 +638,7 @@ export class SessionEvidenceStore implements SessionAccess {
         if (generation !== this.generation())
           throw new Error('Session assets changed during retrieval. Retry the request.');
         this.atomic!(() => {
+          onRetained?.(version);
           this.sql.exec(
             'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
             version,
@@ -658,6 +664,7 @@ export class SessionEvidenceStore implements SessionAccess {
         signal?.throwIfAborted();
         throw new Error('Session assets changed during retrieval. Retry the request.');
       }
+      onRetained?.(version);
       this.sql.exec(
         'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
         version,
