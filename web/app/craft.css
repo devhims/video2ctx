@@ -942,12 +942,14 @@ html:has(.craft) body {
 .craft-result-title {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-sm) var(--space-md);
 }
 
 .craft-sample-badge {
   flex-shrink: 0;
+  margin-left: auto;
   transform: translateY(3px);
   padding: 0.3rem 0.6rem;
   border: 1px solid var(--rule);
@@ -960,7 +962,8 @@ html:has(.craft) body {
 }
 
 .craft-result-head h2 {
-  max-width: 34ch;
+  flex: 1 1 34ch;
+  min-width: 0;
   margin: 0;
   font-size: clamp(1.35rem, 3vw, 2rem);
   font-weight: 650;

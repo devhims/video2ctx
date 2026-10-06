@@ -152,7 +152,9 @@ async function downloadImage(source: string, signal: AbortSignal): Promise<strin
     || !['ytimg.com', 'ggpht.com', 'googleusercontent.com'].some(host => url.hostname === host || url.hostname.endsWith(`.${host}`))) {
     throw new Error('Unsupported sample image host');
   }
-  const response = await fetch(url, { redirect: 'error', signal });
+  // Workers rejects redirect: 'error'. Manual mode exposes redirects, which
+  // the non-2xx check below rejects without contacting the Location host.
+  const response = await fetch(url, { redirect: 'manual', signal });
   const type = response.headers.get('content-type')?.split(';')[0]?.trim();
   if (!response.ok || !type || !IMAGE_TYPES.includes(type) || !response.body) {
     await response.body?.cancel();
