@@ -949,7 +949,11 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
     : {route,videoId:ids[1]!,useStoryboard:false,comparisonVideoIds:ids};
   options.finalizationDeadlineAt=Date.now()+(recovered ? -5_000 : 60_000);
   options.session={brief:()=>({assets:ids.map((videoId,index)=>({version:versions[index],kind:'transcript',videoId,current:true,collectedAt:1,details:{}})),memories:[]}),
-    evidence:(version: string)=>packets.filter(packet=>packet.assetVersions?.includes(version)),
+    evidence:(version: string)=>packets.filter(packet=>packet.assetVersions?.includes(version)).flatMap(packet => [
+      { ...packet, packetId: `paged:${packet.packetId}`, artifacts: [] },
+      packet,
+      { ...packet, packetId: `older-full:${packet.packetId}` },
+    ]),
     readTranscriptEvidence,readEvidence,searchTools} as unknown as NonNullable<typeof options.session>;
   let attempts=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
@@ -973,6 +977,13 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
     expect(finalizer.doGenerateCalls).toHaveLength(1);
     expect(readEvidence).not.toHaveBeenCalled();
     expect(searchTools).not.toHaveBeenCalled();
+    const request = finalizer.doGenerateCalls[0]!.prompt.find(message => message.role === 'user');
+    const text = request?.content.find(part => part.type === 'text');
+    const input = JSON.parse(text?.text ?? '{}');
+    expect(input.evidence.map((packet: EvidencePacket) => packet.packetId)).toEqual(['saved:0', 'saved:1']);
+    for (const packet of packets) {
+      expect(JSON.stringify(input.evidence).split(packet.excerpts[0]!.text)).toHaveLength(2);
+    }
   }
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   const result=await vi.mocked(options.finalize).mock.results[0]!.value;

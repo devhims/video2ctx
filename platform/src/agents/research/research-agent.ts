@@ -752,11 +752,13 @@ async function runUnifiedFinalizer(options: {
       const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
         .sort((a, b) => b.collectedAt - a.collectedAt)[0];
       if (!asset || options.context.session.transcriptOverLimit?.(asset.version)) continue;
-      const packets = options.context.session.evidence(asset.version);
-      options.onEvidence?.(packets);
-      for (const packet of packets) {
-        if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
-      }
+      // Session packets are newest first. Pages and query reads overlap the
+      // full transcript and must not consume the comparison budget again.
+      const packet = options.context.session.evidence(asset.version)
+        .find(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript'));
+      if (!packet) continue;
+      options.onEvidence?.([packet]);
+      if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
     }
   } else if (options.context.session && !conversational) {
     try {
