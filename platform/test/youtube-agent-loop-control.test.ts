@@ -565,7 +565,7 @@ describe('YouTube AgentCore loop control', () => {
         recoveredEvidence: [transcriptAnalysisPacket()],
       });
       const check = expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      await vi.advanceTimersByTimeAsync(100_001);
+      await vi.advanceTimersByTimeAsync(120_001);
       await check;
       expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
         answer: expect.stringContaining('[cite:transcript:abcdefghijk:window:0:0]'),
@@ -575,7 +575,7 @@ describe('YouTube AgentCore loop control', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('ends the entire loop including a stalled recovery finalizer within its 60-second phase', async () => {
+  it('bounds a stalled recovery finalizer by its main phase plus separate retry', async () => {
     vi.useFakeTimers();
     try {
       const model = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } });
@@ -585,7 +585,7 @@ describe('YouTube AgentCore loop control', () => {
         decision: { route: 'topic_research' }, context: inspectContext(),
       });
       const check = expect(run).rejects.toThrow(/Finalization timed out/i);
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(80_001);
       await check;
     } finally { vi.useRealTimers(); }
   });
@@ -1160,13 +1160,9 @@ describe('YouTube AgentCore loop control', () => {
       await vi.advanceTimersByTimeAsync(95_000);
       await run;
       expect(onFinalizing).toHaveBeenCalledExactlyOnceWith(startedAt + 34_000 + 60_000);
-      expect(synthesis.mock.calls.filter(([call])=>call.responseFormat?.type === 'json')).toHaveLength(duration > 40_000 ? 2 : 1);
+      expect(synthesis.mock.calls.filter(([call])=>call.responseFormat?.type === 'json')).toHaveLength(1);
       expect(context.finalize).toHaveBeenCalledTimes(1);
-      if (duration > 40_000) {
-        expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-          warnings: expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE' })]),
-        }));
-      }
+      expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings: [] }));
     } finally { vi.useRealTimers(); }
   });
 
@@ -1411,7 +1407,7 @@ describe('YouTube AgentCore loop control', () => {
         context, recoveredEvidence: [transcriptAnalysisPacket()],
       });
       const check = expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(80_001);
       await check;
       expect(attempts).toBe(2);
       const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
@@ -1442,7 +1438,7 @@ describe('YouTube AgentCore loop control', () => {
       const check = kind === 'raw'
         ? expect(run).rejects.toMatchObject({ code: 'FINAL_SYNTHESIS_UNAVAILABLE', message: expect.stringContaining(reason) })
         : expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(80_001);
       await check;
       if (kind === 'analyzed') {
         const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];

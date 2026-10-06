@@ -26,7 +26,7 @@ import {
 } from './runtime/memory-updater';
 import { fireworksModelPricing } from './fireworks-finalizer';
 import type { LanguageModel } from 'ai';
-import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
+import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, finalizationHardDeadline, withRunDeadline } from './runtime/deadline';
 import {
   Agent,
   type FiberContext,
@@ -1197,8 +1197,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   // failed settlement. Queued work has no clock until classification starts.
   // An alarm from an earlier phase must never cancel a later phase prematurely.
   private reconciliationDeadline(run: RunRow): number | undefined {
-    if (run.finalization_deadline_at !== null) return run.finalization_deadline_at + AGENT_PERSISTENCE_TIMEOUT_MS;
-    if (run.research_deadline_at !== null) return run.research_deadline_at + AGENT_FINALIZATION_TIMEOUT_MS + AGENT_PERSISTENCE_TIMEOUT_MS;
+    if (run.finalization_deadline_at !== null) return finalizationHardDeadline(run.finalization_deadline_at) + AGENT_PERSISTENCE_TIMEOUT_MS;
+    if (run.research_deadline_at !== null) return finalizationHardDeadline(run.research_deadline_at + AGENT_FINALIZATION_TIMEOUT_MS) + AGENT_PERSISTENCE_TIMEOUT_MS;
     if (run.classification_deadline_at !== null) return run.classification_deadline_at + AGENT_PERSISTENCE_TIMEOUT_MS;
     return undefined;
   }

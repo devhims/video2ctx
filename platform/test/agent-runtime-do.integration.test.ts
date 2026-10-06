@@ -461,8 +461,14 @@ test('a stale admission watchdog does not cancel classification or active phase 
   });
   await runtime.reconcileRun(runId);
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  // A late retry also gets the separate persistence allowance.
   await runInDurableObject(runtime, async instance => {
-    instance.sql`UPDATE agent_runs SET finalization_deadline_at = ${Date.now() - 31_000} WHERE id = ${runId}`;
+    instance.sql`UPDATE agent_runs SET finalization_deadline_at = ${Date.now() - 40_000} WHERE id = ${runId}`;
+  });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRun(runId)).toMatchObject({ status: 'running' });
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET finalization_deadline_at = ${Date.now() - 51_000} WHERE id = ${runId}`;
   });
   await runtime.reconcileRun(runId);
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });

@@ -13,7 +13,8 @@ import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics
 import { researchVideoTarget } from './research-plan';
 import { assertGroundedAnswerBlocks, transcriptSourceContext, TranscriptGroundingError } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
-import { answerOutputTokenLimit, finalizationOutputTokenLimit, FINALIZATION_CONTEXT_TIMEOUT_MS, FINALIZATION_REPAIR_RESERVE_MS } from './answer-budget';
+import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
+import { FinalizationStallError, withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
@@ -21,7 +22,7 @@ import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, 
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
-import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
+import { AGENT_CLASSIFICATION_TIMEOUT_MS, researchTimeoutMs, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_FINALIZATION_RETRY_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, finalizationHardDeadline, withRunDeadline } from '../runtime/deadline';
 import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../runtime/frame-budget';
 import { generateText, streamText, Output, NoObjectGeneratedError, tool, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel } from 'ai';
 import { z, ZodError } from 'zod';
@@ -160,7 +161,7 @@ export async function executeResearchRun(options: {
     await options.onFinalizing(deadlineAt);
     const finalizationFailures: string[] = [];
     try {
-      await withRunDeadline(deadlineAt, options.signal, (signal, persist) => runUnifiedFinalizer({
+      await withRunDeadline(finalizationHardDeadline(deadlineAt), options.signal, (signal, persist) => runUnifiedFinalizer({
         model: createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision,
@@ -621,7 +622,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     const finalizationFailures: string[] = [];
     try {
       const deadlineAt = await startFinalization();
-      await withRunDeadline(deadlineAt, options.context.signal, (signal, persist) => runUnifiedFinalizer({
+      await withRunDeadline(finalizationHardDeadline(deadlineAt), options.context.signal, (signal, persist) => runUnifiedFinalizer({
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, model: options.finalizationModel ?? options.model,
         message: options.message,
@@ -649,7 +650,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           code: errorMessage(finalizationError) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
             : finalizationError instanceof ApiError ? finalizationError.code
             : isAgentCoreTimeout(finalizationError) ? 'FINALIZATION_TIMEOUT' : 'FINALIZATION_FAILED',
-          remainingMs: Math.max(0, (finalizationDeadlineAt ?? Date.now()) - Date.now()) }),
+          remainingMs: Math.max(0, finalizationHardDeadline(finalizationDeadlineAt ?? Date.now()) - Date.now()) }),
       );
       if (errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
@@ -724,7 +725,10 @@ async function runUnifiedFinalizer(options: {
   const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
   let prepared = prepareEvidence();
-  const contextDeadlineAt = Math.min(options.deadlineAt, Date.now() + FINALIZATION_CONTEXT_TIMEOUT_MS);
+  // Gather context once, charged only to the main deadline. Answer retries below
+  // reuse these results and never restart context collection.
+  const contextDeadlineAt = options.deadlineAt;
+  const contextExpired = Date.now() >= contextDeadlineAt;
   let contextIncomplete = false;
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
@@ -739,7 +743,24 @@ async function runUnifiedFinalizer(options: {
   const historySelection = options.decision.route === 'finalize' ? options.decision.historySelection : undefined;
   const historyPage = historyRequired ? options.context.session?.readHistory?.(0, historySelection === 'first_user_message' || historySelection === 'all_user_messages' ? 'user' : undefined) : undefined;
   const contextMessages: ModelMessage[] = [];
-  if (options.context.session && !conversational) {
+  if (options.context.session && !conversational && contextExpired) {
+    // Recovery has only response time left. Restore saved comparison packets
+    // synchronously from SQLite, without repeating R2 reads or model work.
+    contextIncomplete = true;
+    const assets = options.context.session.brief().assets;
+    for (const videoId of comparisonVideoIds) {
+      const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
+        .sort((a, b) => b.collectedAt - a.collectedAt)[0];
+      if (!asset || options.context.session.transcriptOverLimit?.(asset.version)) continue;
+      // Session packets are newest first. Pages and query reads overlap the
+      // full transcript and must not consume the comparison budget again.
+      const packet = options.context.session.evidence(asset.version)
+        .find(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript'));
+      if (!packet) continue;
+      options.onEvidence?.([packet]);
+      if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
+    }
+  } else if (options.context.session && !conversational) {
     try {
       const gathered = await withRunDeadline(contextDeadlineAt, options.context.signal, async signal => {
         const searchTools = await options.context.session!.searchTools?.(packets => {
@@ -839,7 +860,10 @@ async function runUnifiedFinalizer(options: {
     }
   }
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // Context collection or recovery can exhaust the main deadline before any
+  // answer call. Use the remaining allowance without inventing a failed answer.
+  const firstAttempt = Date.now() >= options.deadlineAt ? 1 : 0;
+  for (let attempt = firstAttempt; attempt < 2; attempt += 1) {
     options.context.signal.throwIfAborted();
     assertModelCostAvailable(options.modelBudget);
     prepared = prepareEvidence();
@@ -858,14 +882,26 @@ async function runUnifiedFinalizer(options: {
     const outputSchema = answerSchema;
     const attemptStartedAt = Date.now();
     let candidate: string | undefined;
+    let generationCompleted = false;
     let finishReason: string | undefined;
     let usageRecorded = false;
     let validationStage = 'generation';
+    let firstContentAt: number | undefined;
+    let lastContentAt: number | undefined;
+    let textCharacters = 0;
+    let reasoningCharacters = 0;
+    const progressDiagnostics = () => ({
+      streaming: Boolean(options.onDraft),
+      firstContentMs: firstContentAt === undefined ? undefined : firstContentAt - attemptStartedAt,
+      idleMs: options.onDraft ? Date.now() - (lastContentAt ?? attemptStartedAt) : undefined,
+      textCharacters: options.onDraft ? textCharacters : candidate?.length,
+      reasoningCharacters: options.onDraft ? reasoningCharacters : undefined,
+    });
     try {
-      const remainingMs = Math.max(0, options.deadlineAt - Date.now());
-      const reserveMs = attempt === 0 ? Math.min(FINALIZATION_REPAIR_RESERVE_MS, Math.floor(remainingMs / 2)) : 0;
-      const attemptDeadlineAt = options.deadlineAt - reserveMs;
-      const result = await withRunDeadline(attemptDeadlineAt, options.context.signal, async signal => {
+      const attemptDeadlineAt = attempt === 0 ? options.deadlineAt
+        : Math.min(finalizationHardDeadline(options.deadlineAt),
+          Math.max(options.deadlineAt, Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS));
+      const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft), async (signal, progress) => {
         const generationOptions = {
         model: options.model,
         onStepFinish: step => {
@@ -922,9 +958,20 @@ async function runUnifiedFinalizer(options: {
         } satisfies Parameters<typeof generateText>[0];
         if (!options.onDraft) return generateText(generationOptions);
 
-        const state: AgentDraft['state'] = attempt > 0 ? 'revising' : 'streaming';
+        const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
         options.onDraft({ answer: '', state });
-        const streamed = streamText(generationOptions);
+        const streamed = streamText({ ...generationOptions, onChunk: ({ chunk }) => {
+          if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;
+          progress();
+          firstContentAt ??= Date.now();
+          lastContentAt = Date.now();
+          if (chunk.type === 'reasoning-delta') reasoningCharacters += chunk.text.length;
+          else {
+            textCharacters += chunk.text.length;
+            // Keep bounded partial JSON for repair, never emit it in diagnostics.
+            candidate = ((candidate ?? '') + chunk.text).slice(0, 32_000);
+          }
+        } });
         let latestDraft = '';
         let publishedDraft = '';
         let lastPublishedAt = 0;
@@ -939,13 +986,15 @@ async function runUnifiedFinalizer(options: {
         if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
         const text = await streamed.text;
         candidate = text;
+        generationCompleted = true;
         const [finishReason, response, totalUsage] = await Promise.all([
           streamed.finishReason, streamed.response, streamed.totalUsage,
         ]);
         const output = await streamed.output;
         return { text, finishReason, response, totalUsage, output };
-      }, 'Finalization attempt timeout.');
+      });
       candidate = result.text;
+      generationCompleted = true;
       finishReason = result.finishReason;
       if (!usageRecorded) options.modelBudget?.recordUsage({
         callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
@@ -998,20 +1047,26 @@ async function runUnifiedFinalizer(options: {
       console.log(JSON.stringify({ event: 'agent_finalization_validated', runId: options.context.runId,
         schemaVersion: FINALIZATION_SCHEMA_VERSION, attempt: attempt + 1, finishReason,
         maxOutputTokens: finalizationOutputTokenLimit(options.decision, attempt > 0),
-        elapsedMs: Date.now() - attemptStartedAt, blockCount: output.blocks.length }));
+        elapsedMs: Date.now() - attemptStartedAt, blockCount: output.blocks.length, ...progressDiagnostics() }));
       return answer;
     } catch (error) {
       const generationError = NoObjectGeneratedError.isInstance(error) ? error : undefined;
       candidate ??= generationError?.text;
       finishReason ??= generationError?.finishReason;
-      if (!usageRecorded && generationError?.usage) options.modelBudget?.recordUsage({
-        callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
-        category: 'timeout_finalizer', usage: generationError.usage,
-        modelId: typeof options.model === 'string' ? options.model : options.model.modelId,
-        pricing: fireworksModelPricing(typeof options.model === 'string' ? options.model : options.model.modelId),
-      });
+      if (!usageRecorded && generationError?.usage) {
+        options.modelBudget?.recordUsage({
+          callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
+          category: 'timeout_finalizer', usage: generationError.usage,
+          modelId: typeof options.model === 'string' ? options.model : options.model.modelId,
+          pricing: fireworksModelPricing(typeof options.model === 'string' ? options.model : options.model.modelId),
+        });
+        usageRecorded = true;
+      }
+      if (!usageRecorded) console.warn(JSON.stringify({ event: 'agent_finalization_usage_unavailable',
+        runId: options.context.runId, attempt: attempt + 1, reason: 'provider_did_not_report_usage',
+        elapsedMs: Date.now() - attemptStartedAt, ...progressDiagnostics() }));
       let schemaIssues = error instanceof ZodError ? error.issues.map(({ path, code, message }) => ({ path, code, message })) : undefined;
-      if (!schemaIssues && candidate) {
+      if (!schemaIssues && candidate && (generationCompleted || generationError) && !isAgentCoreTimeout(error)) {
         validationStage = 'output_schema';
         try {
           const parsed = outputSchema.safeParse(JSON.parse(candidate));
@@ -1024,6 +1079,7 @@ async function runUnifiedFinalizer(options: {
           : error instanceof TranscriptGroundingError ? 'UNGROUNDED_ANSWER'
           : error instanceof ZodError || generationError ? 'INVALID_ANSWER_STRUCTURE'
           : options.context.signal.aborted ? 'FINALIZATION_ABORTED'
+          : error instanceof FinalizationStallError ? 'FINALIZATION_STALLED'
           : isAgentCoreTimeout(error) ? 'FINALIZATION_ATTEMPT_TIMEOUT' : 'MODEL_GENERATION_FAILED';
       options.onFailure?.(failureCode);
       console.warn(JSON.stringify({ event: 'agent_finalization_attempt_failed', runId: options.context.runId,
@@ -1031,7 +1087,8 @@ async function runUnifiedFinalizer(options: {
         schemaVersion: FINALIZATION_SCHEMA_VERSION, validationStage, finishReason,
         candidateCharacters: candidate?.length,
         maxOutputTokens: finalizationOutputTokenLimit(options.decision, attempt > 0),
-        remainingMs: Math.max(0, options.deadlineAt - Date.now()),
+        remainingMs: Math.max(0, finalizationHardDeadline(options.deadlineAt) - Date.now()),
+        ...progressDiagnostics(),
         citationFailure: error instanceof AgentCitationError ? error.reason : undefined,
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
         code: failureCode }));
@@ -1040,6 +1097,7 @@ async function runUnifiedFinalizer(options: {
       if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && !(error instanceof TranscriptGroundingError) && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
       feedback = { errors: finishReason === 'length'
           ? 'The previous answer exceeded the enforced output-token ceiling. Shorten wording and remove repetition while preserving requested items and evidence. Return a complete answer within the repair ceiling.'
+          : isAgentCoreTimeout(error) ? 'The previous generation ran out of time. Use the partial candidate where valid, shorten the answer, and return complete JSON now.'
           : schemaIssues ?? (referenceError || error instanceof TranscriptGroundingError ? errorMessage(error) : 'Return complete valid JSON matching the supplied schema.'),
         previousCandidate: candidate?.slice(0, 32_000) };
     }

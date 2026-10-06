@@ -4,7 +4,14 @@ export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
 // Individual frame calls allocate from this shared window before starting.
 export const AGENT_VISUAL_RESEARCH_TIMEOUT_MS = 120_000;
 export const AGENT_FINALIZATION_TIMEOUT_MS = 60_000;
+// Retry time is additional to the main phase, never withheld from its answer.
+export const AGENT_FINALIZATION_RETRY_TIMEOUT_MS = 20_000;
 export const AGENT_PERSISTENCE_TIMEOUT_MS = 30_000;
+
+/** Derive from the persisted main deadline so recovery cannot reset the clock. */
+export function finalizationHardDeadline(mainDeadlineAt: number): number {
+  return mainDeadlineAt + AGENT_FINALIZATION_RETRY_TIMEOUT_MS;
+}
 
 export function researchTimeoutMs(useStoryboard: boolean | undefined): number {
   return useStoryboard === true ? AGENT_VISUAL_RESEARCH_TIMEOUT_MS : AGENT_RESEARCH_TIMEOUT_MS;
