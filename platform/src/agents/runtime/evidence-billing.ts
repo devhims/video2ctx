@@ -272,25 +272,24 @@ export class RunEvidenceLedger {
     );
   }
 
+  private planUnit(runId: string, unit: EvidenceChargeUnit) {
+    const unseen = unit.assetKeys.filter(key => !this.isDelivered(runId, key));
+    const claims = this.assetClaims(runId, unseen);
+    const pending = claims ? this.uncoveredClaims(runId, claims) : undefined;
+    return { unit, pending, cost: unseen.length === 0 || pending?.length === 0 ? 0 : cachedPrice(unit.operation) };
+  }
+
   private admitUnits(
     runId: string,
     source: Exclude<EvidenceChargeSource, 'tool'>,
     mapped: { assetKeys: string[]; units: EvidenceChargeUnit[] },
-    chargedUnits: Set<string>,
     remaining: number,
     now: number,
   ): EvidenceChargeReceipt[] | undefined {
-    const charged = mapped.units.filter(unit => !chargedUnits.has(unit.key)
-      && unit.assetKeys.some(key => !this.isDelivered(runId, key)));
-    const plans = charged.map(unit => {
-      const claims = this.assetClaims(runId, unit.assetKeys.filter(key => !this.isDelivered(runId, key)));
-      const pending = claims ? this.uncoveredClaims(runId, claims) : undefined;
-      return { unit, pending, cost: pending?.length === 0 ? 0 : cachedPrice(unit.operation) };
-    });
+    const plans = mapped.units.map(unit => this.planUnit(runId, unit));
     if (plans.reduce((sum, plan) => sum + plan.cost, 0) > remaining) return undefined;
     this.markDelivered(runId, mapped.assetKeys, now);
     return plans.flatMap(({ unit, pending, cost }) => {
-      chargedUnits.add(unit.key);
       if (!cost) return [];
       const receipt: EvidenceChargeReceipt = { source, operation: unit.operation, price: 'cached',
         credits: cost, ...(unit.videoId ? { videoId: unit.videoId } : {}) };
@@ -315,17 +314,36 @@ export class RunEvidenceLedger {
     return this.transaction(() => {
       const now = Date.now();
       const result: EvidenceDelivery = { admitted: [], withheld: [], unavailable: [], receipts: [] };
-      const chargedUnits = new Set<string>();
+      const grouped = new Map<string, { unit: EvidenceChargeUnit; cost: number }>();
+      const assetKeys = new Set<string>();
+      const remaining = this.available(runId);
+      let cost = 0;
       for (const packet of packets) {
         if (!packet.excerpts.length) { result.admitted.push(packet); continue; }
         const mapped = packetChargeUnits(packet, lookup);
         if (!mapped) { result.unavailable.push(packet); continue; }
-        const receipts = this.admitUnits(runId, source, mapped, chargedUnits, this.available(runId), now);
-        if (!receipts) { result.withheld.push(packet); continue; }
+        // Price the full unit across the admitted batch before writing any receipts.
+        // A retained frame keeps its cached charge even if a preceding frame joins
+        // a pending provider claim. Withheld packets never contribute provenance.
+        const updates = mapped.units.map(unit => {
+          const previous = grouped.get(unit.key);
+          return this.planUnit(runId, { ...unit,
+            assetKeys: [...new Set([...(previous?.unit.assetKeys ?? []), ...unit.assetKeys])] });
+        });
+        const nextCost = cost + updates.reduce((sum, plan) => sum + plan.cost - (grouped.get(plan.unit.key)?.cost ?? 0), 0);
+        if (nextCost > remaining) { result.withheld.push(packet); continue; }
+        for (const plan of updates) grouped.set(plan.unit.key, plan);
+        for (const key of mapped.assetKeys) assetKeys.add(key);
+        cost = nextCost;
         this.sql.exec('INSERT OR IGNORE INTO agent_evidence_delivered_packets VALUES (?, ?, ?, ?)', runId, packet.packetId, source, now);
-        result.receipts.push(...receipts);
         result.admitted.push(packet);
       }
+      if (!assetKeys.size) return result;
+      const receipts = this.admitUnits(runId, source, {
+        assetKeys: [...assetKeys], units: [...grouped.values()].map(plan => plan.unit),
+      }, remaining, now);
+      if (!receipts) throw new Error('Admitted evidence exceeded its planned credit budget.');
+      result.receipts = receipts;
       return result;
     });
   }
@@ -340,7 +358,7 @@ export class RunEvidenceLedger {
       const mapped = packetChargeUnits({ packetId: `assets:${versions.join(',')}`, kind: 'youtube_transcript', sources: [],
         excerpts: [], artifacts: [], warnings: [], usage: [], assetVersions: [...versions] }, lookup);
       if (!mapped) throw new Error('Saved asset is unavailable or deleted. Retrieve it explicitly before analysis.');
-      const receipts = this.admitUnits(runId, source, mapped, new Set(), this.available(runId), Date.now());
+      const receipts = this.admitUnits(runId, source, mapped, this.available(runId), Date.now());
       if (!receipts) {
         throw new ApiError(422, 'AGENT_CREDIT_BUDGET_EXHAUSTED',
           'This run has used its credit reserve. Finalize with the evidence already available.');

@@ -638,3 +638,104 @@ test('search reading a newly pinned transcript before tool completion must not c
     expect(charges.reduce((sum, row) => sum + row.credits, 0)).toBe(1);
   });
 });
+
+const mixedDeliveryModes = ['claimed-first', 'retained-first', 'combined-claimed-first', 'combined-retained-first'] as const;
+const mixedRecoveryModes = ['none', 'before-delivery', 'before-settlement'] as const;
+for (const mode of mixedDeliveryModes) for (const outcome of ['completed', 'failed'] as const) {
+  test.each(mixedRecoveryModes)(`mixed saved frames: ${mode}, provider ${outcome}, recovery %s`, async recovery => {
+    await withLedger(`mixed-${mode}-${outcome}-${recovery}`, create => {
+      let tools = 0;
+      let ledger = create(22, () => tools);
+      ledger.registerAssetClaim('run', 'refresh', v(11));
+      if (recovery === 'before-delivery') ledger = create(22, () => tools);
+      const versions = mode.endsWith('retained-first') ? [v(12), v(11)] : [v(11), v(12)];
+      const deliver = () => mode.startsWith('combined')
+        ? ledger.deliverAssets('run', 'saved_analysis', versions, lookup)
+        : ledger.deliver('run', 'search_context', versions.map(version => packet(`mixed:${version}`, [version], {
+          kind: 'youtube_frames',
+        })), lookup).receipts;
+      expect(deliver().map(receipt => receipt.credits)).toEqual([1]);
+      expect(ledger.committed('run')).toBe(1);
+      if (recovery === 'before-settlement') ledger = create(22, () => tools);
+      if (outcome === 'completed') {
+        tools += ledger.recordTool('run', 'get_video_frames', packet('refresh', [v(11)], {
+          kind: 'youtube_frames', excerpts: [],
+          usage: [{ operation: 'frames', credits: 2, cacheStatus: 'miss', claims: ['refresh'] }],
+        }), lookup).credits;
+      }
+      const expected = outcome === 'completed' ? 3 : 1;
+      expect(ledger.committed('run')).toBe(expected);
+      expect(ledger.receipts('run').map(receipt => [receipt.price, receipt.credits]))
+        .toEqual(outcome === 'completed' ? [['cached', 1], ['fresh', 2]] : [['cached', 1]]);
+      ledger = create(22, () => tools);
+      expect(deliver()).toEqual([]);
+      expect(ledger.committed('run')).toBe(expected);
+    });
+  });
+}
+
+
+test.each(['claimed-first', 'retained-first'] as const)('mixed frames exclude a withheld packet from grouping: %s', async order => {
+  await withLedger(`mixed-withheld-${order}`, create => {
+    const ledger = create(2);
+    ledger.registerAssetClaim('run', 'fetch', v(11));
+    ledger.registerAssetClaim('run', 'fetch', v(13));
+    ledger.deliverAssets('run', 'saved_analysis', [v(13)], lookup);
+    const claimed = packet('claimed', [v(11)], { kind: 'youtube_frames' });
+    // This packet adds a retained frame and a transcript, exceeding the last credit.
+    const mixed = packet('mixed', [v(12), v(1)], { kind: 'youtube_frames' });
+    const result = ledger.deliver('run', 'search_context', order === 'claimed-first' ? [claimed, mixed] : [mixed, claimed], lookup);
+    expect(result.admitted.map(p => p.packetId)).toEqual(['claimed']);
+    expect(result.withheld.map(p => p.packetId)).toEqual(['mixed']);
+    expect(result.receipts).toEqual([]);
+    expect(ledger.committed('run')).toBe(1);
+    expect(ledger.deliveredPacketIds('run')).toEqual(new Set(['claimed']));
+    // Withheld content was neither charged nor marked delivered.
+    expect(ledger.deliverAssets('run', 'saved_analysis', [v(12)], lookup).map(r => r.credits)).toEqual([1]);
+    expect(ledger.committed('run')).toBe(2);
+  });
+});
+
+test.each(['empty', 'unavailable'] as const)('mixed frames exclude %s packets from grouping', async excluded => {
+  await withLedger(`mixed-excluded-${excluded}`, create => {
+    let tools = 0;
+    const ledger = create(22, () => tools);
+    ledger.registerAssetClaim('run', 'fetch', v(11));
+    const claimed = packet('claimed', [v(11)], { kind: 'youtube_frames' });
+    const retained = packet('retained', excluded === 'empty' ? [v(12)] : [v(12), v(99)], {
+      kind: 'youtube_frames', ...(excluded === 'empty' ? { excerpts: [] } : {}),
+    });
+    ledger.deliver('run', 'search_context', [claimed, retained], lookup);
+    tools += ledger.recordTool('run', 'get_video_frames', packet('fetch', [v(11)], {
+      kind: 'youtube_frames', usage: [{ operation: 'frames', credits: 2, cacheStatus: 'miss', claims: ['fetch'] }],
+    }), lookup).credits;
+    expect(ledger.committed('run')).toBe(2);
+    expect(ledger.receipts('run').map(r => [r.price, r.credits])).toEqual([['fresh', 2]]);
+    expect(ledger.deliverAssets('run', 'saved_analysis', [v(12)], lookup).map(r => r.credits)).toEqual([1]);
+  });
+});
+
+test.each(mixedDeliveryModes)('mixed frames respect the last available credit: %s', async mode => {
+  await withLedger(`mixed-reserve-${mode}`, create => {
+    let tools = 0;
+    const ledger = create(3, () => tools);
+    ledger.registerAssetClaim('run', 'fetch', v(11));
+    ledger.hold('run', 'fetch', 2);
+    const versions = mode.endsWith('retained-first') ? [v(12), v(11)] : [v(11), v(12)];
+    if (mode.startsWith('combined')) ledger.deliverAssets('run', 'saved_analysis', versions, lookup);
+    else {
+      const result = ledger.deliver('run', 'search_context', versions.map(version => packet(`budget:${version}`, [version], {
+        kind: 'youtube_frames',
+      })), lookup);
+      expect(result.admitted).toHaveLength(2);
+      expect(result.withheld).toEqual([]);
+    }
+    expect(ledger.available('run')).toBe(0);
+    tools += ledger.recordTool('run', 'get_video_frames', packet('fetch', [v(11)], {
+      kind: 'youtube_frames', usage: [{ operation: 'frames', credits: 2, cacheStatus: 'miss', claims: ['fetch'] }],
+    }), lookup).credits;
+    ledger.release('run', 'fetch');
+    expect(ledger.committed('run')).toBe(3);
+    expect(ledger.available('run')).toBe(0);
+  });
+});
