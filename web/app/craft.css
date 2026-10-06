@@ -939,6 +939,25 @@ html:has(.craft) body {
   }
 }
 
+.craft-result-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.craft-sample-badge {
+  flex-shrink: 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
 .craft-result-head h2 {
   max-width: 34ch;
   margin: 0;

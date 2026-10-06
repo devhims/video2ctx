@@ -66,6 +66,7 @@ export interface DemoChannel {
 }
 
 export interface DemoResponse {
+  samplePreview?: boolean;
   video: DemoVideo;
   channel?:
     | { status: 'ready'; channel: DemoChannel }

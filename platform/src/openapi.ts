@@ -2010,7 +2010,7 @@ export const openApiDocument = {
               totalCount: { type: 'integer', minimum: 0 },
               comments: {
                 type: 'array',
-                maxItems: 4,
+                maxItems: 12,
                 items: { type: 'object', additionalProperties: true },
               },
             },
@@ -2031,6 +2031,7 @@ export const openApiDocument = {
           comments: schemaRef('LandingDemoComments'),
           quota: schemaRef('LandingDemoQuota'),
           partial: { type: 'boolean' },
+          samplePreview: { type: 'boolean', description: 'True when serving a saved homepage sample with embedded images. Counts and comments are representative, not refreshed.' },
         },
       },
       ScaleInquiryRequest: {
