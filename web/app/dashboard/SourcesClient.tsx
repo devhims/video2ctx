@@ -40,7 +40,7 @@ async function fetchSourceData(inspector: Inspector, option: SourceDataOption, s
 }
 
 type SourceSave = { id: string; input: string; projectId: string | null; projectName: string; path: string; body: string; method?: 'POST' | 'PUT'; retains?: boolean };
-type SourceReceipt = { sourceId: string; sourceRevision: string };
+type SourceReceipt = { sourceId: string; sourceRevision: string } | { savedRevision: string };
 type ProjectRestore = { item: ProjectItem } & ({ state: 'restored'; origin: 'pin' | 'project-source' | 'recent' | 'storage'; recovered: boolean;
   source: RecentSource; snapshot: SourceSnapshot; sourceRevision?: string; savedText?: string; missingData: string[] }
   | { state: 'unavailable'; input?: string | null });
@@ -217,7 +217,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
         setPendingInspection({ type: result.item.entity_type, id: result.item.entity_type === 'search' ? '' : result.item.entity_id, input, reason: 'missing' });
         return;
       }
-      if (result.origin === 'recent' && result.sourceRevision) sourceReceipt.current = { generation, receipt: { sourceId: result.source.id, sourceRevision: result.sourceRevision } };
+      if (result.sourceRevision) sourceReceipt.current = { generation, receipt: { savedRevision: result.sourceRevision } };
       setQuery(result.source.input); historyInput.current = result.source.input; setTranscriptQuery('');
       if (result.snapshot.kind === 'search') {
         setSelectedData(result.snapshot.selectedData); setItems(result.snapshot.items); setInspector(null); setHasSearched(true);
@@ -508,10 +508,18 @@ export default function SourcesClient({ active }: {active:boolean}) {
       const project = openedHere
         ? list.find(entry => entry.id === openedHere.projectId) ?? { id: openedHere.projectId, name: 'its project' }
         : list[0] ?? await createProject('Research inbox');
+      const retain = async (itemId: string) => {
+        const pendingSave = pendingSourceSave.current;
+        if (pendingSave?.generation === generation) await pendingSave.promise;
+        const receipt = sourceReceipt.current?.generation === generation ? sourceReceipt.current.receipt : null;
+        await persistSource({ id: crypto.randomUUID(), input, projectId: project.id, projectName: project.name, method: 'PUT', retains: true,
+          path: `/v1/projects/${encodeURIComponent(project.id)}/sources/items/${encodeURIComponent(itemId)}/snapshot`,
+          body: JSON.stringify(receipt ?? { input, snapshot: sourceRequest(snapshot) }) });
+      };
       if (openedHere?.kind === 'project-source') {
-        // Already a project source row: refresh that same row rather than adding a second one.
+        // Keep the same row and the displayed revision, including recovery from another owned reference.
         if (openedHere.retained && openedHere.generation === generation) setNotice(`Already saved in ${project.name}`);
-        else await rememberSource(input, snapshot, { id: project.id, name: project.name });
+        else await retain(openedHere.itemId);
         return;
       }
       const title = String(current.data.title ?? current.data.name ?? current.id);
@@ -527,14 +535,8 @@ export default function SourcesClient({ active }: {active:boolean}) {
       if (openedHere?.kind === 'item' && openedHere.itemId === saved.id && openedHere.retained && openedHere.generation === generation) {
         setNotice(`Already saved in ${project.name}`);
       } else {
-        // Pin exactly what is displayed: wait for this inspection's Recent save, then copy its revision.
-        const pendingSave = pendingSourceSave.current;
-        if (pendingSave?.generation === generation) await pendingSave.promise;
-        const receipt = sourceReceipt.current?.generation === generation ? sourceReceipt.current.receipt : null;
-        // Success is announced only once the saved data is retained; a failure keeps this item's retry.
-        await persistSource({ id: crypto.randomUUID(), input, projectId: project.id, projectName: project.name, method: 'PUT', retains: true,
-          path: `/v1/projects/${encodeURIComponent(project.id)}/sources/items/${encodeURIComponent(saved.id)}/snapshot`,
-          body: JSON.stringify(receipt ?? { input, snapshot: sourceRequest(snapshot) }) });
+        // Copy the displayed Recent or recovered revision; keep the same request for a failed-save retry.
+        await retain(saved.id);
       }
       // The import is independent of retained data and starts even if pinning failed.
       await api('/v1/imports', {
@@ -883,7 +885,7 @@ function SourceChannelOverview({ channel, fallback, error }: { channel?: Channel
 
 function TranscriptDataPanel({ inspector, segments, transcriptQuery, setTranscriptQuery }: { inspector: Inspector; segments: Segment[]; transcriptQuery: string; setTranscriptQuery: (value: string) => void }) {
   if (inspector.loadingData?.includes('transcript') && (!inspector.transcript || inspector.dataErrors.transcript)) return <SourceSkeleton label='Loading transcript' variant='panel' lines={7} />;
-  if (captionsUnavailable(inspector.dataErrors.transcript) && !inspector.transcript) return <HistoryEmptyState title='No captions available' description='This video does not have captions available on YouTube, so there is no transcript to display.' />;
+  if (captionsUnavailable(inspector.dataErrors.transcript) && !inspector.transcript && !inspector.savedText) return <HistoryEmptyState title='No captions available' description='This video does not have captions available on YouTube, so there is no transcript to display.' />;
   if (inspector.dataErrors.transcript && !inspector.transcript && !inspector.savedText) return <p role='alert' className='source-data-unavailable'>{inspector.dataErrors.transcript}</p>;
   if (!inspector.transcript && inspector.savedText) return <>
     {/* Only the project's own saved text survives: no track, timing ranges or completeness are claimed. */}

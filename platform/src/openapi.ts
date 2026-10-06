@@ -1218,11 +1218,14 @@ export const openApiDocument = {
     '/v1/projects/{id}/sources/items/{itemId}/snapshot': {
       put: {
         tags: ['Projects'], operationId: 'pinProjectItemSnapshot', summary: 'Retain saved data for a project item', security: privateSecurity,
-        description: 'Copies the exact Recent version identified by sourceId and sourceRevision, or resolves a dataset descriptor from already-stored data when the Recent save failed. Verifies the owned item’s provider, type and entity. A stale revision is rejected. Creates no additional project row and makes no provider request.',
+        description: 'Copies the exact Recent version identified by sourceId and sourceRevision, or an owned recovered reference identified by savedRevision within this project. Otherwise resolves a dataset descriptor from already-stored data when the Recent save failed. Verifies the owned item’s provider, type and entity. A stale revision is rejected. Creates no additional project row and makes no provider request.',
         parameters: [idParameter, pathParameter('itemId', 'Project item UUID.')],
         requestBody: jsonBody({ oneOf: [
           { type: 'object', required: ['sourceId', 'sourceRevision'], additionalProperties: false, properties: {
             sourceId: { type: 'string', format: 'uuid' }, sourceRevision: sourceRevisionResponse,
+          } },
+          { type: 'object', required: ['savedRevision'], additionalProperties: false, properties: {
+            savedRevision: sourceRevisionResponse,
           } },
           z.toJSONSchema(saveSourceSchema.omit({ projectId: true }), { target: 'openapi-3.0' }),
         ] }),

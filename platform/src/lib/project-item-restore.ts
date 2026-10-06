@@ -17,7 +17,7 @@ export const MISSING_DATA_MESSAGE = 'This saved data is not available. Fetching 
 type Dataset = 'metadata' | 'transcript' | 'comments' | 'channel';
 const SUPPORTED = new Set(['video', 'playlist', 'channel']);
 
-export interface RestoredSnapshot { snapshot: SourceSnapshot; missingData: Dataset[] }
+export interface RestoredSnapshot { snapshot: SourceSnapshot; missingData: Dataset[]; savedText?: string }
 
 export type RecoveryEvidence = 'saved-reference' | 'project-source' | 'project-document' | 'project-import';
 
@@ -89,6 +89,21 @@ export async function restoreReference(env: Env, reference: SourceReference, tit
   restored.data ??= videoFallback(source.id, title);
   for (const field of missing) dataErrors[field] = MISSING_DATA_MESSAGE;
   return { snapshot: sourceSnapshotSchema.parse({ kind: 'inspection', inspector: restored }), missingData: missing.sort() };
+}
+
+/** Keep the project's private transcript visible even when a usable pin contains only metadata. */
+export async function restoreProjectReference(env: Env, reference: SourceReference, context: {
+  userId: string; projectId: string; item: ProjectItemRecord;
+}): Promise<RestoredSnapshot | null> {
+  const restored = await restoreReference(env, reference, context.item.title);
+  if (!restored || restored.snapshot.kind !== 'inspection') return restored;
+  const inspector = restored.snapshot.inspector;
+  if (inspector.type !== 'video' || inspector.transcript || !inspector.requestedData.includes('transcript')) return restored;
+  const evidence = await entitlementEvidence(env, context.userId, context.projectId, context.item);
+  const savedText = evidence.document ? await savedProjectText(env, evidence.document.r2_key) : undefined;
+  if (!savedText) return restored;
+  if (inspector.dataErrors.transcript === MISSING_DATA_MESSAGE) delete inspector.dataErrors.transcript;
+  return { ...restored, savedText, missingData: restored.missingData.filter(field => field !== 'transcript') };
 }
 
 function itemInput(item: Pick<ProjectItemRecord, 'entity_type' | 'entity_id'>) {
@@ -176,7 +191,7 @@ export async function recoverProjectItem(env: Env, input: {
 }): Promise<ItemRestore> {
   const { userId, projectId, item, references, ownedRow = false } = input;
   for (const reference of references) {
-    const restored = await restoreReference(env, reference.snapshot, item.title);
+    const restored = await restoreProjectReference(env, reference.snapshot, { userId, projectId, item });
     if (restored) return { state: 'restored', origin: reference.origin, recovered: true, source: reference.source,
       sourceRevision: reference.sourceRevision, ...restored };
   }

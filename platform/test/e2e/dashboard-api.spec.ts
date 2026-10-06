@@ -1757,3 +1757,38 @@ test('QA 003 opening a Recent source in Add sources mode links it to the existin
     expect(providerReads).toBe(0);
   } finally { await scenario.clear(); }
 });
+
+
+for (const sourceRow of [false, true]) test(`Save preserves a recovered revision for a ${sourceRow ? 'project source' : 'D1 item'}`, async ({ page }) => {
+  const project = { id: '99492be1-b7ec-4a6b-a445-bc347bccce73', name: 'Recovered project', item_count: 1 };
+  const item = { id: 'ae00b448-fdc2-4e3f-923b-d39c656d1a01', provider: 'youtube', entity_type: 'video', entity_id: videoId,
+    title: 'Recovered historical video', ...(sourceRow ? { source_id: '1fe53b17-7221-4b26-aead-be993d177238' } : {}) };
+  const sourceRevision = 'e'.repeat(64);
+  const source = { id: '1fe53b17-7221-4b26-aead-be993d177238', input: `https://www.youtube.com/watch?v=${videoId}`,
+    title: item.title, kind: 'inspection', updatedAt: Date.now() };
+  const pins: unknown[] = [], recentWrites: unknown[] = [];
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => route.fulfill({ json: {
+    state: 'restored', origin: 'pin', recovered: true, missingData: [], item, source, sourceRevision,
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type: 'video', id: videoId, requestedData: ['transcript'],
+      data: { id: videoId, title: item.title, thumbnails: [], freshness: QA003_STORED }, transcript, dataErrors: {} } },
+  } }));
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() === 'POST') recentWrites.push(route.request().postDataJSON());
+    return route.fulfill({ json: { sources: [] } });
+  });
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => route.fulfill({ json: { id: item.id, existing: true } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}/snapshot`, route => {
+    pins.push(route.request().postDataJSON());
+    return route.fulfill({ json: { itemId: item.id, sourceId: null, sourceRevision } });
+  });
+  await page.route('**/api/platform/v1/imports', route => route.fulfill({ status: 202, json: { id: 'import-job' } }));
+  try {
+    await page.goto(`/dashboard/sources?openProject=${project.id}&saved=${item.id}`);
+    await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Save to project', exact: true }).click();
+    await expect(page.getByText(`Saved to ${project.name}`, { exact: true })).toBeVisible();
+    expect(pins).toEqual([{ savedRevision: sourceRevision }]);
+    expect(recentWrites).toEqual([]);
+  } finally { await scenario.clear(); }
+});

@@ -577,3 +577,94 @@ describe('saved project item revisions and reuse of existing rows', () => {
     expect(await account.projectSourceCounts()).toEqual([]);
   });
 });
+
+test('saving a recovered owned pin retains the displayed version', async () => {
+  const { projectId, app, account } = await owner('review-recovered-version');
+  const id = videoId();
+  await storeVideo(id, 'Displayed original transcript');
+  const recent = await remember(app, id);
+  const moment = await addItem(app, projectId, { entityType: 'video', entityId: id, title: 'Moment', startMs: 1000 });
+  expect((await pin(app, projectId, moment.id, { sourceId: recent.source.id, sourceRevision: recent.sourceRevision })).status).toBe(200);
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DELETE FROM recent_sources'); });
+  const whole = await addItem(app, projectId, { entityType: 'video', entityId: id, title: 'Whole video' });
+  await storeVideo(id, 'Newer undisplayed transcript', 'Stored video', Date.now() + 1000);
+  const before = await open(app, projectId, whole.id);
+  expect(before.body).toMatchObject({ state: 'restored', origin: 'pin', recovered: true,
+    snapshot: { inspector: { transcript: { text: 'Displayed original transcript' } } } });
+  // SourcesClient sends the recovered revision, even after Recent eviction and a shared refresh.
+  expect((await pin(app, projectId, whole.id, { savedRevision: before.body.sourceRevision })).status).toBe(200);
+  const after = await open(app, projectId, whole.id);
+  expect(after.body.snapshot.inspector.transcript.text).toBe(before.body.snapshot.inspector.transcript.text);
+});
+
+test('saving preserves a recovered private text transcript on the next open', async () => {
+  const { userId, projectId, app } = await owner('review-saved-text');
+  const id = videoId();
+  await saveVideoResource(env, { kind: 'video', id }, { id, title: 'Text-only video', thumbnails: [] }, Date.now(), 60_000);
+  const item = await addItem(app, projectId, { entityType: 'video', entityId: id, title: 'Text-only video' });
+  const documentId = await sha256(`${userId}:${projectId}:youtube:${id}:0`);
+  const key = `private/${userId}/projects/${projectId}/youtube/${documentId}.md`;
+  await env.RESEARCH.put(key, '# Text-only video\n\n[0] The only saved transcript');
+  await env.DB.prepare(`INSERT INTO documents (id, owner_scope, user_id, project_id, provider, entity_type, entity_id, title, r2_key, created_at) VALUES (?, 'private', ?, ?, 'youtube', 'transcript', ?, ?, ?, ?)`)
+    .bind(documentId, userId, projectId, id, 'Text-only video', key, Date.now()).run();
+  const before = await open(app, projectId, item.id);
+  expect(before.body).toMatchObject({ state: 'restored', origin: 'storage', savedText: '[0] The only saved transcript', missingData: [] });
+  // This is the descriptor sourceRequest() emits when the inspector has savedText but no transcript.
+  expect((await pin(app, projectId, item.id, inspection(id, ['metadata']))).status).toBe(200);
+  const after = await open(app, projectId, item.id);
+  expect(after.body.savedText).toBe(before.body.savedText);
+});
+
+
+test('saved revisions must still belong to the account, project and source being saved', async () => {
+  const { userId, projectId, app, account } = await owner('saved-revision-boundary');
+  const id = videoId();
+  await storeVideo(id, 'Owned original');
+  const recent = await remember(app, id);
+  const item = await addItem(app, projectId, { entityType: 'video', entityId: id });
+  await pin(app, projectId, item.id, { sourceId: recent.source.id, sourceRevision: recent.sourceRevision });
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DELETE FROM recent_sources'); });
+  const receipt = { savedRevision: recent.sourceRevision };
+  const otherSource = await addItem(app, projectId, { entityType: 'video', entityId: videoId() });
+  expect((await pin(app, projectId, otherSource.id, receipt)).status).toBe(409);
+  const otherProject = crypto.randomUUID();
+  await env.DB.prepare('INSERT INTO projects (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(otherProject, userId, 'Other project', '', Date.now(), Date.now()).run();
+  const otherItem = await addItem(app, otherProject, { entityType: 'video', entityId: id });
+  expect((await pin(app, otherProject, otherItem.id, receipt)).status).toBe(409);
+  const foreign = await owner('foreign-saved-revision');
+  const foreignItem = await addItem(foreign.app, foreign.projectId, { entityType: 'video', entityId: id });
+  expect((await pin(foreign.app, foreign.projectId, foreignItem.id, receipt)).status).toBe(409);
+  // A formerly owned revision cannot resolve against newer shared data after its last reference is removed.
+  await storeVideo(id, 'Newer shared data', 'Stored video', Date.now() + 1000);
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DELETE FROM project_item_snapshots'); });
+  const rejected = await pin(app, projectId, item.id, receipt);
+  expect(rejected.status).toBe(409);
+  expect(await rejected.json()).toMatchObject({ error: { code: 'SOURCE_REVISION_MISMATCH' } });
+  expect(await account.getProjectItemPin(projectId, item.id)).toBeNull();
+});
+
+test('a recovered project source saves the selected revision into its existing row', async () => {
+  const { projectId, app, account } = await owner('recovered-project-source');
+  const id = videoId();
+  await storeVideo(id, 'Lost original', 'Lost title');
+  const original = await referenceSource(env, inspection(id) as Parameters<typeof referenceSource>[1]);
+  const linked = await account.saveSourceWithProject(original, projectId);
+  const originalReference = original.snapshot as Extract<SaveReferencedSource['snapshot'], { kind: 'inspection' }>;
+  await env.VIDEO_ASSETS.delete(await objectKey(originalReference.inspector.assets.metadata!.contentHash));
+  await env.VIDEO_ASSETS.delete(await objectKey(originalReference.inspector.assets.transcript!.contentHash));
+  await storeVideo(id, 'Recovered displayed transcript', 'Recovered title', Date.now() + 1000);
+  const recent = await remember(app, id);
+  const moment = await addItem(app, projectId, { entityType: 'video', entityId: id, startMs: 1000 });
+  await pin(app, projectId, moment.id, { sourceId: recent.source.id, sourceRevision: recent.sourceRevision });
+  await runInDurableObject(account, (_instance, state) => { state.storage.sql.exec('DELETE FROM recent_sources'); });
+  await storeVideo(id, 'Undisplayed newest transcript', 'Newest title', Date.now() + 2000);
+  const before = await open(app, projectId, linked.linked!.item.id);
+  expect(before.body).toMatchObject({ origin: 'pin', recovered: true,
+    snapshot: { inspector: { transcript: { text: 'Recovered displayed transcript' } } } });
+  expect((await pin(app, projectId, linked.linked!.item.id, { savedRevision: before.body.sourceRevision })).status).toBe(200);
+  const after = await open(app, projectId, linked.linked!.item.id);
+  expect(after.body).toMatchObject({ origin: 'project-source', recovered: false,
+    sourceRevision: before.body.sourceRevision, snapshot: { inspector: { transcript: { text: 'Recovered displayed transcript' } } } });
+  expect(await account.projectSourceCounts()).toEqual([{ projectId, count: 1 }]);
+});

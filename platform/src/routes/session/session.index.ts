@@ -3,7 +3,7 @@ import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { userAccountInstanceName } from '../../agents/runtime/identity';
 import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionSchema } from '../../lib/source-history';
 import { referenceSource, restoreSource, sourceThumbnail } from '../../lib/source-history-storage';
-import { entitlementEvidence, projectItemInput, recoverProjectItem, restoreReference } from '../../lib/project-item-restore';
+import { entitlementEvidence, projectItemInput, recoverProjectItem, restoreProjectReference } from '../../lib/project-item-restore';
 import type { PinResult } from '../../durable-objects/user-account';
 import { z } from 'zod';
 import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
@@ -173,7 +173,8 @@ sessionRoutes.get('/projects/:id/sources/items/:itemId', async (c) => {
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
   const linked = await account.getProjectSource(projectId, itemId);
   if (linked) {
-    const restored = await restoreReference(c.env, linked.snapshot, linked.source.title);
+    const restored = await restoreProjectReference(c.env, linked.snapshot, { userId: user.id, projectId,
+      item: { ...linked.item, start_ms: null, end_ms: null, note: '', tags_json: '[]' } });
     if (restored) return c.json({ state: 'restored', item: linked.item, origin: 'project-source', recovered: false, source: linked.source,
       sourceRevision: await sourceRevision(linked.snapshot), ...restored });
     // The owned row is saved evidence: try other owned references and retained storage before asking to pay.
@@ -187,7 +188,7 @@ sessionRoutes.get('/projects/:id/sources/items/:itemId', async (c) => {
   if (!item) throw new ApiError(404, 'ITEM_NOT_FOUND', 'This project item was not found.');
   const pin = await account.getProjectItemPin(projectId, itemId);
   if (pin) {
-    const restored = await restoreReference(c.env, pin.snapshot, item.title);
+    const restored = await restoreProjectReference(c.env, pin.snapshot, { userId: user.id, projectId, item });
     if (restored) return c.json({ state: 'restored', item, origin: 'pin', recovered: false, source: pin.source,
       sourceRevision: pin.sourceRevision, ...restored });
   }
@@ -208,6 +209,21 @@ sessionRoutes.put('/projects/:id/sources/items/:itemId/snapshot', async (c) => {
   await ownProject(c.env, user.id, projectId);
   const account = c.env.USER_ACCOUNT.getByName(await userAccountInstanceName(user.id));
   const item = await ownedProjectItem(c.env, user.id, projectId, itemId);
+  const savedReceipt = savedPinReceiptSchema.safeParse(json);
+  if (savedReceipt.success) {
+    const linked = item ? null : await account.getProjectSource(projectId, itemId);
+    const target = item ?? linked?.item;
+    if (!target) throw new ApiError(404, 'ITEM_NOT_FOUND', 'This project item was not found.');
+    if (!projectItemInput(target)) throw new ApiError(422, 'UNSUPPORTED_ITEM', 'This project item cannot retain a source snapshot.');
+    const identity = { provider: target.provider, type: target.entity_type, id: target.entity_id };
+    // A revision is only a selector. The account and project must still own matching references.
+    const references = await account.ownedSourceReferences(projectId, `${identity.provider}:${identity.type}:${identity.id}`);
+    const saved = references.find(reference => reference.sourceRevision === savedReceipt.data.savedRevision);
+    if (!saved) return pinResponse(c, { ok: false, code: 'SOURCE_REVISION_MISMATCH' });
+    const value = { input: saved.source.input, title: saved.source.title, snapshot: saved.snapshot };
+    return pinResponse(c, item ? await account.pinProjectItem(projectId, itemId, value, identity)
+      : await account.refreshProjectSource(projectId, itemId, value, identity));
+  }
   if (!item) {
     // A standalone Save that matched an existing project source row refreshes that row in place.
     const linked = await account.getProjectSource(projectId, itemId);
@@ -606,6 +622,7 @@ function wholeSourceItem(env: Env, userId: string, projectId: string, provider: 
 }
 
 const pinReceiptSchema = z.object({ sourceId: sourceIdSchema, sourceRevision: sourceRevisionSchema }).strict();
+const savedPinReceiptSchema = z.object({ savedRevision: sourceRevisionSchema }).strict();
 
 /** Size- and type-checked JSON for source-history writes. */
 async function sourceJson(request: Request): Promise<unknown> {

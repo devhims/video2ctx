@@ -118,7 +118,7 @@ export const OPENAPI_INTERNAL_SAFETY: Readonly<Record<string, string>> = {
   getRecentSource: 'Browser-session only. Verifies user ownership before reading the saved shared references.',
   getProjectSource: 'Browser-session only. Verify project ownership and restore the item from that project without modifying saved references.',
   openProjectItem: 'Browser-session only. Verify project and item ownership; restore from storage without provider requests, credits or writes, and only within the user’s saved evidence.',
-  pinProjectItemSnapshot: 'Browser-session only. Verify the owned item identity; copy an exact Recent revision or resolve already-stored data, never client-supplied R2 keys.',
+  pinProjectItemSnapshot: 'Browser-session only. Verify the owned item identity; copy an exact owned Recent or project revision or resolve already-stored data, never client-supplied R2 keys.',
   linkProjectSource: 'Browser-session only. Verify that the project and saved source belong to the same signed-in user before linking shared asset references.',
   inspectLandingYouTubeVideo: 'Public, rate-limited demo route; do not use it as a credentialed bulk-data API.',
   submitScaleInquiry: 'Public lead form; validate Turnstile and rate limits, and never let the caller choose the notification recipient.',
