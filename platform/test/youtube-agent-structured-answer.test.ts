@@ -90,6 +90,44 @@ describe('structured answer citations', () => {
     expect(error).toBeInstanceOf(z.ZodError);
     expect((error as z.ZodError).issues[0]!.message).toMatch(/exactly one.*no spaces or commas/);
   });
+  const reservedLeftovers = ['[cite:]', '[cite:ref_1', '[cite:', '(source marker:]', '(source marker:ref_1', '(source marker:'];
+  it.each(reservedLeftovers)('QA 012: rejects empty or unfinished reserved syntax in a paragraph: %s', marker => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{ text: `Claim ${marker} remains.`, evidenceIds: ['e1'] }] },
+      new Map([['ref_1', 'e1']]))).toThrow(z.ZodError);
+  });
+  it.each(reservedLeftovers)('QA 012: rejects empty or unfinished reserved syntax in a table cell: %s', marker => {
+    const table = `| Video | Source |\n| --- | --- |\n| Rabbit | ${marker} |`;
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{ text: table, evidenceIds: ['e1'] }] },
+      new Map([['ref_1', 'e1']]))).toThrow(z.ZodError);
+  });
+  it('QA 012: reports one bounded issue for a block mixing valid and malformed markers, without echoing it', () => {
+    let error: unknown;
+    try {
+      renderStructuredAnswer({ ...base, blocks: [
+        { text: 'Valid block. [cite:ref_1]', evidenceIds: ['e1'] },
+        { text: 'Mixed [cite:ref_1] and [cite:] and (source marker:payload_x and [cite:undeclared].', evidenceIds: ['e1'] },
+      ] }, new Map([['ref_1', 'e1']]));
+    } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(z.ZodError);
+    const issues = (error as z.ZodError).issues;
+    expect(issues.map(issue => issue.path)).toEqual([['blocks', 1, 'text']]);
+    expect(issues[0]!.message).toMatch(/exactly one supplied ID/);
+    expect(JSON.stringify(issues)).not.toMatch(/payload_x|undeclared|\[cite:\]/);
+  });
+  it('QA 012: normalized output and complete aliases or full IDs are not treated as leftovers', () => {
+    const table = '| Video | Source |\n| --- | --- |\n| Zoo | [cite:ref_1] |\n| Rabbit | [cite:e2] (source marker:ref_1] |';
+    expect(renderStructuredAnswer({ ...base, blocks: [{ text: table, evidenceIds: ['e1', 'e2'] }] },
+      new Map([['ref_1', 'e1']])).answer).toBe('| Video | Source |\n| --- | --- |\n| Zoo | [cite:e1] |\n| Rabbit | [cite:e2] [cite:e1] |');
+    expect(renderStructuredAnswer({ ...base, blocks: [{ text: 'Claim [cite:transcript:abc_1:window:3:180000].',
+      evidenceIds: ['transcript:abc_1:window:3:180000'] }] }).answer).toBe('Claim [cite:transcript:abc_1:window:3:180000].');
+  });
+  it.each([
+    'The earlier answer showed [source unavailable] beside the table.',
+    'See [1], [note], [citation needed] and [docs](https://example.com/cite:x).',
+    'A cite: label and source marker: text without reserved brackets.',
+  ])('QA 012: keeps benign bracket text and the literal placeholder: %s', text => {
+    expect(renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] }).answer).toBe(`${text} [cite:e1]`);
+  });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
       { text: 'First draft [cite:ref_1]' },

@@ -62,6 +62,9 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
   }).filter(Boolean).join('\n\n').slice(0, 20_000);
 }
 
+/** Complete model-written inline markers. Any other reserved prefix is malformed. */
+const INLINE_MARKER = /\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g;
+
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
@@ -72,9 +75,12 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     let invalidInline = false;
     // Inline placement can position only references declared for this block.
     // Persisted evidence validation still owns whether those IDs are valid.
-    const text = block.text
-      .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
-      .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (marker, inlineId: string | undefined, escapedId: string | undefined) => {
+    const stripped = block.text.replace(/【ref_\d+】|\[ref_\d+\]/g, '');
+    // Reserved syntax left after removing complete markers is empty or unfinished.
+    // Check before normalization so application-written [cite:id] output is never rescanned.
+    if (/\[cite:|\(source marker:/.test(stripped.replace(INLINE_MARKER, ''))) invalidInline = true;
+    const text = stripped
+      .replace(INLINE_MARKER, (marker, inlineId: string | undefined, escapedId: string | undefined) => {
         const rawId = inlineId ?? escapedId!;
         const id = aliases.get(rawId) ?? rawId;
         if (!declared.has(id)) {

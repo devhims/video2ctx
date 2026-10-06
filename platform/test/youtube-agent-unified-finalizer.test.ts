@@ -523,6 +523,58 @@ it('QA 012: never persists a repeated invalid inline citation after repair is ex
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
+function reservedSyntaxFinalizer(values: unknown[]) {
+  const reply = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+    finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] });
+  const stream = (value: unknown) => ({ stream: simulateReadableStream({ chunks: [
+    { type: 'stream-start' as const, warnings: [] }, { type: 'text-start' as const, id: 'answer' },
+    { type: 'text-delta' as const, id: 'answer', delta: JSON.stringify(value) },
+    { type: 'text-end' as const, id: 'answer' },
+    { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
+  ], initialDelayInMs: null, chunkDelayInMs: null }) });
+  return new MockLanguageModelV4({ doGenerate: values.map(reply), doStream: values.map(stream) });
+}
+
+it.each(['generate', 'stream'] as const)('QA 012: %s repairs empty or unfinished reserved markers before persistence', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const malformed = { ...output, blocks: [{ text: '| Video | Source |\n| --- | --- |\n| Interview | [cite:] |\n| Detail | (source marker:ref_1 |', evidenceIds: ['ref_1'] }] };
+  const corrected = { ...output, blocks: [{ text: '| Video | Source |\n| --- | --- |\n| Interview | [cite:ref_1] |', evidenceIds: ['ref_1'] }] };
+  const finalizer = reservedSyntaxFinalizer([malformed, corrected]);
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await executeResearchRun(options);
+
+  const calls = mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls;
+  expect(calls).toHaveLength(2);
+  const repairPrompt = JSON.stringify(calls[1]!.prompt);
+  expect(repairPrompt).toContain('validationFeedback');
+  expect(repairPrompt).toContain('exactly one supplied ID');
+  expect(options.finalize).toHaveBeenCalledOnce();
+  const [, saved] = vi.mocked(options.finalize).mock.calls[0]!;
+  expect(saved.answer).toBe('| Video | Source |\n| --- | --- |\n| Interview | [cite:frame-observation] |');
+  expect(saved.answer).not.toMatch(/\[cite:\]|\(source marker:/);
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(compactAgentResult(result).answer).toBe('| Video | Source |\n| --- | --- |\n| Interview | [1] |');
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+it.each(['generate', 'stream'] as const)('QA 012: %s never persists reserved syntax that is still malformed after repair', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const malformed = { ...output, blocks: [{ text: 'The woman holds the microphone. [cite:ref_1', evidenceIds: ['ref_1'] }] };
+  const finalizer = reservedSyntaxFinalizer([malformed, malformed]);
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
+
+  expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).not.toHaveBeenCalled();
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
 it('finalize_answer tool handoff compatibility: only the unified finalizer persists the answer', async () => {
   const { options, output } = setup('context_answer', true);
   options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
