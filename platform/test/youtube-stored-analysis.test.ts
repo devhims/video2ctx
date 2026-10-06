@@ -258,3 +258,64 @@ describe('retrieval and saved-asset analysis boundary', () => {
     expect(context.analyzeFrames).not.toHaveBeenCalled();
   });
 });
+
+describe('saved-analysis input billing', () => {
+  const otherVideo = 'bcdefghijkl';
+  function billed() {
+    const fixture = setup();
+    const deliverSavedAssets = vi.fn();
+    fixture.context.deliverSavedAssets = deliverSavedAssets;
+    return { ...fixture, deliverSavedAssets };
+  }
+
+  it('admits validated inputs once, immediately before each analyst', async () => {
+    for (const kind of kinds) {
+      const { context, versions, deliverSavedAssets } = billed();
+      await analyze(kind, versions[kind], context);
+      expect(deliverSavedAssets).toHaveBeenCalledTimes(1);
+      expect(deliverSavedAssets).toHaveBeenCalledWith([versions[kind]]);
+      expect(deliverSavedAssets.mock.invocationCallOrder[0]!)
+        .toBeLessThan(vi.mocked(analyst(context, kind)).mock.invocationCallOrder[0]!);
+    }
+  });
+
+  it('keeps the charge when the analyst fails after admission', async () => {
+    const { context, versions, deliverSavedAssets } = billed();
+    vi.mocked(context.analyzeFrames!).mockRejectedValueOnce(new Error('Analyst failed.'));
+    await expect(analyze('frame', versions.frame, context)).rejects.toThrow('Analyst failed.');
+    expect(deliverSavedAssets).toHaveBeenCalledWith([versions.frame]);
+  });
+
+  it('charges nothing and calls no model for a mixed-video frame selection', async () => {
+    const { context, store, frames, versions, deliverSavedAssets } = billed();
+    const other = store.put('frame', otherVideo, { ...frames, videoId: otherVideo }, { timestampMs: 0 });
+    await expect(executeAnalyzeVideoFrames({ assetVersions: [versions.frame, other], focus: 'Compare.' }, context, 'mixed'))
+      .rejects.toThrow('one video');
+    expect(deliverSavedAssets).not.toHaveBeenCalled();
+    expect(context.analyzeFrames).not.toHaveBeenCalled();
+  });
+
+  it('charges nothing and calls no model for a mixed-manifest or too-late storyboard selection', async () => {
+    const { context, store, storyboard, versions, deliverSavedAssets } = billed();
+    const other = store.put('storyboard_sheet', videoId, { ...storyboard }, { sheetIndex: 0, manifestVersion: 'other-manifest' });
+    await expect(executeAnalyzeVideoStoryboard({ assetVersions: [versions.storyboard_sheet, other], focus: 'Compare.' }, context, 'mixed'))
+      .rejects.toThrow('manifest version');
+    context.researchDeadlineAt = Date.now() + 1;
+    await expect(executeAnalyzeVideoStoryboard({ assetVersions: [versions.storyboard_sheet], focus: 'Late.' }, context, 'late'))
+      .rejects.toThrow('research time');
+    expect(deliverSavedAssets).not.toHaveBeenCalled();
+    expect(context.analyzeStoryboard).not.toHaveBeenCalled();
+  });
+
+  it('charges nothing and calls no model for an invalid or partial saved transcript', async () => {
+    const { context, store, transcript, deliverSavedAssets } = billed();
+    const partial = store.put('transcript', videoId, { ...transcript, meta: { ...transcript.meta, partial: true } });
+    const mismatched = store.put('transcript', otherVideo, transcript);
+    for (const version of [partial, mismatched]) {
+      await expect(executeAnalyzeVideoTranscript({ assetVersion: version, focus: 'Describe.' }, context, version))
+        .rejects.toThrow('complete nonempty saved transcript');
+    }
+    expect(deliverSavedAssets).not.toHaveBeenCalled();
+    expect(analyst(context, 'transcript')).not.toHaveBeenCalled();
+  });
+});

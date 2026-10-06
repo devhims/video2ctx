@@ -20,7 +20,8 @@ const metadataSchema = z.object({
 
 /** Project persisted provider evidence, never model-authored result artifacts.
  * Recording time is kept distinct from fetch time for historical packets that
- * did not persist freshness. Reusing this packet has no evidence charge. */
+ * did not persist freshness. A run that receives this packet's content pays the video
+ * operation's cached price once (see evidence-billing.ts); otherwise it is only referenced. */
 export function metadataForConversation(records: readonly { packet: EvidencePacket; recordedAt: number }[]): EvidencePacket[] {
   const selected: EvidencePacket[] = [];
   const seen = new Set<string>();

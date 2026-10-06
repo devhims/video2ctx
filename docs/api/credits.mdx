@@ -48,4 +48,20 @@ These operations charge a fixed amount whether or not the underlying data was ca
 
 ## Agent tool calls
 
-When an agent fetches provider data during a run, each tool call uses the provider data prices above. Two operations exist only as agent tools: storyboard costs 1 credit cached or fresh, and frames cost 1 cached or 2 fresh. A tool call that reuses data already fetched in the same session costs 0.
+When an agent fetches provider data during a run, each tool call uses the provider data prices above. Two operations exist only as agent tools: storyboard costs 1 credit cached or fresh, and frames cost 1 cached or 2 fresh.
+
+An agent run also pays the cached price when it uses evidence saved in its session by an earlier run. This covers retrieval tools served from saved assets, analysis of saved transcripts, frames or storyboard sheets, saved-evidence reads and searches during finalization, and earlier-turn source content. Each saved unit is charged once per run, in the same units as the operation that produced it:
+
+| Saved unit | Operation | Charge |
+| --- | --- | --- |
+| One transcript version (video, language and track) | transcript | 1 |
+| One comments page | comments | 1 |
+| The saved frames of one video delivered by one call | frames | 1 |
+| The saved sheets of one storyboard manifest delivered by one call | storyboard | 1 |
+| Earlier recorded metadata for one video | video | 1 |
+
+Within one run, later pages, filtered reads, searches, analyses, retries, answer repairs and restart recovery of a unit that run already received cost 0. A different language or a refreshed version is a separate unit. A fresh provider call always pays its own price, even when it returns content the run already has. Requests that share one in-flight provider call pay that call's price once. The next run that needs the same evidence pays again.
+
+Some requests use no saved source content, such as rephrasing or quoting earlier messages. They charge nothing, because no priced operation runs. A failed or cancelled run keeps the charges for evidence operations that succeeded before it stopped, and returns the rest of its reserve. A run never charges more than its reserve. When the remaining reserve cannot cover a new unit, that evidence is not loaded, and the answer states the gap. Agent responses list the settled operations in `billing.charges`.
+
+Opening existing runs, Sources, Projects and their stored content in the dashboard is free. Project search keeps its separate price.

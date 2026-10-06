@@ -1,3 +1,4 @@
+import { isDataOperation, retrievalUsage } from '../../../runtime/evidence-billing';
 import type { SearchResult, SourceMetadata } from 'all-things-youtube';
 import { z } from 'zod';
 import type { DataOperation, MeteredCacheStatus } from '../../../../lib/metering';
@@ -48,11 +49,9 @@ export function executeProviderEvidence<T>(
         packetId: `packet:${execution.context.runId}:${safeIdPart(execution.toolCallId)}`,
         ...execution.packet(response.value),
         assetVersions: response.assetVersions,
-        usage: [{
-          operation: execution.operation,
-          credits: response.sessionReused ? 0 : execution.credits(response.cacheStatus),
-          cacheStatus: response.cacheStatus,
-        }],
+        usage: [isDataOperation(execution.operation)
+          ? retrievalUsage(execution.operation, response, execution.credits)
+          : { operation: execution.operation, credits: execution.credits(response.cacheStatus), cacheStatus: response.cacheStatus }],
       });
     },
   });

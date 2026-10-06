@@ -203,7 +203,9 @@ test('reuses raw transcripts across runs and object reconstruction, including la
     );
     expect(p.transcript).toHaveBeenCalledTimes(1);
     expect(first.usage[0]!.credits).toBeGreaterThan(0);
-    expect(second.usage[0]!.credits).toBe(0);
+    // A later run that receives the saved transcript pays its cached table price;
+    // the run ledger deduplicates repeated reads inside that run.
+    expect(second.usage[0]).toMatchObject({ operation: 'transcript', credits: 1, reuse: 'session' });
     expect(second.assetVersions).toEqual(first.assetVersions);
     expect(reopen().brief().assets).toHaveLength(1);
   }));
@@ -585,7 +587,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
       [packet],
     );
     const received: EvidencePacket[] = [];
-    const tools = await store.searchTools((packets) => received.push(...packets), new AbortController().signal);
+    const tools = await store.searchTools((packets) => { received.push(...packets); }, new AbortController().signal);
     expect(Object.keys(tools).sort()).toEqual(['read_session_history', 'search_context']);
     const options = { toolCallId: 'search', messages: [], context: {} };
     const run = async (label: string, query: string) =>

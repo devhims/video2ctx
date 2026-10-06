@@ -14,6 +14,7 @@ import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, recordAgentMemoryCost, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
+import { RunEvidenceLedger, billingCharges, toolCreditHold, type EvidenceChargeSource, type EvidenceDelivery } from './runtime/evidence-billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
 import {
   generateMemoryDelta,
@@ -191,6 +192,33 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       `.map(row=>storedExtractionDiagnosticSchema.parse(JSON.parse(row.payload_json)))
         .filter(event=>event.toolCallId === toolCallId && event.recordedAt >= startedAt),
     }));
+  }
+  #evidenceLedger?: RunEvidenceLedger;
+  private get evidenceLedger() {
+    return (this.#evidenceLedger ??= new RunEvidenceLedger(this.ctx.storage.sql,
+      work => this.ctx.storage.transactionSync(work), runId => this.completedToolCredits(runId)));
+  }
+  private completedToolCredits(runId: string): number {
+    return this.sql<{ credits: number }>`
+      SELECT COALESCE(SUM(credits), 0) AS credits FROM agent_tool_calls
+      WHERE run_id = ${runId} AND status = 'completed'
+    `[0]?.credits ?? 0;
+  }
+  /** Admit saved or inherited content before any model of this run receives it. */
+  private deliverEvidence(runId: string, source: Exclude<EvidenceChargeSource, 'tool'>, packets: EvidencePacket[]): EvidenceDelivery {
+    this.assertRunActive(runId);
+    const delivery = this.evidenceLedger.deliver(runId, source, packets, version => this.sessionStore.assetInfo(version));
+    for (const receipt of delivery.receipts) this.recordEvent(runId, 'evidence.charged', { ...receipt });
+    if (delivery.withheld.length) {
+      this.recordEvent(runId, 'evidence.withheld', { source, packets: delivery.withheld.length, code: 'AGENT_CREDIT_BUDGET_EXHAUSTED' });
+    }
+    return delivery;
+  }
+  /** Admit saved assets handed to an analyst. Throws, before inference, when the reserve cannot cover them. */
+  private deliverSavedAssets(runId: string, versions: readonly string[]): void {
+    this.assertRunActive(runId);
+    const receipts = this.evidenceLedger.deliverAssets(runId, 'saved_analysis', versions, version => this.sessionStore.assetInfo(version));
+    for (const receipt of receipts) this.recordEvent(runId, 'evidence.charged', { ...receipt });
   }
   #sessionStore?: SessionEvidenceStore;
   private get sessionStore() {
@@ -627,8 +655,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           SELECT COUNT(*) AS count FROM agent_tool_calls
           WHERE run_id = ${runId} AND tool_name = 'search_youtube'
         `[0]?.count ?? 0) > 0,
-        recoveredEvidence: evidenceWithConversationMetadata(this.readEvidencePackets(runId), conversationHistory),
+        // Earlier-turn content is resolved by the run against its route and billed on delivery.
+        recoveredEvidence: this.readEvidencePackets(runId),
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
+        deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
+        deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
+        deliveredPacketIds: this.evidenceLedger.deliveredPacketIds(runId),
         modelBudget,
         modelCallPrefix,
         onClassificationDiagnostic: event => {
@@ -765,6 +797,17 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted. Finalize with available evidence.');
     }
 
+    // Hold the call's highest table price before any provider work, so concurrent
+    // tools and saved-evidence reads together never exceed the run's reserve.
+    this.evidenceLedger.hold(runId, execution.toolCallId, toolCreditHold(execution.operation, analysis));
+    try {
+      return await this.performHeldEvidenceTool(runId, execution, generation);
+    } finally {
+      this.evidenceLedger.release(runId, execution.toolCallId);
+    }
+  }
+
+  private async performHeldEvidenceTool(runId: string, execution: EvidenceToolExecution, generation: number): Promise<EvidencePacket> {
     const timestamp = Date.now();
     this.sql`
       INSERT INTO agent_tool_calls (
@@ -785,24 +828,31 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     `;
 
     try {
-      const packet = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
+      const executed = await versionEvidencePacket(evidencePacketSchema.parse(await execution.execute()));
       if (generation !== this.sessionStore.clearGeneration()) throw new Error('Evidence was deleted during execution. Retry the request.');
-      if (packet.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
+      if (executed.assetVersions?.some(version=>!this.sessionStore.has(version))) throw new Error('Evidence was deleted during analysis. Retry the request.');
       this.assertRunActive(runId);
-      const credits = packet.usage.reduce((sum, usage) => sum + usage.credits, 0);
-      if (credits > AGENT_CREDIT_RESERVE / (MAX_TOOL_CALLS - 1)) throw new Error('Evidence tool exceeded its credit allowance.');
-      this.sessionStore.savePacket(packet);
-      const serialized = JSON.stringify(packet);
-      this.sql`
-        INSERT INTO agent_evidence_packets (packet_id, run_id, tool_call_id, packet_json, created_at)
-        VALUES (${packet.packetId}, ${runId}, ${execution.toolCallId}, ${serialized}, ${Date.now()})
-        ON CONFLICT(packet_id) DO UPDATE SET packet_json = excluded.packet_json
-      `;
-      this.sql`
-        UPDATE agent_tool_calls
-        SET status = 'completed', result_json = ${serialized}, credits = ${credits}, updated_at = ${Date.now()}
-        WHERE run_id = ${runId} AND tool_call_id = ${execution.toolCallId}
-      `;
+      // Pricing, delivery marks and the completed record commit together, so a restart
+      // never sees an asset delivered without the charge that delivered it.
+      const { packet, credits, receipts } = this.ctx.storage.transactionSync(() => {
+        const billed = this.evidenceLedger.recordTool(runId, execution.toolName, executed, version => this.sessionStore.assetInfo(version));
+        if (billed.credits > AGENT_CREDIT_RESERVE / (MAX_TOOL_CALLS - 1)) throw new Error('Evidence tool exceeded its credit allowance.');
+        const serialized = JSON.stringify(billed.packet);
+        this.sql`
+          INSERT INTO agent_evidence_packets (packet_id, run_id, tool_call_id, packet_json, created_at)
+          VALUES (${billed.packet.packetId}, ${runId}, ${execution.toolCallId}, ${serialized}, ${Date.now()})
+          ON CONFLICT(packet_id) DO UPDATE SET packet_json = excluded.packet_json
+        `;
+        // Saved for later runs in the same commit: a failed save leaves the tool failed and uncharged.
+        this.sessionStore.savePacket(billed.packet);
+        this.sql`
+          UPDATE agent_tool_calls
+          SET status = 'completed', result_json = ${serialized}, credits = ${billed.credits}, updated_at = ${Date.now()}
+          WHERE run_id = ${runId} AND tool_call_id = ${execution.toolCallId}
+        `;
+        return billed;
+      });
+      for (const receipt of receipts) this.recordEvent(runId, 'evidence.charged', { ...receipt, toolCallId: execution.toolCallId });
       this.recordEvent(runId, 'tool.completed', {
         tool: execution.toolName,
         toolCallId: execution.toolCallId,
@@ -874,11 +924,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       userId: run.user_id,
       creditsRemaining: run.credits_remaining_at_admission,
     });
-    const creditsCharged = this.sql<{ credits: number }>`
-      SELECT COALESCE(SUM(credits), 0) AS credits
-      FROM agent_tool_calls
-      WHERE run_id = ${runId} AND status = 'completed'
-    `[0]?.credits ?? 0;
+    const creditsCharged = this.evidenceLedger.committed(runId);
     const history = this.readConversationHistory(run);
     const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
     const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
@@ -951,14 +997,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   private async settleRun(runId: string): Promise<void> {
     const run = this.readRun(runId);
     if (!run || !isTerminal(run.status) || run.billing_settled) return;
-    const actual = this.sql<{ credits: number }>`
-      SELECT COALESCE(SUM(credits), 0) AS credits FROM agent_tool_calls
-      WHERE run_id = ${runId} AND status = 'completed'
-    `[0]?.credits ?? 0;
+    const actual = this.evidenceLedger.committed(runId);
     const remaining = await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
       () => settleAgentCredits(this.env, run.user_id, runId, actual, this.answerModelCostMicros(runId)), 'Persistence phase timeout.');
     const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
-    if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining };
+    const charges = billingCharges(this.evidenceLedger.receipts(runId));
+    if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining, ...(charges.length ? { charges } : {}) };
     this.sql`UPDATE agent_runs SET billing_settled = 1,
       result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId}`;
   }
@@ -1258,7 +1302,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     await this.sessionStore.delete();
     this.sessionStore.search.clearHistory();
     for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
+      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
       'agent_trace_run_index', 'agent_trace_publish_order']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
@@ -1723,6 +1767,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`.some(column => column.name === 'error_context_json')) {
       this.sql`ALTER TABLE agent_tool_calls ADD COLUMN error_context_json TEXT`;
     }
+    this.evidenceLedger.initialize();
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_routes (
         run_id TEXT PRIMARY KEY,

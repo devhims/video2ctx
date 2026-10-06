@@ -2494,7 +2494,12 @@ export const openApiDocument = {
           citations: { type: 'array', items: schemaRef('AgentCitation') },
           artifacts: { type: 'array', items: { type: 'object', required: ['type', 'data'], properties: { type: { type: 'string' }, title: { type: 'string' }, data: { type: 'object', additionalProperties: true } } } },
           warnings: { type: 'array', items: { type: 'object', required: ['code', 'message'], properties: { code: { type: 'string' }, message: { type: 'string' } } } },
-          billing: { type: 'object', required: ['creditsCharged', 'creditsRemaining'], properties: { creditsCharged: { type: 'integer', minimum: 0 }, creditsRemaining: { type: 'integer', minimum: 0 } } },
+          billing: { type: 'object', required: ['creditsCharged', 'creditsRemaining'], properties: { creditsCharged: { type: 'integer', minimum: 0 }, creditsRemaining: { type: 'integer', minimum: 0 },
+            charges: { type: 'array', maxItems: 64, description: 'Settled operations behind creditsCharged, at existing credits-table prices. Absent for runs settled before receipts existed.',
+              items: { type: 'object', required: ['source', 'operation', 'price', 'credits'], properties: {
+                source: { type: 'string', description: 'Tool or saved-evidence read that delivered the content.' },
+                operation: { type: 'string' }, price: { type: 'string', enum: ['cached', 'fresh'] },
+                credits: { type: 'integer', minimum: 1 }, videoId: { type: 'string' } } } } } },
         },
       },
       AgentRun: {

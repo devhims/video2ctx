@@ -85,6 +85,10 @@ export async function executeAnalyzeVideoTranscript(
         )
           throw new Error('Analysis requires a complete nonempty saved transcript.');
         const sourceId = `youtube:${asset.videoId}:transcript`;
+        // Every preflight check passed: admit the saved inputs as delivered source content,
+        // billed once per run per unit, immediately before inference. A later analyst
+        // failure keeps the charge; a rejected selection above never reaches this line.
+        context.deliverSavedAssets?.([parsed.assetVersion]);
         const evidence = await observeAgentOperation(
           { runId: context.runId, toolCallId, videoId: asset.videoId, stage: 'transcript_analysis' },
           context.signal,

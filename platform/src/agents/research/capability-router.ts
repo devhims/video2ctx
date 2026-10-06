@@ -203,6 +203,8 @@ export interface CapabilityClassifierInput {
   message: string;
   conversationHistory?: ConversationTurn[];
   availableEvidence?: EvidencePacket[];
+  /** Recorded metadata in history appears only by reference; finalization can load it. */
+  metadataByReference?: boolean;
   sessionBrief?: SessionBrief;
   model: LanguageModel;
   /** Different model for attempt 3, after both primary attempts failed. */
@@ -247,7 +249,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Requests for current view counts, likes, or comments require an executable route with refreshDynamicData true, even when past values are in history. Use saved data for historical questions. This does not require refreshing transcripts or images.',
       'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
       'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A complete transcript can support new transcript questions through finalizer reads. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. A request to refresh transcripts, images or all source evidence requires an executable route with refreshEvidence true. Requests limited to current statistics or comments use refreshDynamicData true instead.',
-      'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without new provider calls. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
+      'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without new provider calls. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. Evidence and recorded metadata listed by reference count as supplied evidence: finalization loads them without provider calls. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
       'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The finalizer can search persisted history beyond the eight recent turns and read all messages chronologically. It can also search accumulated memory and evidence across assets. Finalization may search and read stored context, but cannot request another inspection or retrieve new provider evidence. Choose inspect_video or topic_research when fresh evidence is needed; use context_answer for supplied or saved context. Do not list the messages yourself.',
       'For every context_answer set contextScope: history for listing, quoting, recalling or correcting conversation messages or preferences; video for claims about video content; mixed only when the requested answer needs both. A video URL inside a quoted earlier message does not require video evidence.',
       'For finalize give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
@@ -276,7 +278,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     prompt: JSON.stringify({
       conversationHistory: conversationHistory.map((turn) => ({
         user: turn.user,
-        assistant: conversationAssistantMessage(turn),
+        assistant: conversationAssistantMessage(turn, input.metadataByReference),
       })),
       session: input.sessionBrief ? sessionBriefForModel(input.sessionBrief) : undefined,
       availableEvidence: (input.availableEvidence ?? []).map(packet=>({kind:packet.kind,sources:packet.sources,excerptCount:packet.excerpts.length})),

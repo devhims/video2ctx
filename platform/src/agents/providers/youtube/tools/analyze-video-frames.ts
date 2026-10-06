@@ -49,6 +49,10 @@ export function executeAnalyzeVideoFrames(
         failures: [],
         meta: { partial: false, warnings: [...new Set(values.flatMap((value) => value.meta.warnings))] },
       });
+      // Every preflight check passed: admit the saved inputs as delivered source content,
+      // billed once per run per unit, immediately before inference. A later analyst
+      // failure keeps the charge; a rejected selection above never reaches this line.
+      context.deliverSavedAssets?.(versions);
       const analysis = await context.analyzeFrames({
         frames,
         focus: parsed.focus,

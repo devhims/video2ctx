@@ -8064,6 +8064,63 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 9007199254740991
+                  },
+                  "charges": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "operation": {
+                          "type": "string",
+                          "enum": [
+                            "search",
+                            "browse",
+                            "trends",
+                            "video",
+                            "tracks",
+                            "transcript",
+                            "comments",
+                            "endscreen",
+                            "storyboard",
+                            "frames",
+                            "channel",
+                            "channelVideos",
+                            "channelPlaylists",
+                            "playlist"
+                          ]
+                        },
+                        "price": {
+                          "type": "string",
+                          "enum": [
+                            "cached",
+                            "fresh"
+                          ]
+                        },
+                        "credits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "videoId": {
+                          "type": "string",
+                          "maxLength": 100
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "operation",
+                        "price",
+                        "credits"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -9579,6 +9636,63 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
+              },
+              "charges": {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "operation": {
+                      "type": "string",
+                      "enum": [
+                        "search",
+                        "browse",
+                        "trends",
+                        "video",
+                        "tracks",
+                        "transcript",
+                        "comments",
+                        "endscreen",
+                        "storyboard",
+                        "frames",
+                        "channel",
+                        "channelVideos",
+                        "channelPlaylists",
+                        "playlist"
+                      ]
+                    },
+                    "price": {
+                      "type": "string",
+                      "enum": [
+                        "cached",
+                        "fresh"
+                      ]
+                    },
+                    "credits": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "videoId": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "operation",
+                    "price",
+                    "credits"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -11009,6 +11123,43 @@
               "creditsRemaining": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "charges": {
+                "type": "array",
+                "maxItems": 64,
+                "description": "Settled operations behind creditsCharged, at existing credits-table prices. Absent for runs settled before receipts existed.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "source",
+                    "operation",
+                    "price",
+                    "credits"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "description": "Tool or saved-evidence read that delivered the content."
+                    },
+                    "operation": {
+                      "type": "string"
+                    },
+                    "price": {
+                      "type": "string",
+                      "enum": [
+                        "cached",
+                        "fresh"
+                      ]
+                    },
+                    "credits": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "videoId": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             }
           }

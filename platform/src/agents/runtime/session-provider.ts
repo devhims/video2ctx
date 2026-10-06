@@ -16,6 +16,17 @@ export function sessionProvider(
   refresh = false,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
+  // Resource keys this run retrieved from the provider, with the claim of that paid
+  // retrieval. A later hit or join served only by such keys names their claims; the run
+  // ledger prices it against them, never against "fetched earlier" alone.
+  const claims = new Map<string, string>();
+  const claimed = <T>(result: CachedResult<T>, keys: readonly string[]): CachedResult<T> => {
+    const { providerClaim, joinedClaims: _joined, ...rest } = result;
+    if (!result.sessionReused) return providerClaim ? { ...rest, providerClaim } : rest;
+    const joined = keys.map(key => claims.get(key));
+    return keys.length > 0 && joined.every(claim => claim !== undefined)
+      ? { ...rest, joinedClaims: [...new Set(joined as string[])] } : rest;
+  };
   const visualQueue = new VisualRetrievalQueue();
   const visual = <T>(kind: 'storyboard' | 'frames', videoId: string, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> => {
     const generation = store.generation();
@@ -42,7 +53,9 @@ export function sessionProvider(
           const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic);
           // Reject before saving, so an over-limit transcript never becomes a session asset.
           if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, fetched.value, store.maxVideoSeconds);
-          return fetched;
+          const claim = crypto.randomUUID();
+          claims.set(key, claim);
+          return { ...fetched, providerClaim: claim };
         },
         (value) => ({
           language: value.translatedTo?.languageCode ?? value.track.languageCode,
@@ -66,6 +79,8 @@ export function sessionProvider(
           result.value.translatedTo?.languageCode ?? result.value.track.languageCode,
         );
         store.alias(resolvedKey, result.assetVersions[0]);
+        const claim = claims.get(key);
+        if (claim && !result.sessionReused) claims.set(resolvedKey, claim);
         if (!result.sessionReused)
           store.aliasTranscript(
             id,
@@ -75,7 +90,7 @@ export function sessionProvider(
           );
         refreshed.add(resolvedKey);
       }
-      return result;
+      return claimed(result, [key]);
     },
     comments: async (id, options = {}) => {
       const key = `comments:${id}:${options.all ?? false}:${options.continuation ?? ''}`;
@@ -85,11 +100,16 @@ export function sessionProvider(
         'comments',
         id,
         fresh,
-        () => provider.comments(id, { ...options, refresh: fresh }),
+        async () => {
+          const fetched = await provider.comments(id, { ...options, refresh: fresh });
+          const claim = crypto.randomUUID();
+          claims.set(key, claim);
+          return { ...fetched, providerClaim: claim };
+        },
         (value) => ({ count: value.comments.length, complete: 'complete' in value ? value.complete : false }),
       );
       if (result.assetVersions?.length) refreshed.add(key);
-      return result;
+      return claimed(result, [key]);
     },
     storyboard: provider.storyboard
       ? (id, timestamps, options = {}, diagnostic) =>
@@ -143,6 +163,7 @@ export function sessionProvider(
               else missing.push(index);
             }
             options.signal?.throwIfAborted();
+            const storyboardClaim = missing.length ? crypto.randomUUID() : undefined;
             if (missing.length) {
               const fetched = prefetched ?? await provider.storyboard!(
                 id,
@@ -185,6 +206,7 @@ export function sessionProvider(
                   options.signal,
                 );
                 refreshed.add(key);
+                claims.set(key, storyboardClaim!);
                 return result;
               }));
               results.push(...saved);
@@ -192,6 +214,8 @@ export function sessionProvider(
             if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
             options.signal?.throwIfAborted();
             const partial = results.length < indexes.length || results.some((r) => r.value.meta.partial);
+            const claim = claimed({ value: null, cacheStatus: 'hit', sessionReused: missing.length === 0, providerClaim: storyboardClaim },
+              indexes.map(index => `storyboard:${id}:${manifestVersion}:${index}`));
             return {
               value: storyboardSchema.parse({
                 ...metadata.value,
@@ -207,6 +231,8 @@ export function sessionProvider(
                 : results.some(result=>result.cacheStatus==='miss') ? 'miss'
                 : results.some(result=>result.cacheStatus==='coalesced') ? 'coalesced' : 'hit',
               sessionReused: missing.length === 0,
+              ...(claim.providerClaim ? { providerClaim: claim.providerClaim } : {}),
+              ...(claim.joinedClaims ? { joinedClaims: claim.joinedClaims } : {}),
               verifiedImages: results.flatMap(result => result.verifiedImages ?? []),
               assetVersions: [manifestVersion, ...results.flatMap((r) => r.assetVersions ?? [])],
             };
@@ -234,6 +260,7 @@ export function sessionProvider(
             }
             signal?.throwIfAborted();
             let fetched: CachedResult<VideoFrames> | undefined;
+            const framesClaim = missing.length ? crypto.randomUUID() : undefined;
             if (missing.length) {
               // Batch misses once; successful images survive even if other timestamps fail.
               const retrievalStarted = Date.now();
@@ -277,6 +304,7 @@ export function sessionProvider(
                   signal,
                 );
                 refreshed.add(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`);
+                claims.set(`frame:${request.videoId}:${maxWidth}:${frame.timestampMs}`, framesClaim!);
                 return result;
               }, FRAME_IO_CONCURRENCY));
               signal?.throwIfAborted();
@@ -301,6 +329,12 @@ export function sessionProvider(
               }),
               cacheStatus: fetched?.cacheStatus ?? 'hit',
               sessionReused: missing.length === 0,
+              ...(() => {
+                const claim = claimed({ value: null, cacheStatus: 'hit', sessionReused: missing.length === 0, providerClaim: framesClaim },
+                  times.map(time => `frame:${request.videoId}:${maxWidth}:${time}`));
+                return { ...(claim.providerClaim ? { providerClaim: claim.providerClaim } : {}),
+                  ...(claim.joinedClaims ? { joinedClaims: claim.joinedClaims } : {}) };
+              })(),
               assetVersions: hits.flatMap((r) => r.assetVersions ?? []),
             };
           })

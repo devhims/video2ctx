@@ -66,6 +66,10 @@ export function executeAnalyzeVideoStoryboard(
       context.signal.throwIfAborted();
       if (!canAnalyzeStoryboard(context.researchDeadlineAt))
         throw new Error('Loading saved images left too little research time for storyboard analysis.');
+      // Every preflight check passed: admit the saved inputs as delivered source content,
+      // billed once per run per unit, immediately before inference. A later analyst
+      // failure keeps the charge; a rejected selection above never reaches this line.
+      context.deliverSavedAssets?.(versions);
       const analysis = await analyzeStoryboardBatches(context.analyzeStoryboard, {
         storyboard,
         focus: parsed.focus,

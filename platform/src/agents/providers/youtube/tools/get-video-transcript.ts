@@ -1,3 +1,4 @@
+import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
 import type { TranscriptSegment } from 'all-things-youtube';
@@ -150,11 +151,7 @@ export function executeGetVideoTranscript(
         ].map(warning => ({ ...warning, videoId: parsed.videoId })),
         assetVersions: response.assetVersions,
         continuation: nextOffset !== undefined ? JSON.stringify({ videoId: parsed.videoId, language: parsed.language, offset: nextOffset }) : undefined,
-        usage: [{
-          operation: 'transcript',
-          credits: response.sessionReused ? 0 : dataOperationCost('transcript', response.cacheStatus),
-          cacheStatus: response.cacheStatus,
-        }],
+        usage: [retrievalUsage('transcript', response, status => dataOperationCost('transcript', status))],
       });
     },
   });

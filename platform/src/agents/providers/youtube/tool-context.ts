@@ -44,6 +44,14 @@ export interface AgentToolContext {
   /** Trusted line naming the run's date, appended to research and finalizer instructions. */
   currentDate?: string;
   getEvidence?(): readonly EvidencePacket[];
+  /**
+   * Admit saved or inherited content before a model of this run receives it. Bills
+   * new operation-sized units once per run and withholds what the reserve cannot cover.
+   * Absent outside a durable run, where content is delivered unbilled.
+   */
+  deliverEvidence?: import('../../runtime/prior-evidence').DeliverEvidence;
+  /** Admit saved assets handed to an analyst. Throws when the run reserve cannot cover them. */
+  deliverSavedAssets?(versions: readonly string[]): void;
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
