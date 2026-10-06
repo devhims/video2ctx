@@ -2,12 +2,14 @@ import { simulateReadableStream, tool } from 'ai';
 import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
 import { executeResearchRun } from '../src/agents/research/research-agent';
+import { finalizationFailure } from '../src/agents/research/finalization-failure';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { compactAgentResult } from '../src/agents/response';
 import type { AgentTurnResult, CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 
 const models = vi.hoisted(() => ({ select: vi.fn() }));
+vi.mock('../src/agents/research/finalization-failure', { spy: true });
 vi.mock('../src/agents/model', async importOriginal => ({
   ...await importOriginal<typeof import('../src/agents/model')>(), createAgentModel: models.select,
 }));
@@ -183,8 +185,9 @@ it('charges context collection to the main budget once and gives only the answer
   } finally { vi.useRealTimers(); }
 });
 
-it('stops context at the main deadline and spends the retry allowance only on an answer', async () => {
+it.each([true, false])('skips an expired first attempt without inventing a failure or repair feedback: valid answer %s', async validAnswer => {
   vi.useFakeTimers();
+  const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     const { options, output } = setup('context_answer');
     options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', reason: 'Saved context.' };
@@ -197,7 +200,7 @@ it('stops context at the main deadline and spends the retry allowance only on an
         contextSignal = abortSignal;
         return new Promise(() => {});
       },
-      doStream: async ({ abortSignal }) => scheduledAnswer(output, 19_000, abortSignal),
+      doStream: async ({ abortSignal }) => scheduledAnswer(validAnswer ? output : { blocks: [] }, 19_000, abortSignal),
     });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
@@ -211,12 +214,42 @@ it('stops context at the main deadline and spends the retry allowance only on an
     const request = finalizer.doStreamCalls[0]!.prompt.find(message => message.role === 'user');
     const text = request?.content.find(part => part.type === 'text');
     expect(JSON.parse(text?.text ?? '{}')).toHaveProperty('contextIncomplete', true);
+    expect(JSON.parse(text?.text ?? '{}')).not.toHaveProperty('validationFeedback');
+    expect(JSON.stringify(finalizer.doStreamCalls[0]!.prompt)).not.toContain('The previous generation ran out of time');
+    expect(warnings.mock.calls.map(([message]) => JSON.parse(String(message))))
+      .not.toContainEqual(expect.objectContaining({ event: 'agent_finalization_attempt_failed' }));
     expect(finalizer.doStreamCalls[0]!.tools ?? []).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(19_000);
-    expect(await run).toBe('completed');
+    const result = await run;
+    if (validAnswer) {
+      expect(result).toBe('completed');
+      expect(options.finalize).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toContain('validation checks');
+      expect(finalizationFailure).toHaveBeenLastCalledWith(expect.anything(), ['INVALID_ANSWER_STRUCTURE']);
+      expect(options.finalize).not.toHaveBeenCalled();
+    }
     expect(searchTools).toHaveBeenCalledOnce();
     expect(finalizer.doGenerateCalls).toHaveLength(1);
     expect(finalizer.doStreamCalls).toHaveLength(1);
+  } finally { warnings.mockRestore(); vi.useRealTimers(); }
+});
+
+it('keeps unused main time available to a progressing retry after an early stall', async () => {
+  vi.useFakeTimers();
+  try {
+    const { options, output } = setup('context_answer');
+    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', reason: 'Saved context.' };
+    options.onDraft = vi.fn();
+    let attempts = 0;
+    const finalizer = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => attempts++ === 0
+      ? new Promise(() => {})
+      : scheduledAnswer(output, 25_000, abortSignal) });
+    models.select.mockReturnValue(finalizer);
+    const run = executeResearchRun(options).then(() => 'completed', error => error.message);
+    await vi.advanceTimersByTimeAsync(40_001);
+    expect(await run).toBe('completed');
+    expect(finalizer.doStreamCalls).toHaveLength(2);
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
@@ -273,7 +306,40 @@ it('keeps partial JSON for a stalled-answer repair and logs only progress metada
       code: 'FINALIZATION_STALLED', validationStage: 'generation', idleMs: 15_000,
       textCharacters: partial.length, candidateCharacters: partial.length,
     }));
+    expect(logged.map(message => JSON.parse(message))).toContainEqual(expect.objectContaining({
+      event: 'agent_finalization_usage_unavailable', attempt: 1,
+      reason: 'provider_did_not_report_usage', textCharacters: partial.length,
+    }));
+    // Only the completed replacement reports usage. Do not fabricate provider costs.
+    expect(options.modelBudget!.recordUsage).toHaveBeenCalledOnce();
   } finally { warnings.mockRestore(); vi.useRealTimers(); }
+});
+
+it('keeps a provider error during partial output classified as generation failure', async () => {
+  vi.useFakeTimers();
+  const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const { options } = setup('context_answer');
+    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', reason: 'Saved context.' };
+    options.onDraft = vi.fn();
+    const finalizer = new MockLanguageModelV4({ doStream: async () => ({
+      stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+        controller.enqueue({ type: 'stream-start', warnings: [] });
+        controller.enqueue({ type: 'text-start', id: 'answer' });
+        controller.enqueue({ type: 'text-delta', id: 'answer', delta: '{"blocks":[{"text":"' + 'x'.repeat(33_000) });
+        setTimeout(() => controller.error(new Error('Provider connection closed.')), 100);
+      } }),
+    }) });
+    models.select.mockReturnValue(finalizer);
+    const run = executeResearchRun(options).catch(error => error.message);
+    await vi.advanceTimersByTimeAsync(101);
+    await run;
+    expect(warnings.mock.calls.map(([message]) => JSON.parse(String(message))))
+      .toContainEqual(expect.objectContaining({ event: 'agent_finalization_attempt_failed',
+        validationStage: 'generation', candidateCharacters: 32_000 }));
+    expect(options.finalize).not.toHaveBeenCalled();
+  } finally { warnings.mockRestore(); errors.mockRestore(); vi.useRealTimers(); }
 });
 
 it('treats reasoning content as progress before answer text arrives', async () => {
@@ -323,19 +389,31 @@ it('bounds continuous output across both attempts by the main deadline plus retr
 
 it('preserves the hard deadline when recovering inside the retry allowance', async () => {
   vi.useFakeTimers();
+  const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     const { options, output } = setup('context_answer');
-    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', reason: 'Saved context.' };
+    options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'history', reason: 'Saved context.' };
     options.finalizationDeadlineAt = Date.now() - 15_000;
     options.onDraft = vi.fn();
+    const searchTools = vi.fn(async () => ({}));
+    const readHistory = vi.fn();
+    options.session = { brief: () => ({ assets: [], memories: [] }), searchTools, readHistory } as unknown as NonNullable<typeof options.session>;
     const finalizer = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => scheduledAnswer(output, 10_000, abortSignal) });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(searchTools).not.toHaveBeenCalled();
+    expect(readHistory).not.toHaveBeenCalled();
+    expect(finalizer.doGenerateCalls).toHaveLength(0);
+    expect(warnings).not.toHaveBeenCalled();
+    const request = finalizer.doStreamCalls[0]!.prompt.find(message => message.role === 'user');
+    const text = request?.content.find(part => part.type === 'text');
+    expect(JSON.parse(text?.text ?? '{}')).not.toHaveProperty('validationFeedback');
     await vi.advanceTimersByTimeAsync(5_001);
     expect(await run).toContain('Finalization timed out');
     expect(finalizer.doStreamCalls).toHaveLength(1);
     expect(options.finalize).not.toHaveBeenCalled();
-  } finally { vi.useRealTimers(); }
+  } finally { warnings.mockRestore(); vi.useRealTimers(); }
 });
 
 it('honors cancellation during a progressing answer without starting a retry', async () => {

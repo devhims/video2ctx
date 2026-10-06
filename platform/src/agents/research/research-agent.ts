@@ -728,6 +728,7 @@ async function runUnifiedFinalizer(options: {
   // Gather context once, charged only to the main deadline. Answer retries below
   // reuse these results and never restart context collection.
   const contextDeadlineAt = options.deadlineAt;
+  const contextExpired = Date.now() >= contextDeadlineAt;
   let contextIncomplete = false;
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
@@ -740,9 +741,13 @@ async function runUnifiedFinalizer(options: {
   // Read the first page deterministically. Ordinal questions cannot use keyword search.
   // This includes the original first message even beyond the recent-turn window.
   const historySelection = options.decision.route === 'finalize' ? options.decision.historySelection : undefined;
-  const historyPage = historyRequired ? options.context.session?.readHistory?.(0, historySelection === 'first_user_message' || historySelection === 'all_user_messages' ? 'user' : undefined) : undefined;
+  const historyPage = historyRequired && !contextExpired ? options.context.session?.readHistory?.(0, historySelection === 'first_user_message' || historySelection === 'all_user_messages' ? 'user' : undefined) : undefined;
   const contextMessages: ModelMessage[] = [];
-  if (options.context.session && !conversational) {
+  if (options.context.session && !conversational && contextExpired) {
+    // Recovery has only response time left. Existing evidence/history inputs
+    // remain usable, but prior context tool messages are not checkpointed.
+    contextIncomplete = true;
+  } else if (options.context.session && !conversational) {
     try {
       const gathered = await withRunDeadline(contextDeadlineAt, options.context.signal, async signal => {
         const searchTools = await options.context.session!.searchTools?.(packets => {
@@ -842,7 +847,10 @@ async function runUnifiedFinalizer(options: {
     }
   }
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // Context collection or recovery can exhaust the main deadline before any
+  // answer call. Use the remaining allowance without inventing a failed answer.
+  const firstAttempt = Date.now() >= options.deadlineAt ? 1 : 0;
+  for (let attempt = firstAttempt; attempt < 2; attempt += 1) {
     options.context.signal.throwIfAborted();
     assertModelCostAvailable(options.modelBudget);
     prepared = prepareEvidence();
@@ -861,6 +869,7 @@ async function runUnifiedFinalizer(options: {
     const outputSchema = answerSchema;
     const attemptStartedAt = Date.now();
     let candidate: string | undefined;
+    let generationCompleted = false;
     let finishReason: string | undefined;
     let usageRecorded = false;
     let validationStage = 'generation';
@@ -877,7 +886,8 @@ async function runUnifiedFinalizer(options: {
     });
     try {
       const attemptDeadlineAt = attempt === 0 ? options.deadlineAt
-        : Math.min(finalizationHardDeadline(options.deadlineAt), Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS);
+        : Math.min(finalizationHardDeadline(options.deadlineAt),
+          Math.max(options.deadlineAt, Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS));
       const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft), async (signal, progress) => {
         const generationOptions = {
         model: options.model,
@@ -963,6 +973,7 @@ async function runUnifiedFinalizer(options: {
         if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
         const text = await streamed.text;
         candidate = text;
+        generationCompleted = true;
         const [finishReason, response, totalUsage] = await Promise.all([
           streamed.finishReason, streamed.response, streamed.totalUsage,
         ]);
@@ -970,6 +981,7 @@ async function runUnifiedFinalizer(options: {
         return { text, finishReason, response, totalUsage, output };
       });
       candidate = result.text;
+      generationCompleted = true;
       finishReason = result.finishReason;
       if (!usageRecorded) options.modelBudget?.recordUsage({
         callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
@@ -1028,14 +1040,20 @@ async function runUnifiedFinalizer(options: {
       const generationError = NoObjectGeneratedError.isInstance(error) ? error : undefined;
       candidate ??= generationError?.text;
       finishReason ??= generationError?.finishReason;
-      if (!usageRecorded && generationError?.usage) options.modelBudget?.recordUsage({
-        callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
-        category: 'timeout_finalizer', usage: generationError.usage,
-        modelId: typeof options.model === 'string' ? options.model : options.model.modelId,
-        pricing: fireworksModelPricing(typeof options.model === 'string' ? options.model : options.model.modelId),
-      });
+      if (!usageRecorded && generationError?.usage) {
+        options.modelBudget?.recordUsage({
+          callId: `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}`,
+          category: 'timeout_finalizer', usage: generationError.usage,
+          modelId: typeof options.model === 'string' ? options.model : options.model.modelId,
+          pricing: fireworksModelPricing(typeof options.model === 'string' ? options.model : options.model.modelId),
+        });
+        usageRecorded = true;
+      }
+      if (!usageRecorded) console.warn(JSON.stringify({ event: 'agent_finalization_usage_unavailable',
+        runId: options.context.runId, attempt: attempt + 1, reason: 'provider_did_not_report_usage',
+        elapsedMs: Date.now() - attemptStartedAt, ...progressDiagnostics() }));
       let schemaIssues = error instanceof ZodError ? error.issues.map(({ path, code, message }) => ({ path, code, message })) : undefined;
-      if (!schemaIssues && candidate && !isAgentCoreTimeout(error)) {
+      if (!schemaIssues && candidate && (generationCompleted || generationError) && !isAgentCoreTimeout(error)) {
         validationStage = 'output_schema';
         try {
           const parsed = outputSchema.safeParse(JSON.parse(candidate));

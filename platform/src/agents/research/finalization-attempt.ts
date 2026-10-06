@@ -25,8 +25,8 @@ export async function withFinalizationAttempt<T>(
     return await withRunDeadline(deadlineAt, signal, async attemptSignal => {
       reset();
       return work(attemptSignal, () => {
-        attemptSignal.throwIfAborted();
-        reset();
+        // Late SDK chunks after cancellation must neither throw nor arm a timer.
+        if (!attemptSignal.aborted) reset();
       });
     }, 'Finalization attempt timeout.');
   } finally { clearTimeout(timer); }
