@@ -381,7 +381,7 @@ it('bounds continuous output across both attempts by the main deadline plus retr
     await vi.advanceTimersByTimeAsync(79_999);
     expect(finished).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await run).toContain('Finalization timed out');
+    expect(await run).toContain('finish your answer within the time limit');
     expect(finalizer.doStreamCalls).toHaveLength(2);
     expect(options.finalize).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
@@ -409,7 +409,7 @@ it('preserves the hard deadline when recovering inside the retry allowance', asy
     const text = request?.content.find(part => part.type === 'text');
     expect(JSON.parse(text?.text ?? '{}')).not.toHaveProperty('validationFeedback');
     await vi.advanceTimersByTimeAsync(5_001);
-    expect(await run).toContain('Finalization timed out');
+    expect(await run).toContain('finish your answer within the time limit');
     expect(finalizer.doStreamCalls).toHaveLength(1);
     expect(options.finalize).not.toHaveBeenCalled();
   } finally { warnings.mockRestore(); vi.useRealTimers(); }
@@ -1046,7 +1046,7 @@ it.each(['length', 'timeout', 'length_then_timeout'] as const)('explains direct 
         finishReason: { unified: 'length', raw: 'length' }, usage, warnings: [] };
     };
     const expected = failure === 'length_then_timeout' ? 'output limit, and the repair attempt timed out'
-      : failure === 'length' ? 'output limit and could not be completed after repair' : 'Finalization timed out';
+      : failure === 'length' ? 'output limit and could not be completed after repair' : 'finish your answer within the time limit';
     const run = executeResearchRun({ ...options, persistedRoute: decision });
     const check = expect(run).rejects.toMatchObject({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
       message: expect.stringContaining(expected) });
@@ -1198,7 +1198,8 @@ it.each([false, true])('does not save an answer after both finalizer models fail
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
   if (gatherContext) options.session = { brief: () => ({ assets: [], memories: [] }), searchTools: async () => ({}) } as unknown as NonNullable<typeof options.session>;
   const error = await executeResearchRun(options).catch(error => error);
-  expect(error).toMatchObject({ code: 'MODEL_FALLBACK_EXHAUSTED', status: 503 });
+  expect(error).toMatchObject({ code: 'MODEL_FALLBACK_EXHAUSTED', status: 503,
+    message: "We're having trouble processing your request right now, even after retrying automatically. Please try again in a few minutes." });
   expect(primary.doGenerateCalls).toHaveLength(1);
   expect(fallback.doGenerateCalls).toHaveLength(1);
   expect(options.finalize).not.toHaveBeenCalled();

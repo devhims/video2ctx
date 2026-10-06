@@ -274,7 +274,8 @@ it('propagates exhausted models through SDK RetryError after a retryable 409', a
   await vi.advanceTimersByTimeAsync(2_001);
   const error = await task;
   expect(error).toBeInstanceOf(RetryError);
-  expect(normalizeAgentExecutionError(error)).toMatchObject({ status: 503, code: 'MODEL_FALLBACK_EXHAUSTED' });
+  expect(normalizeAgentExecutionError(error)).toMatchObject({ status: 503, code: 'MODEL_FALLBACK_EXHAUSTED',
+    message: "We're having trouble processing your request right now, even after retrying automatically. Please try again in a few minutes." });
   expect(primary.doGenerateCalls).toHaveLength(2);
   expect(fallback.doGenerateCalls).toHaveLength(1);
 });

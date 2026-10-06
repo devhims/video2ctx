@@ -584,7 +584,7 @@ describe('YouTube AgentCore loop control', () => {
         model, finalizationModel: recovery, message: 'Research design skills',
         decision: { route: 'topic_research' }, context: inspectContext(),
       });
-      const check = expect(run).rejects.toThrow(/Finalization timed out/i);
+      const check = expect(run).rejects.toThrow(/finish your answer within the time limit/i);
       await vi.advanceTimersByTimeAsync(80_001);
       await check;
     } finally { vi.useRealTimers(); }
@@ -597,7 +597,7 @@ describe('YouTube AgentCore loop control', () => {
     await expect(runResearchAgentWithModel({model:failed,finalizationModel:failed,message:'Compare the videos',
       decision:{route:'inspect_video',videoId:'abcdefghijk'},context,recoveredEvidence:[raw],
       finalizationDeadlineAt:Date.now()+60_000})).rejects.toMatchObject({code:'FINAL_SYNTHESIS_UNAVAILABLE',
-        message:expect.stringContaining('saved evidence remains available')});
+        message:expect.stringContaining('evidence already saved remains available')});
     expect(context.finalize).not.toHaveBeenCalled();
   });
 
@@ -1353,7 +1353,7 @@ describe('YouTube AgentCore loop control', () => {
     if (failure === 'exhausted') {
       expect(lastInput.answer).toContain('answer validation checks');
       expect(lastInput.warnings).toContainEqual({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
-        message: expect.stringContaining('Retry the question') });
+        message: expect.stringContaining('Please try again in a few minutes') });
     }
   });
 
@@ -1411,9 +1411,9 @@ describe('YouTube AgentCore loop control', () => {
       await check;
       expect(attempts).toBe(2);
       const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
-      expect(input.answer).toContain('Finalization timed out');
+      expect(input.answer).toContain('finish your answer within the time limit');
       expect(input.warnings).toContainEqual({ code: 'FINAL_SYNTHESIS_UNAVAILABLE',
-        message: expect.stringContaining('Finalization timed out') });
+        message: expect.stringContaining('finish your answer within the time limit') });
     } finally { vi.useRealTimers(); }
   });
 

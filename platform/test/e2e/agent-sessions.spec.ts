@@ -542,7 +542,7 @@ test('views stored session evidence and deletes assets with their dependent memo
 });
 
 for (const failure of [
-  { code: 'FINAL_SYNTHESIS_UNAVAILABLE', reason: 'The answer reached its output limit, and the repair attempt timed out. Any successfully saved evidence remains available in this session. Retry the question to use it again.' },
+  { code: 'FINAL_SYNTHESIS_UNAVAILABLE', reason: 'The answer reached its output limit, and the repair attempt timed out. Please try again in a few minutes. Any evidence already saved remains available in this session.' },
   { code: 'YOUTUBE_UNAVAILABLE', reason: 'YouTube is not available right now.' },
 ]) test(`${failure.code} reasons stay visible after refresh for failed and partial runs`, async ({ page, context }) => {
   await login(context, 'allowed');
