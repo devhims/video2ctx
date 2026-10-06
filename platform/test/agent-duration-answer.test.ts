@@ -1,3 +1,4 @@
+import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { describe, expect, it } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
 import { durationLimitNotice, withDurationLimitNotice } from '../src/agents/research/duration-limit-answer';
@@ -69,4 +70,33 @@ it('omits stale rejection notices once the same transcript has usable content', 
 
 it('treats an empty requested-video list as unpinned topic research', () => {
   expect(durationLimitNotice(failures, [], [])).toBe(durationLimitNotice(failures, []));
+});
+
+const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+  userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
+const admission = { userId: 'test', creditsRemaining: 100 };
+
+it.each(['inspect_video', 'topic_research'] as const)('accepts an exact persisted duration fallback without citations for %s', intent => {
+  const context = { failures, requestedVideoIds: [failure.videoId] };
+  const notice = durationLimitNotice(failures, [], context.requestedVideoIds);
+  const input = evidenceFallback([], intent, undefined, notice)!;
+  const result = buildAgentTurnResult(identity, admission, input, [], 0, context);
+  expect(result.answer).toBe(input.answer);
+  expect(result.citations).toEqual([]);
+  expect(result.confidence).toBe('low');
+});
+
+it('keeps the citation requirement for unverified, altered, or stale duration responses', () => {
+  const context = { failures, requestedVideoIds: [failure.videoId] };
+  const notice = durationLimitNotice(failures, [], context.requestedVideoIds);
+  const input = evidenceFallback([], 'inspect_video', undefined, notice)!;
+  const finalize = (candidate = input, packets: EvidencePacket[] = [], trustedContext = context) =>
+    buildAgentTurnResult(identity, admission, candidate, packets, 0, trustedContext);
+  expect(() => buildAgentTurnResult(identity, admission, input, [], 0)).toThrow(/citation/);
+  expect(() => finalize(input, [], { ...context, failures: [] })).toThrow(/citation/);
+  expect(() => finalize(input, [], { ...context, requestedVideoIds: ['short000001'] })).toThrow(/citation/);
+  expect(() => finalize({ ...input, answer: `${input.answer} This course teaches Python.` })).toThrow(/citation/);
+  expect(() => finalize({ ...input, confidence: 'high' })).toThrow(/citation/);
+  expect(() => finalize(input, [content])).toThrow(/citation/);
+  expect(() => finalize({ ...input, answer: `${input.answer} [cite:invented]` })).toThrow(/persisted evidence/);
 });

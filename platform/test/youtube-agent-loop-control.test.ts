@@ -2032,6 +2032,11 @@ it('recovers a duration rejection without metadata or another provider call', as
   const model = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research phase timeout.'); } });
   const recovered = { toolCallId: 'recovered-long', toolName: 'get_video_transcript', operation: 'transcript' as const,
     message: 'VIDEO_TOO_LONG: PRIVATE_PROVIDER_DIAGNOSTIC', durationLimit: { videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 7200 } };
+  context.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({
+    runId: context.runId, conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(),
+  }, { userId: 'test', creditsRemaining: 100 }, input, [], 0,
+  { failures: [recovered], requestedVideoIds: ['rfscVS0vtbw'] }));
   await expect(runResearchAgentWithModel({ model, context, message: 'Summarize the course or explain the limit.',
     decision: { route: 'inspect_video', videoId: 'rfscVS0vtbw' }, recoveredToolFailures: [recovered] })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
   const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1].answer;

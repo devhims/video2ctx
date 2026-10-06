@@ -846,7 +846,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       userMessageId: run.user_message_id,
       agentMessageId: run.agent_message_id,
     }, admission, parsedInput,
-    conversationEvidence(evidenceWithConversationMetadata([...citedSessionEvidence, ...this.readEvidencePackets(runId)], history), history), creditsCharged);
+    conversationEvidence(evidenceWithConversationMetadata([...citedSessionEvidence, ...this.readEvidencePackets(runId)], history), history), creditsCharged,
+    decision.route === 'inspect_video' || decision.route === 'topic_research' ? {
+      failures: this.readEvidenceToolFailures(runId),
+      requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
+    } : undefined);
     this.sessionStore.remember(runId, parsedInput.memoryUpdates ?? [], citedSessionEvidence);
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();

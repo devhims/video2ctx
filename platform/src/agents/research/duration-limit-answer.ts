@@ -1,7 +1,7 @@
 import { ZodError } from 'zod';
 import { finalizeAnswerInputSchema, type EvidencePacket, type FinalizeAnswerInput } from '../contracts';
 import { formatVideoDuration, formatVideoLimit, videoDurationFailureSchema, type VideoDurationFailure } from '../runtime/video-duration-limit';
-import { hasContentEvidence } from './evidence-fallback';
+import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 
 /** Keep unsupported requested videos visible without tainting successful replacements. */
 export function durationLimitNotice(
@@ -40,4 +40,22 @@ export function withDurationLimitNotice(input: FinalizeAnswerInput, notice: stri
   if (maximum !== null && answer.length > maximum) throw new ZodError([{ code: 'custom', path: ['blocks'],
     message: `Shorten the rendered answer, including citations, to at most ${maximum - notice.length - 2} characters to leave room for the required duration notice. Preserve supported findings and valid references.` }]);
   return { ...input, answer };
+}
+
+/** Supplied by the runtime from persisted failures and the saved route, never model input. */
+export interface DurationLimitAnswerContext {
+  failures: readonly { durationLimit?: VideoDurationFailure }[];
+  requestedVideoIds: readonly string[];
+}
+
+/** Only the application's exact guardrail fallback may omit research citations. */
+export function isDurationLimitFallback(
+  input: FinalizeAnswerInput,
+  packets: readonly EvidencePacket[],
+  context?: DurationLimitAnswerContext,
+): boolean {
+  if (!context || input.confidence !== 'low' || hasContentEvidence(packets)
+    || (input.intent !== 'inspect_video' && input.intent !== 'topic_research')) return false;
+  const notice = durationLimitNotice(context.failures, packets, context.requestedVideoIds);
+  return !!notice && input.answer === evidenceFallback(packets, input.intent, undefined, notice)?.answer;
 }
