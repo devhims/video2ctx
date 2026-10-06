@@ -40,6 +40,31 @@ async function seed(name: string, status = 'failed') {
   return { runtime, userId, runId, conversationId };
 }
 
+test.each(['response_timeout', 'phase_budget'])('restores %s fallback for the same run without affecting a new run', async reason => {
+  const { runtime, runId } = await seed(`model-fallback-recovery-${reason}`);
+  await runInDurableObject(runtime, async instance => {
+    const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
+    const state = reader.modelFailoverState(runId);
+    expect(state.fallback).toBe(false);
+    state.onDiagnostic?.({ event: 'fallback', callId: 'call', attemptId: 'attempt', modelId: 'glm',
+      role: 'agent_core', serviceTier: 'priority', reason });
+  });
+  await runInDurableObject(runtime, async instance => {
+    const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
+    expect(reader.modelFailoverState(runId).fallback).toBe(true);
+    expect(reader.modelFailoverState('new-run').fallback).toBe(false);
+    expect(instance.sql`SELECT * FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback'`).toHaveLength(1);
+    const internal = instance as unknown as { env: Env; memoryUpdaterModel(runId: string): import('@ai-sdk/provider').LanguageModelV4 };
+    const saved = { FIREWORKS_API_KEY: internal.env.FIREWORKS_API_KEY, AI_GATEWAY_ID: internal.env.AI_GATEWAY_ID,
+      AGENT_GLM_PROVIDER: internal.env.AGENT_GLM_PROVIDER };
+    Object.assign(internal.env, { FIREWORKS_API_KEY: 'test-key', AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks' });
+    try {
+      expect(internal.memoryUpdaterModel(runId).modelId).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
+      expect(internal.memoryUpdaterModel('new-run').modelId).toBe('accounts/fireworks/models/glm-5p3-flash');
+    } finally { Object.assign(internal.env, saved); }
+  });
+});
+
 test.each(['storyboard', 'transcript'] as const)('persists %s diagnostics across RPCs, isolates owners, and bounds run storage', async kind => {
   const fixture = { ...extractionFixture, kind };
   const { runtime, runId } = await seed(`extraction-diagnostics-${kind}-owner`);

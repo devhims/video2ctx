@@ -247,7 +247,7 @@ test('near the run cost limit, a delayed unobserved first call blocks the retry;
     const runId = await addRun(instance, 1);
     // Answer-phase telemetry leaves room for exactly one estimated memory call.
     instance.sql`INSERT INTO agent_model_usage (run_id, call_id, category, model_id, input_tokens, cached_input_tokens,
-      output_tokens, estimated_cost_micros, created_at) VALUES (${runId}, 'answer', 'timeout_finalizer', 'model', 0, 0, 0, 989000, 0)`;
+      output_tokens, estimated_cost_micros, created_at) VALUES (${runId}, 'answer', 'timeout_finalizer', 'model', 0, 0, 0, 979000, 0)`;
     let respond!: () => void;
     const late = new Promise<void>(resolve => { respond = resolve; });
     const model = new MockLanguageModelV4({ doGenerate: async () => {
@@ -260,7 +260,7 @@ test('near the run cost limit, a delayed unobserved first call blocks the retry;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await internals(instance).finalizeRun(runId, 'final', answer('An accepted answer.'));
     await internals(instance).processMemoryJobs();
-    // 989,000 observed + 10,000 for the unobserved first call + 10,000 for a retry exceeds 1,000,000.
+    // 979,000 observed + 20,000 for the unobserved first call + 20,000 for a retry exceeds 1,000,000.
     expect(model.doGenerateCalls).toHaveLength(1);
     expect(jobs(instance)).toMatchObject([{ status: 'skipped', attempts: 1, outcome: 'cost_limit' }]);
     respond();
@@ -443,4 +443,57 @@ test('account deletion aborts an in-flight update and leaves no memory state beh
   });
   // An aborted call has no observed usage, so no memory cost entry is invented.
   expect(await memoryLedger(userId)).toEqual([]);
+});
+
+test.each(['success', 'retry', 'budget', 'backup_budget'] as const)('accounts for each memory provider request and rejects abandoned changes: %s', async mode => {
+  const { withModelFailover } = await import('../src/agents/runtime/model-failover');
+  const { runtime, userId, addRun } = await seed(`memory-failover-usage-${mode}`);
+  let providerCost = 0;
+  let creditsAfterAnswer = 0;
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    if (mode === 'budget' || mode === 'backup_budget') instance.sql`INSERT INTO agent_model_usage (run_id,call_id,category,model_id,input_tokens,cached_input_tokens,
+      output_tokens,estimated_cost_micros,created_at) VALUES (${runId},'answer','timeout_finalizer','model',0,0,0,${mode === 'backup_budget' ? 979000 : 960000},0)`;
+    let respond!: () => void;
+    const late = new Promise<void>(resolve => { respond = resolve; });
+    const primary = new MockLanguageModelV4({ modelId: 'accounts/fireworks/models/glm-5p3-flash', doGenerate: async () => {
+      await late;
+      return { content: [{ type: 'text', text: JSON.stringify({ changes: [upsert('question', 'abandoned', 'Which speaker?')] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    let backupCalls = 0;
+    const fallback = new MockLanguageModelV4({ modelId: 'accounts/fireworks/models/deepseek-v4p1-flash', doGenerate: async () => ({
+      content: [{ type: 'text', text: mode !== 'success' && backupCalls++ === 0 ? '{"changes":"invalid"}' : '{"changes":[]}' }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    // Shorten only the primary budget here; the unit test exercises the eight-second cutoff.
+    const state = { fallback: false, deadlineAt: Date.now() + 10_001 };
+    const model = withModelFailover({ primary, fallback, state, role: 'memory_updater' });
+    vi.spyOn(internals(instance), 'memoryUpdaterModel').mockReturnValue(model);
+    await internals(instance).finalizeRun(runId, 'final', answer('An accepted answer.'));
+    creditsAfterAnswer = await creditBalance(env, userId);
+    await internals(instance).processMemoryJobs();
+    const expectedRequests = mode === 'backup_budget' ? 1 : mode === 'retry' ? 3 : 2;
+    expect(primary.doGenerateCalls).toHaveLength(1);
+    expect(fallback.doGenerateCalls).toHaveLength(expectedRequests - 1);
+    expect(jobs(instance)).toMatchObject([{ status: mode === 'budget' || mode === 'backup_budget' ? 'skipped' : 'completed', attempts: mode === 'retry' ? 2 : 1 }]);
+    expect(reported(instance)).toHaveLength(expectedRequests - 1);
+    expect(instance.sql`SELECT * FROM agent_events WHERE type = 'memory.request_started'`).toHaveLength(expectedRequests);
+    respond();
+    await vi.waitFor(() => expect(reported(instance)).toHaveLength(expectedRequests));
+    await internals(instance).processMemoryJobs();
+    await internals(instance).processMemoryJobs();
+    const rows = instance.sql<{ call_id: string; model_id: string; estimated_cost_micros: number }>`
+      SELECT call_id,model_id,estimated_cost_micros FROM agent_model_usage WHERE category = 'memory_update'`;
+    expect(rows).toHaveLength(expectedRequests);
+    expect(new Set(rows.map(row => row.call_id)).size).toBe(expectedRequests);
+    expect(rows.filter(row => row.model_id.endsWith('glm-5p3-flash'))).toHaveLength(1);
+    providerCost = rows.reduce((total, row) => total + row.estimated_cost_micros, 0);
+    expect(internals(instance).sessionStore.brief().memories).toEqual([]);
+    expect(await instance.getRun(runId)).toMatchObject({ status: 'completed' });
+  });
+  const ledger = await memoryLedger(userId);
+  expect(ledger).toHaveLength(mode === 'backup_budget' ? 1 : mode === 'retry' ? 3 : 2);
+  expect(ledger.every(row => row.credits === 0)).toBe(true);
+  expect(ledger.reduce((total, row) => total + row.provider_cost_micros, 0)).toBe(providerCost);
+  expect(await creditBalance(env, userId)).toBe(creditsAfterAnswer);
 });

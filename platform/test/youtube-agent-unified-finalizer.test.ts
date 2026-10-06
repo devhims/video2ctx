@@ -1151,3 +1151,55 @@ describe('earlier-turn source content and history-only routes', () => {
     expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('The woman holds the microphone toward the man.');
   });
 });
+
+it('restarts a stalled GLM draft on DeepSeek without consuming a schema repair or mixing text', async () => {
+  vi.useFakeTimers();
+  try {
+    const { withModelFailover } = await import('../src/agents/runtime/model-failover');
+    const { options, classifier, output } = setup('context_answer');
+    const primary = new MockLanguageModelV4({ modelId: 'glm', doStream: async () => ({
+      stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'abandoned' });
+        controller.enqueue({ type: 'text-delta', id: 'abandoned', delta: '{"confidence":"medium","warnings":[],"blocks":[{"text":"Abandoned answer' });
+      } }),
+    }) });
+    const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doStream: async () => ({ stream: simulateReadableStream({
+      initialDelayInMs: 0, chunkDelayInMs: 0,
+      chunks: [{ type: 'text-start', id: 'backup' }, { type: 'text-delta', id: 'backup', delta: JSON.stringify(output) },
+        { type: 'text-end', id: 'backup' }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage }],
+    }) }) });
+    const state = { fallback: false };
+    const model = withModelFailover({ primary, fallback, state, role: 'finalizer' });
+    models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
+    const drafts: { answer: string; state: string }[] = [];
+    options.onDraft = draft => drafts.push(draft);
+    const task = executeResearchRun(options);
+    await vi.advanceTimersByTimeAsync(5_100);
+    await task;
+    expect(primary.doStreamCalls).toHaveLength(1);
+    expect(fallback.doStreamCalls).toHaveLength(1);
+    expect(options.finalize).toHaveBeenCalledOnce();
+    expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: output.blocks[0]!.text }));
+    const abandoned = drafts.findIndex(draft => draft.answer.includes('Abandoned'));
+    expect(abandoned).toBeGreaterThanOrEqual(0);
+    expect(drafts.slice(abandoned + 1)).toContainEqual({ answer: '', state: 'streaming' });
+    expect(drafts.at(-1)?.answer).toBe(output.blocks[0]!.text);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([false, true])('does not save an answer after both finalizer models fail, with context gathering %s', async gatherContext => {
+  const { withModelFailover } = await import('../src/agents/runtime/model-failover');
+  const { options, classifier } = setup('context_answer');
+  const fail = async () => { throw new Error('connection unavailable'); };
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: fail });
+  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: fail });
+  const model = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'finalizer' });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
+  if (gatherContext) options.session = { brief: () => ({ assets: [], memories: [] }), searchTools: async () => ({}) } as unknown as NonNullable<typeof options.session>;
+  const error = await executeResearchRun(options).catch(error => error);
+  expect(error).toMatchObject({ code: 'MODEL_FALLBACK_EXHAUSTED', status: 503 });
+  expect(primary.doGenerateCalls).toHaveLength(1);
+  expect(fallback.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).not.toHaveBeenCalled();
+});

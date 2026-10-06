@@ -76,7 +76,7 @@ describe('bounded projection authorizes proposals (reviewer round 1, finding 1)'
     const characters = system.length + prompt.length;
     expect(characters).toBeLessThan(46_000);
     // One token per character at GLM Priority input rates, plus the 800-token output limit.
-    expect(Math.ceil(characters * 0.1875 + 800 * 0.625)).toBeLessThan(MEMORY_UPDATE_COST_RESERVE_MICROS);
+    expect(Math.ceil(characters * 0.375 + 800 * 1.50)).toBeLessThan(MEMORY_UPDATE_COST_RESERVE_MICROS);
   });
 
   it('only accepts user context quoted from the bounded question', () => {
@@ -195,4 +195,36 @@ describe('generateMemoryDelta', () => {
     controller.abort(new Error('Account deleted.'));
     await expect(pending).rejects.toThrow('Account deleted.');
   });
+});
+
+it('reports late primary and accepted backup memory usage separately after the eight-second cutoff', async () => {
+  const { withModelFailover } = await import('../src/agents/runtime/model-failover');
+  vi.useFakeTimers();
+  try {
+    let respond!: () => void;
+    const late = new Promise<void>(resolve => { respond = resolve; });
+    const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => {
+      await late;
+      return { content: [{ type: 'text', text: JSON.stringify({ changes: [change({ topic: 'abandoned' })] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: async () => ({
+      content: [{ type: 'text', text: '{"changes":[]}' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    const model = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'memory_updater' });
+    const onUsage = vi.fn(); const onRequestStart = vi.fn();
+    const pending = generateMemoryDelta({ model, input: input(), signal: new AbortController().signal, onUsage, onRequestStart });
+    await vi.advanceTimersByTimeAsync(8_001);
+    const accepted = await pending;
+    expect(accepted).toEqual({ changes: [], rejected: 0 });
+    expect(onRequestStart).toHaveBeenCalledTimes(2);
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage.mock.calls[0]![0]).toMatchObject({ modelId: 'deepseek', usage: { inputTokens: 120, outputTokens: 30 } });
+    respond(); await vi.advanceTimersByTimeAsync(1);
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    expect(onUsage.mock.calls[1]![0]).toMatchObject({ modelId: 'glm', usage: { inputTokens: 120, outputTokens: 30 } });
+    expect(new Set(onUsage.mock.calls.map(([event]) => event.requestId)).size).toBe(2);
+    expect(onRequestStart.mock.calls.map(([id]) => id).sort()).toEqual(onUsage.mock.calls.map(([event]) => event.requestId).sort());
+    expect(await pending).toBe(accepted);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
 });

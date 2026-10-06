@@ -349,3 +349,27 @@ describe('YouTube agent model', () => {
       expect(JSON.stringify(records)).not.toContain('private');
     } finally { log.mockRestore(); }
  });
+
+it.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'memory_updater', 'finalizer'])('falls back %s to DeepSeek Priority with its own provider options and model identity', async role => {
+  const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: 'test-key',
+    AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'glm-5p3-flash', AGENT_FINALIZER_REASONING_EFFORT: 'medium' } as unknown as Env;
+  const requests: Record<string, any>[] = [];
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); requests.push(body);
+    if (body.model === FIREWORKS_GLM_MODEL_ID) return Response.json({ error: { message: 'temporarily unavailable' } }, { status: 503 });
+    return Response.json({ id: 'backup', created: 1, model: body.model,
+      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
+  });
+  try {
+    const model = createAgentModel(env, 'session', 'low', { model_role: role });
+    const result = await generateText({ model, prompt: 'test', maxOutputTokens: 100 });
+    expect(result.response.modelId).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({ model: 'accounts/fireworks/models/deepseek-v4p1-flash', service_tier: 'priority', prompt_cache_key: 'session' });
+    if (role === 'finalizer') {
+      expect(requests[1]).not.toHaveProperty('reasoning_effort');
+      expect(requests[1]?.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+    } else expect(requests[1]?.reasoning_effort).toBe('none');
+  } finally { fetchMock.mockRestore(); }
+});

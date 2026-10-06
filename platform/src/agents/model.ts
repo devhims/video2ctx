@@ -1,3 +1,5 @@
+import type { LanguageModelV4 } from '@ai-sdk/provider';
+import { withModelFailover, type ModelFailoverState } from './runtime/model-failover';
 import { createWorkersAI } from 'workers-ai-provider';
 import { createFireworks } from '@ai-sdk/fireworks';
 import { wrapLanguageModel, type LanguageModelUsage } from 'ai';
@@ -38,22 +40,34 @@ export function createAgentModel(
   sessionAffinity: string,
   reasoningEffort: 'low' | 'medium' = 'medium',
   metadata?: Record<string, string | number | boolean | null>,
-) {
+  failoverState?: ModelFailoverState,
+): LanguageModelV4 {
+  return configuredAgentModel(env, sessionAffinity, reasoningEffort, metadata, failoverState);
+}
+
+function configuredAgentModel(
+  env: Env,
+  sessionAffinity: string,
+  reasoningEffort: 'low' | 'medium',
+  metadata?: Record<string, string | number | boolean | null>,
+  failoverState?: ModelFailoverState,
+  backup = false,
+): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
   const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
-  const provider: string | undefined = isFinalizer ? env.AGENT_FINALIZER_PROVIDER
+  const provider: string | undefined = backup ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
   const useFireworks = provider === 'fireworks';
   if (provider && !['workers-ai', 'fireworks'].includes(provider)) {
     throw new Error(`Unsupported agent ${isFinalizer ? 'finalizer' : useTextProfile ? 'text' : 'GLM'} provider.`);
   }
   if (useFireworks && !env.FIREWORKS_API_KEY?.trim()) throw new Error('Fireworks secret is not configured.');
-  const profile = useFireworks && (isFinalizer || useTextProfile)
-    ? fireworksFinalizerProfile(isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
-  const finalizerEffort = isFinalizer ? env.AGENT_FINALIZER_REASONING_EFFORT?.trim() : undefined;
+  const profile = useFireworks && (backup || isFinalizer || useTextProfile)
+    ? fireworksFinalizerProfile(backup ? CLASSIFIER_FALLBACK_TEXT_MODEL : isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
+  const finalizerEffort = isFinalizer && !backup ? env.AGENT_FINALIZER_REASONING_EFFORT?.trim() : undefined;
   if (finalizerEffort && !['low', 'medium'].includes(finalizerEffort)) {
     throw new Error('Unsupported finalizer reasoning effort.');
   }
@@ -78,7 +92,7 @@ export function createAgentModel(
     sessionAffinity,
     reasoning_effort: reasoningEffort,
   });
-  return wrapLanguageModel({ model, middleware: {
+  const configured = wrapLanguageModel({ model, middleware: {
     specificationVersion: 'v4',
     transformParams: async ({ params }) => profile ? {
       ...params,
@@ -111,4 +125,10 @@ export function createAgentModel(
       serviceTier: useFireworks ? 'priority' : undefined,
     }, params.abortSignal, doGenerate),
   } });
+  if (useFireworks && model.modelId === FIREWORKS_GLM_MODEL_ID) {
+    const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
+    return withModelFailover({ primary: configured, fallback, state: failoverState ?? { fallback: false },
+      role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined });
+  }
+  return configured;
 }

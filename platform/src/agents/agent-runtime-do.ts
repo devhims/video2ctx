@@ -16,6 +16,7 @@ import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, recordAgentMemoryCost, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { RunEvidenceLedger, billingCharges, toolCreditHold, type EvidenceChargeSource, type EvidenceDelivery } from './runtime/evidence-billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
+import type { ModelFailoverState } from './runtime/model-failover';
 import {
   generateMemoryDelta,
   MEMORY_UPDATE_COST_RESERVE_MICROS,
@@ -638,6 +639,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.syncSessionHistory();
       this.sessionStore.beginRun(runId);
       await executeResearchRun({
+        modelFailover: this.modelFailoverState(runId),
         traceToolCall: call => this.traceToolCall(runId, call),
         session: this.sessionStore,
         classificationDeadlineAt: row.classification_deadline_at ?? undefined,
@@ -1089,7 +1091,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   /** Tests replace this model. It uses the same provider configuration as other GLM roles. */
   private memoryUpdaterModel(runId: string): LanguageModel {
-    return createAgentModel(this.env, this.sessionAffinity, 'low', { agent_run_id: runId, model_role: 'memory_updater' });
+    const state = this.modelFailoverState(runId);
+    state.deadlineAt = Date.now() + this.memoryUpdateTimeoutMs();
+    return createAgentModel(this.env, this.sessionAffinity, 'low', { agent_run_id: runId, model_role: 'memory_updater' }, state);
   }
 
   private async runMemoryJob(job: MemoryJobRow): Promise<void> {
@@ -1111,10 +1115,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // Admit a call only if the run's observed model cost plus one estimated allowance for
     // each started call that has not reported usage yet (for example, a timed-out call whose
     // provider ignored abort), plus one for this call, stays within the existing run limit.
-    const observedCalls = this.sql<{ count: number }>`
-      SELECT COUNT(*) AS count FROM agent_model_usage WHERE run_id = ${job.run_id} AND category = 'memory_update'
-    `[0]!.count;
-    const unobservedCalls = Math.max(0, job.attempts - observedCalls);
+    const unobservedCalls = this.unobservedMemoryRequests(job.run_id, job.attempts);
     if (this.modelCostMicros(job.run_id) + (unobservedCalls + 1) * MEMORY_UPDATE_COST_RESERVE_MICROS > AGENT_MODEL_COST_LIMIT_MICROS) {
       return this.finishMemoryJob(job.run_id, 'skipped', 'cost_limit');
     }
@@ -1136,6 +1137,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       // provider ignores abort, and a late result is never returned here or applied.
       const delta = await generateMemoryDelta({ model: this.memoryUpdaterModel(job.run_id), input, signal: controller.signal,
         timeoutMs: this.memoryUpdateTimeoutMs(),
+        onRequestStart: requestId => this.startMemoryRequest(job.run_id, attempt, requestId),
         onUsage: observation => this.recordMemoryUsage(job.run_id, attempt, observation) });
       if (this.#deleted) return;
       const status = this.ctx.storage.transactionSync(() => {
@@ -1174,6 +1176,32 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     return MEMORY_UPDATE_TIMEOUT_MS;
   }
 
+  private unobservedMemoryRequests(runId: string, priorAttempts: number): number {
+    const started = this.sql<{ attempt: number }>`SELECT json_extract(payload_json, '$.attempt') AS attempt
+      FROM agent_events WHERE run_id = ${runId} AND type = 'memory.request_started'`;
+    // Older jobs and crashes between claiming an attempt and recording its request
+    // retain one conservative reservation for each attempt without a start event.
+    const represented = new Set(started.filter(row => row.attempt <= priorAttempts).map(row => row.attempt)).size;
+    const requests = started.length + Math.max(0, priorAttempts - represented);
+    const observed = this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_model_usage
+      WHERE run_id = ${runId} AND category = 'memory_update'`[0]!.count;
+    return Math.max(0, requests - observed);
+  }
+
+  private startMemoryRequest(runId: string, attempt: number, requestId?: string): void {
+    if (this.#deleted || this.#memoryUsageClosed || !this.readRun(runId)) throw new Error('Memory recording is closed.');
+    // Check again before a backup request; abandoned primary requests still reserve cost.
+    const outstanding = this.unobservedMemoryRequests(runId, attempt - 1);
+    if (this.modelCostMicros(runId) + (outstanding + 1) * MEMORY_UPDATE_COST_RESERVE_MICROS > AGENT_MODEL_COST_LIMIT_MICROS)
+      throw new Error('The agent run has exhausted its estimated memory-cost budget.');
+    this.recordEvent(runId, 'memory.request_started', { attempt,
+      callId: this.memoryRequestId(attempt, requestId) });
+  }
+
+  private memoryRequestId(attempt: number, requestId?: string): string {
+    return `memory-update:${attempt}${requestId ? `:${requestId}` : ''}`;
+  }
+
   /**
    * Record usage once per observed provider call. A call that responds after its
    * deadline, after its job finished, or after the answer completed is still recorded
@@ -1187,7 +1215,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     const pricing = observation.modelId ? fireworksModelPricing(observation.modelId) : undefined;
     const estimatedCostMicros = pricing ? estimateModelCostMicros(observation.usage, pricing) : estimateAgentModelCostMicros(observation.usage);
-    const callId = `memory-update:${attempt}`;
+    const callId = this.memoryRequestId(attempt, observation.requestId);
     this.sql`
       INSERT INTO agent_model_usage (
         run_id, call_id, category, model_id, input_tokens, cached_input_tokens,
@@ -1608,6 +1636,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     console.log(JSON.stringify({ event: 'agent_transcript_diagnostic', runId, videoId, modelCallId,
       attemptId, attempt, outcome, elapsedMs, code, finishReason, modelId, inputTokens,
       outputTokens, cancellationReason, issueCount, issueCodes: diagnostic.issues?.map(issue => issue.code) }));
+  }
+
+  private modelFailoverState(runId: string): ModelFailoverState {
+    return {
+      fallback: this.sql`SELECT id FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback' LIMIT 1`.length > 0,
+      onDiagnostic: event => this.recordEvent(runId, event.event === 'fallback' ? 'model.fallback' : 'model.attempt', { ...event }),
+    };
   }
 
   private recordEvent(runId: string, type: string, payload: Record<string, unknown>): void {
