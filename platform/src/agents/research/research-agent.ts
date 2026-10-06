@@ -1,4 +1,4 @@
-import { hasModelFailover, ModelFallbackExhaustedError, setModelFailoverDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
+import { hasModelFailover, modelFallbackExhaustion, setModelFailoverDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
@@ -651,7 +651,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {
-    if (error instanceof ModelFallbackExhaustedError || errorMessage(error) === 'Persistence phase timeout.') throw error;
+    if (modelFallbackExhaustion(error) || errorMessage(error) === 'Persistence phase timeout.') throw error;
     // The phase deadline wins its race before an aborted provider necessarily
     // rejects. Snapshot interrupted tools now so the finalizer sees every gap.
     for (const pending of pendingTools.values()) {
@@ -707,7 +707,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             : isAgentCoreTimeout(finalizationError) ? 'FINALIZATION_TIMEOUT' : 'FINALIZATION_FAILED',
           remainingMs: Math.max(0, finalizationHardDeadline(finalizationDeadlineAt ?? Date.now()) - Date.now()) }),
       );
-      if (finalizationError instanceof ModelFallbackExhaustedError || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
+      if (modelFallbackExhaustion(finalizationError) || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
       const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
@@ -941,7 +941,7 @@ async function runUnifiedFinalizer(options: {
       contextMessages.push(...gathered.response.messages);
       if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
     } catch (error) {
-      if (error instanceof ModelFallbackExhaustedError) throw error;
+      if (modelFallbackExhaustion(error)) throw error;
       options.context.signal.throwIfAborted();
       contextIncomplete = true;
       console.warn(JSON.stringify({event:'agent_finalizer_context_incomplete',runId:options.context.runId,

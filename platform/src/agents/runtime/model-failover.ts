@@ -1,4 +1,5 @@
 import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import { RetryError } from 'ai';
 import { failureDetails } from './diagnostics';
 
 export interface ModelAttemptDiagnostic {
@@ -36,13 +37,23 @@ export class ModelFallbackExhaustedError extends Error {
   }
 }
 
+/** The SDK wraps a terminal non-retryable error if an earlier request was retried. */
+export function modelFallbackExhaustion(error: unknown): ModelFallbackExhaustedError | undefined {
+  const seen = new Set<unknown>();
+  while (RetryError.isInstance(error) && !seen.has(error)) {
+    seen.add(error);
+    error = error.lastError;
+  }
+  return error instanceof ModelFallbackExhaustedError ? error : undefined;
+}
+
 /** Only the owner of the displayed draft may restart a partially consumed stream. */
 export class ModelStreamRestartError extends Error {
   constructor(readonly failure: unknown) { super('Restart the model step with DeepSeek after discarding the interrupted draft.'); }
 }
 
 class ModelAttemptTimeout extends Error {
-  constructor(readonly reason: 'response_timeout' | 'first_content_timeout' | 'stream_stall' | 'attempt_timeout') {
+  constructor(readonly reason: 'response_timeout' | 'first_content_timeout' | 'stream_stall' | 'attempt_timeout' | 'phase_budget') {
     super(reason);
     this.name = 'TimeoutError';
   }
@@ -73,8 +84,8 @@ export async function withModelStreamFallback<T>(work: (callId: string) => Promi
     if (!(error instanceof ModelStreamRestartError)) throw error;
     try { return await work(callId); }
     catch (backupError) {
-      if (backupError instanceof ModelFallbackExhaustedError)
-        throw new ModelFallbackExhaustedError([error.failure, ...backupError.failures]);
+      const exhausted = modelFallbackExhaustion(backupError);
+      if (exhausted) throw new ModelFallbackExhaustedError([error.failure, ...exhausted.failures]);
       throw backupError;
     }
   }
@@ -135,8 +146,10 @@ export function withModelFailover(options: {
     const fail = (reason: ConstructorParameters<typeof ModelAttemptTimeout>[0]) => controller.abort(new ModelAttemptTimeout(reason));
     const remainingMs = Math.max(1, (state.deadlineAt ?? Infinity) - Date.now());
     const budgetMs = model === primary ? Math.max(1, remainingMs - fallbackReserveMs) : remainingMs;
-    const attemptLimitMs = Math.min(streaming ? totalTimeoutMs : responseTimeoutMs, budgetMs);
-    const total = setTimeout(() => fail(streaming ? 'attempt_timeout' : 'response_timeout'), attemptLimitMs);
+    const configuredLimitMs = streaming ? totalTimeoutMs : responseTimeoutMs;
+    const attemptLimitMs = Math.min(configuredLimitMs, budgetMs);
+    const total = setTimeout(() => fail(budgetMs < configuredLimitMs ? 'phase_budget'
+      : streaming ? 'attempt_timeout' : 'response_timeout'), attemptLimitMs);
     let idle = streaming ? setTimeout(() => fail('first_content_timeout'), Math.min(firstContentTimeoutMs, attemptLimitMs)) : undefined;
     emit({ event: 'attempt_started', ...fields, responseTimeoutMs: streaming ? undefined : attemptLimitMs,
       firstContentTimeoutMs: streaming ? firstContentTimeoutMs : undefined, idleTimeoutMs: streaming ? idleTimeoutMs : undefined,
@@ -148,7 +161,8 @@ export function withModelFailover(options: {
       clearTimeout(total); clearTimeout(idle);
       const details = failureDetails(error);
       emit({ event: 'attempt_finished', ...fields,
-        outcome: params.abortSignal?.aborted ? 'canceled' : error ? 'failed' : 'succeeded',
+        outcome: params.abortSignal?.aborted || (error instanceof ModelAttemptTimeout && error.reason === 'phase_budget')
+          ? 'canceled' : error ? 'failed' : 'succeeded',
         reason: error instanceof RunModelFallback ? 'run_fallback'
           : error instanceof ModelAttemptTimeout ? error.reason : error ? 'provider_error' : undefined,
         elapsedMs: Date.now() - startedAt,

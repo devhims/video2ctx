@@ -40,14 +40,14 @@ async function seed(name: string, status = 'failed') {
   return { runtime, userId, runId, conversationId };
 }
 
-test('restores model fallback for the same run without affecting a new run', async () => {
-  const { runtime, runId } = await seed('model-fallback-recovery');
+test.each(['response_timeout', 'phase_budget'])('restores %s fallback for the same run without affecting a new run', async reason => {
+  const { runtime, runId } = await seed(`model-fallback-recovery-${reason}`);
   await runInDurableObject(runtime, async instance => {
     const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
     const state = reader.modelFailoverState(runId);
     expect(state.fallback).toBe(false);
     state.onDiagnostic?.({ event: 'fallback', callId: 'call', attemptId: 'attempt', modelId: 'glm',
-      role: 'agent_core', serviceTier: 'priority', reason: 'response_timeout' });
+      role: 'agent_core', serviceTier: 'priority', reason });
   });
   await runInDurableObject(runtime, async instance => {
     const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };

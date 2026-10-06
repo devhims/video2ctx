@@ -1,4 +1,4 @@
-import { APICallError, generateText, streamText, tool, isStepCount } from 'ai';
+import { APICallError, RetryError, generateText, streamText, tool, isStepCount } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import type { LanguageModelV4GenerateResult, LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
@@ -204,4 +204,85 @@ it('moves concurrent visual and transcript calls to DeepSeek when any role detec
   await vi.advanceTimersByTimeAsync(5_001);
   expect((await other).text).toBe('ok');
   expect(vi.getTimerCount()).toBe(0);
+});
+
+const routingReply = (decision: Record<string, unknown>): LanguageModelV4GenerateResult => ({ ...reply(),
+  content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify(decision) }],
+  finishReason: { unified: 'tool-calls', raw: 'tool_calls' } });
+
+it('uses the routing backup after two successful but invalid GLM replies', async () => {
+  const { classifyCapabilityWithModel } = await import('../src/agents/research/capability-router');
+  const primary = new MockLanguageModelV4({ doGenerate: async () => reply('I will recall your message.') });
+  const fallback = new MockLanguageModelV4({ doGenerate: async () => routingReply({ route: 'finalize',
+    responseIntent: 'context_answer', contextScope: 'history', historySelection: 'first_user_message',
+    reason: 'Read saved messages.', answerDetail: 'standard' }) });
+  const { model } = build(primary, fallback, 'classifier');
+  const decision = await classifyCapabilityWithModel({ model, fallbackModel: fallback,
+    message: 'What was my first message?', signal: new AbortController().signal });
+  expect(decision).toMatchObject({ route: 'finalize', contextScope: 'history', historySelection: 'first_user_message' });
+  expect(primary.doGenerateCalls).toHaveLength(2);
+  expect(fallback.doGenerateCalls).toHaveLength(1);
+});
+
+it('keeps a valid advisory route when both models fail optional reconsideration', async () => {
+  const { classifyCapabilityWithModel } = await import('../src/agents/research/capability-router');
+  let calls = 0;
+  const primary = new MockLanguageModelV4({ doGenerate: async () => {
+    if (calls++) throw unavailable();
+    return routingReply({ route: 'topic_research', searchQuery: 'slide design tips', researchBreadth: 'focused',
+      visualEvidence: 'helpful', answerDetail: 'standard' });
+  } });
+  const fallback = new MockLanguageModelV4({ doGenerate: async () => { throw unavailable(); } });
+  const { model } = build(primary, fallback, 'classifier');
+  await expect(classifyCapabilityWithModel({ model, fallbackModel: fallback,
+    message: 'Summarize the slide design tips in popular talks', signal: new AbortController().signal }))
+    .resolves.toMatchObject({ route: 'topic_research', searchQuery: 'slide design tips', visualEvidence: 'helpful' });
+  expect(primary.doGenerateCalls).toHaveLength(2);
+  expect(fallback.doGenerateCalls).toHaveLength(1);
+});
+
+it('labels a budget-driven switch separately and preserves that selection in a fresh phase', async () => {
+  const { model, state, diagnostics, fallback } = build(new MockLanguageModelV4({ doGenerate: async () => {
+    await new Promise(resolve => setTimeout(resolve, 100)); return reply('healthy primary');
+  } }));
+  Object.assign(state, { deadlineAt: Date.now() + 9_000 });
+  const task = generateText({ model, prompt: 'near deadline' });
+  await vi.advanceTimersByTimeAsync(101);
+  expect((await task).text).toBe('ok');
+  expect(diagnostics.find(event => event.event === 'fallback')).toMatchObject({ reason: 'phase_budget' });
+  expect(diagnostics.find(event => event.event === 'attempt_finished' && event.reason === 'phase_budget'))
+    .toMatchObject({ outcome: 'canceled' });
+  Object.assign(state, { deadlineAt: Date.now() + 60_000 });
+  await generateText({ model, prompt: 'new phase' });
+  expect(fallback.doGenerateCalls).toHaveLength(2);
+});
+
+it('propagates exhausted models through SDK RetryError after a retryable 409', async () => {
+  const { classifyCapabilityWithModel } = await import('../src/agents/research/capability-router');
+  const { normalizeAgentExecutionError } = await import('../src/agents/runtime/agent-errors');
+  let calls = 0;
+  const primary = new MockLanguageModelV4({ doGenerate: async () => {
+    if (calls++ === 0) throw new APICallError({ message: 'conflict', url: 'https://example.test', requestBodyValues: {}, statusCode: 409, isRetryable: true });
+    throw unavailable();
+  } });
+  const fallback = new MockLanguageModelV4({ doGenerate: async () => { throw unavailable(); } });
+  const { model } = build(primary, fallback, 'classifier');
+  const task = classifyCapabilityWithModel({ model, message: 'Compare coding assistants', signal: new AbortController().signal })
+    .then(value => value, error => error);
+  await vi.advanceTimersByTimeAsync(2_001);
+  const error = await task;
+  expect(error).toBeInstanceOf(RetryError);
+  expect(normalizeAgentExecutionError(error)).toMatchObject({ status: 503, code: 'MODEL_FALLBACK_EXHAUSTED' });
+  expect(primary.doGenerateCalls).toHaveLength(2);
+  expect(fallback.doGenerateCalls).toHaveLength(1);
+});
+
+
+it('unwraps only the terminal retry failure, including nested retry wrappers', async () => {
+  const { normalizeAgentExecutionError } = await import('../src/agents/runtime/agent-errors');
+  const exhausted = new ModelFallbackExhaustedError([unavailable(), unavailable()]);
+  const wrap = (errors: unknown[]) => new RetryError({ message: 'retries ended', reason: 'errorNotRetryable', errors });
+  expect(normalizeAgentExecutionError(wrap([unavailable(), wrap([exhausted])]))).toMatchObject({ status: 503, code: 'MODEL_FALLBACK_EXHAUSTED' });
+  const unrelated = wrap([exhausted, new Error('different terminal failure')]);
+  expect(normalizeAgentExecutionError(unrelated)).toBe(unrelated);
 });
