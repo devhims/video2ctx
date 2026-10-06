@@ -6,12 +6,12 @@ import { memoryId, type MemoryChange, type SessionMemory } from './session-evide
 
 /** Jobs record this version. A job created by another updater version is skipped, not reinterpreted. */
 export const MEMORY_UPDATER_VERSION = 1;
-/** Each attempt is one provider call (SDK retries are disabled), counted durably before the call. */
+/** Each attempt is a bounded generation, including one model fallback. SDK retries are disabled. */
 export const MEMORY_UPDATE_MAX_ATTEMPTS = 2;
 export const MEMORY_UPDATE_TIMEOUT_MS = 20_000;
 export const MEMORY_UPDATE_MAX_OUTPUT_TOKENS = 800;
 /**
- * Estimated cost allowance per memory call, used for admission only. A call is admitted
+ * Estimated cost allowance per bounded memory generation, including fallback, used for admission only. A call is admitted
  * when observed run cost plus this allowance for every started-but-unobserved call and
  * for the new call fits the run limit. Prompt and output bounds keep a call well under
  * this at current pricing, but it is an estimate, not a provider-enforced ceiling.

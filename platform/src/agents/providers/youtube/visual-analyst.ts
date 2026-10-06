@@ -43,7 +43,10 @@ export function createVisualAnalyst(model: LanguageModel, modelBudget?: AgentMod
         { type: 'text', text: JSON.stringify({ conversationHistory: conversationHistoryForModel(input.conversationHistory), focus: input.focus, videoId: storyboard.videoId, selection: storyboard.selection,
           sheets: storyboard.sheets.map(({ imageBase64, ...mapping }) => ({
             sheetIndex: Math.floor(mapping.firstFrameIndex / (storyboard.manifest?.framesPerSheet ?? mapping.columns * mapping.rows)), ...mapping })) }) },
-        ...storyboard.sheets.map(sheet => ({ type: 'file' as const, data: sheet.imageBase64, mediaType: 'image/jpeg' })),
+        ...storyboard.sheets.flatMap((sheet, index) => [
+          { type: 'text' as const, text: `Contact sheet ${index + 1}: ${sheet.columns} columns by ${sheet.rows} rows, each tile ${sheet.tileWidth} by ${sheet.tileHeight} pixels. Each tile is a separate video frame, not one continuous scene. The top-left tile is frame ${sheet.firstFrameIndex}; tile at zero-based row r and column c is frame ${sheet.firstFrameIndex} + r * ${sheet.columns} + c. Only ${sheet.frameCount} tiles contain frames. Describe and cite individual tiles; never attribute the entire contact sheet to a single frame.` },
+          { type: 'file' as const, data: sheet.imageBase64, mediaType: 'image/jpeg' },
+        ]),
       ] }],
       output: Output.object({ schema }),
       maxOutputTokens: 1_600,

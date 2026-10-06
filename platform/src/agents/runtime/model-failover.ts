@@ -22,7 +22,7 @@ export interface ModelAttemptDiagnostic {
   totalTimeoutMs?: number;
 }
 
-/** Shared by all text roles in one run. Persist the fallback event before the next call. */
+/** Shared by all model roles in one run. Persist the fallback event before the next call. */
 export interface ModelFailoverState {
   fallback: boolean;
   deadlineAt?: number;
@@ -48,7 +48,12 @@ class ModelAttemptTimeout extends Error {
   }
 }
 
+class RunModelFallback extends Error {
+  constructor() { super('Another model call switched this run to DeepSeek.'); }
+}
+
 const managedModels = new WeakMap<object, ModelFailoverState>();
+const activePrimaryAttempts = new WeakMap<ModelFailoverState, Set<AbortController>>();
 export function hasModelFailover(model: unknown): boolean {
   return typeof model === 'object' && model !== null && managedModels.has(model);
 }
@@ -100,7 +105,9 @@ export function withModelFailover(options: {
 }): LanguageModelV4 {
   const { primary, fallback, state, role } = options;
   // Leave most of the 20-second classification phase for its backup and validation.
-  const responseTimeoutMs = role === 'classifier' ? 5_000 : role === 'transcript_analyst' ? 15_000 : 10_000;
+  // Visual analysis and memory have an outer 20-second deadline for both attempts.
+  const responseTimeoutMs = role === 'classifier' ? 5_000 : role === 'transcript_analyst' ? 15_000
+    : role === 'visual_analyst' || role === 'memory_updater' ? 8_000 : 10_000;
   const firstContentTimeoutMs = 10_000;
   const idleTimeoutMs = 5_000;
   const totalTimeoutMs = 30_000;
@@ -112,6 +119,11 @@ export function withModelFailover(options: {
   const attempt = (model: LanguageModelV4, params: LanguageModelV4CallOptions, callId: string, streaming: boolean) => {
     params.abortSignal?.throwIfAborted();
     const controller = new AbortController();
+    if (model === primary) {
+      let active = activePrimaryAttempts.get(state);
+      if (!active) activePrimaryAttempts.set(state, active = new Set());
+      active.add(controller);
+    }
     const signal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
     const startedAt = Date.now();
     const fields = { callId, attemptId: crypto.randomUUID(), modelId: model.modelId, role, serviceTier: 'priority' as const };
@@ -132,11 +144,13 @@ export function withModelFailover(options: {
     const finish = (error?: unknown) => {
       if (ended) return;
       ended = true;
+      activePrimaryAttempts.get(state)?.delete(controller);
       clearTimeout(total); clearTimeout(idle);
       const details = failureDetails(error);
       emit({ event: 'attempt_finished', ...fields,
         outcome: params.abortSignal?.aborted ? 'canceled' : error ? 'failed' : 'succeeded',
-        reason: error instanceof ModelAttemptTimeout ? error.reason : error ? 'provider_error' : undefined,
+        reason: error instanceof RunModelFallback ? 'run_fallback'
+          : error instanceof ModelAttemptTimeout ? error.reason : error ? 'provider_error' : undefined,
         elapsedMs: Date.now() - startedAt,
         firstContentMs: firstContentAt === undefined ? undefined : firstContentAt - startedAt,
         idleMs: lastContentAt === undefined ? Date.now() - startedAt : Date.now() - lastContentAt,
@@ -150,6 +164,8 @@ export function withModelFailover(options: {
       if (!state.fallback) {
         state.fallback = true;
         emit({ event: 'fallback', ...fields, reason: error instanceof ModelAttemptTimeout ? error.reason : 'provider_error' });
+        // Wake concurrent transcript/image calls immediately, without waiting for their own timers.
+        for (const pending of activePrimaryAttempts.get(state) ?? []) pending.abort(new RunModelFallback());
       }
     };
     const progress = (part: LanguageModelV4StreamPart) => {
@@ -162,7 +178,8 @@ export function withModelFailover(options: {
       idle = setTimeout(() => fail('stream_stall'), idleTimeoutMs);
     };
     return { signal, finish, switchModel, progress, markUsage: () => { usageAvailable = true; },
-      cancel: () => { controller.abort(new Error('Model attempt finished.')); clearTimeout(total); clearTimeout(idle); } };
+      cancel: () => { activePrimaryAttempts.get(state)?.delete(controller);
+        controller.abort(new Error('Model attempt finished.')); clearTimeout(total); clearTimeout(idle); } };
   };
   const model: LanguageModelV4 = {
     specificationVersion: 'v4', provider: primary.provider,

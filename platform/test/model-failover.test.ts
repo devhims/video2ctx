@@ -186,3 +186,22 @@ it('reserves fallback time when tools have consumed most of the research phase',
   expect(fallback.doGenerateCalls).toHaveLength(1);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('moves concurrent visual and transcript calls to DeepSeek when any role detects failure, isolating other runs', async () => {
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: hanging });
+  const { model: classifier, fallback, state, diagnostics } = build(primary, undefined, 'classifier');
+  const visual = withModelFailover({ primary, fallback, state, role: 'visual_analyst' });
+  const transcript = withModelFailover({ primary, fallback, state, role: 'transcript_analyst' });
+  const separate = build(primary);
+  const other = generateText({ model: separate.model, prompt: 'other run' });
+  const task = Promise.all([classifier, visual, transcript].map(model => generateText({ model, prompt: 'same run' })));
+  await vi.advanceTimersByTimeAsync(5_001);
+  expect((await task).map(result => result.text)).toEqual(['ok', 'ok', 'ok']);
+  expect(fallback.doGenerateCalls).toHaveLength(3);
+  expect(diagnostics.filter(event => event.reason === 'run_fallback')).toHaveLength(2);
+  expect(primary.doGenerateCalls[0]!.abortSignal!.aborted).toBe(false);
+  expect(separate.state.fallback).toBe(false);
+  await vi.advanceTimersByTimeAsync(5_001);
+  expect((await other).text).toBe('ok');
+  expect(vi.getTimerCount()).toBe(0);
+});

@@ -54,6 +54,14 @@ test('restores model fallback for the same run without affecting a new run', asy
     expect(reader.modelFailoverState(runId).fallback).toBe(true);
     expect(reader.modelFailoverState('new-run').fallback).toBe(false);
     expect(instance.sql`SELECT * FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback'`).toHaveLength(1);
+    const internal = instance as unknown as { env: Env; memoryUpdaterModel(runId: string): import('@ai-sdk/provider').LanguageModelV4 };
+    const saved = { FIREWORKS_API_KEY: internal.env.FIREWORKS_API_KEY, AI_GATEWAY_ID: internal.env.AI_GATEWAY_ID,
+      AGENT_GLM_PROVIDER: internal.env.AGENT_GLM_PROVIDER };
+    Object.assign(internal.env, { FIREWORKS_API_KEY: 'test-key', AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks' });
+    try {
+      expect(internal.memoryUpdaterModel(runId).modelId).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
+      expect(internal.memoryUpdaterModel('new-run').modelId).toBe('accounts/fireworks/models/glm-5p3-flash');
+    } finally { Object.assign(internal.env, saved); }
   });
 });
 

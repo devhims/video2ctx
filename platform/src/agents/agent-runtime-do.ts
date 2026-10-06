@@ -1091,7 +1091,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   /** Tests replace this model. It uses the same provider configuration as other GLM roles. */
   private memoryUpdaterModel(runId: string): LanguageModel {
-    return createAgentModel(this.env, this.sessionAffinity, 'low', { agent_run_id: runId, model_role: 'memory_updater' });
+    const state = this.modelFailoverState(runId);
+    state.deadlineAt = Date.now() + this.memoryUpdateTimeoutMs();
+    return createAgentModel(this.env, this.sessionAffinity, 'low', { agent_run_id: runId, model_role: 'memory_updater' }, state);
   }
 
   private async runMemoryJob(job: MemoryJobRow): Promise<void> {

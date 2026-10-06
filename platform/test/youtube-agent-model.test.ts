@@ -350,7 +350,7 @@ describe('YouTube agent model', () => {
     } finally { log.mockRestore(); }
  });
 
-it.each(['classifier', 'agent_core', 'transcript_analyst', 'finalizer'])('falls back %s to DeepSeek Priority with its own provider options and model identity', async role => {
+it.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'memory_updater', 'finalizer'])('falls back %s to DeepSeek Priority with its own provider options and model identity', async role => {
   const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', FIREWORKS_API_KEY: 'test-key',
     AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'glm-5p3-flash', AGENT_FINALIZER_REASONING_EFFORT: 'medium' } as unknown as Env;
   const requests: Record<string, any>[] = [];
