@@ -95,6 +95,13 @@ export const canonicalUsageSchema = z.object({
   operation: evidenceOperationSchema,
   credits: z.number().int().nonnegative(),
   cacheStatus: z.enum(['hit', 'miss', 'coalesced', 'stale']),
+  /**
+   * Set when no provider call was made. `session` reuses saved evidence and is priced by
+   * per-run deduplication; `run` is served entirely by retrievals this run made.
+   */
+  reuse: z.enum(['session', 'run']).optional(),
+  /** Same-run provider retrievals: created by provider work, or joined by a `run` reuse. */
+  claims: z.array(z.string().min(1).max(100)).max(30).optional(),
 });
 
 export const evidenceSourceSchema = z.object({
@@ -216,6 +223,14 @@ export const agentTurnResultSchema = z.object({
   billing: z.object({
     creditsCharged: z.number().int().nonnegative(),
     creditsRemaining: z.number().int().nonnegative(),
+    /** Settled operations behind creditsCharged. Absent for runs settled before receipts existed. */
+    charges: z.array(z.object({
+      source: z.string().min(1).max(100),
+      operation: evidenceOperationSchema,
+      price: z.enum(['cached', 'fresh']),
+      credits: z.number().int().positive(),
+      videoId: z.string().max(100).optional(),
+    })).max(64).optional(),
   }),
 });
 

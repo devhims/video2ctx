@@ -71,7 +71,8 @@ export interface SessionAccess {
   ): Promise<{ packets: EvidencePacket[]; nextOffset?: number; needsInspection?: boolean }>;
   readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
   searchHistory?(query: string): Promise<{ content: string }[]>;
-  searchTools?(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal): Promise<ToolSet>;
+  /** onEvidence admits found packets and returns those the model may receive. */
+  searchTools?(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }): Promise<ToolSet>;
 }
 
 /** Keep model routing context bounded without truncating stored evidence or history. */
@@ -154,8 +155,8 @@ export class SessionEvidenceStore implements SessionAccess {
   searchHistory(query: string) {
     return this.search.searchHistory(query);
   }
-  searchTools(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal) {
-    return this.search.tools(this, onEvidence, signal);
+  searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
+    return this.search.tools(this, onEvidence, signal, options);
   }
   async ensureSearchIndexed() {
     const generation = this.generation();
@@ -288,6 +289,12 @@ export class SessionEvidenceStore implements SessionAccess {
       JSON.stringify(versions),
     );
     this.search.indexPacket(id, packet);
+  }
+  /** Kind, video and stored details of a saved asset, for per-run billing. */
+  assetInfo(version: string): { kind: SessionAssetKind; videoId: string; details: Record<string, unknown> } | undefined {
+    const row = this.sql.exec<{ kind: SessionAssetKind; video_id: string; details_json: string }>(
+      'SELECT kind, video_id, details_json FROM session_assets WHERE version=?', version).toArray()[0];
+    return row ? { kind: row.kind, videoId: row.video_id, details: JSON.parse(row.details_json) } : undefined;
   }
   has(version: string) {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
@@ -555,14 +562,16 @@ export class SessionEvidenceStore implements SessionAccess {
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean = () => true,
     signal?: AbortSignal,
+    /** Synchronous billing provenance, published with provider-loaded assets only. */
+    onRetained?: (version: string) => void,
   ): Promise<CachedResult<T>> {
     // Cancellation belongs to this waiter. The shared provider still coalesces
     // extraction; a canceled waiter must never publish session references.
-    if (signal) return this.resolve(key, kind, videoId, fresh, load, describe, accept, signal);
+    if (signal) return this.resolve(key, kind, videoId, fresh, load, describe, accept, signal, onRetained);
     const pendingKey = `${this.generation()}:${key}:${fresh}`;
     const existing = this.pending.get(pendingKey);
     if (existing) return existing.then((result) => ({ ...result, sessionReused: true })) as Promise<CachedResult<T>>;
-    const promise = this.resolve(key, kind, videoId, fresh, load, describe, accept);
+    const promise = this.resolve(key, kind, videoId, fresh, load, describe, accept, undefined, onRetained);
     this.pending.set(pendingKey, promise);
     try {
       return await promise;
@@ -579,6 +588,8 @@ export class SessionEvidenceStore implements SessionAccess {
     describe: (value: T) => Record<string, unknown>,
     accept: (value: T) => boolean,
     signal?: AbortSignal,
+    /** Synchronous billing provenance, published with provider-loaded assets only. */
+    onRetained?: (version: string) => void,
   ): Promise<CachedResult<T>> {
     signal?.throwIfAborted();
     const generation = this.generation();
@@ -603,6 +614,7 @@ export class SessionEvidenceStore implements SessionAccess {
         signal?.throwIfAborted();
         if (stored === null || generation !== this.generation() || !this.has(version))
           throw new Error('Session assets changed during retrieval. Retry the request.');
+        onRetained?.(version);
         this.alias(key, version);
         return { ...result, ...(stored ? { verifiedImages: this.catalog?.verifiedImages(stored) } : {}), assetVersions: [version] };
       }
@@ -626,6 +638,7 @@ export class SessionEvidenceStore implements SessionAccess {
         if (generation !== this.generation())
           throw new Error('Session assets changed during retrieval. Retry the request.');
         this.atomic!(() => {
+          onRetained?.(version);
           this.sql.exec(
             'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
             version,
@@ -651,6 +664,7 @@ export class SessionEvidenceStore implements SessionAccess {
         signal?.throwIfAborted();
         throw new Error('Session assets changed during retrieval. Retry the request.');
       }
+      onRetained?.(version);
       this.sql.exec(
         'INSERT OR IGNORE INTO session_assets VALUES (?, ?, ?, ?, ?, ?, ?)',
         version,

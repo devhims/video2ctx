@@ -1,3 +1,4 @@
+import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { withRunDeadline } from '../../../runtime/deadline';
 import { storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../../../runtime/storyboard-budget';
@@ -98,7 +99,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
       ...storyboard.meta.warnings.map(message => ({ code: 'PARTIAL_STORYBOARD', message })),
     ],
     assetVersions: [...new Set(response.assetVersions ?? [])],
-    usage: [{ operation: 'storyboard', credits: response.sessionReused ? 0 : meteredCredits('storyboard')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+    usage: [retrievalUsage('storyboard', response, meteredCredits('storyboard'))],
   });
   if (context.saveStoryboardPreviews) {
     const previewStartedAt = Date.now();

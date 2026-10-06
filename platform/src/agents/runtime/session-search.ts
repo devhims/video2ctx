@@ -206,11 +206,13 @@ export class SessionSearch {
   }
   async tools(
     store: SessionEvidenceStore,
-    onEvidence: (packets: EvidencePacket[]) => void,
+    onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void,
     signal: AbortSignal,
+    /** History-only routes search messages and memory, never saved source evidence. */
+    options: { evidence?: boolean } = {},
   ): Promise<ToolSet> {
     const check = () => signal.throwIfAborted();
-    const session = Session.create(this.history)
+    const base = Session.create(this.history)
       .withContext('history', {
         provider: {
           get: async () =>
@@ -232,17 +234,20 @@ export class SessionSearch {
             return JSON.stringify(this.searchMemory(query));
           },
         },
-      })
+      });
+    const session = options.evidence === false ? base : base
       .withContext('evidence', {
         provider: {
           get: async () =>
             'Search transcript passages and saved visual/comment analysis across session assets. Queries match all words. Results contain version-specific citation IDs; older versions are labelled.',
           search: async (query) => {
             check();
-            const result = await this.searchEvidence(store, query);
+            const found = await this.searchEvidence(store, query);
             check();
-            onEvidence(result.packets);
-            return JSON.stringify(result);
+            // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
+            const packets = onEvidence(found.packets) ?? found.packets;
+            const withheld = found.packets.length - packets.length;
+            return JSON.stringify({ packets, ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
         },
       });

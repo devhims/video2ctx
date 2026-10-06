@@ -563,7 +563,8 @@ it('resumes direct finalization without reclassification or a new deadline', asy
 });
 
 it.each(['video', 'history', 'mixed'] as const)('omits inspection requests from the transmitted schema for %s context', async contextScope => {
-  const { options, finalizer, decision } = setup('context_answer', true);
+  // History-only answers receive no source content, so only source scopes cite it.
+  const { options, finalizer, decision } = setup('context_answer', contextScope !== 'history');
   await executeResearchRun({ ...options, persistedRoute: { ...decision, contextScope } });
   const format = finalizer.doGenerateCalls[0]!.responseFormat;
   if (format?.type !== 'json') throw new Error('Expected structured output.');
@@ -574,6 +575,8 @@ it.each(['video', 'history', 'mixed'] as const)('omits inspection requests from 
 
 it('allows stored-context search during gathering and exposes no retrieval or inspection tools', async () => {
   const {options,classifier,output}=setup('context_answer',true);
+  const deliverEvidence=vi.fn((packets:EvidencePacket[],_source:string)=>({admitted:packets,withheld:[],unavailable:[],receipts:[]}));
+  options.deliverEvidence=deliverEvidence;
   const search=vi.fn(async()=>({matches:[{text:'The woman holds the microphone.'}]}));
   const inspect=vi.fn();
   options.session={brief:()=>({assets:[],memories:[]}),searchTools:async()=>({
@@ -587,9 +590,17 @@ it('allows stored-context search during gathering and exposes no retrieval or in
       expect(call.toolChoice).toEqual({type:'none'});
       return {content:[{type:'text',text:JSON.stringify(output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
     }
-    expect(call.tools?.map(value=>value.name).sort()).toEqual(['list_session_assets','read_session_evidence','search_context']);
+    expect(call.tools?.map(value=>value.name).sort()).toEqual(['list_session_assets','read_prior_evidence','read_session_evidence','search_context']);
+    if (steps===0) {
+      // The earlier answer's source is referenced, not loaded, until the model asks for it.
+      const prompt=JSON.stringify(call.prompt);
+      expect(prompt).toContain('priorEvidence');
+      expect(prompt).toContain('prior-frames');
+      expect(prompt).not.toContain('The woman holds the microphone toward the man.');
+    }
     return steps++===0
-      ? {content:[{type:'tool-call',toolCallId:'saved-search',toolName:'search_context',input:JSON.stringify({query:'interviewer'})}],finishReason:{unified:'tool-calls',raw:'tool_calls'},usage,warnings:[]}
+      ? {content:[{type:'tool-call',toolCallId:'saved-search',toolName:'search_context',input:JSON.stringify({query:'interviewer'})},
+        {type:'tool-call',toolCallId:'prior-read',toolName:'read_prior_evidence',input:JSON.stringify({ids:['prior-frames']})}],finishReason:{unified:'tool-calls',raw:'tool_calls'},usage,warnings:[]}
       : {content:[{type:'text',text:'Stored context is sufficient.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
   }});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
@@ -598,6 +609,9 @@ it('allows stored-context search during gathering and exposes no retrieval or in
   expect(inspect).not.toHaveBeenCalled();
   expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
   expect(options.finalize).toHaveBeenCalledOnce();
+  // The vague follow-up loaded and paid for the cited source within one context step.
+  expect(deliverEvidence.mock.calls.map(([packets,source])=>[source,packets.map(packet=>packet.packetId)])).toEqual([['read_prior_evidence',['prior-frames']]]);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('[cite:frame-observation]')}));
 });
 
 it('rejects invented citations, repairs once, and keeps the system prompt stable', async () => {
@@ -1041,4 +1055,99 @@ it.each(['length', 'timeout', 'length_then_timeout'] as const)('explains direct 
     expect(options.finalize).not.toHaveBeenCalled();
     expect(attempts).toBe(2);
   } finally { vi.useRealTimers(); }
+});
+
+describe('earlier-turn source content and history-only routes', () => {
+  const SECOND = 'bcdefghijkl';
+  function historySetup(contextScope: 'history' | 'mixed', comparisonVideoIds?: string[]) {
+    const base = setup('context_answer', false);
+    base.options.conversationHistory[0]!.evidence = [evidence];
+    const decision = { ...base.decision, contextScope, ...(comparisonVideoIds ? { comparisonVideoIds } : {}) } as CapabilityRouteDecision;
+    const deliverEvidence = vi.fn((packets: EvidencePacket[], _source: string) => ({ admitted: packets, withheld: [], unavailable: [], receipts: [] }));
+    const readEvidence = vi.fn(async () => ({ packets: [] }));
+    const readTranscriptEvidence = vi.fn(async () => ({ packets: [] }));
+    const searchOptions: unknown[] = [];
+    const search = vi.fn(async () => JSON.stringify({ packets: [] }));
+    const assets = ['abcdefghijk', SECOND].map((videoId, index) => ({ version: String(index + 1).padStart(64, '0'),
+      kind: 'transcript', videoId, collectedAt: 1, current: true, details: {} }));
+    base.options.session = { brief: () => ({ assets, memories: [] }), evidence: () => [], readEvidence, readTranscriptEvidence,
+      searchTools: async (_onEvidence: unknown, _signal: unknown, options: unknown) => {
+        searchOptions.push(options);
+        return { search_context: tool({ inputSchema: z.object({ query: z.string() }), execute: search }) };
+      } } as unknown as NonNullable<typeof base.options.session>;
+    base.options.deliverEvidence = deliverEvidence;
+    const identity = base.options as unknown as Parameters<typeof buildAgentTurnResult>[0];
+    base.options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, [evidence], 0));
+    return { ...base, decision, deliverEvidence, readEvidence, readTranscriptEvidence, searchOptions, search };
+  }
+
+  it('keeps a history-only rephrase free of source content even with comparison subjects and a model read attempt', async () => {
+    const { options, decision, output, deliverEvidence, readEvidence, readTranscriptEvidence, searchOptions } =
+      historySetup('history', ['abcdefghijk', SECOND]);
+    options.message = 'Rephrase that.';
+    let gathering = 0;
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      if (call.responseFormat?.type === 'json') {
+        const prompt = JSON.stringify(call.prompt);
+        expect(prompt).toContain('The man is the interviewer.');
+        expect(prompt).not.toContain('The woman holds the microphone toward the man.');
+        return { content: [{ type: 'text', text: JSON.stringify(output) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      }
+      expect(call.tools?.map(value => value.name).sort()).toEqual(['list_session_assets', 'search_context']);
+      const prompt = JSON.stringify(call.prompt);
+      expect(prompt).toContain('The man is the interviewer.');
+      expect(prompt).not.toContain('priorEvidence');
+      expect(prompt).not.toContain('The woman holds the microphone toward the man.');
+      // The model tries to read saved sources anyway; no such tool exists on this route.
+      return gathering++ === 0
+        ? { content: [{ type: 'tool-call', toolCallId: 'attempt', toolName: 'read_session_evidence',
+          input: JSON.stringify({ version: '1'.padStart(64, '0') }) }, { type: 'tool-call', toolCallId: 'prior', toolName: 'read_prior_evidence',
+          input: JSON.stringify({ ids: ['prior-frames'] }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }
+        : { content: [{ type: 'text', text: 'Done.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    models.select.mockImplementation(() => finalizer);
+    await executeResearchRun({ ...options, persistedRoute: decision });
+    expect(searchOptions).toEqual([{ evidence: false }]);
+    expect(readEvidence).not.toHaveBeenCalled();
+    expect(readTranscriptEvidence).not.toHaveBeenCalled();
+    expect(deliverEvidence).not.toHaveBeenCalled();
+    expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ citations: [] }));
+  });
+
+  it('lets a mixed follow-up load and pay for the same earlier source by reference', async () => {
+    const { options, decision, deliverEvidence, searchOptions } = historySetup('mixed');
+    const cited = { confidence: 'medium', warnings: [], blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['frame-observation'] }] };
+    let gathering = 0;
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      if (call.responseFormat?.type === 'json') {
+        return { content: [{ type: 'text', text: JSON.stringify(cited) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      }
+      expect(call.tools?.map(value => value.name)).toContain('read_prior_evidence');
+      return gathering++ === 0
+        ? { content: [{ type: 'tool-call', toolCallId: 'prior', toolName: 'read_prior_evidence', input: JSON.stringify({ ids: ['prior-frames'] }) }],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }
+        : { content: [{ type: 'text', text: 'Loaded.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    models.select.mockImplementation(() => finalizer);
+    await executeResearchRun({ ...options, persistedRoute: decision });
+    expect(searchOptions).toEqual([{ evidence: true }]);
+    expect(deliverEvidence.mock.calls.map(([packets, source]) => [source, packets.map(packet => packet.packetId)]))
+      .toEqual([['read_prior_evidence', ['prior-frames']]]);
+    expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      answer: expect.stringContaining('[cite:frame-observation]') }));
+  });
+
+  it('loads and bills earlier evidence for named comparison subjects without a model read', async () => {
+    const { options, decision, deliverEvidence } = historySetup('mixed', ['abcdefghijk', SECOND]);
+    const output = { confidence: 'medium', blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['ref_1'] }],
+      warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'No saved evidence covers the second video.' }] };
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => call.responseFormat?.type === 'json'
+      ? { content: [{ type: 'text', text: JSON.stringify(output) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }
+      : { content: [{ type: 'text', text: 'Enough.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] } });
+    models.select.mockImplementation(() => finalizer);
+    await executeResearchRun({ ...options, persistedRoute: decision });
+    expect(deliverEvidence.mock.calls[0]?.[1]).toBe('inherited_subject');
+    expect(deliverEvidence.mock.calls[0]?.[0].map(packet => packet.packetId)).toEqual(['prior-frames']);
+    expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('The woman holds the microphone toward the man.');
+  });
 });

@@ -1,3 +1,4 @@
+import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, visualSpan, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -69,7 +70,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
           ...frames.failures.map(failure => ({ code: 'FRAME_UNAVAILABLE', message: `Frame at ${failure.timestampMs}ms is unavailable (${failure.code}).` })),
         ],
         assetVersions: response.assetVersions,
-        usage: [{ operation: 'frames', credits: response.sessionReused ? 0 : meteredCredits('frames')(response.cacheStatus), cacheStatus: response.cacheStatus }],
+        usage: [retrievalUsage('frames', response, meteredCredits('frames'))],
       });
       const previewStarted = Date.now();
       if (context.saveFramePreviews) {

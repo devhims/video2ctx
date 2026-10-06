@@ -48,6 +48,10 @@ export interface CachedResult<T> {
   frameTimingsMs?: { sessionLookup: number; retrieval: number; sessionPin: number };
   catalogVersions?: VideoAssetReference[];
   sessionReused?: boolean;
+  /** The same-run claim created by this result's provider retrieval. */
+  providerClaim?: string;
+  /** For a session reuse: this run's own retrievals that supplied every reused asset. */
+  joinedClaims?: string[];
   assetVersions?: string[];
   value: T;
   cacheStatus: CacheStatus;
