@@ -231,7 +231,7 @@ function CraftResult({ result }: { result: DemoResponse }) {
           <h2>{result.video.title}</h2>
           {result.samplePreview ? (
             <span className='craft-sample-badge' title='Saved example. Counts and comments may not be current.'>
-              Sample preview
+              Sample Preview
             </span>
           ) : null}
         </div>

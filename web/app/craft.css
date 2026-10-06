@@ -941,7 +941,7 @@ html:has(.craft) body {
 
 .craft-result-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   flex-wrap: wrap;
   gap: var(--space-sm) var(--space-md);
 }
