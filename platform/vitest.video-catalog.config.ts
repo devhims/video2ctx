@@ -15,5 +15,5 @@ export default defineConfig({
       },
     })),
   ],
-  test: { include: ['test/video-catalog.integration.test.ts'] },
+  test: { include: ['test/video-catalog.integration.test.ts', 'test/landing-samples.integration.test.ts'] },
 });

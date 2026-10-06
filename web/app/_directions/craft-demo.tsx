@@ -1,8 +1,9 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ChecksIcon, CopyIcon, PlayIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 import { ClipTabs } from './clip-tabs';
+import { videoIdFromInput } from '../../lib/source-data';
 import {
   type DemoResponse,
   type TranscriptSegment,
@@ -52,6 +53,7 @@ export function CraftDemo() {
   const [error, setError] = useState('');
   const [limitReached, setLimitReached] = useState(false);
   const [inspectionStep, setInspectionStep] = useState(0);
+  const sampleResults = useRef(new Map<string, DemoResponse>());
 
   useEffect(() => {
     if (state !== 'loading') {
@@ -74,7 +76,10 @@ export function CraftDemo() {
     setLimitReached(false);
 
     try {
-      const payload = await inspect(target);
+      const videoId = videoIdFromInput(target);
+      const saved = videoId ? sampleResults.current.get(videoId) : undefined;
+      const payload = saved ?? await inspect(target);
+      if (payload.samplePreview) sampleResults.current.set(payload.video.id, payload);
       setResult(payload);
       setState('done');
     } catch (cause) {
@@ -222,7 +227,14 @@ function CraftResult({ result }: { result: DemoResponse }) {
   return (
     <section className='craft-result' aria-label='Inspection result'>
       <header className='craft-result-head' style={cascade(0)}>
-        <h2>{result.video.title}</h2>
+        <div className='craft-result-title'>
+          <h2>{result.video.title}</h2>
+          {result.samplePreview ? (
+            <span className='craft-sample-badge' title='Saved example. Counts and comments may not be current.'>
+              Sample Preview
+            </span>
+          ) : null}
+        </div>
         <p>
           {result.video.viewCountText ? (
             <span>{result.video.viewCountText}</span>
