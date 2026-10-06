@@ -124,10 +124,10 @@ Research has ten evidence tool types plus finalization. Inspection has five evid
 
 | Limit | Current behavior |
 |---|---|
-| Total run deadline | Up to 120 seconds across classification (20), research (40), and finalization (60), excluding queueing and persistence |
+| Total run deadline | Up to 140 seconds for ordinary runs or 220 for visual runs: classification (20), research (40 or 120), finalization (60), and one retry (20), excluding queueing and persistence |
 | Research phase | Up to 40 seconds after classification; includes planning, tools, and analyses |
 | Forced early finalization | At a model-step boundary, when <=12 seconds remain in the main phase, nominal step 8 is reached, transcript/tool budget is exhausted, or estimated model cost reaches the reserve threshold |
-| Finalization phase | Up to 60 seconds from handoff, including synthesis and any citation repair; early research completion starts it sooner |
+| Finalization phase | Up to 60 seconds from handoff for context and first synthesis, plus one separately bounded 20-second retry; early research completion starts it sooner |
 | Persistence | Separate 30-second timeout outside model-processing windows; billing settlement retries durably |
 | Agent Core steps | Eight nominal; finalization is forced by the eighth. Stop ceiling is ten including two retry allowances. Time can stop execution much earlier |
 | Durable tool calls | Twelve total: at most eleven evidence calls, reserving one successful finalization slot |
@@ -193,7 +193,7 @@ Both answer paths share qualitative writing guidance about relevance, concise re
 
 For an explicitly requested numbered list, classification may preserve `numberedItemCount`. Reserved synthesis must return labels 1 through that count, or explicitly disclose `ANSWER_SCOPE_SHORTFALL`. Other formats are not inferred from arbitrary numbers in the request. These checks detect missing numbered items, not whether each item is useful or fully supported. A token ceiling is a truncation boundary, not a guarantee of a complete answer or a wall-clock latency bound.
 
-A failed structured response gets at most one repair within the same 60-second finalization deadline. Context gathering is bounded to 10 seconds. The first synthesis attempt reserves up to 20 seconds for repair, or half the remaining phase time on a short resumed deadline. A stalled first attempt can use this reserved retry. Repair receives the failed candidate and specific validation errors, with instructions to preserve valid content. Diagnostics record the schema version, validation stage, finish reason, candidate length and bounded issue paths/codes, without logging the candidate text. Test captures must preserve these structured issue arrays.
+A failed structured response gets at most one repair with its own 20-second budget. The first answer keeps the remaining 60-second main phase; context gathering uses at most 10 seconds of that phase. Total finalization is bounded by the persisted main deadline plus 20 seconds, including after recovery. Streaming attempts retry after 15 seconds without text or reasoning content, even before the main deadline; a progressing answer is not interrupted to reserve repair time. Repair receives bounded partial JSON and instructions to shorten a timed-out answer, or the specific validation errors. Diagnostics record the schema version, validation stage, finish reason, candidate length, first-content latency, idle duration, text/reasoning character counts and bounded issue paths/codes, without logging model content. Test captures must preserve these structured issue arrays.
 
 Partial results contain deduplicated analyst findings or visual observations. Raw transcript pages and comments do not become arbitrary excerpt summaries. Partial findings use status completed, confidence low, and warning code PARTIAL_EVIDENCE. If synthesis fails and there are no useful findings, the run fails with a clear explanation that saved evidence can be reused. When content was retrieved but synthesis failed, FINAL_SYNTHESIS_UNAVAILABLE identifies that outcome explicitly. Discovery-only fallback uses NO_CONTENT_EVIDENCE. A completed durable run or a low-confidence answer alone does not identify successful synthesis; inspect the warning codes.
 
