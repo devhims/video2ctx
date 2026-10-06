@@ -21,7 +21,6 @@ export function attachTestAssetStore(context: AgentToolContext) {
     readAsset: async (version) => saved.get(version) ?? null,
     evidence: () => [],
     readEvidence: async () => ({ packets: [] }),
-    remember: () => {},
   };
   const provider = context.provider;
   context.provider = {

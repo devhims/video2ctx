@@ -357,7 +357,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });
@@ -865,8 +865,9 @@ test('session assets enforce ownership and deletion removes run copies, citation
     const writer=instance as unknown as {performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>};
     const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',input:{videoId:'abcdefghijk'},execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
     instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'finalize',responseIntent:'context_answer',reason:'Stored evidence'})},0)`;
-    await writer.finalizeRun(runId,'finish',{intent:'context_answer',answer:`A caption [cite:${packet.excerpts[0]!.id}]`,confidence:'high',citations:[],artifacts:[],warnings:[],
-      memoryUpdates:[{kind:'finding',topic:'caption',text:'A finding',evidenceIds:[packet.excerpts[0]!.id]}]});
+    await writer.finalizeRun(runId,'finish',{intent:'context_answer',answer:`A caption [cite:${packet.excerpts[0]!.id}]`,confidence:'high',citations:[],artifacts:[],warnings:[]});
+    const {remember}=await import('./fixtures/memory');
+    remember(store,runId,[{kind:'finding',topic:'caption',text:'A finding',evidenceIds:[packet.excerpts[0]!.id]}]);
     expect(store.brief().memories).toHaveLength(1);
   });
   expect(await runtime.getSessionAssets(conversationId,'different-user')).toBeNull();

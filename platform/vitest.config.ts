@@ -13,6 +13,7 @@ export default defineConfig({
       'test/user-account-do.integration.test.ts',
       'test/project-item-open.integration.test.ts',
       'test/agent-runtime-do.integration.test.ts',
+      'test/agent-memory-updater.integration.test.ts',
       'test/proxy-health-do.integration.test.ts', 'test/media-frame-capacity.integration.test.ts', 'test/frame-media-source.integration.test.ts',
     ],
     setupFiles: ['./test/setup.ts'],

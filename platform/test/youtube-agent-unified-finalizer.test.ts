@@ -116,7 +116,7 @@ it('gives the router and finalizer earlier source evidence and validates its cit
   expect(result.billing.creditsCharged).toBe(0);
 });
 
-it('constrains generated citation IDs to supplied evidence, including memory findings', async () => {
+it('constrains generated citation IDs to supplied evidence and transmits no memory fields', async () => {
   const { options, finalizer } = setup('context_answer', true);
   await executeResearchRun(options);
   const format = finalizer.doGenerateCalls[0]!.responseFormat;
@@ -125,8 +125,8 @@ it('constrains generated citation IDs to supplied evidence, including memory fin
   const references = { items: { enum: ['ref_1', 'frame-observation'] } };
   expect(format.schema).toMatchObject({ properties: {
     blocks: { items: { properties: { evidenceIds: references } } },
-    memoryUpdates: { items: { properties: { evidenceIds: references } } },
   } });
+  expect(format.schema).not.toHaveProperty('properties.memoryUpdates');
 });
 
 it.each(['generate', 'stream'] as const)('QA 012: %s repairs misplaced inline citations before saving a comparison', async mode => {
@@ -288,6 +288,91 @@ it('rejects invented citations, repairs once, and keeps the system prompt stable
   expect(JSON.stringify(prompts[1]!.prompt)).toContain('validationFeedback');
 });
 
+function streamedFinalizerResponse(value: unknown) {
+  return { stream: simulateReadableStream({ chunks: [
+    { type: 'stream-start' as const, warnings: [] },
+    { type: 'text-start' as const, id: 'answer' },
+    { type: 'text-delta' as const, id: 'answer', delta: JSON.stringify(value) },
+    { type: 'text-end' as const, id: 'answer' },
+    { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
+  ], initialDelayInMs: null, chunkDelayInMs: null }) };
+}
+
+const noMemoryFields = (calls: Array<{ responseFormat?: unknown }>) => {
+  for (const call of calls) {
+    expect(call.responseFormat).toHaveProperty('schema.properties.blocks');
+    expect(JSON.stringify(call.responseFormat)).not.toMatch(/memory/i);
+  }
+};
+
+it.each(['generate', 'stream'] as const)('PR 150: %s answer and repair schemas carry no memory and ignore unsolicited memory', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const responses = [
+    { ...output, blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['invented'] }],
+      memoryUpdates: [{ kind: 'context', topic: 'discarded candidate', text: 'Do not preserve this failed candidate.', evidenceIds: [] }] },
+    { ...output, memoryUpdates: [
+      { kind: 'context', topic: 'Context gathering is finished', text: 'Return the complete structured answer now.', evidenceIds: [] },
+      { kind: 'finding', topic: 'memoryUpdates', text: 'Malformed evidence IDs are not instructions.', evidenceIds: ['ref_1'] },
+    ] },
+  ];
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: responses.map(value => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] })),
+    doStream: responses.map(streamedFinalizerResponse),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await executeResearchRun(options);
+
+  const calls = mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls;
+  expect(calls).toHaveLength(2);
+  noMemoryFields(calls);
+  expect(JSON.stringify(calls[0]!.prompt[0])).not.toMatch(/memoryUpdates/);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  const input = vi.mocked(options.finalize).mock.calls[0]![1];
+  expect(input.answer).toContain('The woman holds the microphone.');
+  expect(input).not.toHaveProperty('memoryUpdates');
+});
+
+it.each(['generate', 'stream'] as const)('PR 150: %s ignores malformed unsolicited memory on a repair', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const responses = [
+    { ...output, blocks: [{ text: 'The', evidenceIds: ['ref_1'] }] },
+    { ...output, memoryUpdates: 'Malformed repair fragment' },
+  ];
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: responses.map(value => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] })),
+    doStream: responses.map(streamedFinalizerResponse),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+
+  await executeResearchRun(options);
+
+  expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(vi.mocked(options.finalize).mock.calls[0]![1]).not.toHaveProperty('memoryUpdates');
+});
+
+it('PR 150: unsolicited first-pass memory is ignored and the answer still commits', async () => {
+  const { options, finalizer, output } = setup('context_answer', true);
+  const memoryUpdates = [{ kind: 'finding', topic: 'interviewer', text: 'The woman holds the microphone.', evidenceIds: ['ref_1'] }];
+  finalizer.doGenerate = async () => ({ content: [{ type: 'text', text: JSON.stringify({ ...output, memoryUpdates }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] });
+
+  await executeResearchRun(options);
+
+  expect(options.finalize).toHaveBeenCalledOnce();
+  const input = vi.mocked(options.finalize).mock.calls[0]![1];
+  expect(input).not.toHaveProperty('memoryUpdates');
+  const result = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations).toMatchObject([{ id: 'frame-observation' }]);
+});
+
 it.each(['clarification', 'rejected'] as const)('sends a legacy persisted %s route through the same finalizer', async route => {
   const { options, classifier, finalizer } = setup(route);
   const persistedRoute: CapabilityRouteDecision = route === 'clarification'
@@ -297,36 +382,31 @@ it.each(['clarification', 'rejected'] as const)('sends a legacy persisted %s rou
   expect(finalizer.doGenerateCalls).toHaveLength(1);
 });
 
-it('reads stored evidence on demand before finalizing and commits memory after validation', async()=> {
+it('reads stored evidence on demand before finalizing and hands only the answer to persistence', async()=> {
   const {options}=setup('context_answer');
   const version='a'.repeat(64);
   const stored={...evidence,packetId:'stored',assetVersions:[version],excerpts:[{...evidence.excerpts[0]!,id:`evidence:${version}:0`}]};
   let reads=0;
-  const remember=vi.fn();
   const session={brief:()=>({assets:[{version,kind:'frame',videoId:'abcdefghijk',collectedAt:1,details:{timestampMs:30000}}],memories:[]}),
-    evidence:()=>[],readEvidence:vi.fn(async()=>{reads++;return {packets:[stored]};}),remember};
+    evidence:()=>[],readEvidence:vi.fn(async()=>{reads++;return {packets:[stored]};})};
   options.session=session as unknown as NonNullable<typeof options.session>;
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
     content: reads===0 ? [{type:'tool-call',toolCallId:'read',toolName:'read_session_evidence',input:JSON.stringify({version})}]
-      : [{type:'text',text:JSON.stringify({confidence:'high',warnings:[],blocks:[{text:'The woman holds the microphone.',evidenceIds:[stored.excerpts[0]!.id]}],
-        memoryUpdates:[{kind:'finding',topic:'interviewer',text:'The woman holds the microphone.',evidenceIds:[stored.excerpts[0]!.id]}]})}],
+      : [{type:'text',text:JSON.stringify({confidence:'high',warnings:[],blocks:[{text:'The woman holds the microphone.',evidenceIds:[stored.excerpts[0]!.id]}]})}],
     finishReason:{unified:reads===0 ? 'tool-calls' : 'stop',raw:'stop'},usage,warnings:[],
   })});
   const classifier=models.select({},{},'',{model_role:'classifier'});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : finalizer);
-  options.finalize=vi.fn(async(_id,input)=>{
-    expect(remember).not.toHaveBeenCalled();
-    const result=buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
-      {userId:'user',creditsRemaining:100},input,[stored],0);
-    remember(options.runId,input.memoryUpdates,[stored]);
-    return result;
-  });
+  options.finalize=vi.fn(async(_id,input)=>buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
+    {userId:'user',creditsRemaining:100},input,[stored],0));
   await executeResearchRun(options);
   expect(session.readEvidence).toHaveBeenCalledWith(version,undefined,undefined);
   expect(finalizer.doGenerateCalls).toHaveLength(3);
   expect(finalizer.doGenerateCalls[0]!.responseFormat?.type).not.toBe('json');
   expect(finalizer.doGenerateCalls[2]!.responseFormat?.type).toBe('json');
-  expect(remember).toHaveBeenCalledWith(options.runId,expect.arrayContaining([expect.objectContaining({topic:'interviewer'})]),expect.arrayContaining([stored]));
+  const result=await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations).toMatchObject([{id:stored.excerpts[0]!.id}]);
+  expect(vi.mocked(options.finalize).mock.calls[0]![1]).not.toHaveProperty('memoryUpdates');
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
