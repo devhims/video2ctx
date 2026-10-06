@@ -57,7 +57,15 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
               const tooLong = context.session?.transcriptOverLimit?.(current.assetVersion);
               if (tooLong) {
                 if (selection) (selection.tooLong ??= new Set()).add(tooLong.videoId);
-                throw new TranscriptToolStageError('VIDEO_TOO_LONG', tooLong);
+                const rejection = new TranscriptToolStageError('VIDEO_TOO_LONG', tooLong);
+                // Non-replacement failures need durable public context. Keep replaceable
+                // preflight checks metadata-only so the next retrieval keeps its budget slot.
+                if (!selection?.allowReplacement) await context.executeEvidenceTool({
+                  toolCallId: `${childId}:retrieve`, toolName: 'get_video_transcript', operation: 'transcript',
+                  input: { assetVersion: current.assetVersion }, semanticKey: `transcript-limit:${current.assetVersion}`,
+                  execute: async () => { throw rejection; },
+                });
+                throw rejection;
               }
             }
             assetVersion = 'assetVersion' in current ? current.assetVersion

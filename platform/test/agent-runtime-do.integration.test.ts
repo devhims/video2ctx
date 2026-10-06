@@ -1,3 +1,6 @@
+import { VideoTooLongError } from '../src/agents/runtime/video-duration-limit';
+import { TranscriptToolStageError } from '../src/agents/providers/youtube/tools/transcript-tool-errors';
+import type { EvidenceToolFailure } from '../src/agents/research/research-agent';
 import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
@@ -1682,5 +1685,37 @@ test('recovers an interrupted successor once and cancels the newest successor', 
       await vi.waitFor(() => expect(instance.sql`SELECT id FROM cf_agents_runs WHERE id=${firstId} OR id=${secondId}`).toHaveLength(0));
       perform.mockRestore();
     }
+  });
+});
+
+
+test('persists allowlisted duration context for recovery and upgrades legacy tool rows', async () => {
+  const { runtime, runId } = await seed('duration-failure-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+      readEvidenceToolFailures(runId: string): EvidenceToolFailure[];
+      ensureAgentRuntimeSchema(): void;
+    };
+    // Simulate a pre-upgrade SQLite table. Its existing rows must remain readable.
+    instance.sql`ALTER TABLE agent_tool_calls DROP COLUMN error_context_json`;
+    writer.ensureAgentRuntimeSchema();
+    instance.sql`UPDATE agent_tool_calls SET status='failed',error='VIDEO_TOO_LONG: legacy text' WHERE run_id=${runId}`;
+    expect(writer.readEvidenceToolFailures(runId)[0]?.durationLimit).toBeUndefined();
+    const guard = new VideoTooLongError('rfscVS0vtbw', 16012, 5400);
+    guard.message = 'PRIVATE_PROVIDER_DIAGNOSTIC';
+    const error = new TranscriptToolStageError('VIDEO_TOO_LONG', guard);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(writer.performEvidenceTool(runId, { toolCallId: 'long-course', toolName: 'get_video_transcript',
+        operation: 'transcript', semanticKey: 'long-course', input: { videoId: 'rfscVS0vtbw' },
+        execute: async () => { throw error; } })).rejects.toBe(error);
+    } finally { log.mockRestore(); }
+    const recovered = writer.readEvidenceToolFailures(runId).find(item => item.toolCallId === 'long-course');
+    expect(recovered?.durationLimit).toEqual({ videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 5400 });
+    const row = instance.sql<{ error_context_json: string }>`SELECT error_context_json FROM agent_tool_calls WHERE tool_call_id='long-course'`[0]!;
+    expect(row.error_context_json).not.toContain('PRIVATE');
+    instance.sql`UPDATE agent_tool_calls SET error_context_json='malformed' WHERE tool_call_id='long-course'`;
+    expect(writer.readEvidenceToolFailures(runId).find(item => item.toolCallId === 'long-course')?.durationLimit).toBeUndefined();
   });
 });

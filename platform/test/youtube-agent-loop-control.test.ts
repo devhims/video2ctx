@@ -1,3 +1,4 @@
+import { VideoTooLongError } from '../src/agents/runtime/video-duration-limit';
 import { researchVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/research-video-transcripts';
 import { attachTestAssetStore } from './fixtures/analysis-session';
 import { analyzeVideoTranscriptsInputSchema } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
@@ -1939,6 +1940,16 @@ it('replaces a saved over-limit transcript given by assetVersion with the next s
       candidates: [1, 2].map(n => ({ type: 'video', id: `video00000${n}` })),
     } }],
   }];
+  // Only one retrieval slot remains: the saved metadata rejection must not
+  // spend the slot required by its replacement. Count real tool executions
+  // instead of using an unlimited pass-through adapter for this regression.
+  const execute = context.executeEvidenceTool;
+  let retrievalSlots = 1;
+  context.executeEvidenceTool = vi.fn(async execution => {
+    if (execution.toolName === 'get_video_transcript' && retrievalSlots-- <= 0)
+      throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted.');
+    return execute(execution);
+  });
   // The helper prefetches its fixtures; count only retrievals made by this tool call.
   vi.mocked(context.provider.transcript).mockClear();
   const tool = createResearchVideoTranscriptsTool(context);
@@ -1946,6 +1957,9 @@ it('replaces a saved over-limit transcript given by assetVersion with the next s
     { toolCallId: 'saved-too-long', messages: [], context: {} });
   expect(result).toMatchObject({ skipped: [{ videoId: 'video000001', code: 'VIDEO_TOO_LONG', replacementVideoId: 'video000002' }], failures: [] });
   expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000002']);
+  expect(retrievalSlots).toBe(0);
+  expect(vi.mocked(context.executeEvidenceTool).mock.calls.filter(([execution]) => execution.toolName === 'get_video_transcript'))
+    .toEqual([[expect.objectContaining({ input: { videoId: 'video000002' } })]]);
 });
 
 it('keeps metadata in conversation memory when caption languages exceed the cap', () => {
@@ -1984,4 +1998,189 @@ it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('retains skipped reason a
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
     warnings: expect.arrayContaining([expect.objectContaining({ code })]),
   }));
+});
+
+
+it.each([{ limit: 7200, label: '2 hours' }, { limit: 5400, label: '90 minutes' }])('puts the rejected video duration and configured limit in the primary answer ($label)', async ({ limit, label }) => {
+  const context = inspectContext();
+  context.maxVideoSeconds = limit;
+  const video = context.provider.video;
+  context.provider.video = async (...args) => {
+    const result = await video(...args);
+    return { ...result, value: { ...result.value, durationSeconds: 16012 } };
+  };
+  context.provider.transcript = vi.fn(async () => { throw new VideoTooLongError('abcdefghijk', 16010, limit); });
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => {
+    if (step++ === 0) return modelResult({ toolCallId: 'too-long', toolName: 'get_video_transcript', input: JSON.stringify({ videoId: 'abcdefghijk' }) });
+    throw new Error('Research phase timeout.');
+  } });
+  await expect(runResearchAgentWithModel({ model, context, message: 'Summarize only this course, or explain the duration limit.',
+    decision: { route: 'inspect_video', videoId: 'abcdefghijk' } })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+  const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+  expect(answer.answer).toContain('4 hours 26 minutes 52 seconds');
+  expect(answer.answer).toContain(`video2ctx currently supports Agent processing for videos up to ${label}`);
+  expect(answer.answer).toContain('could not analyze');
+  expect(answer.warnings).toContainEqual(expect.objectContaining({ code: 'NO_CONTENT_EVIDENCE' }));
+  expect(context.provider.transcript).toHaveBeenCalledTimes(1);
+});
+
+it('recovers a duration rejection without metadata or another provider call', async () => {
+  const context = inspectContext();
+  context.provider.video = vi.fn(async () => { throw new Error('Metadata unavailable'); });
+  context.provider.transcript = vi.fn();
+  const model = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research phase timeout.'); } });
+  const recovered = { toolCallId: 'recovered-long', toolName: 'get_video_transcript', operation: 'transcript' as const,
+    message: 'VIDEO_TOO_LONG: PRIVATE_PROVIDER_DIAGNOSTIC', durationLimit: { videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 7200 } };
+  await expect(runResearchAgentWithModel({ model, context, message: 'Summarize the course or explain the limit.',
+    decision: { route: 'inspect_video', videoId: 'rfscVS0vtbw' }, recoveredToolFailures: [recovered] })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+  const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1].answer;
+  expect(answer).toContain('The transcript for this video reaches 4 hours 26 minutes 52 seconds');
+  expect(answer).toContain('up to 2 hours');
+  expect(answer).not.toContain('PRIVATE_PROVIDER');
+  expect(context.provider.transcript).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('preserves supported findings and scopes duration notices in model finalization (comparison=%s)', async comparison => {
+  const context = inspectContext();
+  const packet = transcriptAnalysisPacket();
+  const recovery = new MockLanguageModelV4({ doGenerate: async call => {
+    const prompt = JSON.stringify(call.prompt);
+    expect(prompt).not.toContain('When providerFailures includes durationLimit, explain');
+    expect(prompt.includes('The application will prepend applicationDurationNotice')).toBe(comparison);
+    expect(prompt).not.toContain('PRIVATE_DURATION_DIAGNOSTIC');
+    if (comparison) expect(prompt).toContain('applicationDurationNotice');
+    return finalizerModelResult({ blocks: [{ text: 'Use the supported workflow.', evidenceIds: ['ref_1'] }],
+      intent: 'topic_research', confidence: 'low', artifacts: [],
+      warnings: comparison ? [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'The other video could not be reviewed.' }] : [] });
+  } });
+  await expect(runResearchAgentWithModel({
+    model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research phase timeout.'); } }),
+    finalizationModel: recovery, context, message: 'Research workflows',
+    decision: { route: 'topic_research', ...(comparison ? { comparisonVideoIds: ['abcdefghijk', 'rfscVS0vtbw'] } : {}) },
+    recoveredEvidence: [packet], recoveredToolFailures: [{ toolCallId: 'rejected-course', toolName: 'get_video_transcript', operation: 'transcript',
+      message: 'VIDEO_TOO_LONG: PRIVATE_DURATION_DIAGNOSTIC', durationLimit: { videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 7200 } }],
+  })).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
+  const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+  expect(input.answer).toContain('Use the supported workflow.');
+  expect(input.answer).toContain(`[cite:${packet.excerpts[0]!.id}]`);
+  expect(input.answer.includes('up to 2 hours')).toBe(comparison);
+});
+
+
+it('keeps the duration notice when a saved over-limit transcript blocks the early fallback and finalization fails', async () => {
+  const context = inspectContext();
+  context.provider.video = vi.fn(async () => { throw new Error('Metadata unavailable'); });
+  attachTestAssetStore(context).put('transcript', 'rfscVS0vtbw', {}, { endMs: 16012000 });
+  await expect(runResearchAgentWithModel({
+    model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research phase timeout.'); } }),
+    finalizationModel: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Finalizer unavailable.'); } }),
+    context, message: 'Summarize this course', decision: { route: 'inspect_video', videoId: 'rfscVS0vtbw' },
+    recoveredToolFailures: [{ toolCallId: 'recovered-long', toolName: 'get_video_transcript', operation: 'transcript',
+      message: 'VIDEO_TOO_LONG: private diagnostic', durationLimit: { videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 7200 } }],
+  })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+  const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1].answer;
+  expect(answer).toContain('4 hours 26 minutes 52 seconds');
+  expect(answer).toContain('up to 2 hours');
+  expect(answer).not.toContain('private diagnostic');
+});
+
+it('records saved-asset duration rejections before comparison finalization', async () => {
+  const context = await transcriptResearchContext();
+  context.session!.transcriptOverLimit = () => new VideoTooLongError('video000001', 16012, 5400);
+  const version = context.session!.brief().assets.find(asset => asset.videoId === 'video000001' && asset.kind === 'transcript')!.version;
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => {
+    if (step++ === 0) return modelResult({ toolCallId: 'saved-long', toolName: 'research_video_transcripts',
+      input: JSON.stringify({ sources: [{ assetVersion: version }], focus: 'Compare workflows' }) });
+    throw new Error('Research phase timeout.');
+  } });
+  await expect(runResearchAgentWithModel({ model,
+    finalizationModel: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Finalizer unavailable.'); } }),
+    context, message: 'Compare these two videos', decision: { route: 'topic_research', comparisonVideoIds: ['video000001', 'video000002'] },
+    recoveredEvidence: [{ ...transcriptAnalysisPacket(), kind: 'youtube_search', artifacts: [] }],
+  })).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
+  const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1].answer;
+  expect(answer).toContain('4 hours 26 minutes 52 seconds');
+  expect(answer).toContain('up to 90 minutes');
+  expect(context.provider.transcript).not.toHaveBeenCalled();
+});
+
+it('repairs a near-limit answer without dropping the duration notice or truncating citations', async () => {
+  const context = inspectContext();
+  const packet = transcriptAnalysisPacket();
+  let attempts = 0;
+  const recovery = new MockLanguageModelV4({ doGenerate: async call => {
+    attempts++;
+    if (attempts === 2) expect(JSON.stringify(call.prompt)).toContain('Shorten the rendered answer');
+    return finalizerModelResult({ blocks: [{ text: attempts === 1 ? 'Supported evidence. '.repeat(990) : 'Supported finding.', evidenceIds: ['ref_1'] }],
+      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'The course transcript was unavailable.' }] });
+  } });
+  await runResearchAgentWithModel({ model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+    finalizationModel: recovery, context, message: 'Compare these videos',
+    decision: { route: 'topic_research', comparisonVideoIds: ['abcdefghijk', 'rfscVS0vtbw'] }, recoveredEvidence: [packet],
+    recoveredToolFailures: [{ toolCallId: 'long', toolName: 'get_video_transcript', operation: 'transcript', message: 'VIDEO_TOO_LONG: rejected',
+      durationLimit: { videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 7200 } }],
+  });
+  expect(attempts).toBe(2);
+  expect(context.finalize).toHaveBeenCalledOnce();
+  const input = vi.mocked(context.finalize).mock.calls[0]![1];
+  expect(input.answer.length).toBeLessThanOrEqual(20000);
+  expect(input.answer).toContain('up to 2 hours');
+  expect(input.answer).toContain(`Supported finding. [cite:${packet.excerpts[0]!.id}]`);
+});
+
+it('retains distinct rejected videos in model context and avoids repeating an exact notice', async () => {
+  const context = inspectContext();
+  const packet = transcriptAnalysisPacket();
+  const failures = ['rfscVS0vtbw', 'long0000001'].map(videoId => ({ toolCallId: videoId, toolName: 'get_video_transcript',
+    operation: 'transcript' as const, message: 'VIDEO_TOO_LONG: PRIVATE_DUPLICATE_DIAGNOSTIC', durationLimit: { videoId, durationSeconds: 16012, limitSeconds: 7200 } }));
+  const recovery = new MockLanguageModelV4({ doGenerate: async call => {
+    const payloadText = call.prompt.flatMap(message => message.role === 'user'
+      ? message.content.flatMap(part => part.type === 'text' ? [part.text] : []) : []).find(text => text.includes('"providerFailures"'))!;
+    const payload = JSON.parse(payloadText);
+    expect(payload.providerFailures.map((failure: { durationLimit: { videoId: string } }) => failure.durationLimit.videoId)).toEqual(['rfscVS0vtbw', 'long0000001']);
+    expect(payloadText).not.toContain('PRIVATE_DUPLICATE_DIAGNOSTIC');
+    return finalizerModelResult({ blocks: [{ text: `${payload.applicationDurationNotice}\n\nSupported finding.`, evidenceIds: ['ref_1'] }],
+      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'Both courses could not be reviewed.' }] });
+  } });
+  await runResearchAgentWithModel({ model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
+    finalizationModel: recovery, context, message: 'Compare these three videos',
+    decision: { route: 'topic_research', comparisonVideoIds: ['abcdefghijk', 'rfscVS0vtbw', 'long0000001'] },
+    recoveredEvidence: [packet], recoveredToolFailures: failures,
+  });
+  const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+  expect(input.answer.match(/currently supports/g)).toHaveLength(2);
+  expect(input.answer).toContain('Supported finding.');
+});
+
+it('keeps the completed answer unchanged when an over-limit candidate is replaced successfully', async () => {
+  const context = await transcriptResearchContext();
+  const fetch = context.provider.transcript;
+  context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
+    if (args[0] === 'video000001') throw new VideoTooLongError('video000001', 16012, 7200);
+    return fetch(...args);
+  });
+  const discovery: EvidencePacket = { packetId: 'candidates', kind: 'youtube_search',
+    sources: [1, 2].map(n => ({ id: `candidate-${n}`, provider: 'youtube', kind: 'search', videoId: `video00000${n}` })),
+    excerpts: [], warnings: [], usage: [],
+    artifacts: [{ type: 'youtube_search_candidates', data: { candidates: [1, 2].map(n => ({ type: 'video', id: `video00000${n}` })) } }] };
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => {
+    if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
+      input: JSON.stringify({ sources: [{ videoId: 'video000001' }], focus: 'Find practical tasks' }) });
+    return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
+      blocks: [{ text: 'Use TypeScript and automated tests.', evidenceIds: ['transcript:video000002:window:0:0'] }], intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
+    }) });
+  } });
+  const finalizationModel = new MockLanguageModelV4({ doGenerate: async call => {
+    expect(JSON.stringify(call.prompt)).not.toContain('The application will prepend applicationDurationNotice');
+    return finalizerModelResult({ blocks: [{ text: 'Use TypeScript and automated tests.', evidenceIds: ['transcript:video000002:window:0:0'] }],
+      intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [] });
+  } });
+  await runResearchAgentWithModel({ model, finalizationModel, context, message: 'Find practical tasks',
+    decision: { route: 'topic_research', researchVideoCount: 1 }, recoveredEvidence: [discovery] });
+  const input = vi.mocked(context.finalize).mock.calls.at(-1)![1];
+  expect(input.answer).toBe('Use TypeScript and automated tests. [cite:transcript:video000002:window:0:0]');
+  expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', 'video000002']);
 });

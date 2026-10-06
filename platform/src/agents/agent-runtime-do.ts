@@ -1,3 +1,4 @@
+import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
 import { storedTranscriptFailure, transcriptRetrievalKey } from './providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
@@ -115,6 +116,7 @@ interface ToolCallRow {
   status: 'running' | 'completed' | 'failed';
   result_json: string | null;
   error: string | null;
+  error_context_json: string | null;
   credits: number;
   created_at: number;
   updated_at: number;
@@ -742,6 +744,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         operation = excluded.operation,
         status = 'running',
         error = null,
+        error_context_json = null,
         updated_at = excluded.updated_at
     `;
 
@@ -780,9 +783,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       console.error({ event: 'agent_evidence_tool_failure', runId, toolCallId: execution.toolCallId,
         tool: execution.toolName, extractionId, ...safeErrorLog(error) });
       const message = errorMessage(error);
+      const durationLimit = videoDurationFailure(error);
       this.sql`
         UPDATE agent_tool_calls
-        SET status = 'failed', error = ${message}, updated_at = ${Date.now()}
+        SET status = 'failed', error = ${message}, error_context_json = ${durationLimit ? JSON.stringify(durationLimit) : null}, updated_at = ${Date.now()}
         WHERE run_id = ${runId} AND tool_call_id = ${execution.toolCallId} AND status = 'running'
       `;
       throw error;
@@ -969,8 +973,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private readEvidenceToolFailures(runId: string): EvidenceToolFailure[] {
-    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error'>>`
-      SELECT tool_call_id, tool_name, operation, error
+    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json'>>`
+      SELECT tool_call_id, tool_name, operation, error, error_context_json
       FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'failed' AND error IS NOT NULL
       ORDER BY created_at ASC
@@ -982,6 +986,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         toolName: row.tool_name,
         operation: operation.data,
         message: row.error,
+        durationLimit: parseVideoDurationFailure(row.error_context_json),
       }];
     });
   }
@@ -1414,6 +1419,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         PRIMARY KEY (run_id, tool_call_id)
       )
     `;
+    if (!this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`.some(column => column.name === 'error_context_json')) {
+      this.sql`ALTER TABLE agent_tool_calls ADD COLUMN error_context_json TEXT`;
+    }
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_routes (
         run_id TEXT PRIMARY KEY,
