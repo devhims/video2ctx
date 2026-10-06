@@ -1,6 +1,7 @@
+import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
+import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
-import { agentMaxVideoSeconds } from '../runtime/video-duration-limit';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
 import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, memoryUpdateSchema, type SessionEvidenceStore } from '../runtime/session-evidence';
@@ -82,6 +83,7 @@ export interface EvidenceToolFailure {
   toolName: string;
   operation: EvidenceOperation;
   message: string;
+  durationLimit?: VideoDurationFailure;
 }
 
 export { extractYouTubeVideoIds, finalIntentMatchesRoute };
@@ -340,6 +342,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const toolFailures = new Map(
     (options.recoveredToolFailures ?? []).map((failure) => [failure.toolCallId, failure]),
   );
+  const currentDurationNotice = () => durationLimitNotice([...toolFailures.values()], [...evidence.values()],
+    options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds);
   const pendingTools = new Map<string, Pick<EvidenceToolExecution, 'toolCallId' | 'toolName' | 'operation'>>();
   const recoveredTranscriptAnalysisKeys = transcriptAnalysisKeys(
     options.recoveredEvidence ?? [],
@@ -407,7 +411,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         warnings.push({ code: 'CHANNEL_INSPECTION_INCOMPLETE',
           message: 'The requested channel catalog could not be inspected. Do not treat this response as complete channel research.' });
       }
-      const result = await options.context.finalize(id, { ...input, warnings, artifacts });
+      const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings, artifacts }, currentDurationNotice()));
       finalized = true;
       return result;
     },
@@ -456,6 +460,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           toolName: execution.toolName,
           operation: execution.operation,
           message: errorMessage(error),
+          durationLimit: videoDurationFailure(error),
         });
         throw error;
       } finally {
@@ -605,7 +610,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && transcriptRequested
       && !options.context.session?.brief().assets.some(asset=>asset.kind==='transcript'
         && (options.decision.route!=='inspect_video' || asset.videoId===options.decision.videoId))) {
-      const unavailable = evidenceFallback([...evidence.values()], options.decision.route);
+      const unavailable = evidenceFallback([...evidence.values()], options.decision.route, undefined, currentDurationNotice());
       if (unavailable) {
         unavailable.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-unavailable:${options.context.runId}`, unavailable);
@@ -649,7 +654,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       if (errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
-      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message);
+      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
       if (partial) {
         partial.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-fallback:${options.context.runId}`, partial);
@@ -713,6 +718,9 @@ async function runUnifiedFinalizer(options: {
   const failureWarnings = options.researchInterrupted
     ? toolFailureWarnings(options.toolFailures) : youtubeAvailabilityWarnings(options.toolFailures);
   const comparisonVideoIds = 'comparisonVideoIds' in options.decision ? options.decision.comparisonVideoIds ?? [] : [];
+  const currentDurationNotice = () => options.decision.route === 'inspect_video' || options.decision.route === 'topic_research'
+    ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
+      ? [options.decision.videoId] : comparisonVideoIds) : '';
   const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
   let prepared = prepareEvidence();
@@ -891,6 +899,7 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. Limit memory updates to at most two useful entries and omit them during repair. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
+          ...(currentDurationNotice() ? ['The application will prepend applicationDurationNotice to this answer. Do not repeat its duration or limit explanation. Answer the supported parts and retain required evidence-gap warnings. The notice is guardrail context, not evidence of video content.'] : []),
           'For visual questions, check each requested subject and attribute against analyzed image evidence, including every item in route.visualRequirements. Presenter names may come from introductions or on-screen labels; clothing requires visual observations. Identify missing subjects or attributes, add ANSWER_SCOPE_SHORTFALL for unanswered parts, and explain the actual failure or budget limit. Transcript silence does not establish that visual facts are unknowable. Never invent clothing details or imply images were inspected when only metadata was retrieved.',
           'If validationFeedback is present, repair the previousCandidate using its errors. Preserve valid content and return complete corrected JSON.',
           ...(options.context.currentDate ? [options.context.currentDate] : []),
@@ -904,7 +913,9 @@ async function runUnifiedFinalizer(options: {
           numberedItemCount,
           route: options.decision,
           evidence: prepared.evidence,
-          providerFailures: groupedToolFailures(options.toolFailures),
+          applicationDurationNotice: currentDurationNotice() || undefined,
+          providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
+            ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure),
           validationFeedback: feedback,
         })}, ...contextMessages, {role:'user',content:'Context gathering is finished. Return the complete structured answer now. Do not promise future work or request another inspection. State any remaining gap.'}],
         temperature: 0,
@@ -1059,7 +1070,7 @@ function summarizeToolFailures(failures: EvidenceToolFailure[]): string {
 function groupedToolFailures(failures: EvidenceToolFailure[]) {
   const groups = new Map<string, EvidenceToolFailure & { count: number }>();
   for (const failure of failures) {
-    const key = `${failure.toolName}\0${failure.operation}\0${failure.message}`;
+    const key = `${failure.toolName}\0${failure.operation}\0${failure.message}\0${JSON.stringify(failure.durationLimit ?? null)}`;
     const existing = groups.get(key);
     if (existing) existing.count += 1;
     else groups.set(key, { ...failure, count: 1 });
