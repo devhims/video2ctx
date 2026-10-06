@@ -1,6 +1,6 @@
 # Research and inspection: current architecture and limits
 
-Implementation reference updated on 2026-09-27. This describes implemented behavior, including the separate finalization window and partial-evidence fallback.
+Implementation reference updated on 2026-10-06. This describes implemented behavior, including model failover, the separate finalization window and partial-evidence fallback.
 
 ## Shared architecture
 
@@ -23,6 +23,29 @@ All Fireworks agent requests set `service_tier: priority`, including classificat
 `AGENT_FINALIZER_MODEL` selects `glm-5p3-flash` (default), `deepseek-v4p1-flash`, the retained `deepseek-v4-flash-0731` profile, or `gpt-oss-120b`. Production config selects `glm-5p3-flash` with `AGENT_FINALIZER_REASONING_EFFORT=medium`, mapped explicitly to Fireworks `high`. GLM also supports `low` for comparison. This effort setting applies to GLM finalizer calls, including stored-context gathering, not to research or visual analysts. GLM does not expose a literal medium setting. Unknown effort values and using this effort override with another model fail explicitly. Clear the override to use a retained model profile: GLM and DeepSeek then use the historical 1,024-token thinking allowance; GPT-OSS uses native low effort. Optional DeepSeek research disables reasoning and preserves its original answer allowance. Finalizers retain 1,024 tokens of output headroom because Fireworks includes reasoning in `max_tokens`; this is a combined ceiling, not a guaranteed reservation. Completed usage is recorded against actual model IDs and configured prices, including cached input. Research drafts are not persisted as final answers. Model selection does not change phase deadlines.
 
 Provider tools call the platform provider stack in process. Cache misses go through the YouTube processor container, which owns outbound YouTube calls. Postman does not call YouTube or Workers AI directly. Locally, the Docker/Wrangler egress bridge is an additional dependency; it has repeatedly failed while ordinary host HTTPS still worked.
+
+## Model availability fallback
+
+Fireworks GLM text calls automatically switch to DeepSeek V4.1 Flash Priority when inference stalls, the connection fails, or the provider returns HTTP 408, 429, or 5xx. This covers classification, Agent Core, transcript analysis, finalization context, and final answers. Authentication and invalid-request errors remain explicit. Workers AI and visual analysis keep their configured models.
+
+The application owns these deadlines. Fireworks runs the inference. Switching models retries only the current inference step with the same messages and completed tool results. It does not restart research or replay completed tools. For example, hypothetically, search finishes in four seconds and the next GLM call hangs. After ten seconds that call is aborted, DeepSeek receives the search results, and research continues. A late GLM response cannot execute another tool or overwrite the answer.
+
+| Attempt | Maximum wait |
+| --- | --- |
+| Classification response | 5 seconds |
+| Research or non-streamed finalizer response | 10 seconds |
+| Transcript analysis response | 15 seconds |
+| First meaningful streamed content | 10 seconds |
+| Silence after streamed content | 5 seconds |
+| Entire streamed response, including reasoning | 30 seconds |
+
+These limits apply to each model attempt and are capped by the remaining phase budget. The primary leaves ten seconds for the backup where possible. Nonempty reasoning, text, and tool argument deltas count as progress; headers and empty chunks do not. A stalled final answer clears its partial draft before the DeepSeek stream starts. Schema and citation validation still apply to the replacement.
+
+After switching, later GLM text roles use DeepSeek for the rest of that run, including durable recovery. A new run tries the configured primary again. Both failed models produce `MODEL_FALLBACK_EXHAUSTED` rather than a successful metadata-only answer. User cancellation, exhausted phase budgets, and invalid configuration are separate failure conditions.
+
+Structured `agent_model_failover` logs and persisted `model.attempt` / `model.fallback` events capture call and attempt IDs, actual model, role, Priority tier, configured deadlines, time to first content, idle time, elapsed time, safe provider request IDs when available, and whether usage was reported. They exclude prompts, transcript content, credentials, and raw errors. Completed calls retain normal token-cost accounting; interrupted calls without reported usage remain unknown. Model events are internal diagnostics, not new public run-response fields.
+
+Both models use Fireworks, so this protects against model-specific failures but cannot guarantee recovery during a provider-wide outage. Thresholds are initial operational limits, not provider latency guarantees. This change needs a platform Worker deployment, with no new secret, binding, or database migration. Production behavior still requires a post-deployment smoke test.
 
 ## Research sequence
 

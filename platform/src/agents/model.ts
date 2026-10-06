@@ -1,3 +1,5 @@
+import type { LanguageModelV4 } from '@ai-sdk/provider';
+import { withModelFailover, type ModelFailoverState } from './runtime/model-failover';
 import { createWorkersAI } from 'workers-ai-provider';
 import { createFireworks } from '@ai-sdk/fireworks';
 import { wrapLanguageModel, type LanguageModelUsage } from 'ai';
@@ -38,7 +40,8 @@ export function createAgentModel(
   sessionAffinity: string,
   reasoningEffort: 'low' | 'medium' = 'medium',
   metadata?: Record<string, string | number | boolean | null>,
-) {
+  failoverState?: ModelFailoverState,
+): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
   const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
@@ -78,7 +81,7 @@ export function createAgentModel(
     sessionAffinity,
     reasoning_effort: reasoningEffort,
   });
-  return wrapLanguageModel({ model, middleware: {
+  const configured = wrapLanguageModel({ model, middleware: {
     specificationVersion: 'v4',
     transformParams: async ({ params }) => profile ? {
       ...params,
@@ -111,4 +114,13 @@ export function createAgentModel(
       serviceTier: useFireworks ? 'priority' : undefined,
     }, params.abortSignal, doGenerate),
   } });
+  if (useFireworks && model.modelId === FIREWORKS_GLM_MODEL_ID
+    && ['classifier', 'agent_core', 'transcript_analyst', 'finalizer'].includes(String(metadata?.model_role))) {
+    const backup = createAgentModel({ ...env, AGENT_TEXT_PROVIDER: 'fireworks', AGENT_TEXT_MODEL: CLASSIFIER_FALLBACK_TEXT_MODEL,
+      AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: CLASSIFIER_FALLBACK_TEXT_MODEL,
+      AGENT_FINALIZER_REASONING_EFFORT: '' } as unknown as Env, sessionAffinity, 'low', metadata);
+    return withModelFailover({ primary: configured, fallback: backup, state: failoverState ?? { fallback: false },
+      role: String(metadata?.model_role), runId: metadata?.agent_run_id as string | undefined });
+  }
+  return configured;
 }

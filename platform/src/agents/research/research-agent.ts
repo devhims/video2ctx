@@ -1,3 +1,4 @@
+import { hasModelFailover, ModelFallbackExhaustedError, setModelFailoverDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
@@ -105,6 +106,7 @@ export async function executeResearchRun(options: {
   researchDeadlineAt?: number;
   finalizationDeadlineAt?: number;
   env: Env;
+  modelFailover?: ModelFailoverState;
   runId: string;
   message: string;
   /** Trusted line naming the run's date, from its admission time and the user's time zone. */
@@ -138,8 +140,12 @@ export async function executeResearchRun(options: {
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
 }): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
+  const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
+  const runModel: typeof createAgentModel = (env, affinity, effort, metadata) =>
+    createAgentModel(env, affinity, effort, metadata, modelFailover);
   options.signal.throwIfAborted();
   const classificationDeadlineAt = options.classificationDeadlineAt ?? Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS;
+  modelFailover.deadlineAt = classificationDeadlineAt;
   if (!options.persistedRoute) await options.onClassifying?.(classificationDeadlineAt);
   const decision = await resolveCapabilityRoute({
     persisted: options.persistedRoute,
@@ -150,7 +156,7 @@ export async function executeResearchRun(options: {
       availableEvidence: conversationEvidence(metadataWithCurrent(options.recoveredEvidence, options.conversationHistory), options.conversationHistory),
       metadataByReference: Boolean(options.session),
       sessionBrief: options.session?.brief(),
-      model: createAgentModel(options.env, options.sessionAffinity, 'low', {
+      model: runModel(options.env, options.sessionAffinity, 'low', {
         ...modelMetadata,
         model_role: 'classifier',
       }),
@@ -181,7 +187,7 @@ export async function executeResearchRun(options: {
     const finalizationFailures: string[] = [];
     try {
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.signal, (signal, persist) => runUnifiedFinalizer({
-        model: createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
+        model: runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision,
         context: { traceToolCall: options.traceToolCall, session: options.session, runId: options.runId, currentDate: options.currentDate, signal,
@@ -200,6 +206,7 @@ export async function executeResearchRun(options: {
   }
 
   const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(decision.useStoryboard);
+  modelFailover.deadlineAt = researchDeadlineAt;
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
   const limiter = new ConcurrencyLimiter(MAX_CONCURRENT_EVIDENCE_REQUESTS);
   // Slow provider requests must not occupy the slots needed to analyze assets
@@ -208,7 +215,7 @@ export async function executeResearchRun(options: {
   const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
-    createAgentModel(options.env, options.sessionAffinity, 'low', {
+    runModel(options.env, options.sessionAffinity, 'low', {
       ...modelMetadata,
       model_role: 'transcript_analyst',
       capability: decision.route,
@@ -231,11 +238,11 @@ export async function executeResearchRun(options: {
     onExtractionDiagnostic: options.onExtractionDiagnostic,
     saveStoryboardPreviews: options.saveStoryboardPreviews,
     analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
-      createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
+      runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
     analyzeStoryboard: decision.useStoryboard === false ? undefined : (input) => createVisualAnalyst(
-      createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
+      runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
     transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : {
@@ -257,6 +264,7 @@ export async function executeResearchRun(options: {
   };
 
   await runResearchAgent({
+    modelFailover,
     env: options.env,
     researchDeadlineAt,
     finalizationDeadlineAt: options.finalizationDeadlineAt,
@@ -283,6 +291,7 @@ export async function runResearchAgent(options: {
   onFinalizing?: (deadlineAt: number) => void | Promise<void>;
   onDraft?: (draft: AgentDraft) => void;
   env: Env;
+  modelFailover?: ModelFailoverState;
   message: string;
   decision: ExecutableRoute;
   context: AgentToolContext;
@@ -298,12 +307,16 @@ export async function runResearchAgent(options: {
   modelCallPrefix?: string;
 }): Promise<void> {
   const metadata = { agent_run_id: options.context.runId, capability: options.decision.route };
+  const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
+  modelFailover.deadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(options.decision.useStoryboard);
+  const runModel: typeof createAgentModel = (env, affinity, effort, metadata) =>
+    createAgentModel(env, affinity, effort, metadata, modelFailover);
   await runResearchAgentWithModel({
     researchDeadlineAt: options.researchDeadlineAt,
     finalizationDeadlineAt: options.finalizationDeadlineAt,
     onFinalizing: options.onFinalizing,
     onDraft: options.onDraft,
-    model: createAgentModel(
+    model: runModel(
       options.env,
       options.sessionAffinity,
       agentCoreReasoningEffort(options.decision.route),
@@ -312,7 +325,7 @@ export async function runResearchAgent(options: {
       model_role: 'agent_core',
       },
     ),
-    finalizationModel: createAgentModel(options.env, options.sessionAffinity, 'low', {
+    finalizationModel: runModel(options.env, options.sessionAffinity, 'low', {
       ...metadata,
       model_role: 'finalizer',
     }),
@@ -638,7 +651,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {
-    if (errorMessage(error) === 'Persistence phase timeout.') throw error;
+    if (error instanceof ModelFallbackExhaustedError || errorMessage(error) === 'Persistence phase timeout.') throw error;
     // The phase deadline wins its race before an aborted provider necessarily
     // rejects. Snapshot interrupted tools now so the finalizer sees every gap.
     for (const pending of pendingTools.values()) {
@@ -694,7 +707,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             : isAgentCoreTimeout(finalizationError) ? 'FINALIZATION_TIMEOUT' : 'FINALIZATION_FAILED',
           remainingMs: Math.max(0, finalizationHardDeadline(finalizationDeadlineAt ?? Date.now()) - Date.now()) }),
       );
-      if (errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
+      if (finalizationError instanceof ModelFallbackExhaustedError || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
       const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
@@ -777,6 +790,7 @@ async function runUnifiedFinalizer(options: {
   // Gather context once, charged only to the main deadline. Answer retries below
   // reuse these results and never restart context collection.
   const contextDeadlineAt = options.deadlineAt;
+  setModelFailoverDeadline(options.model, contextDeadlineAt);
   const contextExpired = Date.now() >= contextDeadlineAt;
   let contextIncomplete = false;
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
@@ -927,6 +941,7 @@ async function runUnifiedFinalizer(options: {
       contextMessages.push(...gathered.response.messages);
       if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
     } catch (error) {
+      if (error instanceof ModelFallbackExhaustedError) throw error;
       options.context.signal.throwIfAborted();
       contextIncomplete = true;
       console.warn(JSON.stringify({event:'agent_finalizer_context_incomplete',runId:options.context.runId,
@@ -975,9 +990,11 @@ async function runUnifiedFinalizer(options: {
       const attemptDeadlineAt = attempt === 0 ? options.deadlineAt
         : Math.min(finalizationHardDeadline(options.deadlineAt),
           Math.max(options.deadlineAt, Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS));
-      const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft), async (signal, progress) => {
+      setModelFailoverDeadline(options.model, attemptDeadlineAt);
+      const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft) && !hasModelFailover(options.model), async (signal, progress) => withModelStreamFallback(async failoverCallId => {
         const generationOptions = {
         model: options.model,
+        providerOptions: { agentDiagnostics: { failoverCallId } },
         onStepFinish: step => {
           options.modelBudget?.recordUsage({callId:`${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}:answer`,
             category:'timeout_finalizer',modelId:step.response.modelId,pricing:fireworksModelPricing(step.response.modelId),usage:step.usage});
@@ -1032,9 +1049,11 @@ async function runUnifiedFinalizer(options: {
         } satisfies Parameters<typeof generateText>[0];
         if (!options.onDraft) return generateText(generationOptions);
 
+        candidate = undefined;
+        let streamError: unknown;
         const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
         options.onDraft({ answer: '', state });
-        const streamed = streamText({ ...generationOptions, onChunk: ({ chunk }) => {
+        const streamed = streamText({ ...generationOptions, onError: ({ error }) => { streamError = error; }, onChunk: ({ chunk }) => {
           if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;
           progress();
           firstContentAt ??= Date.now();
@@ -1046,27 +1065,29 @@ async function runUnifiedFinalizer(options: {
             candidate = ((candidate ?? '') + chunk.text).slice(0, 32_000);
           }
         } });
-        let latestDraft = '';
-        let publishedDraft = '';
-        let lastPublishedAt = 0;
-        for await (const partial of streamed.partialOutputStream) {
-          latestDraft = renderPartialAnswer(partial);
-          const now = Date.now();
-          if (!latestDraft || latestDraft === publishedDraft || now - lastPublishedAt < 500) continue;
-          options.onDraft({ answer: latestDraft, state });
-          publishedDraft = latestDraft;
-          lastPublishedAt = now;
-        }
-        if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
-        const text = await streamed.text;
-        candidate = text;
-        generationCompleted = true;
-        const [finishReason, response, totalUsage] = await Promise.all([
-          streamed.finishReason, streamed.response, streamed.totalUsage,
-        ]);
-        const output = await streamed.output;
-        return { text, finishReason, response, totalUsage, output };
-      });
+        try {
+          let latestDraft = '';
+          let publishedDraft = '';
+          let lastPublishedAt = 0;
+          for await (const partial of streamed.partialOutputStream) {
+            latestDraft = renderPartialAnswer(partial);
+            const now = Date.now();
+            if (!latestDraft || latestDraft === publishedDraft || now - lastPublishedAt < 500) continue;
+            options.onDraft({ answer: latestDraft, state });
+            publishedDraft = latestDraft;
+            lastPublishedAt = now;
+          }
+          if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
+          const text = await streamed.text;
+          candidate = text;
+          generationCompleted = true;
+          const [finishReason, response, totalUsage] = await Promise.all([
+            streamed.finishReason, streamed.response, streamed.totalUsage,
+          ]);
+          const output = await streamed.output;
+          return { text, finishReason, response, totalUsage, output };
+        } catch (error) { throw streamError ?? error; }
+      }));
       candidate = result.text;
       generationCompleted = true;
       finishReason = result.finishReason;

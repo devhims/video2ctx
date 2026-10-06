@@ -40,6 +40,23 @@ async function seed(name: string, status = 'failed') {
   return { runtime, userId, runId, conversationId };
 }
 
+test('restores model fallback for the same run without affecting a new run', async () => {
+  const { runtime, runId } = await seed('model-fallback-recovery');
+  await runInDurableObject(runtime, async instance => {
+    const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
+    const state = reader.modelFailoverState(runId);
+    expect(state.fallback).toBe(false);
+    state.onDiagnostic?.({ event: 'fallback', callId: 'call', attemptId: 'attempt', modelId: 'glm',
+      role: 'agent_core', serviceTier: 'priority', reason: 'response_timeout' });
+  });
+  await runInDurableObject(runtime, async instance => {
+    const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
+    expect(reader.modelFailoverState(runId).fallback).toBe(true);
+    expect(reader.modelFailoverState('new-run').fallback).toBe(false);
+    expect(instance.sql`SELECT * FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback'`).toHaveLength(1);
+  });
+});
+
 test.each(['storyboard', 'transcript'] as const)('persists %s diagnostics across RPCs, isolates owners, and bounds run storage', async kind => {
   const fixture = { ...extractionFixture, kind };
   const { runtime, runId } = await seed(`extraction-diagnostics-${kind}-owner`);

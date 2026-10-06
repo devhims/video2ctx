@@ -1,8 +1,10 @@
+import { ModelFallbackExhaustedError } from './model-failover';
 import { ApiError } from '../../lib/http';
 
 const WORKERS_AI_CAPACITY_PATTERN = /(?:\b3040\b|capacity (?:is )?temporarily exceeded)/iu;
 
 export function normalizeAgentExecutionError(error: unknown): unknown {
+  if (error instanceof ModelFallbackExhaustedError) return new ApiError(503, error.code, error.message);
   if (!isWorkersAiCapacityError(error)) return error;
   return new ApiError(
     503,

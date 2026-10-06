@@ -16,6 +16,7 @@ import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
 import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, recordAgentMemoryCost, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { RunEvidenceLedger, billingCharges, toolCreditHold, type EvidenceChargeSource, type EvidenceDelivery } from './runtime/evidence-billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
+import type { ModelFailoverState } from './runtime/model-failover';
 import {
   generateMemoryDelta,
   MEMORY_UPDATE_COST_RESERVE_MICROS,
@@ -638,6 +639,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.syncSessionHistory();
       this.sessionStore.beginRun(runId);
       await executeResearchRun({
+        modelFailover: this.modelFailoverState(runId),
         traceToolCall: call => this.traceToolCall(runId, call),
         session: this.sessionStore,
         classificationDeadlineAt: row.classification_deadline_at ?? undefined,
@@ -1608,6 +1610,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     console.log(JSON.stringify({ event: 'agent_transcript_diagnostic', runId, videoId, modelCallId,
       attemptId, attempt, outcome, elapsedMs, code, finishReason, modelId, inputTokens,
       outputTokens, cancellationReason, issueCount, issueCodes: diagnostic.issues?.map(issue => issue.code) }));
+  }
+
+  private modelFailoverState(runId: string): ModelFailoverState {
+    return {
+      fallback: this.sql`SELECT id FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback' LIMIT 1`.length > 0,
+      onDiagnostic: event => this.recordEvent(runId, event.event === 'fallback' ? 'model.fallback' : 'model.attempt', { ...event }),
+    };
   }
 
   private recordEvent(runId: string, type: string, payload: Record<string, unknown>): void {

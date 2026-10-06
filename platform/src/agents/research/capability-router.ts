@@ -1,3 +1,4 @@
+import { hasModelFailover, ModelFallbackExhaustedError } from '../runtime/model-failover';
 import { traceToolCallRepair, type TraceToolCall } from '../runtime/tool-call-trace';
 import { z } from 'zod';
 import { ApiError } from '../../lib/http';
@@ -373,7 +374,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   };
 
   const decision = await coordinateClassification(call, input.signal, deadlineAt, callId,
-    { fallbackModel: Boolean(input.fallbackModel), lastResort });
+    { fallbackModel: !hasModelFailover(input.model) && Boolean(input.fallbackModel), managedFailover: hasModelFailover(input.model), lastResort });
   return finishClassification(decision, videoIds, channelIds, explicitVideoIds);
 }
 
@@ -430,7 +431,7 @@ const LAST_RESORT_MARGIN_MS = 250;
  */
 async function coordinateClassification(
   call: ClassifierCall, signal: AbortSignal, deadlineAt: number, callId: string,
-  options: { fallbackModel: boolean; lastResort: (evaluations: Evaluation[]) => ClassifierDecision },
+  options: { fallbackModel: boolean; managedFailover?: boolean; lastResort: (evaluations: Evaluation[]) => ClassifierDecision },
 ): Promise<ClassifierDecision> {
   type Settled = { key: Promise<Settled>; context: AttemptContext } & (
     { ok: true; evaluation: Evaluation } | { ok: false; error: unknown });
@@ -454,7 +455,7 @@ async function coordinateClassification(
       evaluation => ({ key, context, ok: true as const, evaluation }),
       (error: unknown) => ({ key, context, ok: false as const, error }));
     pending.add(key);
-    if (hedged || deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return;
+    if (options.managedFailover || hedged || deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return;
     later(CLASSIFIER_REQUEST_STALL_MS, () => {
       if (answered.has(context) || signal.aborted) return;
       console.warn(JSON.stringify({ event: 'agent_classification_request_stalled', modelCallId: callId,
@@ -497,7 +498,7 @@ async function coordinateClassification(
       if (!next.ok) {
         // Cancellation and the phase deadline propagate. Provider and budget errors
         // only end the run when the last-resort step cannot build a decision either.
-        if (signal.aborted) throw next.error;
+        if (signal.aborted || next.error instanceof ModelFallbackExhaustedError) throw next.error;
         if (failedRepair) launchFallback();
         continue;
       }
