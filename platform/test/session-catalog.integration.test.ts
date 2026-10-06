@@ -2,6 +2,7 @@ import { env as workerEnv, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import type { Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore } from '../src/agents/runtime/session-evidence';
+import { remember } from './fixtures/memory';
 import { SessionCatalog, type SessionCatalogReference } from '../src/agents/runtime/session-catalog';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
@@ -94,7 +95,7 @@ test('two sessions reuse one source object while deletion removes only the first
     const version = result.assetVersions![0]!;
     const packet = (await store.readEvidence(version)).packets[0]!;
     store.beginRun('r1');
-    store.remember(
+    remember(store,
       'r1',
       [
         {

@@ -23,6 +23,7 @@ export type CommentRecord = {
   isHearted?: boolean;
 };
 export type CommentPage = {
+  pageReceipt?: string;
   videoId: string;
   comments: CommentRecord[];
   totalCount?: number;
@@ -72,7 +73,11 @@ export type Inspector = {
   refreshData?: Array<SourceDataOption | 'metadata'>;
   transcript?: Transcript;
   comments?: CommentPage;
+  commentPagesLoaded?: number;
+  commentsReceipt?: { sourceId: string; sourceRevision: string };
   channel?: ChannelInfo;
+  savedText?: string;
+  savedMoment?: { startMs: number; endMs?: number | null; note?: string };
 };
 export type SourceSnapshot = { kind: 'search'; selectedData: SourceDataOption[]; items: SearchItem[] }
   | { kind: 'inspection'; inspector: Inspector };

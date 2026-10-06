@@ -2320,6 +2320,17 @@ html:has(.developer-page) body {
   opacity: .55;
 }
 
+.source-saved-text {
+  margin: 0;
+  max-height: 32rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: .8rem;
+  line-height: 1.6;
+}
+
 .source-data-warning {
   margin: 0 0 var(--space-md);
   padding: var(--space-sm) var(--space-md);

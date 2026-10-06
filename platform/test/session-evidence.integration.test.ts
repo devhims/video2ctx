@@ -7,6 +7,7 @@ import { expect, test, vi } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
 import type { Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
+import { remember } from './fixtures/memory';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
@@ -305,7 +306,7 @@ test('memory validates evidence, updates a topic, and removes dependent findings
       context(store, sessionProvider(provider(), store)),
       'tool',
     );
-    store.remember(
+    remember(store,
       'run1',
       [
         { topic: 'opening', kind: 'finding', text: 'Opening finding', evidenceIds: [packet.excerpts[0]!.id] },
@@ -314,7 +315,7 @@ test('memory validates evidence, updates a topic, and removes dependent findings
       ],
       [packet],
     );
-    store.remember(
+    remember(store,
       'run2',
       [{ topic: 'intent', kind: 'context', text: 'Compare interviewers', evidenceIds: [] }],
       [packet],
@@ -325,7 +326,7 @@ test('memory validates evidence, updates a topic, and removes dependent findings
     expect(store.brief().memories.map((memory) => memory.topic)).toEqual(['intent']);
     expect(store.evidence()).toEqual([]);
     expect(await store.read(packet.assetVersions![0]!)).toBeNull();
-    store.remember(
+    remember(store,
       'late',
       [{ topic: 'stale', kind: 'finding', text: 'Stale', evidenceIds: [packet.excerpts[0]!.id] }],
       [packet],
@@ -458,13 +459,13 @@ test('storyboard selections batch missing sheets and reuse overlapping sheets ac
 
 test('forgetting memory during a run prevents that run from restoring its stale snapshot', async () =>
   within('memory-forget-race', async (store) => {
-    store.remember('before', [{ kind: 'context', topic: 'intent', text: 'Old preference', evidenceIds: [] }], []);
+    remember(store, 'before', [{ kind: 'context', topic: 'intent', text: 'Old preference', evidenceIds: [] }], []);
     store.beginRun('active');
     store.deleteMemory('context:intent');
-    store.remember('active', [{ kind: 'context', topic: 'intent', text: 'Old preference', evidenceIds: [] }], []);
+    remember(store, 'active', [{ kind: 'context', topic: 'intent', text: 'Old preference', evidenceIds: [] }], []);
     expect(store.brief().memories).toEqual([]);
     store.beginRun('next');
-    store.remember(
+    remember(store,
       'next',
       [{ kind: 'context', topic: 'intent', text: 'New explicit preference', evidenceIds: [] }],
       [],
@@ -570,7 +571,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
       context(store, sessionProvider(provider(), store)),
       'initial',
     );
-    store.remember(
+    remember(store,
       'first',
       [
         {
@@ -590,7 +591,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
     const run = async (label: string, query: string) =>
       JSON.parse(String(await tools.search_context!.execute!({ label, query }, options)));
     expect((await run('memory', 'enterprise pricing'))[0].topic).toBe('focus');
-    store.remember(
+    remember(store,
       'second',
       [{ kind: 'context', topic: 'focus', text: 'Focus on team pricing.', evidenceIds: [] }],
       [],
@@ -649,7 +650,7 @@ test('search indexes remain isolated between session Durable Objects', async () 
       createdAt: 0,
     });
     await sessionProvider(provider(), store).transcript(id);
-    store.remember(
+    remember(store,
       'one',
       [{ kind: 'context', topic: 'private', text: 'Private account context.', evidenceIds: [] }],
       [],

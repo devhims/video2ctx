@@ -47,6 +47,11 @@ export interface SessionMemory extends MemoryUpdate {
   runId: string;
   updatedAt: number;
 }
+/** One validated change from the post-answer memory updater. */
+export type MemoryChange = MemoryUpdate & { action: 'upsert' | 'remove' };
+export function memoryId(kind: MemoryUpdate['kind'], topic: string) {
+  return `${kind}:${topic.trim().toLowerCase()}`;
+}
 export interface SessionBrief {
   historyMessages?: number;
   assets: SessionAsset[];
@@ -67,7 +72,6 @@ export interface SessionAccess {
   readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
   searchHistory?(query: string): Promise<{ content: string }[]>;
   searchTools?(onEvidence: (packets: EvidencePacket[]) => void, signal: AbortSignal): Promise<ToolSet>;
-  remember(runId: string, updates: MemoryUpdate[], evidence: EvidencePacket[]): void;
 }
 
 /** Keep model routing context bounded without truncating stored evidence or history. */
@@ -137,6 +141,11 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(
       `CREATE TABLE IF NOT EXISTS session_run_generations (run_id TEXT PRIMARY KEY, generation INTEGER NOT NULL)`,
     );
+    // The last turn that wrote or removed each memory topic. An older concurrent
+    // branch that finishes later must not overwrite or resurrect a newer correction.
+    sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_writes (id TEXT PRIMARY KEY, source_turn INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_state (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
+    sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
     this.search = new SessionSearch(sql);
   }
   readHistory(offset = 0, role?: 'user' | 'assistant') {
@@ -663,34 +672,71 @@ export class SessionEvidenceStore implements SessionAccess {
   beginRun(runId: string) {
     this.sql.exec('INSERT OR IGNORE INTO session_run_generations VALUES (?, ?)', runId, this.generation());
   }
-  remember(runId: string, updates: MemoryUpdate[], _evidence: EvidencePacket[]) {
-    const snapshot = this.sql
+  /** The deletion fence captured when a run started, or the current fence for runs without a snapshot. */
+  runGeneration(runId: string) {
+    return this.sql
       .exec<{ generation: number }>('SELECT generation FROM session_run_generations WHERE run_id=?', runId)
-      .toArray()[0];
-    if (snapshot && snapshot.generation !== this.generation()) return;
+      .toArray()[0]?.generation ?? this.generation();
+  }
+  /** Increments on every memory write or removal, so a model snapshot can be revalidated before commit. */
+  memoryVersion() {
+    return this.sql.exec<{ version: number }>('SELECT version FROM session_memory_state WHERE id=1').one().version;
+  }
+  /**
+   * Apply a validated delta from one accepted turn. The caller owns semantic validation;
+   * this method enforces the storage fences. It never deletes unrelated memories.
+   * - `generation` must still match: any forget or evidence deletion since the run began fences the delta.
+   * - `memoryVersion` must still match the snapshot the model read.
+   * - A memory last written or removed by a newer turn is never overwritten by an older turn.
+   * - Findings must cite excerpts that still exist in session evidence.
+   */
+  applyMemoryDelta(input: {
+    runId: string;
+    sourceTurn: number;
+    generation: number;
+    memoryVersion: number;
+    changes: MemoryChange[];
+  }): { status: 'applied' | 'fenced' | 'stale_snapshot'; applied: number } {
+    if (input.generation !== this.generation()) return { status: 'fenced', applied: 0 };
+    if (input.memoryVersion !== this.memoryVersion()) return { status: 'stale_snapshot', applied: 0 };
     const available = new Set(
-      this.evidenceForCitations(updates.flatMap((update) => update.evidenceIds)).flatMap((packet) =>
+      this.evidenceForCitations(input.changes.flatMap((change) => change.evidenceIds)).flatMap((packet) =>
         packet.excerpts.map((excerpt) => excerpt.id),
       ),
     );
-    for (const input of updates.slice(0, 12)) {
-      const update = memoryUpdateSchema.parse(input);
-      if (update.kind === 'finding' && !update.evidenceIds.length) continue;
-      if (update.evidenceIds.some((id) => !available.has(id))) continue;
-      const id = `${update.kind}:${update.topic.toLowerCase()}`;
-      const memory: SessionMemory = { ...update, id, runId, updatedAt: Date.now() };
-      this.sql.exec(
-        'INSERT OR REPLACE INTO session_memories VALUES (?, ?, ?, ?)',
-        id,
-        runId,
-        JSON.stringify(memory),
-        memory.updatedAt,
-      );
+    let applied = 0;
+    for (const change of input.changes.slice(0, 12)) {
+      const id = memoryId(change.kind, change.topic);
+      const lastTurn = this.sql
+        .exec<{ source_turn: number }>('SELECT source_turn FROM session_memory_writes WHERE id=?', id)
+        .toArray()[0]?.source_turn;
+      if (lastTurn !== undefined && lastTurn > input.sourceTurn) continue;
+      if (change.action === 'remove') {
+        this.sql.exec('DELETE FROM session_memories WHERE id=?', id);
+      } else {
+        const update = memoryUpdateSchema.parse(change);
+        if (update.kind === 'finding' ? !update.evidenceIds.length : update.evidenceIds.length) continue;
+        if (update.evidenceIds.some((evidenceId) => !available.has(evidenceId))) continue;
+        const memory: SessionMemory = { ...update, id, runId: input.runId, updatedAt: Date.now() };
+        this.sql.exec(
+          'INSERT OR REPLACE INTO session_memories VALUES (?, ?, ?, ?)',
+          id,
+          input.runId,
+          JSON.stringify(memory),
+          memory.updatedAt,
+        );
+      }
+      this.sql.exec('INSERT OR REPLACE INTO session_memory_writes VALUES (?, ?)', id, input.sourceTurn);
+      applied += 1;
     }
+    if (applied) this.sql.exec('UPDATE session_memory_state SET version=version+1 WHERE id=1');
+    return { status: 'applied', applied };
   }
   deleteMemory(id: string) {
     this.sql.exec('UPDATE session_evidence_state SET generation=generation+1 WHERE id=1');
+    this.sql.exec('UPDATE session_memory_state SET version=version+1 WHERE id=1');
     this.sql.exec('DELETE FROM session_memories WHERE id=?', id);
+    this.sql.exec('DELETE FROM session_memory_writes WHERE id=?', id);
   }
   clearGeneration() {
     return this.sql.exec<{generation:number}>('SELECT generation FROM session_evidence_clear_state WHERE id=1').one().generation;
@@ -714,8 +760,12 @@ export class SessionEvidenceStore implements SessionAccess {
       }
     }
     for (const memory of this.brief().memories)
-      if (!version || memory.evidenceIds.some((id) => deletedIds.has(id)))
+      if (!version || memory.evidenceIds.some((id) => deletedIds.has(id))) {
         this.sql.exec('DELETE FROM session_memories WHERE id=?', memory.id);
+        this.sql.exec('DELETE FROM session_memory_writes WHERE id=?', memory.id);
+      }
+    if (!version) this.sql.exec('DELETE FROM session_memory_writes');
+    this.sql.exec('UPDATE session_memory_state SET version=version+1 WHERE id=1');
     for (const row of rows) {
       this.sql.exec('DELETE FROM session_asset_keys WHERE version=?', row.version);
       this.sql.exec('DELETE FROM session_assets WHERE version=?', row.version);

@@ -192,8 +192,8 @@ export const memoryUpdateSchema = z.object({
 });
 export type MemoryUpdate = z.infer<typeof memoryUpdateSchema>;
 
+// Answers never carry memory. A separate updater proposes memory after the answer is persisted.
 export const finalizeAnswerInputSchema = z.object({
-  memoryUpdates: z.array(memoryUpdateSchema).max(12).optional(),
   answer: z.string().min(1).max(20_000),
   intent: z.enum(['topic_research', 'inspect_video', 'context_answer', 'clarification', 'rejected']),
   confidence: z.enum(['high', 'medium', 'low']),

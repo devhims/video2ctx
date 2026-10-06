@@ -4,7 +4,7 @@ import { videoResourceKey } from './video-resources';
 import { readYouTubeCacheEntry } from './youtube-cache-coordinator';
 import { readSourceResponse } from './source-response-storage';
 import { routeInput, withYouTubeMetadata } from './youtube';
-import { sourceSnapshotSchema, type SaveSourceInput, type SaveReferencedSource, type SourceReference, type SourceSnapshot } from './source-history';
+import { sourceSnapshotSchema, sourceCommentPageSchema, mergeSourceCommentPages, type SaveSourceInput, type SaveReferencedSource, type SourceReference, type SourceSnapshot } from './source-history';
 
 function thumbnailUrl(data: Record<string, unknown>): string | undefined {
   const images = data.thumbnails as Array<{ url?: string; width?: number }> | undefined;
@@ -34,7 +34,7 @@ async function saveShared(env: Env, value: unknown): Promise<string> {
   return key;
 }
 
-export async function referenceSource(env: Env, value: SaveSourceInput): Promise<SaveReferencedSource> {
+export async function referenceSource(env: Env, value: SaveSourceInput, savedComments?: SourceReference): Promise<SaveReferencedSource> {
   if (!env.VIDEO_ASSETS || !videoCatalog(env)) throw new ApiError(503, 'SOURCE_STORAGE_UNAVAILABLE', 'Recent sources storage is unavailable.');
   const { input, snapshot } = value;
   const cachedPublicData = async (type: string, id: string): Promise<Record<string, unknown>> => {
@@ -61,12 +61,16 @@ export async function referenceSource(env: Env, value: SaveSourceInput): Promise
   }
   const source = snapshot.inspector;
   const assets: Partial<Record<'metadata' | 'transcript' | 'comments', VideoAssetReference>> = {};
+  const retained = savedComments?.kind === 'inspection' && savedComments.inspector.provider === source.provider
+    && savedComments.inspector.type === source.type && savedComments.inspector.id === source.id ? savedComments.inspector : undefined;
+  if (source.commentsReceipt && !retained) throw new ApiError(409, 'SOURCE_REVISION_MISMATCH', 'The saved comments changed. Reopen this source.');
+  if (retained?.assets.comments) assets.comments = retained.assets.comments;
   let data: Record<string, unknown> = {};
   if (source.type === 'video') {
     const operations = [
       { field: 'metadata' as const, op: { kind: 'video' as const, id: source.id } },
       ...(source.loadedData.includes('transcript') ? [{ field: 'transcript' as const, op: { kind: 'transcript' as const, id: source.id, granularity: 'word' as const } }] : []),
-      ...(source.loadedData.includes('comments') ? [{ field: 'comments' as const, op: { kind: 'comments' as const, id: source.id } }] : []),
+      ...(source.loadedData.includes('comments') && !retained ? [{ field: 'comments' as const, op: { kind: 'comments' as const, id: source.id } }] : []),
     ];
     await Promise.all(operations.map(async ({ field, op }) => {
       if (source.dataErrors[field]) return;
@@ -82,6 +86,7 @@ export async function referenceSource(env: Env, value: SaveSourceInput): Promise
   return { input, title: String(data.title ?? data.name ?? input).slice(0, 300), snapshot: {
     kind: 'inspection', inspector: { provider: source.provider, type: source.type, id: source.id,
       requestedData: source.requestedData, dataErrors: source.dataErrors, assets,
+      ...(retained?.commentPages ? { commentPages: retained.commentPages } : {}),
       entity: source.type !== 'video' ? await saveShared(env, data) : undefined,
       channel: channel ? await saveShared(env, channel) : undefined,
       thumbnailUrl: thumbnailUrl(data),
@@ -100,7 +105,7 @@ export async function restoreSource(env: Env, reference: SourceReference): Promi
   if (reference.kind === 'search') return sourceSnapshotSchema.parse({
     kind: 'search', selectedData: reference.selectedData, items: await readShared(reference.results),
   });
-  const { assets, entity, channel, ...source } = reference.inspector;
+  const { assets, entity, channel, commentPages, ...source } = reference.inspector;
   const restored: Record<string, unknown> = { ...source,
     data: entity ? await readShared(entity) : { id: source.id, url: `https://youtube.com/watch?v=${encodeURIComponent(source.id)}` },
     channel: channel ? await readShared(channel) : undefined,
@@ -112,5 +117,36 @@ export async function restoreSource(env: Env, reference: SourceReference): Promi
     const value = { ...withYouTubeMetadata(stored.value as Record<string, unknown>), freshness: { state: 'stored', fetchedAt: new Date(stored.fetchedAt).toISOString() } };
     restored[field === 'metadata' ? 'data' : field] = value;
   }));
+  if (restored.comments) {
+    const pages = [sourceCommentPageSchema.parse(restored.comments)];
+    for (const asset of commentPages ?? []) {
+      const saved = await videoCatalog(env)?.readSourceVersion(asset);
+      if (!saved) throw new ApiError(404, 'SOURCE_ASSET_MISSING', 'A saved comments page is unavailable. Retry loading stored data.');
+      pages.push(sourceCommentPageSchema.parse(saved.value));
+    }
+    restored.comments = mergeSourceCommentPages(pages);
+    restored.commentPagesLoaded = pages.length;
+  }
   return sourceSnapshotSchema.parse({ kind: 'inspection', inspector: restored });
+}
+
+/** Append an already-fetched page to an owned immutable chain. Never calls a provider. */
+export async function appendSourceComments(env: Env, reference: SourceReference, continuation: string, asset: VideoAssetReference): Promise<SourceReference> {
+  if (reference.kind !== 'inspection' || reference.inspector.type !== 'video' || !reference.inspector.assets.comments) {
+    throw new ApiError(409, 'SOURCE_COMMENTS_MISSING', 'Save the first comments page before adding another page.');
+  }
+  const catalog = videoCatalog(env);
+  if (!catalog) throw new ApiError(503, 'SOURCE_STORAGE_UNAVAILABLE', 'Saved source storage is unavailable.');
+  const source = reference.inspector;
+  const last = source.commentPages?.at(-1) ?? source.assets.comments!;
+  const previous = await catalog.readSourceVersion(last);
+  if (!previous || sourceCommentPageSchema.parse(previous.value).continuation !== continuation) {
+    throw new ApiError(409, 'SOURCE_COMMENTS_MISMATCH', 'This page does not follow the saved comments. Reopen the saved source.');
+  }
+  const expected = videoResourceKey({ kind: 'comments', id: source.id, continuation })!;
+  if (asset.videoId !== expected.videoId || asset.kind !== expected.kind || asset.variant !== expected.variant) throw new ApiError(409, 'SOURCE_COMMENTS_MISMATCH', 'The comments version does not match this page.');
+  const saved = await catalog.readSourceVersion(asset);
+  if (!saved) throw new ApiError(409, 'SOURCE_ASSET_NOT_SAVED', 'The comments page is not stored yet. Retry saving it.');
+  if (sourceCommentPageSchema.parse(saved.value).videoId !== source.id) throw new ApiError(500, 'SOURCE_ASSET_INVALID', 'Saved comments could not be verified.');
+  return { ...reference, inspector: { ...source, commentPages: [...(source.commentPages ?? []), asset] } };
 }

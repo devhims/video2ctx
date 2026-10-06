@@ -35,13 +35,60 @@ describe('structured answer citations', () => {
     expect(renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]}).answer)
       .toBe(`${table}\n\nSources: [cite:e1]`);
   });
+  it.each(['[cite:e1]', '[cite:ref_1]', '(source marker:ref_1]'])('QA 012: preserves a declared reference in a bullet: %s', marker => {
+    expect(renderStructuredAnswer({ ...base, blocks: [
+      { text: `- A supported observation. ${marker}`, evidenceIds: ['e1'] },
+    ] }, new Map([['ref_1', 'e1']])).answer).toBe('- A supported observation. [cite:e1]');
+  });
   it('does not allow inline aliases to cite evidence undeclared for the block', () => {
     const table='| Test | Source |\n| --- | --- |\n| Coding | [cite:ref_2] |';
-    const input=renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','invented']]));
-    expect(input.answer).toContain('| Coding | [source unavailable] |');
-    expect(input.answer).not.toContain('invented');
-    expect(input.answer).not.toContain('ref_2');
-    expect(input.answer).toContain('[cite:e1]');
+    expect(() => renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','invented']])))
+      .toThrow(z.ZodError);
+  });
+  it.each(['[cite:ref_2]', '(source marker:ref_2]'])('QA 012: rejects wrong-block references even when another block declares them: %s', marker => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [
+      { text: `First source ${marker}.`, evidenceIds: ['e1'] },
+      { text: 'Second source.', evidenceIds: ['e2'] },
+    ] }, new Map([['ref_2', 'e2']]))).toThrow(z.ZodError);
+  });
+  it('QA 012: citation repair feedback identifies the block without echoing untrusted marker text', () => {
+    let error: unknown;
+    try {
+      renderStructuredAnswer({ ...base, blocks: [
+        { text: 'A supported first block.', evidenceIds: ['e1'] },
+        { text: 'Another claim [cite:untrusted marker payload].', evidenceIds: ['e1'] },
+      ] });
+    } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(z.ZodError);
+    expect((error as z.ZodError).issues).toEqual([expect.objectContaining({
+      code: 'custom', path: ['blocks', 1, 'text'], message: expect.stringContaining('evidenceIds'),
+    })]);
+    expect(JSON.stringify(error)).not.toContain('untrusted marker payload');
+  });
+  it('QA 012: reports every invalid block once alongside coherence errors', () => {
+    let error: unknown;
+    try {
+      renderStructuredAnswer({ ...base, blocks: [
+        { text: 'The claim continues', evidenceIds: ['e1'] },
+        { text: 'across blocks [cite:bad1] [cite:bad2].', evidenceIds: ['e1'] },
+        { text: 'Another claim [cite:bad3].', evidenceIds: ['e1'] },
+      ] });
+    } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(z.ZodError);
+    const issues = (error as z.ZodError).issues;
+    expect(issues.map(issue => issue.path)).toEqual([
+      ['blocks', 0, 'text'], ['blocks', 1, 'text'], ['blocks', 2, 'text'],
+    ]);
+    expect(JSON.stringify(issues)).not.toMatch(/bad[123]/);
+  });
+  it.each(['[cite:ref_1, ref_2]', '[cite: ref_1]'])('QA 012: malformed marker feedback explains the one-ID syntax: %s', marker => {
+    let error: unknown;
+    try {
+      renderStructuredAnswer({ ...base, blocks: [{ text: `Claim ${marker}.`, evidenceIds: ['e1', 'e2'] }] },
+        new Map([['ref_1', 'e1'], ['ref_2', 'e2']]));
+    } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(z.ZodError);
+    expect((error as z.ZodError).issues[0]!.message).toMatch(/exactly one.*no spaces or commas/);
   });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
@@ -159,7 +206,7 @@ describe('structured answer citations', () => {
     expect(() => finalize(['invented'])).toThrow(/persisted evidence/);
   });
   it('does not allow answer text to inject extra references', () => {
-    expect(finalize(['e1'], 'Text [cite:invented]').citations.map(c => c.id)).toEqual(['e1']);
+    expect(() => finalize(['e1'], 'Text [cite:invented]')).toThrow(z.ZodError);
   });
   it('removes model-written short reference markers before adding validated citations', () => {
     const rendered = renderStructuredAnswer({ ...base, blocks: [

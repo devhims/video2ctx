@@ -18,6 +18,7 @@ export function evidenceFallback(
   packets: readonly EvidencePacket[],
   intent: 'topic_research' | 'inspect_video',
   failureMessage?: string,
+  durationNotice?: string,
 ): FinalizeAnswerInput | null {
   const accessWarnings = [...new Map(packets.flatMap(packet => packet.warnings)
     .filter(warning => ['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'].includes(warning.code))
@@ -30,14 +31,19 @@ export function evidenceFallback(
       const excerpt = packet.excerpts.find(e => e.sourceId === source.id && /^[A-Za-z0-9:_-]+$/.test(e.id));
       return excerpt ? [`- ${safeText(source.title ?? 'Video source')} [cite:${excerpt.id}]`] : [];
     })).slice(0, 3);
-    if (!links.length) return null;
+    if (!links.length && !durationNotice) return null;
+    const explanation = links.length
+      ? 'I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.'
+      : 'I could not analyze the requested video content in this run. I cannot give an evidence-backed summary without its content.';
     return {
       intent, confidence: 'low', citations: [], artifacts: [],
-      answer: `I found potentially relevant videos, but could not analyze their content in this run. I cannot give an evidence-backed recommendation or summary from titles and descriptions alone.\n\nSources to explore, not verified recommendations:\n${links.join('\n')}`,
+      answer: `${durationNotice ? `${durationNotice}\n\n` : ''}${explanation}${links.length ? `\n\nSources to explore, not verified recommendations:\n${links.join('\n')}` : ''}`,
       warnings: [
       ...accessWarnings,
         { code: 'PARTIAL_EVIDENCE', message: 'Video content analysis did not complete; the requested answer is unavailable.' },
-        { code: 'NO_CONTENT_EVIDENCE', message: 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.' },
+        { code: 'NO_CONTENT_EVIDENCE', message: links.length
+          ? 'Only discovery or metadata evidence was available. Linked videos have not been reviewed.'
+          : 'No usable video content was available. The requested video has not been reviewed.' },
       ],
     };
   }

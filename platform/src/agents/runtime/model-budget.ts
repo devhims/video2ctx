@@ -16,7 +16,9 @@ export type AgentModelUsageCategory =
   | 'transcript_analyst'
   | 'visual_analyst'
   | 'timeout_finalizer'
-  | 'citation_repair';
+  | 'citation_repair'
+  /** Post-answer memory updater. Recorded after completion and settled as separate telemetry. */
+  | 'memory_update';
 
 export interface AgentModelUsageEntry {
   callId: string;

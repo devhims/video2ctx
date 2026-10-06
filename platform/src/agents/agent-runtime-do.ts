@@ -1,3 +1,4 @@
+import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
 import { storedTranscriptFailure, transcriptRetrievalKey } from './providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
@@ -12,8 +13,19 @@ import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
 import { removeIdempotencyColumn } from './runtime/remove-idempotency-column';
-import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
+import { AGENT_MAX_TOOL_CALLS, AGENT_CREDIT_RESERVE, recordAgentMemoryCost, reserveAgentCredits, settleAgentCredits } from './runtime/billing';
 import { estimateModelCostMicros } from './runtime/model-budget';
+import {
+  generateMemoryDelta,
+  MEMORY_UPDATE_COST_RESERVE_MICROS,
+  MEMORY_UPDATE_MAX_ATTEMPTS,
+  MEMORY_UPDATE_TIMEOUT_MESSAGE,
+  MEMORY_UPDATE_TIMEOUT_MS,
+  MEMORY_UPDATER_VERSION,
+  type MemoryUsageObservation,
+} from './runtime/memory-updater';
+import { fireworksModelPricing } from './fireworks-finalizer';
+import type { LanguageModel } from 'ai';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, AGENT_RESEARCH_TIMEOUT_MS, AGENT_FINALIZATION_TIMEOUT_MS, AGENT_PERSISTENCE_TIMEOUT_MS, withRunDeadline } from './runtime/deadline';
 import {
   Agent,
@@ -22,7 +34,7 @@ import {
   type FiberRecoveryResult,
 } from 'agents';
 import { z } from 'zod';
-import { ApiError, safeErrorLog } from '../lib/http';
+import { ApiError, safeErrorLog, sha256 } from '../lib/http';
 import {
   executeResearchRun,
   extractYouTubeVideoIds,
@@ -55,7 +67,7 @@ import {
 } from './contracts';
 import { buildAgentTurnResult } from './finalizer';
 import { metadataForConversation, evidenceWithConversationMetadata } from './runtime/conversation-metadata';
-import { AGENT_MODEL_ID, estimateAgentModelCostMicros } from './model';
+import { AGENT_MODEL_ID, createAgentModel, estimateAgentModelCostMicros } from './model';
 import { normalizeAgentExecutionError } from './runtime/agent-errors';
 import {
   AGENT_MODEL_COST_LIMIT_MICROS,
@@ -115,6 +127,7 @@ interface ToolCallRow {
   status: 'running' | 'completed' | 'failed';
   result_json: string | null;
   error: string | null;
+  error_context_json: string | null;
   credits: number;
   created_at: number;
   updated_at: number;
@@ -125,6 +138,23 @@ interface RouteRow {
   decision_json: string;
   created_at: number;
 }
+
+type MemoryJobStatus = 'pending' | 'running' | 'completed' | 'skipped' | 'failed';
+interface MemoryJobRow {
+  run_id: string;
+  turn_ordinal: number;
+  answer_sha256: string;
+  updater_version: number;
+  generation: number;
+  status: MemoryJobStatus;
+  attempts: number;
+  outcome: string | null;
+  created_at: number;
+  updated_at: number;
+}
+const MEMORY_JOB_CALLBACK = 'processMemoryJobs';
+/** Wakes the DO if an in-process drain was lost to eviction, a crash, or the commit-to-dispatch gap. */
+const MEMORY_BACKSTOP_MS = 30_000;
 
 export interface AgentRunView extends AgentRunReceipt {
   transcriptDiagnostics?: TranscriptDiagnostic[];
@@ -283,6 +313,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   readonly #activeRunFibers = new Map<string, string>();
   readonly #activeRuns = new Set<Promise<void>>();
   readonly #inFlightEvidence = new Map<string, Promise<EvidencePacket>>();
+  #memoryDrain?: Promise<void>;
+  #memoryRedrain = false;
+  #memoryAbort?: AbortController;
+  /** Set during account deletion: usage observed afterwards cannot be recorded. */
+  #memoryUsageClosed = false;
+  #memorySchemaReady = false;
 
   private scheduleTraceRetry() {
     return this.schedule(new Date(Date.now()+15_000), 'retryTraceIndex', {}, {idempotent:true});
@@ -312,6 +348,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       for (const run of this.sql<RunRow>`SELECT * FROM agent_runs WHERE billing_settled = 0`) {
         await this.scheduleRunReconciliation(run);
       }
+      // Recover memory intent committed with an answer whose dispatch or drain was lost.
+      if (this.memoryWorkRemaining()) await this.dispatchMemoryJobs();
     }
   }
 
@@ -742,6 +780,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         operation = excluded.operation,
         status = 'running',
         error = null,
+        error_context_json = null,
         updated_at = excluded.updated_at
     `;
 
@@ -780,9 +819,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       console.error({ event: 'agent_evidence_tool_failure', runId, toolCallId: execution.toolCallId,
         tool: execution.toolName, extractionId, ...safeErrorLog(error) });
       const message = errorMessage(error);
+      const durationLimit = videoDurationFailure(error);
       this.sql`
         UPDATE agent_tool_calls
-        SET status = 'failed', error = ${message}, updated_at = ${Date.now()}
+        SET status = 'failed', error = ${message}, error_context_json = ${durationLimit ? JSON.stringify(durationLimit) : null}, updated_at = ${Date.now()}
         WHERE run_id = ${runId} AND tool_call_id = ${execution.toolCallId} AND status = 'running'
       `;
       throw error;
@@ -799,6 +839,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     toolCallId: string,
     input: FinalizeAnswerInput,
   ): Promise<AgentTurnResult> {
+    const parsedInput = finalizeAnswerInputSchema.parse(input);
+    // The only await before acceptance. Every read, validation and the commit below
+    // run synchronously, so cancellation, evidence deletion or a concurrent finalize
+    // cannot interleave between validating this answer and persisting it.
+    // buildAgentTurnResult copies input.answer verbatim, so this is the accepted answer's hash.
+    const answerHash = await sha256(parsedInput.answer);
+    if (this.#deleted) throw new Error('Agent run is no longer active.');
     const run = this.requireRun(runId);
     if (run.result_json) return agentTurnResultSchema.parse(JSON.parse(run.result_json));
     const toolCount = this.sql<{ count: number }>`
@@ -812,7 +859,6 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (run.status === 'failed' || run.status === 'cancelled') {
       throw new Error('Agent run is no longer active.');
     }
-    const parsedInput = finalizeAnswerInputSchema.parse(input);
     const decision = this.readRoute(runId);
     if (!decision) {
       throw new ApiError(422, 'AGENT_ROUTE_MISSING', 'The agent run has no persisted capability route.');
@@ -842,26 +888,45 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       userMessageId: run.user_message_id,
       agentMessageId: run.agent_message_id,
     }, admission, parsedInput,
-    conversationEvidence(evidenceWithConversationMetadata([...citedSessionEvidence, ...this.readEvidencePackets(runId)], history), history), creditsCharged);
-    this.sessionStore.remember(runId, parsedInput.memoryUpdates ?? [], citedSessionEvidence);
+    conversationEvidence(evidenceWithConversationMetadata([...citedSessionEvidence, ...this.readEvidencePackets(runId)], history), history), creditsCharged,
+    decision.route === 'inspect_video' || decision.route === 'topic_research' ? {
+      failures: this.readEvidenceToolFailures(runId),
+      requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
+    } : undefined);
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();
-    this.sql`
-      INSERT INTO agent_tool_calls (
-        run_id, tool_call_id, semantic_key, tool_name, operation, status,
-        result_json, error, credits, created_at, updated_at
-      ) VALUES (
-        ${runId}, ${toolCallId}, 'finalize', 'finalize_answer', 'finalize', 'completed',
-        ${serialized}, null, 0, ${timestamp}, ${timestamp}
-      )
-      ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
-        status = 'completed', result_json = excluded.result_json, error = null, updated_at = excluded.updated_at
-    `;
-    this.sql`
-      UPDATE agent_runs
-      SET status = 'completed', phase = 'completed', result_json = ${serialized}, draft_json = null, error = null, updated_at = ${timestamp}
-      WHERE id = ${runId}
-    `;
+    // The accepted answer and its memory intent commit together, or neither does.
+    this.ctx.storage.transactionSync(() => {
+      this.sql`
+        INSERT INTO agent_tool_calls (
+          run_id, tool_call_id, semantic_key, tool_name, operation, status,
+          result_json, error, credits, created_at, updated_at
+        ) VALUES (
+          ${runId}, ${toolCallId}, 'finalize', 'finalize_answer', 'finalize', 'completed',
+          ${serialized}, null, 0, ${timestamp}, ${timestamp}
+        )
+        ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
+          status = 'completed', result_json = excluded.result_json, error = null, updated_at = excluded.updated_at
+      `;
+      this.sql`
+        UPDATE agent_runs
+        SET status = 'completed', phase = 'completed', result_json = ${serialized}, draft_json = null, error = null, updated_at = ${timestamp}
+        WHERE id = ${runId}
+      `;
+      // Out-of-scope rejections carry no session knowledge, and application fallback
+      // answers only explain temporary retrieval or finalization failures.
+      if (parsedInput.intent !== 'rejected' && !/^evidence-(?:unavailable|fallback):/.test(toolCallId)) {
+        this.sql`
+          INSERT OR IGNORE INTO agent_memory_jobs (
+            run_id, turn_ordinal, answer_sha256, updater_version, generation, status, attempts,
+            outcome, created_at, updated_at
+          ) VALUES (
+            ${runId}, ${run.turn_ordinal}, ${answerHash}, ${MEMORY_UPDATER_VERSION},
+            ${this.sessionStore.runGeneration(runId)}, 'pending', 0, null, ${timestamp}, ${timestamp}
+          )
+        `;
+      }
+    });
     this.sessionStore.search.upsertHistory({
       id: run.agent_message_id, role: 'assistant', text: result.answer,
       ordinal: run.turn_ordinal * 2 + 1, parentId: run.user_message_id, createdAt: timestamp,
@@ -872,6 +937,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       creditsCharged: result.billing.creditsCharged,
       citationCount: result.citations.length,
     });
+    await this.dispatchMemoryJobs();
     await this.settleRun(runId);
     return agentTurnResultSchema.parse(JSON.parse(this.requireRun(runId).result_json!));
   }
@@ -890,11 +956,241 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE run_id = ${runId} AND status = 'completed'
     `[0]?.credits ?? 0;
     const remaining = await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
-      () => settleAgentCredits(this.env, run.user_id, runId, actual, this.modelCostMicros(runId)), 'Persistence phase timeout.');
+      () => settleAgentCredits(this.env, run.user_id, runId, actual, this.answerModelCostMicros(runId)), 'Persistence phase timeout.');
     const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
     if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining };
     this.sql`UPDATE agent_runs SET billing_settled = 1,
       result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId}`;
+  }
+
+  /** Persist a wake-up before relying on in-process work, then start the drain without awaiting it. */
+  private async dispatchMemoryJobs(): Promise<void> {
+    try { await this.scheduleMemoryBackstop(); } catch (error) {
+      // onStart re-arms pending jobs if this process ends before the alarm is saved.
+      console.warn({ event: 'agent_memory_dispatch_failed', ...safeErrorLog(error) });
+    }
+    this.ctx.waitUntil(this.processMemoryJobs());
+  }
+
+  private async scheduleMemoryBackstop(): Promise<void> {
+    if (this.getSchedules().some(schedule => schedule.callback === MEMORY_JOB_CALLBACK)) return;
+    await this.schedule(new Date(Date.now() + MEMORY_BACKSTOP_MS), MEMORY_JOB_CALLBACK, {});
+  }
+
+  private async cancelMemorySchedules(): Promise<void> {
+    for (const schedule of this.getSchedules()) if (schedule.callback === MEMORY_JOB_CALLBACK) await this.cancelSchedule(schedule.id);
+  }
+
+  private memoryWorkRemaining(): boolean {
+    return this.sql<{ count: number }>`
+      SELECT (SELECT COUNT(*) FROM agent_memory_jobs WHERE status IN ('pending', 'running'))
+        + (SELECT COUNT(*) FROM agent_model_usage u WHERE u.category = 'memory_update'
+          AND NOT EXISTS (SELECT 1 FROM agent_memory_cost_reports r WHERE r.run_id = u.run_id AND r.call_id = u.call_id)) AS count
+    `[0]!.count > 0;
+  }
+
+  /**
+   * Schedule callback and in-process dispatch share one serialized drain. Jobs run
+   * in turn order; a request arriving mid-drain triggers one more pass. Never throws.
+   */
+  async processMemoryJobs(): Promise<void> {
+    if (this.#memoryDrain) {
+      this.#memoryRedrain = true;
+      return this.#memoryDrain;
+    }
+    const drain = (async () => {
+      do {
+        this.#memoryRedrain = false;
+        try { await this.drainMemoryJobs(); } catch (error) {
+          console.error({ event: 'agent_memory_drain_failed', ...safeErrorLog(error) });
+          if (!this.#deleted) await this.scheduleMemoryBackstop().catch(() => undefined);
+          return;
+        }
+      } while (this.#memoryRedrain && !this.#deleted);
+    })().finally(() => { this.#memoryDrain = undefined; });
+    this.#memoryDrain = drain;
+    return drain;
+  }
+
+  private async drainMemoryJobs(): Promise<void> {
+    if (this.#deleted) return;
+    this.ensureAgentRuntimeSchema();
+    // Replace any consumed alarm with a fresh one that survives a crash during this drain.
+    await this.cancelMemorySchedules();
+    await this.scheduleMemoryBackstop();
+    for (;;) {
+      if (this.#deleted) return;
+      // Within this process only the drain runs jobs, so a selected running row
+      // belongs to an interrupted process and is recovered with its attempt counted.
+      const job = this.sql<MemoryJobRow>`
+        SELECT * FROM agent_memory_jobs WHERE status IN ('pending', 'running')
+        ORDER BY turn_ordinal, created_at LIMIT 1
+      `[0];
+      if (!job) break;
+      await this.runMemoryJob(job);
+    }
+    if (!await this.settleMemoryCosts() || this.memoryWorkRemaining()) return;
+    await this.cancelMemorySchedules();
+    if (this.memoryWorkRemaining()) await this.scheduleMemoryBackstop();
+  }
+
+  private finishMemoryJob(runId: string, status: MemoryJobStatus, outcome: string): void {
+    this.sql`UPDATE agent_memory_jobs SET status = ${status}, outcome = ${outcome}, updated_at = ${Date.now()}
+      WHERE run_id = ${runId}`;
+  }
+
+  /** Tests replace this model. It uses the same provider configuration as other GLM roles. */
+  private memoryUpdaterModel(runId: string): LanguageModel {
+    return createAgentModel(this.env, this.sessionAffinity, 'low', { agent_run_id: runId, model_role: 'memory_updater' });
+  }
+
+  private async runMemoryJob(job: MemoryJobRow): Promise<void> {
+    if (job.updater_version !== MEMORY_UPDATER_VERSION) return this.finishMemoryJob(job.run_id, 'skipped', 'updater_version');
+    const readAccepted = () => {
+      const run = this.readRun(job.run_id);
+      const result = run?.status === 'completed' && run.result_json
+        ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : undefined;
+      return run && result && !result.warnings.some(warning => warning.code === 'SESSION_EVIDENCE_DELETED')
+        ? { run, result } : undefined;
+    };
+    const accepted = readAccepted();
+    if (!accepted) return this.finishMemoryJob(job.run_id, 'skipped', 'answer_unavailable');
+    if (await sha256(accepted.result.answer) !== job.answer_sha256) return this.finishMemoryJob(job.run_id, 'skipped', 'answer_changed');
+    if (this.#deleted) return;
+    // Any forget or evidence deletion since the run began fences its memory.
+    if (this.sessionStore.generation() !== job.generation) return this.finishMemoryJob(job.run_id, 'skipped', 'session_changed');
+    if (job.attempts >= MEMORY_UPDATE_MAX_ATTEMPTS) return this.finishMemoryJob(job.run_id, 'failed', 'attempts_exhausted');
+    // Admit a call only if the run's observed model cost plus one estimated allowance for
+    // each started call that has not reported usage yet (for example, a timed-out call whose
+    // provider ignored abort), plus one for this call, stays within the existing run limit.
+    const observedCalls = this.sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM agent_model_usage WHERE run_id = ${job.run_id} AND category = 'memory_update'
+    `[0]!.count;
+    const unobservedCalls = Math.max(0, job.attempts - observedCalls);
+    if (this.modelCostMicros(job.run_id) + (unobservedCalls + 1) * MEMORY_UPDATE_COST_RESERVE_MICROS > AGENT_MODEL_COST_LIMIT_MICROS) {
+      return this.finishMemoryJob(job.run_id, 'skipped', 'cost_limit');
+    }
+    // Count the attempt durably before inference, so a crash cannot retry without bound.
+    const attempt = job.attempts + 1;
+    this.sql`UPDATE agent_memory_jobs SET status = 'running', attempts = ${attempt}, updated_at = ${Date.now()}
+      WHERE run_id = ${job.run_id}`;
+    const memoryVersion = this.sessionStore.memoryVersion();
+    const input = {
+      question: accepted.run.execution_message ?? accepted.run.message,
+      answer: accepted.result.answer,
+      citations: accepted.result.citations,
+      memories: this.sessionStore.brief().memories,
+    };
+    const controller = new AbortController();
+    this.#memoryAbort = controller;
+    try {
+      // generateMemoryDelta owns the wall-clock deadline: it rejects on time even if the
+      // provider ignores abort, and a late result is never returned here or applied.
+      const delta = await generateMemoryDelta({ model: this.memoryUpdaterModel(job.run_id), input, signal: controller.signal,
+        timeoutMs: this.memoryUpdateTimeoutMs(),
+        onUsage: observation => this.recordMemoryUsage(job.run_id, attempt, observation) });
+      if (this.#deleted) return;
+      const status = this.ctx.storage.transactionSync(() => {
+        // Revalidate everything the model relied on immediately before the write.
+        const current = readAccepted();
+        if (!current || current.result.answer !== input.answer) {
+          this.finishMemoryJob(job.run_id, 'skipped', 'answer_changed');
+          return 'answer_changed';
+        }
+        const applied = this.sessionStore.applyMemoryDelta({ runId: job.run_id, sourceTurn: job.turn_ordinal,
+          generation: job.generation, memoryVersion, changes: delta.changes });
+        if (applied.status === 'stale_snapshot') {
+          this.finishMemoryJob(job.run_id, attempt >= MEMORY_UPDATE_MAX_ATTEMPTS ? 'failed' : 'pending', 'stale_snapshot');
+        } else if (applied.status === 'fenced') {
+          this.finishMemoryJob(job.run_id, 'skipped', 'session_changed');
+        } else {
+          this.finishMemoryJob(job.run_id, 'completed', `applied:${applied.applied};rejected:${delta.rejected}`);
+        }
+        return applied.status;
+      });
+      console.log(JSON.stringify({ event: 'agent_memory_update', runId: job.run_id, attempt, status,
+        proposed: delta.changes.length, rejected: delta.rejected }));
+    } catch (error) {
+      if (this.#deleted) return;
+      const outcome = controller.signal.aborted ? 'aborted'
+        : errorMessage(error) === MEMORY_UPDATE_TIMEOUT_MESSAGE ? 'timeout' : 'model_failed';
+      this.finishMemoryJob(job.run_id, attempt >= MEMORY_UPDATE_MAX_ATTEMPTS ? 'failed' : 'pending', outcome);
+      console.warn({ event: 'agent_memory_update_failed', runId: job.run_id, attempt, outcome, ...safeErrorLog(error) });
+    } finally {
+      if (this.#memoryAbort === controller) this.#memoryAbort = undefined;
+    }
+  }
+
+  /** Tests shorten this. Production uses the updater's 20-second wall-clock limit. */
+  private memoryUpdateTimeoutMs(): number {
+    return MEMORY_UPDATE_TIMEOUT_MS;
+  }
+
+  /**
+   * Record usage once per observed provider call. A call that responds after its
+   * deadline, after its job finished, or after the answer completed is still recorded
+   * while its run exists, then reported by the next drain. Once account deletion closes
+   * recording, a late observation is dropped rather than recreating deleted data.
+   */
+  private recordMemoryUsage(runId: string, attempt: number, observation: MemoryUsageObservation): void {
+    if (this.#memoryUsageClosed || !this.readRun(runId)) {
+      console.warn(JSON.stringify({ event: 'agent_memory_usage_unrecorded', runId, attempt }));
+      return;
+    }
+    const pricing = observation.modelId ? fireworksModelPricing(observation.modelId) : undefined;
+    const estimatedCostMicros = pricing ? estimateModelCostMicros(observation.usage, pricing) : estimateAgentModelCostMicros(observation.usage);
+    const callId = `memory-update:${attempt}`;
+    this.sql`
+      INSERT INTO agent_model_usage (
+        run_id, call_id, category, model_id, input_tokens, cached_input_tokens,
+        output_tokens, estimated_cost_micros, created_at
+      ) VALUES (
+        ${runId}, ${callId}, 'memory_update', ${observation.modelId ?? AGENT_MODEL_ID}, ${observation.usage.inputTokens ?? 0},
+        ${observation.usage.inputTokenDetails?.cacheReadTokens ?? 0}, ${observation.usage.outputTokens ?? 0},
+        ${estimatedCostMicros}, ${Date.now()}
+      )
+      ON CONFLICT(run_id, call_id) DO NOTHING
+    `;
+    console.log(JSON.stringify({ event: 'agent_model_usage', runId, category: 'memory_update', callId,
+      modelId: observation.modelId, inputTokens: observation.usage.inputTokens, outputTokens: observation.usage.outputTokens,
+      estimatedCostMicros }));
+    // Joins an active drain or starts one, so late usage is reported too.
+    if (!this.#deleted) void this.dispatchMemoryJobs();
+  }
+
+  /**
+   * Report each observed memory call once, as a zero-credit ledger entry with its
+   * provider cost. Independent of job status and of the run's credit settlement.
+   * Returns false while D1 is unavailable; the backstop retries.
+   */
+  private async settleMemoryCosts(): Promise<boolean> {
+    for (const usage of this.sql<{ run_id: string; call_id: string; estimated_cost_micros: number; user_id: string }>`
+      SELECT u.run_id, u.call_id, u.estimated_cost_micros, r.user_id FROM agent_model_usage u
+      JOIN agent_runs r ON r.id = u.run_id
+      WHERE u.category = 'memory_update' AND NOT EXISTS (
+        SELECT 1 FROM agent_memory_cost_reports c WHERE c.run_id = u.run_id AND c.call_id = u.call_id)
+    `) {
+      try {
+        await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
+          () => recordAgentMemoryCost(this.env, usage.user_id, usage.run_id, usage.call_id, usage.estimated_cost_micros),
+          'Persistence phase timeout.');
+      } catch (error) {
+        console.warn({ event: 'agent_memory_cost_settlement_failed', runId: usage.run_id, ...safeErrorLog(error) });
+        return false;
+      }
+      this.sql`INSERT OR IGNORE INTO agent_memory_cost_reports (run_id, call_id, reported_at)
+        VALUES (${usage.run_id}, ${usage.call_id}, ${Date.now()})`;
+    }
+    return true;
+  }
+
+  /** Answer settlement excludes post-answer memory telemetry, which has its own ledger entry. */
+  private answerModelCostMicros(runId: string): number {
+    return this.sql<{ cost: number }>`
+      SELECT COALESCE(SUM(estimated_cost_micros), 0) AS cost
+      FROM agent_model_usage
+      WHERE run_id = ${runId} AND category != 'memory_update'
+    `[0]?.cost ?? 0;
   }
 
   // The watchdog allows phase budgets and persistence to finish, and retries
@@ -946,6 +1242,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       .map(run => this.cancelRunFiber(run.id, 'Account deleted.')));
     await Promise.allSettled([...this.#activeRuns]);
     for (const run of runs) await this.settleRun(run.id);
+    // Stop memory work. The drain is bounded by the updater's wall-clock deadline even if
+    // a provider ignores abort. Then close usage recording and report what was observed.
+    this.#memoryAbort?.abort(new Error('Account deleted.'));
+    await this.#memoryDrain;
+    this.sql`UPDATE agent_memory_jobs SET status = 'skipped', outcome = 'account_deleted', updated_at = ${Date.now()}
+      WHERE status IN ('pending', 'running')`;
+    this.#memoryUsageClosed = true;
+    if (!await this.settleMemoryCosts()) throw new Error('Memory cost settlement is unavailable. Retry account deletion.');
     // Abort propagates to provider and model calls. Drain tool promises before
     // removing evidence so a late completion cannot recreate private data.
     await Promise.allSettled([...this.#inFlightEvidence.values()]);
@@ -954,7 +1258,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     await this.sessionStore.delete();
     this.sessionStore.search.clearHistory();
     for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_runs', 'session_run_generations', 'agent_trace_run_index', 'agent_trace_publish_order']) {
+      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
+      'agent_trace_run_index', 'agent_trace_publish_order']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
     // SDK snapshots contain run identifiers only, but clear those too.
@@ -969,8 +1274,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private readEvidenceToolFailures(runId: string): EvidenceToolFailure[] {
-    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error'>>`
-      SELECT tool_call_id, tool_name, operation, error
+    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json'>>`
+      SELECT tool_call_id, tool_name, operation, error, error_context_json
       FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'failed' AND error IS NOT NULL
       ORDER BY created_at ASC
@@ -982,6 +1287,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         toolName: row.tool_name,
         operation: operation.data,
         message: row.error,
+        durationLimit: parseVideoDurationFailure(row.error_context_json),
       }];
     });
   }
@@ -1414,6 +1720,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         PRIMARY KEY (run_id, tool_call_id)
       )
     `;
+    if (!this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`.some(column => column.name === 'error_context_json')) {
+      this.sql`ALTER TABLE agent_tool_calls ADD COLUMN error_context_json TEXT`;
+    }
     this.sql`
       CREATE TABLE IF NOT EXISTS agent_routes (
         run_id TEXT PRIMARY KEY,
@@ -1482,6 +1791,39 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       CREATE INDEX IF NOT EXISTS agent_model_usage_run_idx
       ON agent_model_usage (run_id, created_at)
     `;
+    this.sql`
+      CREATE TABLE IF NOT EXISTS agent_memory_jobs (
+        run_id TEXT PRIMARY KEY,
+        turn_ordinal INTEGER NOT NULL,
+        answer_sha256 TEXT NOT NULL,
+        updater_version INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        outcome TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `;
+    this.sql`CREATE INDEX IF NOT EXISTS agent_memory_jobs_status_idx ON agent_memory_jobs (status, turn_ordinal)`;
+    // One row per observed memory call whose zero-credit cost entry reached D1.
+    this.sql`
+      CREATE TABLE IF NOT EXISTS agent_memory_cost_reports (
+        run_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        reported_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, call_id)
+      )
+    `;
+    if (!this.#memorySchemaReady) {
+      // Memories written before turn tracking keep their writer's turn, so an
+      // older concurrent branch cannot overwrite them after this deploy.
+      // The session store getter creates the session memory tables.
+      void this.sessionStore;
+      this.sql`INSERT OR IGNORE INTO session_memory_writes (id, source_turn)
+        SELECT m.id, COALESCE(r.turn_ordinal, 0) FROM session_memories m LEFT JOIN agent_runs r ON r.id = m.run_id`;
+      this.#memorySchemaReady = true;
+    }
   }
 
   private ensureModelIdColumn(): void {

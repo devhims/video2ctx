@@ -52,3 +52,21 @@ export async function settleAgentCredits(
     .bind(userId).first<{ balance: number }>();
   return Number(row?.balance ?? 0);
 }
+
+/**
+ * Provider cost of one observed post-answer memory updater call. Credits stay
+ * unchanged: user credits charge evidence retrieval only. The run settlement may
+ * already be final, so each observed call has its own zero-credit, once-only entry.
+ * A call observed late, after its job finished, therefore still gets reported.
+ */
+export async function recordAgentMemoryCost(
+  env: CreditEnv, userId: string, runId: string, callId: string, providerCostMicros: number,
+): Promise<void> {
+  if (!Number.isInteger(providerCostMicros) || providerCostMicros < 0) throw new Error('Invalid memory provider cost.');
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO credit_ledger
+      (id, user_id, operation_id, entry_type, credits, provider_cost_micros, metadata_json, created_at)
+    VALUES (?, ?, ?, 'adjustment', 0, ?, ?, ?)
+  `).bind(crypto.randomUUID(), userId, `agent-memory:${runId}:${callId}`, providerCostMicros,
+    JSON.stringify({ operation: 'agent_memory', runId, callId }), Date.now()).run();
+}
