@@ -65,37 +65,47 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
-  assertCoherentAnswerBlocks(input);
+  const issues = coherentAnswerBlockIssues(input);
+  const answer = input.blocks.map((block, blockIndex) => {
+    const declared = new Set(block.evidenceIds);
+    const placed = new Set<string>();
+    let invalidInline = false;
+    // Inline placement can position only references declared for this block.
+    // Persisted evidence validation still owns whether those IDs are valid.
+    const text = block.text
+      .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
+      .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (marker, inlineId: string | undefined, escapedId: string | undefined) => {
+        const rawId = inlineId ?? escapedId!;
+        const id = aliases.get(rawId) ?? rawId;
+        if (!declared.has(id)) {
+          invalidInline = true;
+          return marker;
+        }
+        placed.add(id);
+        return `[cite:${id}]`;
+      });
+    // One bounded error per block gives the single repair all affected blocks.
+    // Never echo untrusted marker text in the error list or return this answer.
+    if (invalidInline) issues.push({ code: 'custom', path: ['blocks', blockIndex, 'text'],
+      message: 'Each marker must contain exactly one supplied ID, with no spaces or commas. Use separate [cite:ref_N] markers for multiple references. Every inline ID must be in this block\'s evidenceIds; add a supplied ID there or remove its marker. Never invent references.' });
+    const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
+    // Appending text to the final table row would create an extra cell.
+    const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
+    return remaining ? `${text}${separator}${remaining}`.trim() : text.trim();
+  }).join('\n\n');
+  if (issues.length) throw new z.ZodError(issues);
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,
     confidence: input.confidence,
     artifacts: input.artifacts,
     warnings: input.warnings.map(warning => ({ ...warning, code: warning.code === 'ANSWER_SCOPE_SHORTFALL' ? 'PARTIAL_EVIDENCE' : warning.code })),
     citations: [],
-    answer: input.blocks.map(block => {
-      const declared = new Set(block.evidenceIds);
-      const placed = new Set<string>();
-      // Inline placement can position only references declared for this block.
-      // Persisted evidence validation still owns whether those IDs are valid.
-      const text = block.text
-        .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
-        .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
-          const rawId = inlineId ?? escapedId!;
-          const id = aliases.get(rawId) ?? rawId;
-          if (!declared.has(id)) return '[source unavailable]';
-          placed.add(id);
-          return `[cite:${id}]`;
-        });
-      const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
-      // Appending text to the final table row would create an extra cell.
-      const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
-      return remaining ? `${text}${separator}${remaining}`.trim() : text.trim();
-    }).join('\n\n'),
+    answer,
   });
 }
 
 /** Local checks complement the transmitted schema without constraining decoding. */
-function assertCoherentAnswerBlocks(input: { blocks: { text: string }[]; warnings: { message: string }[] }) {
+function coherentAnswerBlockIssues(input: { blocks: { text: string }[]; warnings: { message: string }[] }) {
   const issues: z.core.$ZodIssue[] = [];
   // Narrow checks for known non-answers, not a minimum answer length. Quotes,
   // names, numbers, yes/no answers and supported partial answers remain valid.
@@ -129,5 +139,5 @@ function assertCoherentAnswerBlocks(input: { blocks: { text: string }[]; warning
       }
     }
   }
-  if (issues.length) throw new z.ZodError(issues);
+  return issues;
 }

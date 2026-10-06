@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
 import { executeResearchRun } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
-import type { CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
+import { compactAgentResult } from '../src/agents/response';
+import type { AgentTurnResult, CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
 
 const models = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('../src/agents/model', async importOriginal => ({
@@ -126,6 +127,101 @@ it('constrains generated citation IDs to supplied evidence, including memory fin
     blocks: { items: { properties: { evidenceIds: references } } },
     memoryUpdates: { items: { properties: { evidenceIds: references } } },
   } });
+});
+
+it.each(['generate', 'stream'] as const)('QA 012: %s repairs misplaced inline citations before saving a comparison', async mode => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const second: EvidencePacket = { ...evidence, packetId: 'other-frame',
+    sources: [{ id: 'other-video', provider: 'youtube', kind: 'video', videoId: 'zzzzzzzzzzz' }],
+    excerpts: [{ id: 'other-observation', sourceId: 'other-video', text: 'A rabbit stands outdoors.', startMs: 60000 }] };
+  options.recoveredEvidence = [second];
+  // Recovered evidence receives ref_1; conversation evidence receives ref_2.
+  const table = '| Video | Observation | Source |\n| --- | --- | --- |\n| Other | A rabbit stands outdoors. | [cite:ref_1] |\n| Prior | The woman holds the microphone. | [cite:ref_2] |';
+  const values = [
+    { ...output, blocks: [{ text: table, evidenceIds: ['ref_1'] }] },
+    { ...output, blocks: [{ text: table, evidenceIds: ['ref_1', 'ref_2'] }] },
+  ];
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: values.map(value => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [] })),
+    doStream: values.map(value => ({ stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start' as const, warnings: [] }, { type: 'text-start' as const, id: 'answer' },
+      { type: 'text-delta' as const, id: 'answer', delta: JSON.stringify(value) },
+      { type: 'text-end' as const, id: 'answer' },
+      { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
+    ], initialDelayInMs: null, chunkDelayInMs: null }) })),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+  const identity = { runId: options.runId, conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity,
+    { userId: 'user', creditsRemaining: 100 }, input, [second, evidence], 0));
+
+  await executeResearchRun(options);
+
+  const calls = mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls;
+  expect(calls).toHaveLength(2);
+  expect(JSON.stringify(calls[1]!.prompt)).toContain('validationFeedback');
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  const compact = compactAgentResult(result);
+  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace('[cite:ref_2]', '[2]'));
+  expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz', 'abcdefghijk']);
+  expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([
+    ['other-observation', 60000], ['frame-observation', 30000],
+  ]);
+  expect(result.answer).not.toContain('[source unavailable]');
+});
+
+it('QA 012: never persists a repeated invalid inline citation after repair is exhausted', async () => {
+  const { options, output } = setup('context_answer', true);
+  const classifier = models.select({}, {}, '', { model_role: 'classifier' });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ ...output,
+      blocks: [{ text: 'The woman holds the microphone. [cite:not_supplied]', evidenceIds: ['ref_1'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
+  }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'classifier' ? classifier : finalizer);
+
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
+
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).not.toHaveBeenCalled();
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+it('finalize_answer tool handoff compatibility: only the unified finalizer persists the answer', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence,
+    sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'invalid-inline', toolName: 'finalize_answer', input: JSON.stringify({
+      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+      blocks: [{ text: 'The woman holds the microphone. [cite:not_supplied]', evidenceIds: ['frame-observation'] }],
+    }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => {
+    expect(options.finalize).not.toHaveBeenCalled();
+    return { content: [{ type: 'text', text: JSON.stringify(output) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'finalizer' ? finalizer : core);
+
+  await executeResearchRun(options);
+
+  expect(core.doGenerateCalls).toHaveLength(1);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.stringContaining('timeout-finalizer'), expect.objectContaining({
+    answer: 'The woman holds the microphone. [cite:frame-observation]', intent: 'inspect_video',
+  }));
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
 it('resumes direct finalization without reclassification or a new deadline', async () => {
