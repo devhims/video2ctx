@@ -1,3 +1,4 @@
+import { isDurationLimitFallback, type DurationLimitAnswerContext } from './research/duration-limit-answer';
 import { ApiError } from '../lib/http';
 import {
   agentTurnResultSchema,
@@ -29,10 +30,12 @@ export function buildAgentTurnResult(
   input: FinalizeAnswerInput,
   packets: EvidencePacket[],
   creditsCharged: number,
+  durationLimitContext?: DurationLimitAnswerContext,
 ): AgentTurnResult {
   const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
   const citations: AgentCitation[] = [];
-  if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && markers.length === 0) {
+  if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && markers.length === 0
+    && !isDurationLimitFallback(input, packets, durationLimitContext)) {
     throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
   }
   for (const marker of markers) {

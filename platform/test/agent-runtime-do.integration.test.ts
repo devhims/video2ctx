@@ -1,3 +1,8 @@
+import { durationLimitNotice } from '../src/agents/research/duration-limit-answer';
+import { evidenceFallback } from '../src/agents/research/evidence-fallback';
+import { VideoTooLongError } from '../src/agents/runtime/video-duration-limit';
+import { TranscriptToolStageError } from '../src/agents/providers/youtube/tools/transcript-tool-errors';
+import type { EvidenceToolFailure } from '../src/agents/research/research-agent';
 import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
@@ -1682,5 +1687,73 @@ test('recovers an interrupted successor once and cancels the newest successor', 
       await vi.waitFor(() => expect(instance.sql`SELECT id FROM cf_agents_runs WHERE id=${firstId} OR id=${secondId}`).toHaveLength(0));
       perform.mockRestore();
     }
+  });
+});
+
+
+test('persists allowlisted duration context for recovery and upgrades legacy tool rows', async () => {
+  const { runtime, runId } = await seed('duration-failure-recovery', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+      readEvidenceToolFailures(runId: string): EvidenceToolFailure[];
+      ensureAgentRuntimeSchema(): void;
+    };
+    // Simulate a pre-upgrade SQLite table. Its existing rows must remain readable.
+    instance.sql`ALTER TABLE agent_tool_calls DROP COLUMN error_context_json`;
+    writer.ensureAgentRuntimeSchema();
+    instance.sql`UPDATE agent_tool_calls SET status='failed',error='VIDEO_TOO_LONG: legacy text' WHERE run_id=${runId}`;
+    expect(writer.readEvidenceToolFailures(runId)[0]?.durationLimit).toBeUndefined();
+    const guard = new VideoTooLongError('rfscVS0vtbw', 16012, 5400);
+    guard.message = 'PRIVATE_PROVIDER_DIAGNOSTIC';
+    const error = new TranscriptToolStageError('VIDEO_TOO_LONG', guard);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(writer.performEvidenceTool(runId, { toolCallId: 'long-course', toolName: 'get_video_transcript',
+        operation: 'transcript', semanticKey: 'long-course', input: { videoId: 'rfscVS0vtbw' },
+        execute: async () => { throw error; } })).rejects.toBe(error);
+    } finally { log.mockRestore(); }
+    const recovered = writer.readEvidenceToolFailures(runId).find(item => item.toolCallId === 'long-course');
+    expect(recovered?.durationLimit).toEqual({ videoId: 'rfscVS0vtbw', durationSeconds: 16012, limitSeconds: 5400 });
+    const row = instance.sql<{ error_context_json: string }>`SELECT error_context_json FROM agent_tool_calls WHERE tool_call_id='long-course'`[0]!;
+    expect(row.error_context_json).not.toContain('PRIVATE');
+    instance.sql`UPDATE agent_tool_calls SET error_context_json='malformed' WHERE tool_call_id='long-course'`;
+    expect(writer.readEvidenceToolFailures(runId).find(item => item.toolCallId === 'long-course')?.durationLimit).toBeUndefined();
+  });
+});
+
+
+test.each(['inspect_video', 'topic_research'] as const)('persists a duration-only %s answer using stored rejection context', async intent => {
+  const { runtime, runId } = await seed(`duration-only-${intent}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+      finalizeRun(runId: string, toolCallId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+    };
+    const videoId = 'rfscVS0vtbw';
+    const route = intent === 'inspect_video' ? { route: intent, videoId }
+      : { route: intent, comparisonVideoIds: [videoId, 'short000001'] };
+    instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify(route)},0)`;
+    const durationLimit = { videoId, durationSeconds: 16012, limitSeconds: 7200 };
+    const requestedVideoIds = intent === 'inspect_video' ? [videoId] : [videoId, 'short000001'];
+    const notice = durationLimitNotice([{ durationLimit }], [], requestedVideoIds);
+    const input = evidenceFallback([], intent, undefined, notice)!;
+    // Matching answer text and warnings cannot authorize an exception on their own.
+    await expect(writer.finalizeRun(runId, 'unverified', input)).rejects.toMatchObject({ code: 'AGENT_CITATION_REQUIRED' });
+    const error = new TranscriptToolStageError('VIDEO_TOO_LONG', new VideoTooLongError(videoId, 16012, 7200));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(writer.performEvidenceTool(runId, { toolCallId: 'long-course', toolName: 'get_video_transcript',
+        operation: 'transcript', semanticKey: 'long-course', input: { videoId },
+        execute: async () => { throw error; } })).rejects.toBe(error);
+    } finally { log.mockRestore(); }
+    await expect(writer.finalizeRun(runId, 'unsupported-claim', { ...input,
+      answer: `${input.answer} This course teaches Python.` })).rejects.toMatchObject({ code: 'AGENT_CITATION_REQUIRED' });
+    const result = await writer.finalizeRun(runId, 'duration-fallback', input);
+    expect(result.answer).toBe(input.answer);
+    expect(result.citations).toEqual([]);
+    const saved = instance.sql<{ status: string; result_json: string }>`SELECT status, result_json FROM agent_runs WHERE id=${runId}`[0]!;
+    expect(saved.status).toBe('completed');
+    expect(JSON.parse(saved.result_json).answer).toBe(input.answer);
   });
 });
