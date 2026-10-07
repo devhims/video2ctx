@@ -423,14 +423,29 @@ describe('YouTube AgentCore loop control', () => {
     expect(context.finalize).toHaveBeenCalledOnce();
   });
 
-  it('does not persist a length-truncated object even if its JSON parses', async () => {
+  it('keeps a length-limited answer whose JSON closes cleanly, with a note', async () => {
+    const output = { confidence: 'low', blocks: [{ text: 'A finding', evidenceIds: ['ref_1'] }], warnings: [] };
+    let attempts = 0;
+    const model = new MockLanguageModelV4({ doGenerate: async () => (attempts++,
+      { ...finalizerModelResult(output), finishReason: { unified: 'length' as const, raw: undefined } }) });
+    const context = inspectContext();
+    await runResearchAgentWithModel({ model, message: 'Inspect the video',
+      decision: { route: 'inspect_video', videoId: 'abcdefghijk' }, context,
+      finalizationDeadlineAt: Date.now() + 40_000, recoveredEvidence: [transcriptAnalysisPacket()] });
+    expect(attempts).toBe(1);
+    expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      answer: expect.stringContaining('A finding'),
+      warnings: expect.arrayContaining([{ code: 'ANSWER_TRUNCATED', message: 'This answer reached its length limit and may be missing later parts.' }]) }));
+  });
+
+  it('regenerates a length-limited answer with no complete block under the larger repair ceiling', async () => {
     const output = { confidence: 'low', blocks: [{ text: 'A finding', evidenceIds: ['ref_1'] }], warnings: [] };
     let attempts = 0;
     const model = new MockLanguageModelV4({ doGenerate: async call => {
       expect(call.maxOutputTokens).toBe(attempts ? 4000 : 3000);
-      return { ...finalizerModelResult(output), finishReason: {
-        unified: attempts++ === 0 ? 'length' as const : 'stop' as const, raw: undefined,
-      } };
+      if (attempts++) return finalizerModelResult(output);
+      return { ...finalizerModelResult(output), content: [{ type: 'text' as const, text: JSON.stringify(output).slice(0, 50) }],
+        finishReason: { unified: 'length' as const, raw: undefined } };
     } });
     const context = inspectContext();
     await runResearchAgentWithModel({ model, message: 'Inspect the video',

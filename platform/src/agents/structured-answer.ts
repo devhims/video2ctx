@@ -56,18 +56,19 @@ export function fillerOnlyAnswer(output: { blocks: { text: string }[] }): boolea
   return output.blocks.every(block => fragment.test(block.text.trim()) || promise.test(block.text.trim()));
 }
 
-/** Keep the complete blocks of an answer cut off at the output-token limit.
- * A block counts as complete only if its own object closed in the raw text. JSON that
- * closes cleanly despite the limit may have been closed early, so its last block is dropped. */
-export async function salvageTruncatedAnswer<T extends { blocks: unknown[] }>(candidate: string | undefined, schema: z.ZodType<T>): Promise<{ output: T; droppedBlock: boolean } | undefined> {
+/** Keep the complete blocks of an answer cut off at the output-token limit. A block
+ * counts as complete only if its own object closed in the raw text. JSON that closes
+ * cleanly despite the limit is kept whole and reported, so the case stays measurable. */
+export async function salvageTruncatedAnswer<T extends { blocks: unknown[] }>(candidate: string | undefined, schema: z.ZodType<T>): Promise<{ output: T; droppedBlock: boolean; closedCleanly: boolean } | undefined> {
   const { value, state } = await parsePartialJson(candidate);
   if (state !== 'repaired-parse' && state !== 'successful-parse') return undefined;
   if (!value || typeof value !== 'object' || !Array.isArray((value as { blocks?: unknown }).blocks)) return undefined;
   const blocks = (value as { blocks: unknown[] }).blocks;
-  const keep = state === 'successful-parse' ? blocks.length - 1 : Math.min(blocks.length, closedBlockCount(candidate!));
+  const closedCleanly = state === 'successful-parse';
+  const keep = closedCleanly ? blocks.length : Math.min(blocks.length, closedBlockCount(candidate!));
   if (keep < 1) return undefined;
   const parsed = schema.safeParse({ ...value, blocks: blocks.slice(0, keep) });
-  return parsed.success ? { output: parsed.data, droppedBlock: keep < blocks.length } : undefined;
+  return parsed.success ? { output: parsed.data, droppedBlock: keep < blocks.length, closedCleanly } : undefined;
 }
 
 /** Count entries of the top-level `blocks` array whose objects close in raw JSON text. */

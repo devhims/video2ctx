@@ -213,13 +213,13 @@ describe('truncated answer salvage', () => {
     blocks: texts.map(text => ({ text, evidenceIds: ['e1'] })) });
   it('keeps complete blocks and drops the block cut off mid-sentence', async () => {
     const candidate = answer('First complete point.', 'Second complete point.').slice(0, -2) + ', {"text": "Third point was cut off mid';
-    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: true, output: expect.objectContaining({ blocks: [
+    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: true, closedCleanly: false, output: expect.objectContaining({ blocks: [
       expect.objectContaining({ text: 'First complete point.' }), expect.objectContaining({ text: 'Second complete point.' }),
     ] }) });
   });
   it('keeps every block of a comparison when only the outer JSON is missing', async () => {
     const candidate = answer('Product A has 54.2% protein.', 'Product B has 61.0% protein.').slice(0, -2);
-    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: false, output: expect.objectContaining({ blocks: [
+    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: false, closedCleanly: false, output: expect.objectContaining({ blocks: [
       expect.objectContaining({ text: 'Product A has 54.2% protein.' }), expect.objectContaining({ text: 'Product B has 61.0% protein.' }),
     ] }) });
   });
@@ -237,10 +237,11 @@ describe('truncated answer salvage', () => {
     await expect(salvageTruncatedAnswer(candidate, output)).resolves.toMatchObject({ droppedBlock: true,
       output: { blocks: [{ text: 'A "quoted} {blocks": [ claim.' }, { text: 'Second \\ point.' }] } });
   });
-  it('drops the last block when JSON closes cleanly despite the limit', async () => {
-    await expect(salvageTruncatedAnswer(answer('First point.', 'Second point.'), output))
-      .resolves.toMatchObject({ droppedBlock: true, output: { blocks: [{ text: 'First point.' }] } });
-    await expect(salvageTruncatedAnswer(answer('The only point.'), output)).resolves.toBeUndefined();
+  it('keeps every block when JSON closes cleanly despite the limit, and reports it', async () => {
+    await expect(salvageTruncatedAnswer(answer('First point.', 'Second point.'), output)).resolves.toMatchObject({
+      droppedBlock: false, closedCleanly: true, output: { blocks: [{ text: 'First point.' }, { text: 'Second point.' }] } });
+    await expect(salvageTruncatedAnswer(answer('The only point.'), output))
+      .resolves.toMatchObject({ droppedBlock: false, closedCleanly: true, output: { blocks: [{ text: 'The only point.' }] } });
   });
   it('returns nothing when no complete block exists', async () => {
     await expect(salvageTruncatedAnswer('{"confidence":"medium","warnings":[],"blocks":[{"text":"Cut off', output)).resolves.toBeUndefined();

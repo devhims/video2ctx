@@ -217,7 +217,7 @@ Answer validation rejects only an answer the application cannot render or persis
 | --- | --- |
 | Inline marker for a reference its block did not declare | Kept in place; persisted validation decides whether it resolves. A marker with no usable reference shows `[source unavailable]` |
 | Reference that matches no saved excerpt, or several different ones | Shown as `[source unavailable]`, `CITATIONS_UNAVAILABLE` note |
-| Output-token limit reached | Blocks whose objects closed are kept and a block cut off mid-way is dropped, `ANSWER_TRUNCATED` note. JSON that closes cleanly despite the limit may have been closed early, so its last block is dropped. Regenerated only when no complete block remains |
+| Output-token limit reached | Blocks whose objects closed are kept and a block cut off mid-way is dropped, `ANSWER_TRUNCATED` note. JSON that closes cleanly despite the limit is kept whole. The review trace records which case occurred (`dropped_block`, `complete_blocks` or `closed_cleanly`). Regenerated only when no complete block remains |
 | Mass or percentage figure absent from the excerpts and findings the block cites, declared or inline | `UNVERIFIED_FIGURES` note listing the figures. When a cited source has the same value with a different unit, the figure is also marked `(unverified)` where it appears |
 | Comparison subject without a citation and no `ANSWER_SCOPE_SHORTFALL` | Answer kept, `PARTIAL_EVIDENCE` note naming the subject |
 | First-message request whose answer omits the exact stored text | Answer replaced by the stored message, quoted exactly |

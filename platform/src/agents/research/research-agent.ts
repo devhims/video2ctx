@@ -1183,6 +1183,8 @@ async function runUnifiedFinalizer(options: {
         numberedItemsMismatch: !conversational && numberedItemsMismatch(output, numberedItemCount),
         replacedFirstMessageAnswer,
         missingComparisonVideos,
+        // How a length-limited answer ended: shows whether clean closes at the limit occur.
+        truncation: salvaged ? salvaged.closedCleanly ? 'closed_cleanly' : salvaged.droppedBlock ? 'dropped_block' : 'complete_blocks' : undefined,
       };
       if (notes.length || signals.numberedItemsMismatch || replacedFirstMessageAnswer) {
         console.log(JSON.stringify({ event: 'agent_answer_review', runId: options.context.runId, attempt: attempt + 1, ...signals }));

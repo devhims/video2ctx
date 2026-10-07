@@ -970,7 +970,8 @@ it('repairs a truncated comparison after the old 40-second cutoff', async () => 
     const finalizer = new MockLanguageModelV4({doGenerate: async () => {
       const attempt = attempts++;
       await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 29_000 : 16_000));
-      return {content:[{type:'text',text:JSON.stringify(output)}],
+      // The first attempt is cut off inside its only block, so nothing can be kept.
+      return {content:[{type:'text',text:attempt === 0 ? JSON.stringify(output).slice(0, 50) : JSON.stringify(output)}],
         finishReason:{unified:attempt === 0 ? 'length' : 'stop',raw:'stop'},usage,warnings:[]};
     }});
     models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
@@ -1374,8 +1375,11 @@ it.each(['generate', 'stream'] as const)('%s keeps complete blocks of a truncate
   });
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
   if (mode === 'stream') options.onDraft = vi.fn();
+  const reviews: unknown[] = [];
+  options.traceToolCall = async call => { if (call.name === 'answer_review') reviews.push(call.input); return call.execute(); };
   await executeResearchRun(options);
   expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(1);
+  expect(reviews).toEqual([expect.objectContaining({ notes: ['ANSWER_TRUNCATED'], truncation: 'dropped_block' })]);
   expect(options.finalize).toHaveBeenCalledOnce();
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
     answer: 'The woman holds the microphone. [cite:frame-observation]',
