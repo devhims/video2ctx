@@ -1421,7 +1421,9 @@ it('answers straight from research evidence, without a context-gathering model c
   options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
   const searchTools = vi.fn(async () => ({}));
   const readEvidence = vi.fn();
-  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence, searchTools } as unknown as NonNullable<typeof options.session>;
+  // A new session: the only stored message is the current request.
+  options.conversationHistory = [];
+  options.session = { brief: () => ({ assets: [], memories: [], historyMessages: 1 }), evidence: () => [], readEvidence, searchTools } as unknown as NonNullable<typeof options.session>;
   const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
   options.onDraft = draft => drafts.push(draft);
   // Research runs in this process and hands off at once.
@@ -1484,4 +1486,60 @@ it('still gathers stored context for a question about earlier conversation, and 
     { answer: '', state: 'streaming', activity: 'thinking' },
   ]);
   expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+/** Fresh inspect_video research that hands off at once, for context-gathering decisions. */
+function freshResearch(configure: (options: ReturnType<typeof setup>['options']) => void) {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const searchTools = vi.fn(async () => ({}));
+  options.session = { brief: () => ({ assets: [], memories: [], historyMessages: 3 }), evidence: () => [], readEvidence: vi.fn(), searchTools } as unknown as NonNullable<typeof options.session>;
+  configure(options);
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+      blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['frame-observation'] }] }) }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: call.responseFormat?.type === 'json'
+    ? JSON.stringify(output) : 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  const plans: string[] = [];
+  const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+    const event = typeof line === 'string' && line.startsWith('{') ? JSON.parse(line) : undefined;
+    if (event?.event === 'agent_finalizer_context_plan') plans.push(event.plan);
+  });
+  return { options, finalizer, plans, restore: () => log.mockRestore() };
+}
+
+it('keeps gathering after research when the conversation is older than the prompt window', async () => {
+  // Review example: a budget stated more than eight turns ago is outside the answer prompt.
+  // Research may read it, but its tool results never reach the answer model.
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.message = 'Inspect this new review using my original budget.';
+    options.session = { ...options.session!, brief: () => ({ assets: [], memories: [], historyMessages: 21 }) } as unknown as typeof options.session;
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_older_conversation']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+it('keeps gathering after research when the evidence budget would cut a passage', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    const long: EvidencePacket = { packetId: 'long-transcript', kind: 'youtube_transcript',
+      sources: [{ id: 'long', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+      excerpts: Array.from({ length: 400 }, (_, index) => ({ id: `long:${index}`, sourceId: 'long', text: `Passage ${index}. ${'detail '.repeat(30)}`, startMs: index * 1000 })),
+      artifacts: [{ type: 'youtube_complete_transcript', data: { requiresAnalysis: false } }], warnings: [], usage: [] };
+    options.recoveredEvidence = [...options.recoveredEvidence!, long];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_evidence_cut']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+it('skips gathering after research when the window and evidence are complete', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(() => {});
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['skip']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
 });

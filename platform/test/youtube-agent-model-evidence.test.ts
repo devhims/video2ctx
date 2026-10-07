@@ -141,3 +141,22 @@ it('keeps both comparison subjects and budgets short references before truncatin
   expect(prepared.fullIds.size).toBe(200);
   expect(prepared.evidence.every(packet=>packet.excerpts?.every(excerpt=>excerpt.id.startsWith('ref_')))).toBe(true);
 });
+
+it('reports whether the finalization budget cut anything', () => {
+  const small = transcriptPacket();
+  expect(finalizationEvidenceForModel([small], 40_000).complete).toBe(true);
+  const long = { ...transcriptPacket(), packetId: 'long',
+    artifacts: [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: true } }],
+    excerpts: Array.from({ length: 400 }, (_, index) => ({ ...small.excerpts[0]!, id: `long:${index}`, text: `Passage ${index}. ${'detail '.repeat(30)}` })) };
+  const cut = finalizationEvidenceForModel([small, long], 40_000);
+  expect(cut.complete).toBe(false);
+  expect(cut.evidence.some(packet => packet.warnings.some(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED'))).toBe(true);
+});
+
+it('treats comparison evidence outside every subject as cut', () => {
+  const subject = transcriptPacket();
+  const other = { ...transcriptPacket(), packetId: 'other', sources: [{ ...subject.sources[0]!, id: 'other', videoId: 'zzzzzzzzzzz' }],
+    excerpts: [{ ...subject.excerpts[0]!, id: 'other:0', sourceId: 'other' }] };
+  expect(finalizationEvidenceForModel([subject], 40_000, ['abcdefghijk']).complete).toBe(true);
+  expect(finalizationEvidenceForModel([subject, other], 40_000, ['abcdefghijk']).complete).toBe(false);
+});

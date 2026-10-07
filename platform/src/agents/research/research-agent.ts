@@ -816,11 +816,15 @@ async function runUnifiedFinalizer(options: {
   const contextMessages: ModelMessage[] = [];
   // History-only answers read messages and memory; saved source content is out of scope.
   const historyOnly = isHistoryOnlyRoute(options.decision);
-  // Research that just ran in this process has loaded this turn's evidence, and research
-  // routes never ask about earlier conversation. A resumed run keeps gathering, because
-  // its research ran before the restart and only stored context can recover it.
-  const synthesisOnly = options.researchRan === true
+  // Research and the answer are separate model calls: the answer sees only the conversation
+  // window and the evidence projection, not research's own tool results. Skipping the
+  // stored-context pass is safe only when that is everything there is. A resumed run keeps
+  // gathering, because its research ran before the restart.
+  const afterResearch = options.researchRan === true
     && (options.decision.route === 'topic_research' || options.decision.route === 'inspect_video');
+  const historyMessages = options.context.session?.brief().historyMessages;
+  // Each prompt turn is one user and one assistant message, plus the current request.
+  const olderConversation = historyMessages === undefined || historyMessages > 2 * (options.conversationHistory?.length ?? 0) + 1;
   if (options.context.session && !conversational && contextExpired && !historyOnly) {
     // Recovery has only response time left. Restore saved comparison packets
     // synchronously from SQLite, without repeating R2 reads or model work.
@@ -866,9 +870,13 @@ async function runUnifiedFinalizer(options: {
         signal.throwIfAborted();
         if (reads.some(result => result.status === 'rejected')) contextIncomplete = true;
         prepared = prepareEvidence();
-        // A model-driven pass over stored context would repeat what research just loaded
-        // and delay the answer by several model calls.
-        if (synthesisOnly) return undefined;
+        // Decide after preloads, which can add evidence to the projection.
+        const plan = !afterResearch ? 'gather' : olderConversation ? 'gather_older_conversation'
+          : !prepared.complete ? 'gather_evidence_cut' : 'skip';
+        console.log(JSON.stringify({ event: 'agent_finalizer_context_plan', runId: options.context.runId, plan }));
+        // Everything research saw is already in the answer prompt; another pass would only
+        // repeat it and delay the answer by several model calls.
+        if (plan === 'skip') return undefined;
         options.onDraft?.({ answer: '', state: 'streaming', activity: 'gathering' });
         const searchTools = await options.context.session!.searchTools?.(found => {
           options.context.signal.throwIfAborted();
