@@ -63,7 +63,7 @@
 .agent-user-message .agent-message-header { justify-content: flex-end; margin-bottom: 0; padding: 0 4px; }
 .agent-message time { color: var(--muted); font-size: 10px; font-weight: 400; }
 .agent-avatar { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; background: var(--color-dashboard-surface-muted); color: var(--muted); border-radius: 50%; }
-.agent-user-bubble { max-width: 100%; padding: 10px 14px; border-radius: 16px; background: var(--ink); color: var(--paper); }
+.agent-user-bubble { max-width: 100%; padding: 10px 14px; border-radius: 16px; background: var(--color-dashboard-surface-muted); color: var(--ink); }
 .agent-answer { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.8; }
 .agent-status { border-radius: 4px; padding: 3px 6px; font-size: 10px; background: var(--color-dashboard-surface-muted); color: var(--muted); text-transform: capitalize; }
 .agent-status.status-completed { color: var(--color-dashboard-success); background: var(--color-dashboard-success-soft); }
