@@ -113,7 +113,7 @@
 .agent-caveats summary { cursor: pointer; }
 .agent-caveats ul { padding-left: 18px; }
 .agent-caveats li { margin-top: 7px; }
-.agent-answer-actions { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.agent-answer-actions { display: flex; align-items: center; gap: 4px; margin-top: 8px; margin-inline-start: -8px; }
 .agent-run-footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
 .agent-sessions .agent-answer-action { display: inline-grid; place-items: center; flex: 0 0 2rem; width: 2rem; height: 2rem; border: 0; background: transparent; padding: 0; color: var(--muted); }
 .agent-sessions .agent-answer-action:hover:not(:disabled) { background: var(--color-dashboard-surface-muted); color: var(--ink); }
@@ -188,7 +188,7 @@
   .agent-composer-dock { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .agent-prompt-bar textarea { font-size: 16px; }
   .agent-sessions .agent-send { width: 44px; height: 44px; }
-  .agent-answer-actions { gap: 0; }
+  .agent-answer-actions { gap: 0; margin-inline-start: -10px; }
   .agent-sessions .agent-answer-action { flex-basis: 36px; width: 36px; height: 44px; }
   .agent-prompt-shortcut { display: none; }
   .agent-prompt-shortcut + .agent-send { margin-left: auto; }
