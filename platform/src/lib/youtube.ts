@@ -67,13 +67,13 @@ export function routeInput(input: string): UniversalInput {
     if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(url.hostname)) {
       throw new ApiError(422, 'UNSUPPORTED_URL', 'Only YouTube URLs are supported.');
     }
-    if (url.hostname === 'youtu.be') return { kind: 'video', provider: 'youtube', id: validId(url.pathname.slice(1)) };
-    const videoId = url.searchParams.get('v');
-    if (videoId) return { kind: 'video', provider: 'youtube', id: validId(videoId) };
+    if (url.hostname === 'youtu.be') return { kind: 'video', provider: 'youtube', id: validVideoId(url.pathname.slice(1)) };
+    // A present but empty or malformed v= still names a video, so it is rejected rather than searched.
+    if (url.searchParams.has('v')) return { kind: 'video', provider: 'youtube', id: validVideoId(url.searchParams.get('v') ?? '') };
     const playlistId = url.searchParams.get('list');
     if (playlistId) return { kind: 'playlist', provider: 'youtube', id: validId(playlistId, 200) };
     const path = url.pathname.split('/').filter(Boolean);
-    if (path[0] === 'shorts' || path[0] === 'live') return { kind: 'video', provider: 'youtube', id: validId(path[1] ?? '') };
+    if (path[0] === 'shorts' || path[0] === 'live') return { kind: 'video', provider: 'youtube', id: validVideoId(path[1] ?? '') };
     if (path[0] === 'playlist') throw new ApiError(422, 'PLAYLIST_ID_REQUIRED', 'The playlist URL has no list parameter.');
     if (path[0]?.startsWith('@')) return { kind: 'channel', provider: 'youtube', id: path[0] };
     if (path[0] === 'channel' && path[1]) return { kind: 'channel', provider: 'youtube', id: validId(path[1], 200) };
@@ -88,6 +88,14 @@ function validId(value: string, max = 64): string {
   if (!value || value.length > max || !/^[A-Za-z0-9_@.\-]+$/.test(value)) {
     throw new ApiError(422, 'INVALID_YOUTUBE_ID', 'The YouTube identifier is invalid.');
   }
+  return value;
+}
+
+/** YouTube video IDs are exactly eleven URL-safe characters, the same rule every video read enforces. */
+export const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+function validVideoId(value: string): string {
+  if (!YOUTUBE_VIDEO_ID.test(value)) throw new ApiError(422, 'INVALID_YOUTUBE_ID', 'Invalid video ID.');
   return value;
 }
 
