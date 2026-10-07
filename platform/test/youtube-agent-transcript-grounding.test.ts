@@ -81,22 +81,21 @@ describe('transcript grounding', () => {
   });
 
   it('accepts an exact Hindi quote and a name supported by video metadata', () => {
-    expect(() => assertTranscriptFacts(facts, [raw], context)).not.toThrow();
+    expect(() => assertTranscriptFacts(facts, [raw])).not.toThrow();
   });
   it('rejects percent-to-gram corruption and fabricated decimal reconstruction', () => {
-    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, unit: 'g' }] }, [raw], context)).toThrow('Unit g');
-    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, value: 62.35, quote: '62.3 5 percent' }] }, ['62.3 5 percent'], context)).toThrow('Unsupported quantity');
+    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, unit: 'g' }] }, [raw])).toThrow('Unit g');
+    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, value: 62.35, quote: '62.3 5 percent' }] }, ['62.3 5 percent'])).toThrow('Unsupported quantity');
   });
-  it('rejects a made-up quote, basis or corrected name without source support', () => {
-    expect(() => assertTranscriptFacts(facts, ['Protein data unavailable.'], context)).toThrow('Unsupported quantity');
-    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, basis: 'per serving' }] }, [raw], context)).toThrow('Basis');
-    expect(() => assertTranscriptFacts(facts, [raw], { title: 'Only What’s Needed whey' })).toThrow('Unsupported entity');
+  it('rejects a made-up numerical quote or unsupported measurement basis', () => {
+    expect(() => assertTranscriptFacts(facts, ['Protein data unavailable.'])).toThrow('Unsupported quantity');
+    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, basis: 'per serving' }] }, [raw])).toThrow('Basis');
   });
   it('requires uncertainty for unknown units and structured support for prose measurements', () => {
     const ambiguous = { ...facts, claim: 'The protein value is unclear.', quantities: [{ ...facts.quantities[0]!, unit: null }] };
-    expect(() => assertTranscriptFacts(ambiguous, [raw], context)).toThrow('Explain');
-    expect(() => assertTranscriptFacts({ ...ambiguous, uncertainty: 'The unit is unclear.' }, [raw], context)).not.toThrow();
-    expect(() => assertTranscriptFacts({ ...facts, quantities: [] }, [raw], context)).toThrow('no matching');
+    expect(() => assertTranscriptFacts(ambiguous, [raw])).toThrow('Explain');
+    expect(() => assertTranscriptFacts({ ...ambiguous, uncertainty: 'The unit is unclear.' }, [raw])).not.toThrow();
+    expect(() => assertTranscriptFacts({ ...facts, quantities: [] }, [raw])).toThrow('no matching');
   });
   it('keeps metadata and facts through compaction and aliasing without rewriting captions', () => {
     const original = packet();
@@ -107,13 +106,13 @@ describe('transcript grounding', () => {
     expect(projected.fullIds.get('ref_1')).toBe('e1');
     expect(JSON.stringify(original)).toBe(before);
   });
-  it('rejects final answers that change cited units or use another video’s entity', () => {
+  it('rejects changed units while treating entity metadata as advisory', () => {
     expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO contains 54.2% protein.', evidenceIds: ['e1'] }], [packet()])).not.toThrow();
     expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO contains 54.2g protein.', evidenceIds: ['e1'] }], [packet()])).toThrow('54.2g');
     const other = packet({ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }] });
     other.artifacts[0]!.data = { ...other.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }], excerptIds: ['e2'] }] };
     other.excerpts[0]!.id = 'e2';
-    expect(() => assertGroundedAnswerBlocks([{ text: 'OWN contains 54.2% protein.', evidenceIds: ['e1'] }], [packet(), other])).toThrow('OWN');
+    expect(() => assertGroundedAnswerBlocks([{ text: 'OWN contains 54.2% protein.', evidenceIds: ['e1'] }], [packet(), other])).not.toThrow();
   });
   it('selects metadata only from the requested video', () => {
     const metadata = packet();
@@ -123,14 +122,14 @@ describe('transcript grounding', () => {
     expect(transcriptSourceContext('other123456', [metadata])).toEqual({});
   });
   it('rejects a different unit even when that unit appears elsewhere in the source quote', () => {
-    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, value: 54.2, unit: 'g', quote: '54.2% protein in a 45g serving' }] }, ['54.2% protein in a 45g serving'], context)).toThrow('different unit');
+    expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, value: 54.2, unit: 'g', quote: '54.2% protein in a 45g serving' }] }, ['54.2% protein in a 45g serving'])).toThrow('different unit');
   });
-  it('repairs unsupported name normalization in the existing analyst call loop', async () => {
-    const output = (name: string) => ({ findings: [{ claim: 'OpenAI provides an API.', windowIndexes: [0], entities: [{ name, quote: 'OpenAI API tutorial', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] });
+  it('accepts paraphrased identity metadata without an extra analyst generation', async () => {
+    const output = { findings: [{ claim: 'OpenAI offers API access.', windowIndexes: [0], entities: [{ name: 'OpenAI', quote: 'An introduction to the OpenAI API', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] };
     let calls = 0;
-    const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(output(calls++ ? 'OpenAI' : 'Anthropic')) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify((calls++, output)) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Explain the API', focus: 'Company name', sourceContext: { title: 'OpenAI API tutorial', provenance: 'asr' }, segments: [{ text: 'Open eye provides an API.', startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
     expect(result.findings[0]?.entities?.[0]?.name).toBe('OpenAI');
     expect(result.excerpts[0]?.text).toBe('Open eye provides an API.');
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Captions can contain grammatical errors');
@@ -188,7 +187,7 @@ describe('transcript grounding', () => {
     expect(result.findings[0]?.uncertainty).toContain('unsupported details');
   });
 
-  it('allows a brand supported by this video’s full product name without matching substrings inside unrelated words', () => {
+  it('allows name variations without changing measurement validation', () => {
     const first = packet();
     const second = packet({ ...facts, entities: [{ name: 'NAKPRO', quote: 'NAKPRO', source: 'title' }] });
     second.excerpts[0]!.id = 'e2';
@@ -197,6 +196,28 @@ describe('transcript grounding', () => {
     expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO was tested.', evidenceIds: ['e1'] }], [first, second])).not.toThrow();
     second.artifacts[0]!.data = { ...second.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }], excerptIds: ['e2'] }] };
     expect(() => assertGroundedAnswerBlocks([{ text: 'The shown result is 54.2%.', evidenceIds: ['e1'] }], [first, second])).not.toThrow();
+  });
+
+  it('keeps a translated place finding valid when another video names the same place', () => {
+    const first = packet({ claim: 'Rohtang Pass is a suggested stop.', entities: [], quantities: [], uncertainty: null });
+    first.excerpts[0]!.text = 'रोहतांग पास घूमने जा सकते हैं।';
+    first.artifacts[0]!.data = { ...first.artifacts[0]!.data as object, groundingVersion: 1 };
+    const second = packet({ claim: 'Rohtang Pass has snow.', entities: [
+      { name: 'Rohtang Pass', quote: 'Rohtang Pass has snow.', source: 'transcript' },
+    ], quantities: [], uncertainty: null });
+    second.packetId = 'p2';
+    second.sources[0]!.id = 's2';
+    second.sources[0]!.videoId = 'lmnopqrstuv';
+    second.sources[0]!.url = 'https://www.youtube.com/watch?v=lmnopqrstuv';
+    second.excerpts[0]!.id = 'e2';
+    second.excerpts[0]!.sourceId = 's2';
+    second.artifacts[0]!.data = { ...second.artifacts[0]!.data as object, groundingVersion: 1,
+      findings: [{ claim: 'Rohtang Pass has snow.', entities: [
+        { name: 'Rohtang Pass', quote: 'Rohtang Pass has snow.', source: 'transcript' },
+      ], quantities: [], uncertainty: null, excerptIds: ['e2'] }] };
+    const blocks = [{ text: 'Consider a visit to Rohtang Pass.', evidenceIds: ['e1'] }];
+    expect(() => assertGroundedAnswerBlocks(blocks, [first])).not.toThrow();
+    expect(() => assertGroundedAnswerBlocks(blocks, [first, second])).not.toThrow();
   });
 
   it('accepts an explicit serving size preserved in a validated quantity quote', () => {

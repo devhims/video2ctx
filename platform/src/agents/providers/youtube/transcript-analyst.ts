@@ -309,9 +309,8 @@ function resolveAnalysis(
       return transcriptWindowId(videoId, window);
     });
     const windows = windowIndexes.map(index => windowByIndex.get(index)!.text);
-    const identityWindows = catalog.map(window => window.text);
     try {
-      assertTranscriptFacts(finding, windows, sourceContext, identityWindows);
+      assertTranscriptFacts(finding, windows);
     } catch (error) {
       if (!(error instanceof TranscriptGroundingError)) throw error;
       for (const issue of error.issues) onIssue?.({ ...issue, findingIndex });
@@ -320,7 +319,7 @@ function resolveAnalysis(
       // measurement. Keep fields checked against their source quotes, never the rejected prose.
       const quantities = finding.quantities.filter(quantity => {
         try {
-          assertTranscriptFacts({ claim: '', entities: [], quantities: [quantity], uncertainty: finding.uncertainty }, windows, sourceContext);
+          assertTranscriptFacts({ claim: '', entities: [], quantities: [quantity], uncertainty: finding.uncertainty }, windows);
           return true;
         } catch (error) {
           if (!(error instanceof TranscriptGroundingError)) throw error;
@@ -328,18 +327,9 @@ function resolveAnalysis(
         }
       });
       if (!quantities.length) return [];
-      const entities = finding.entities.filter(entity => {
-        try {
-          assertTranscriptFacts({ claim: '', entities: [entity], quantities: [], uncertainty: null }, windows, sourceContext, identityWindows);
-          return true;
-        } catch (error) {
-          if (!(error instanceof TranscriptGroundingError)) throw error;
-          return false;
-        }
-      });
       return [{
         claim: quantities.map(quantity => `${quantity.kind} ${quantity.metric}: ${quantity.value}${quantity.unit ?? ' (unit unclear)'}`).join('; ') + '.',
-        excerptIds, entities, quantities,
+        excerptIds, entities: finding.entities, quantities,
         uncertainty: ('Only source-checked measurements were retained; the original claim contained unsupported details.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
       }];
     }
