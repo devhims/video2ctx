@@ -1005,6 +1005,30 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
   expect(result.artifacts).toContainEqual({type:'research_coverage',data:{targetVideos:2,requiredVideos:2,reviewedVideos:2}});
 });
 
+it('keeps the finalize-only cited-subject coverage for a metadata comparison', async () => {
+  // Direct finalization has no evidence scope; its writer counts cited comparison subjects, unchanged.
+  const {options} = setup('context_answer');
+  const ids = ['DC471a9qrU4', 'jNQXAC9IVRw'];
+  const packets: EvidencePacket[] = ids.map((videoId, index) => ({packetId:`metadata:${index}`,kind:'youtube_video',
+    sources:[{id:`video:${index}`,provider:'youtube',kind:'video',videoId,title:`Video ${index + 1}`}],
+    excerpts:[{id:`metadata:${videoId}:0`,sourceId:`video:${index}`,text:`Video ${index + 1} lasts ${index + 1} minutes.`}],
+    artifacts:[],warnings:[],usage:[]}));
+  options.message='Compare the durations of the two earlier videos.';
+  options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'video',reason:'Saved metadata.',comparisonVideoIds:ids,
+    evidenceScope:'metadata'} as unknown as typeof options.persistedRoute;
+  options.conversationHistory=[{userMessageId:'prior-u',agentMessageId:'prior-a',resourceIds:ids,user:'Get both videos.',assistant:'Saved.',evidence:packets}];
+  const finalizer=new MockLanguageModelV4({doGenerate:async ()=>({content:[{type:'text',text:JSON.stringify({confidence:'medium',warnings:[],blocks:[
+    {text:'The first video lasts one minute.',evidenceIds:['ref_1']},{text:'The second video lasts two minutes.',evidenceIds:['ref_2']}]})}],
+    finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='finalizer'?finalizer:(()=>{ throw new Error('No classifier or research.'); })());
+  options.finalize=vi.fn(async(_id,input)=>buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
+    {userId:'user',creditsRemaining:100},input,packets,0));
+  await executeResearchRun(options);
+  const result=await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.artifacts).toContainEqual({type:'research_coverage',data:{targetVideos:2,requiredVideos:2,reviewedVideos:2}});
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
 it('stops context gathering at the shared deadline and still generates a non-streaming answer', async () => {
   vi.useFakeTimers();
   try {

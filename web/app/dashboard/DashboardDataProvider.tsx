@@ -4,12 +4,22 @@ import { createContext, use, useCallback, useContext, useEffect, useState, useRe
 import { createDashboardCache, type AccountResource, type AccountSeeds, type ResourceResult, type ResourceSnapshot } from '../../lib/dashboard-cache';
 import { platformRequest } from '../../lib/platform-request';
 import { CREDIT_BALANCE_EVENT, type DashboardAccountData } from '../../lib/dashboard-data';
+import { createCreditRefresher, type CreditRefresher } from '../../lib/credit-refresh';
 
 const Context = createContext<ReturnType<typeof createDashboardCache> | null>(null);
 const DraftContext = createContext<Map<string, unknown> | null>(null);
+const CreditContext = createContext<CreditRefresher | null>(null);
 export function DashboardDataProvider({ children, seeds }: { children: ReactNode; seeds?: AccountSeeds }) {
   const [cache] = useState(() => createDashboardCache(platformRequest, { ...seeds }));
   const [drafts] = useState(() => new Map<string, unknown>());
+  const [credits] = useState(() => createCreditRefresher(cache));
+  useEffect(() => {
+    // Another tab or view may have spent credits. Returning to this tab re-reads
+    // the current balance once; it does not poll or wait for later settlement.
+    const visible = () => { if (document.visibilityState === 'visible') void credits.refresh(); };
+    document.addEventListener('visibilitychange', visible);
+    return () => document.removeEventListener('visibilitychange', visible);
+  }, [credits]);
   useEffect(() => {
     const balanceChanged = (event: Event) => {
       const balance = (event as CustomEvent<number>).detail;
@@ -21,7 +31,13 @@ export function DashboardDataProvider({ children, seeds }: { children: ReactNode
     window.addEventListener(CREDIT_BALANCE_EVENT, balanceChanged);
     return () => window.removeEventListener(CREDIT_BALANCE_EVENT, balanceChanged);
   }, [cache]);
-  return <Context.Provider value={cache}><DraftContext.Provider value={drafts}>{children}</DraftContext.Provider></Context.Provider>;
+  return <Context.Provider value={cache}><DraftContext.Provider value={drafts}><CreditContext.Provider value={credits}>{children}</CreditContext.Provider></DraftContext.Provider></Context.Provider>;
+}
+
+export function useCreditRefresh() {
+  const credits = useContext(CreditContext);
+  if (!credits) throw new Error('DashboardDataProvider is missing');
+  return credits;
 }
 
 // Research survives route navigation, but never persists beyond this user's

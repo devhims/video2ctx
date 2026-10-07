@@ -15,6 +15,7 @@ import { createFrameAnalyst } from '../providers/youtube/frame-analyst';
 import type { ClassificationDiagnostic } from './capability-router';
 import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research-plan';
+import { CONTENT_PACKET_KINDS, citedMetadataVideoIds, reviewedVideoIds } from './research-coverage';
 import { assertGroundedAnswerBlocks, transcriptSourceContext, TranscriptGroundingError } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
 import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
@@ -38,6 +39,7 @@ import {
   type EvidenceOperation,
   type EvidencePacket,
   type FinalizeAnswerInput,
+  hasMetadataScope,
   visualEvidenceLevel,
 } from '../contracts';
 import { createVisualAnalyst } from '../providers/youtube/visual-analyst';
@@ -432,10 +434,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
     finalize: async (id, input) => {
       await startFinalization();
-      const reviewedVideos = new Set([...evidence.values()].filter(packet =>
-        packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
-        && (options.decision.comparisonVideoIds?.length || options.decision.route !== 'topic_research' || packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')),
-      ).flatMap(packet => packet.sources.flatMap(source => source.videoId && (!options.decision.comparisonVideoIds || options.decision.comparisonVideoIds.includes(source.videoId)) ? [source.videoId] : [])));
+      const reviewedVideos = reviewedVideoIds([...evidence.values()], options.decision);
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
       const warnings = mergeWarnings(input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
@@ -444,13 +443,21 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
       }
-      if (requiredVideos !== undefined && reviewedVideos.size < requiredVideos) {
+      const metadataScope = hasMetadataScope(options.decision);
+      // Metadata scope is fulfilled only by cited video metadata; content reviews stay a separate count.
+      const metadataVideos = metadataScope
+        ? citedMetadataVideoIds([...evidence.values()], input.answer, options.decision.comparisonVideoIds) : undefined;
+      if (requiredVideos !== undefined && metadataVideos && metadataVideos.size < requiredVideos) {
         warnings.push({ code: 'PARTIAL_EVIDENCE',
-          message: `The user requested ${requiredVideos} source videos; usable transcript evidence was reviewed from ${reviewedVideos.size}.` });
+          message: `The user requested ${requiredVideos} videos from metadata; the answer cites video metadata for ${metadataVideos.size}.` });
+      } else if (requiredVideos !== undefined && !metadataVideos && reviewedVideos.size < requiredVideos) {
+        warnings.push({ code: 'PARTIAL_EVIDENCE',
+          message: `The user requested ${requiredVideos} source videos; usable transcript or analyzed visual evidence was reviewed from ${reviewedVideos.size}.` });
       }
       const artifacts = [...input.artifacts.filter(artifact => artifact.type !== 'research_coverage'), {
         type: 'research_coverage', data: { targetVideos: target, reviewedVideos: reviewedVideos.size,
-          ...(requiredVideos !== undefined ? { requiredVideos } : {}) },
+          ...(requiredVideos !== undefined ? { requiredVideos } : {}),
+          ...(metadataVideos ? { metadataVideos: metadataVideos.size } : {}) },
       }];
       if (options.decision.route === 'topic_research' && options.decision.channelId
         && ![...evidence.values()].some(packet => packet.kind === 'youtube_channel_videos')) {
@@ -602,12 +609,14 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             '',
             `Activated capability: ${capability.id}`,
             capability.instructions,
-            ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. The finalizer will also read saved transcripts for every subject.`] : []),
+            ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos.${hasMetadataScope(options.decision) ? '' : ' The finalizer will also read saved transcripts for every subject.'}`] : []),
+            ...(hasMetadataScope(options.decision)
+              ? ['Evidence scope: metadata only. The user limited this request to search results and video or channel metadata. Do not retrieve transcripts, comments, frames or storyboards. Verify each video you report with get_video and cite that video metadata; search results alone do not verify a video. Do not claim to have reviewed video content.'] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
             ...(options.decision.route === 'inspect_video'
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
-              : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
+              : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. ${hasMetadataScope(options.decision) ? 'This metadata-only scope overrides the transcript research steps above: verify the selected videos with get_video instead of analyzing transcripts.' : 'Analyze selected transcripts together.'} A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
             ...(visualRequired
               ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. finalize_answer stays unavailable until analyzed images provide observations or no visual retrieval path remains.`]
               : visualEvidenceLevel(options.decision) === 'helpful' ? ['Visual tools are optional for this request. Use them only when images add needed detail.'] : []),
@@ -771,11 +780,17 @@ async function runUnifiedFinalizer(options: {
   modelCallPrefix?: string;
 }): Promise<AgentTurnResult> {
   assertModelCostAvailable(options.modelBudget);
+  // Explicit metadata scope excludes saved content. Deterministic preloads skip it,
+  // and context reads never admit it, so it is neither shown to the model nor billed.
+  const metadataOnly = hasMetadataScope(options.decision);
+  const inScope = (packets: EvidencePacket[]) => metadataOnly ? packets.filter(packet => !CONTENT_PACKET_KINDS.has(packet.kind)) : packets;
   // Every saved read below is admitted before the model receives it. Admission bills
   // new operation-sized units once per run and withholds what the reserve cannot cover.
-  const deliver = (packets: EvidencePacket[], source: Parameters<DeliverEvidence>[1]) =>
-    options.context.deliverEvidence && packets.length ? options.context.deliverEvidence(packets, source)
+  const deliver = (candidates: EvidencePacket[], source: Parameters<DeliverEvidence>[1]) => {
+    const packets = inScope(candidates);
+    return options.context.deliverEvidence && packets.length ? options.context.deliverEvidence(packets, source)
       : { admitted: packets, withheld: [], unavailable: [], receipts: [] };
+  };
   // The model still sees every provider failure, but a completed answer should
   // not inherit warnings for candidates it successfully replaced.
   const failureWarnings = options.researchInterrupted
@@ -785,7 +800,8 @@ async function runUnifiedFinalizer(options: {
     ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
       ? [options.decision.videoId] : comparisonVideoIds) : '';
   const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
-  const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
+  // Metadata scope projects only in-scope packets to the model; stored and billed evidence is unchanged.
+  const prepareEvidence = () => finalizationEvidenceForModel(inScope(options.evidence), evidenceBudget, comparisonVideoIds);
   let prepared = prepareEvidence();
   // Gather context once, charged only to the main deadline. Answer retries below
   // reuse these results and never restart context collection.
@@ -813,7 +829,7 @@ async function runUnifiedFinalizer(options: {
     // synchronously from SQLite, without repeating R2 reads or model work.
     contextIncomplete = true;
     const assets = options.context.session.brief().assets;
-    for (const videoId of comparisonVideoIds) {
+    for (const videoId of metadataOnly ? [] : comparisonVideoIds) {
       const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
         .sort((a, b) => b.collectedAt - a.collectedAt)[0];
       if (!asset || options.context.session.transcriptOverLimit?.(asset.version)) continue;
@@ -839,8 +855,9 @@ async function runUnifiedFinalizer(options: {
           options.onEvidence?.(packets);
           for (const packet of packets) if (!options.evidence.some(existing=>existing.packetId===packet.packetId)) options.evidence.push(packet);
           return packets;
-        }, signal, { evidence: !historyOnly });
-        const loadPrior = (packets: EvidencePacket[]) => {
+        }, signal, { evidence: !historyOnly && !metadataOnly });
+        const loadPrior = (candidates: EvidencePacket[]) => {
+          const packets = inScope(candidates);
           for (const packet of packets) for (const excerpt of packet.excerpts) gatheredEvidenceIds.add(excerpt.id);
           options.onEvidence?.(packets);
           for (const packet of packets) if (!options.evidence.some(existing=>existing.packetId===packet.packetId)) options.evidence.push(packet);
@@ -884,7 +901,7 @@ async function runUnifiedFinalizer(options: {
         // Read each comparison subject before model-selected searches can favor one side.
         // This reuses exact stored versions and never calls the provider.
         const assets = options.context.session!.brief().assets;
-        const reads = await Promise.allSettled((historyOnly ? [] : comparisonVideoIds).map(async videoId => {
+        const reads = await Promise.allSettled((historyOnly || metadataOnly ? [] : comparisonVideoIds).map(async videoId => {
           const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
             .sort((a,b) => b.collectedAt - a.collectedAt)[0];
           if (!asset) return;
@@ -1024,6 +1041,8 @@ async function runUnifiedFinalizer(options: {
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           ...(currentDurationNotice() ? ['The application will prepend applicationDurationNotice to this answer. Do not repeat its duration or limit explanation. Answer the supported parts and retain required evidence-gap warnings. The notice is guardrail context, not evidence of video content.'] : []),
           'For visual questions, check each requested subject and attribute against analyzed image evidence, including every item in route.visualRequirements. Presenter names may come from introductions or on-screen labels; clothing requires visual observations. Identify missing subjects or attributes, add ANSWER_SCOPE_SHORTFALL for unanswered parts, and explain the actual failure or budget limit. Transcript silence does not establish that visual facts are unknowable. Never invent clothing details or imply images were inspected when only metadata was retrieved.',
+          ...(hasMetadataScope(options.decision)
+            ? ['route.evidenceScope is metadata: the user limited this request to video metadata. Cite the get_video metadata evidence for each reported video. Do not describe or claim to have reviewed video content, and report any missing metadata field or unverified video with ANSWER_SCOPE_SHORTFALL.'] : []),
           'If validationFeedback is present, repair the previousCandidate using its errors. Preserve valid content and return complete corrected JSON.',
           ...(options.context.currentDate ? [options.context.currentDate] : []),
         ].join('\n'),

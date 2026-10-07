@@ -8,6 +8,8 @@ import {
   capabilityRouteDecisionSchema,
   answerDetailSchema,
   comparisonVideoIdsSchema,
+  evidenceScopeSchema,
+  hasMetadataScope,
   numberedItemCountSchema,
   visualEvidenceSchema,
   visualRequirementsSchema,
@@ -41,6 +43,7 @@ const classifierDecisionSchema = z.object({
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
   visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable storyboard and frame tools.'),
   visualRequirements: visualRequirementsSchema.optional().describe('Only when visualEvidence is required: each requested fact that needs images, such as "presenter clothing".'),
+  evidenceScope: evidenceScopeSchema.optional().describe('Only for topic_research with visualEvidence none: metadata when the user explicitly limits evidence to search results and video or channel metadata and excludes transcripts, captions, comments and images. Otherwise omit, including when any answer depends on spoken content, audience reaction or visuals.'),
 });
 
 // Share required fields between the provider's JSON schema and local validation.
@@ -261,6 +264,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Return topic_research when the request needs discovery or new evidence from multiple videos. Specific-video comparisons with reusable evidence follow the comparisonVideoIds rules below. When the user names a topic and asks for an explanation, understanding, comparison, or research, the task is sufficiently scoped to begin discovery. Unfamiliar concepts, terminology, methods, product names, or model names do not by themselves require clarification, even if they have several possible meanings. Preserve the supplied terms together in searchQuery and let YouTube discovery establish their context and what evidence is available. Do not require the user to define the terms they are asking you to understand. Do not invent a field or expand an unfamiliar term to a guessed meaning before searching.',
       'For topic_research without comparisonVideoIds, always set researchBreadth: focused for a narrow explanation or specific question; comparative for recommendations, best-of questions, comparisons, or broad surveys. A request to explain how named subjects differ is comparative even when phrased as a narrow explanation or "help me understand". The application derives the research target from breadth and any explicit source count.',
       'Set explicitSourceCount only when the user explicitly requests that many source videos. Otherwise omit it entirely. Do not use zero, infer it from presenters or answer items, or choose a research target yourself.',
+      'Set evidenceScope: metadata only for topic_research with visualEvidence none when the user explicitly restricts the evidence to search results and video or channel metadata, such as titles, channels, durations or IDs, and excludes transcripts or captions, comments and images. Omit it when the request asks about spoken content, teaching quality, audience feedback or anything visible, or does not state that restriction.',
       'For topic_research without comparisonVideoIds, provide one concise searchQuery for YouTube discovery. Rewrite for searchability, not to correct the user. Preserve the factual details that identify the subject and constrain the requested answer: names, model and version numbers, dates and date ranges, quantities and units, budgets and upper or lower limits, locations, comparison subjects, and exclusions or negation. You may remove conversational filler and add neutral task words such as tutorial or comparison, but must not change those details, reverse a constraint, broaden the scope, or invent a qualifier.',
       'Treat user-supplied facts as search constraints, not as facts you must endorse. If a name, release, number or premise seems unfamiliar or mistaken, search it as supplied and let retrieved evidence establish what is available. Do not substitute something more familiar from memory. Before submitting searchQuery, compare it with the current request and relevant user history: does it still ask about the same subject, with the same important numbers, units and restrictions?',
       'Search fidelity examples: "how to get the most out of opus 5.5?" -> "Opus 5.5 tips and prompting guide", never Opus 4.5. "run a 7B model locally with 8 GB RAM without a GPU" -> "7B model local inference 8 GB RAM CPU only", never a different model size or GPU setup. "20-minute vegetarian meals under 500 calories" -> "vegetarian meals under 500 calories ready in 20 minutes", preserving both limits and the dietary restriction. The application executes the query immediately; no separate search-planning step is needed.',
@@ -366,6 +370,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     // The fallback uses no model, but an exhausted budget still ends the run.
     assertModelCostAvailable(input.modelBudget);
     const built = lastResortDecision(evaluations, input, videoIds, channelIds, explicitVideoIds);
+    // Fallback decisions keep content semantics: a narrower evidence scope needs a valid classification.
+    delete built.decision.evidenceScope;
     console.warn(JSON.stringify({ event: 'agent_classification_last_resort', modelCallId: callId, method: built.method,
       candidates: evaluations.length, defaultedFields: built.defaultedFields }));
     input.onDiagnostic?.({ attempt: 0, stage: 'last_resort', lastResort: built.method, outcome: 'valid', modelId: '',
@@ -737,15 +743,18 @@ function expectedComparisonSubjects(input: CapabilityClassifierInput): string[] 
 function finishClassification(
   decision: z.infer<typeof classifierDecisionSchema>, videoIds: string[], channelIds: string[], explicitVideoIds: string[],
 ): CapabilityRouteDecision {
-  const { explicitSourceCount, ...classified } = withVisualAccess(decision);
+  const { explicitSourceCount, evidenceScope, ...classified } = withVisualAccess(decision);
   const pinned = explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
     && (decision.route !== 'finalize' || (decision.responseIntent === 'context_answer' && decision.contextScope !== 'history'));
   const route = pinned ? { ...classified, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
     visualEvidence: classified.visualEvidence ?? 'helpful', useStoryboard: classified.visualEvidence !== 'none' } : classified;
   const researchVideoCount = route.route === 'inspect_video' ? 1 : route.route === 'topic_research'
     ? Math.min(8, route.comparisonVideoIds?.length ?? explicitSourceCount ?? (route.researchBreadth === 'comparative' ? 4 : 2)) : 0;
+  // Metadata scope only fits research without images; anything else keeps content semantics.
+  const metadataScope = evidenceScope === 'metadata' && hasMetadataScope({ ...route, evidenceScope });
   const resolved = resolveClassification(capabilityRouteDecisionSchema.parse({ ...route, researchVideoCount,
     ...(route.route === 'topic_research' && explicitSourceCount !== undefined ? { requiredVideoCount: explicitSourceCount } : {}),
+    ...(metadataScope ? { evidenceScope: 'metadata' } : {}),
   }), videoIds);
   if (resolved.route === 'topic_research') {
     if (resolved.channelId && !channelIds.includes(resolved.channelId)) {

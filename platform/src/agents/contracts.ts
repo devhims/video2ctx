@@ -7,7 +7,10 @@ export const answerDetailSchema = z.enum(['standard', 'detailed']);
 
 export const executableCapabilitySchema = z.enum(['topic_research', 'inspect_video']);
 export const researchVideoCountSchema = z.number().int().min(1).max(8);
-export const researchCoverageSchema = z.object({ targetVideos: z.number().int().positive(), reviewedVideos: z.number().int().nonnegative(), requiredVideos: z.number().int().positive().optional() });
+export const researchCoverageSchema = z.object({ targetVideos: z.number().int().positive(), reviewedVideos: z.number().int().nonnegative(), requiredVideos: z.number().int().positive().optional(),
+  metadataVideos: z.number().int().nonnegative().optional().describe('Only for explicitly metadata-scoped research: distinct videos whose cited video metadata the answer used. This is not a content review.') });
+/** Missing means content. metadata applies only to research explicitly limited to discovery and video metadata. */
+export const evidenceScopeSchema = z.enum(['content', 'metadata']);
 export const numberedItemCountSchema = z.number().int().min(1).max(100).optional();
 export const visualEvidenceSchema = z.enum(['none', 'helpful', 'required']);
 export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
@@ -29,6 +32,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     answerDetail: answerDetailSchema.optional(),
     comparisonVideoIds: comparisonVideoIdsSchema,
     numberedItemCount: numberedItemCountSchema,
+    evidenceScope: evidenceScopeSchema.optional(),
   }),
   z.object({
     route: z.literal('inspect_video'),
@@ -66,6 +70,15 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
 /** Legacy routes only recorded tool access, so they never make visual evidence mandatory. */
 export function visualEvidenceLevel(decision: { useStoryboard?: boolean; visualEvidence?: VisualEvidence }): VisualEvidence {
   return decision.visualEvidence ?? (decision.useStoryboard === false ? 'none' : 'helpful');
+}
+
+/**
+ * The one test for explicit metadata scope, applied to classified and persisted
+ * routes alike: topic research, scope metadata and explicitly no visual evidence.
+ * Anything else, including incompatible persisted values, keeps content semantics.
+ */
+export function hasMetadataScope(decision: { route: string; evidenceScope?: unknown; visualEvidence?: unknown }): boolean {
+  return decision.route === 'topic_research' && decision.evidenceScope === 'metadata' && decision.visualEvidence === 'none';
 }
 
 export const agentWarningSchema = z.object({
