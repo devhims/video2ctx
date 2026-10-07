@@ -2844,6 +2844,15 @@ html:has(.craft) body {
 }
 
 @media (max-width: 640px) {
+  .craft-result-head h2 {
+    flex-basis: 100%;
+  }
+
+  .craft-sample-badge {
+    margin-left: 0;
+    transform: none;
+  }
+
   .craft-examples {
     flex-wrap: nowrap;
   }
