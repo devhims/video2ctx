@@ -56,7 +56,8 @@ export interface AgentToolContext {
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
   saveStoryboardPreviews?: SaveStoryboardPreviews;
-  validateAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): void;
+  /** Qualify likely unit errors in place and add notes, such as unverified figures. Never rejects the answer. */
+  reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): { blocks: { text: string; evidenceIds: string[] }[]; warnings: FinalizeAnswerInput['warnings'] };
   runId: string;
   provider: YouTubeAgentProvider;
   transcriptPolicy:

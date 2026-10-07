@@ -475,13 +475,26 @@ describe('YouTube agent deterministic finalizer', () => {
     expect(result.citations[0]).toMatchObject({ id: packet.excerpts[0]!.id, excerpt: packet.excerpts[0]!.text });
   });
 
-  it('rejects conflicting persisted excerpts with the same citation ID', () => {
+  it('marks an ambiguous citation unavailable and keeps the answer when another citation resolves', () => {
+    const packet = evidencePacket();
+    const conflicting = { ...packet, packetId: 'other', excerpts: packet.excerpts.map(e => ({ ...e, text: 'Conflicting evidence' })) };
+    const resolved = { ...packet, packetId: 'resolved', excerpts: [{ ...packet.excerpts[0]!, id: 'transcript:abcdefghijk:1' }] };
+    const result = buildAgentTurnResult(identity(), admission(), {
+      answer: 'A claim. [cite:transcript:abcdefghijk:0]\n\nAnother claim. [cite:transcript:abcdefghijk:1]', intent: 'topic_research',
+      confidence: 'high', citations: [], artifacts: [], warnings: [],
+    }, [packet, conflicting, resolved], 1);
+    expect(result.answer).toBe('A claim. [source unavailable]\n\nAnother claim. [cite:transcript:abcdefghijk:1]');
+    expect(result.citations.map(citation => citation.id)).toEqual(['transcript:abcdefghijk:1']);
+    expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
+  });
+
+  it('still rejects a research answer whose only citation is ambiguous', () => {
     const packet = evidencePacket();
     const conflicting = { ...packet, packetId: 'other', excerpts: packet.excerpts.map(e => ({ ...e, text: 'Conflicting evidence' })) };
     expect(() => buildAgentTurnResult(identity(), admission(), {
       answer: 'A claim. [cite:transcript:abcdefghijk:0]', intent: 'topic_research',
       confidence: 'high', citations: [], artifacts: [], warnings: [],
-    }, [packet, conflicting], 1)).toThrow(expect.objectContaining({ code: 'INVALID_AGENT_CITATION', reason: 'conflicting_evidence' }));
+    }, [packet, conflicting], 1)).toThrow(expect.objectContaining({ code: 'AGENT_CITATION_REQUIRED' }));
   });
 
   it('does not manufacture references for an answer without markers', () => {
@@ -491,7 +504,18 @@ describe('YouTube agent deterministic finalizer', () => {
     }, [evidencePacket()], 1)).toThrow(/inline citation markers/);
   });
 
-  it('rejects citation identifiers that were not persisted', () => {
+  it('marks citation identifiers that were not persisted as unavailable', () => {
+    const packet = evidencePacket();
+    const result = buildAgentTurnResult(identity(), admission(), {
+      answer: 'A supported claim. [cite:transcript:abcdefghijk:0] [cite:transcript:invented:0]',
+      intent: 'topic_research', confidence: 'low', citations: [], artifacts: [], warnings: [],
+    }, [packet], 1);
+    expect(result.answer).toBe('A supported claim. [cite:transcript:abcdefghijk:0] [source unavailable]');
+    expect(result.citations).toHaveLength(1);
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'CITATIONS_UNAVAILABLE' }));
+  });
+
+  it('still rejects a research answer whose only citation was not persisted', () => {
     const packet = evidencePacket();
     expect(() => buildAgentTurnResult(identity(), admission(), {
       answer: 'An unsupported claim. [cite:transcript:invented:0]',
@@ -504,7 +528,7 @@ describe('YouTube agent deterministic finalizer', () => {
       }],
       artifacts: [],
       warnings: [],
-    }, [packet], 1)).toThrow(expect.objectContaining({ code: 'INVALID_AGENT_CITATION', reason: 'missing_evidence' }));
+    }, [packet], 1)).toThrow(expect.objectContaining({ code: 'AGENT_CITATION_REQUIRED' }));
   });
 });
 

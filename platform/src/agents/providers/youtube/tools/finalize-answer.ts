@@ -13,8 +13,10 @@ export function createFinalizeAnswerTool(context: AgentToolContext) {
     inputSchema: structuredAnswerSchema,
     outputSchema: agentTurnResultSchema,
     execute: (input, { toolCallId }) => {
-      context.validateAnswerBlocks?.(input.blocks);
-      return context.finalize(toolCallId, renderStructuredAnswer(input));
+      const review = context.reviewAnswerBlocks?.(input.blocks);
+      const answer = renderStructuredAnswer(review ? { ...input, blocks: review.blocks } : input);
+      answer.warnings.push(...review?.warnings ?? []);
+      return context.finalize(toolCallId, answer);
     },
   });
 }

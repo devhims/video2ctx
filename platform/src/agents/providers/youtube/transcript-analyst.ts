@@ -294,7 +294,7 @@ function resolveAnalysis(
 ): TranscriptAnalystResult {
   const windowByIndex = new Map(catalog.map((window) => [window.index, window]));
   const selected = new Map<number, TranscriptCatalogEntry>();
-  const groundingErrors: string[] = [];
+  let unverifiedFindings = 0;
   const findings = output.findings.flatMap((finding, findingIndex) => {
     const windowIndexes = [...new Set(finding.windowIndexes)];
     const excerptIds = windowIndexes.map((windowIndex) => {
@@ -309,44 +309,38 @@ function resolveAnalysis(
       return transcriptWindowId(videoId, window);
     });
     const windows = windowIndexes.map(index => windowByIndex.get(index)!.text);
-    const identityWindows = catalog.map(window => window.text);
     try {
-      assertTranscriptFacts(finding, windows, sourceContext, identityWindows);
+      assertTranscriptFacts(finding, windows);
     } catch (error) {
       if (!(error instanceof TranscriptGroundingError)) throw error;
       for (const issue of error.issues) onIssue?.({ ...issue, findingIndex });
-      groundingErrors.push(`Finding ${findingIndex + 1}: ${error.message}`);
+      unverifiedFindings += 1;
       // A mixed comparison may contain both an unclear ASR number and a valid
       // measurement. Keep fields checked against their source quotes, never the rejected prose.
       const quantities = finding.quantities.filter(quantity => {
         try {
-          assertTranscriptFacts({ claim: '', entities: [], quantities: [quantity], uncertainty: finding.uncertainty }, windows, sourceContext);
+          assertTranscriptFacts({ claim: '', entities: [], quantities: [quantity], uncertainty: finding.uncertainty }, windows);
           return true;
         } catch (error) {
           if (!(error instanceof TranscriptGroundingError)) throw error;
           return false;
         }
       });
-      if (!quantities.length) return [];
-      const entities = finding.entities.filter(entity => {
-        try {
-          assertTranscriptFacts({ claim: '', entities: [entity], quantities: [], uncertainty: null }, windows, sourceContext, identityWindows);
-          return true;
-        } catch (error) {
-          if (!(error instanceof TranscriptGroundingError)) throw error;
-          return false;
-        }
-      });
-      return [{
+      if (quantities.length) return [{
         claim: quantities.map(quantity => `${quantity.kind} ${quantity.metric}: ${quantity.value}${quantity.unit ?? ' (unit unclear)'}`).join('; ') + '.',
-        excerptIds, entities, quantities,
+        excerptIds, entities: finding.entities, quantities,
         uncertainty: ('Only source-checked measurements were retained; the original claim contained unsupported details.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
+      }];
+      // Nothing checkable survived. Keep the finding marked unverified rather than
+      // discarding it; the final answer notes any figure its sources do not contain.
+      return [{
+        claim: finding.claim, excerptIds, entities: finding.entities, quantities: [],
+        uncertainty: ('Some figures in this finding could not be matched to the transcript. Treat them as unverified.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
       }];
     }
     return [{ claim: finding.claim, excerptIds, entities: finding.entities, quantities: finding.quantities, uncertainty: finding.uncertainty }];
   });
 
-  if (groundingErrors.length && !findings.length) throw new TranscriptGroundingError(groundingErrors.join('\n'));
   const acceptedIds = new Set(findings.flatMap(finding => finding.excerptIds));
   const excerpts = [...selected.values()].filter(window => acceptedIds.has(transcriptWindowId(videoId, window)))
     .sort((a, b) => a.startMs - b.startMs)
@@ -365,7 +359,7 @@ function resolveAnalysis(
     sourceContext,
     findings,
     excerpts,
-    warnings: [...output.warnings, ...(groundingErrors.length ? [`Removed unsupported details from ${groundingErrors.length} transcript finding(s). Measurements checked against the transcript were retained where available; other affected findings were discarded.`] : [])],
+    warnings: [...output.warnings, ...(unverifiedFindings ? [`Some figures in ${unverifiedFindings} transcript finding${unverifiedFindings === 1 ? '' : 's'} could not be matched to the transcript and are marked unverified.`] : [])],
     coverage: completeCoverage(segments),
   };
 }

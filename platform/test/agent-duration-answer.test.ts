@@ -98,5 +98,5 @@ it('keeps the citation requirement for unverified, altered, or stale duration re
   expect(() => finalize({ ...input, answer: `${input.answer} This course teaches Python.` })).toThrow(/citation/);
   expect(() => finalize({ ...input, confidence: 'high' })).toThrow(/citation/);
   expect(() => finalize(input, [content])).toThrow(/citation/);
-  expect(() => finalize({ ...input, answer: `${input.answer} [cite:invented]` })).toThrow(/persisted evidence/);
+  expect(() => finalize({ ...input, answer: `${input.answer} [cite:invented]` })).toThrow(/citation/);
 });

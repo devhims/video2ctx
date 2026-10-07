@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { renderPartialAnswer, renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, assertRequestedNumberedItems } from '../src/agents/structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, numberedItemsMismatch, fillerOnlyAnswer, salvageTruncatedAnswer } from '../src/agents/structured-answer';
 import { compactAgentResult } from '../src/agents/response';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -40,55 +40,34 @@ describe('structured answer citations', () => {
       { text: `- A supported observation. ${marker}`, evidenceIds: ['e1'] },
     ] }, new Map([['ref_1', 'e1']])).answer).toBe('- A supported observation. [cite:e1]');
   });
-  it('does not allow inline aliases to cite evidence undeclared for the block', () => {
+  it('keeps an undeclared inline reference in place for persistence to verify', () => {
     const table='| Test | Source |\n| --- | --- |\n| Coding | [cite:ref_2] |';
-    expect(() => renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','invented']])))
-      .toThrow(z.ZodError);
+    expect(renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','e2']])).answer)
+      .toBe('| Test | Source |\n| --- | --- |\n| Coding | [cite:e2] |\n\nSources: [cite:e1]');
   });
-  it.each(['[cite:ref_2]', '(source marker:ref_2]'])('QA 012: rejects wrong-block references even when another block declares them: %s', marker => {
-    expect(() => renderStructuredAnswer({ ...base, blocks: [
+  it.each(['[cite:ref_2]', '(source marker:ref_2]'])('keeps a reference another block declares where the model placed it: %s', marker => {
+    expect(renderStructuredAnswer({ ...base, blocks: [
       { text: `First source ${marker}.`, evidenceIds: ['e1'] },
       { text: 'Second source.', evidenceIds: ['e2'] },
-    ] }, new Map([['ref_2', 'e2']]))).toThrow(z.ZodError);
+    ] }, new Map([['ref_2', 'e2']])).answer).toBe('First source [cite:e2]. [cite:e1]\n\nSecond source. [cite:e2]');
   });
-  it('QA 012: citation repair feedback identifies the block without echoing untrusted marker text', () => {
-    let error: unknown;
-    try {
-      renderStructuredAnswer({ ...base, blocks: [
-        { text: 'A supported first block.', evidenceIds: ['e1'] },
-        { text: 'Another claim [cite:untrusted marker payload].', evidenceIds: ['e1'] },
-      ] });
-    } catch (caught) { error = caught; }
-    expect(error).toBeInstanceOf(z.ZodError);
-    expect((error as z.ZodError).issues).toEqual([expect.objectContaining({
-      code: 'custom', path: ['blocks', 1, 'text'], message: expect.stringContaining('evidenceIds'),
-    })]);
-    expect(JSON.stringify(error)).not.toContain('untrusted marker payload');
+  it('marks a marker with no usable reference as unavailable without echoing its text', () => {
+    const answer = renderStructuredAnswer({ ...base, blocks: [
+      { text: 'A supported first block.', evidenceIds: ['e1'] },
+      { text: 'Another claim [cite:untrusted marker payload].', evidenceIds: ['e1'] },
+    ] }).answer;
+    expect(answer).toBe('A supported first block. [cite:e1]\n\nAnother claim [source unavailable]. [cite:e1]');
+    expect(answer).not.toContain('untrusted marker payload');
   });
-  it('QA 012: reports every invalid block once alongside coherence errors', () => {
-    let error: unknown;
-    try {
-      renderStructuredAnswer({ ...base, blocks: [
-        { text: 'The claim continues', evidenceIds: ['e1'] },
-        { text: 'across blocks [cite:bad1] [cite:bad2].', evidenceIds: ['e1'] },
-        { text: 'Another claim [cite:bad3].', evidenceIds: ['e1'] },
-      ] });
-    } catch (caught) { error = caught; }
-    expect(error).toBeInstanceOf(z.ZodError);
-    const issues = (error as z.ZodError).issues;
-    expect(issues.map(issue => issue.path)).toEqual([
-      ['blocks', 0, 'text'], ['blocks', 1, 'text'], ['blocks', 2, 'text'],
-    ]);
-    expect(JSON.stringify(issues)).not.toMatch(/bad[123]/);
+  it.each([
+    ['[cite:ref_1, ref_2]', 'Claim [cite:e1] [cite:e2].'],
+    ['[cite: ref_1]', 'Claim [cite:e1]. [cite:e2]'],
+  ])('splits a marker holding several references: %s', (marker, expected) => {
+    expect(renderStructuredAnswer({ ...base, blocks: [{ text: `Claim ${marker}.`, evidenceIds: ['e1', 'e2'] }] },
+      new Map([['ref_1', 'e1'], ['ref_2', 'e2']])).answer).toBe(expected);
   });
-  it.each(['[cite:ref_1, ref_2]', '[cite: ref_1]'])('QA 012: malformed marker feedback explains the one-ID syntax: %s', marker => {
-    let error: unknown;
-    try {
-      renderStructuredAnswer({ ...base, blocks: [{ text: `Claim ${marker}.`, evidenceIds: ['e1', 'e2'] }] },
-        new Map([['ref_1', 'e1'], ['ref_2', 'e2']]));
-    } catch (caught) { error = caught; }
-    expect(error).toBeInstanceOf(z.ZodError);
-    expect((error as z.ZodError).issues[0]!.message).toMatch(/exactly one.*no spaces or commas/);
+  it.each(['The', "I'll look up the transcript."])('rejects a filler-only answer for one repair: %s', text => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] })).toThrow(/fragment or promise/);
   });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
@@ -97,17 +76,21 @@ describe('structured answer citations', () => {
     ] })).toBe('First draft\n\nSecond draft');
     expect(renderPartialAnswer({ blocks: [{ text: 'x'.repeat(25_000) }] })).toHaveLength(20_000);
   });
-  it('rejects a schema-valid one-item answer for an explicit ten-item request', () => {
+  it('reports a numbered-item mismatch as a signal without rejecting the answer', () => {
     const output = finalizationOutputSchema.parse({ confidence: 'medium', warnings: [],
       blocks: [{ text: '1. A single item that ends', evidenceIds: ['e1'] }] });
-    expect(() => assertRequestedNumberedItems(output, 10)).toThrow(/10 numbered items/);
+    expect(numberedItemsMismatch(output, 10)).toBe(true);
     const complete = { ...output, blocks: Array.from({ length: 10 }, (_, i) => ({
       text: `### ${i + 1}. Complete supported item.`, evidenceIds: ['e1'],
     })) };
-    expect(() => assertRequestedNumberedItems(complete, 10)).not.toThrow();
-    expect(() => assertRequestedNumberedItems({ ...output, warnings: [{
+    expect(numberedItemsMismatch(complete, 10)).toBe(false);
+    expect(numberedItemsMismatch({ ...output, warnings: [{
       code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only one item is supported by the available evidence.',
-    }] }, 10)).not.toThrow();
+    }] }, 10)).toBe(false);
+  });
+  it('flags filler-only answers as a signal', () => {
+    expect(fillerOnlyAnswer({ blocks: [{ text: "I'll look up the transcript." }] })).toBe(true);
+    expect(fillerOnlyAnswer({ blocks: [{ text: 'The' }, { text: 'No.' }] })).toBe(false);
   });
   it('allows a complete long paragraph without forcing a citation into a word at 2000 characters', () => {
     const text = 'A complete supported sentence. '.repeat(75).trim();
@@ -118,18 +101,18 @@ describe('structured answer citations', () => {
     });
   });
 
-  it('rejects continuation fragments before adding citations between them', () => {
-    expect(() => renderStructuredAnswer({ ...base, blocks: [
-      { text: 'Converts the design into production-adj', evidenceIds: ['e1'] },
-      { text: 'ady code using the existing components.', evidenceIds: ['e1'] },
-    ] })).toThrow(/complete/);
+  it('keeps headings and blocks that start with a lowercase name', () => {
+    expect(renderStructuredAnswer({ ...base, blocks: [
+      { text: '## Results', evidenceIds: ['e1'] },
+      { text: 'iPhone battery life lasted all day.', evidenceIds: ['e1'] },
+    ] }).answer).toBe('## Results [cite:e1]\n\niPhone battery life lasted all day. [cite:e1]');
   });
 
-  it('rejects repetitive generation commentary in warnings instead of persisting it', () => {
-    expect(() => renderStructuredAnswer({ ...base,
+  it('keeps repetitive warning text rather than rejecting the answer', () => {
+    expect(renderStructuredAnswer({ ...base,
       blocks: [{ text: 'The report is supported.', evidenceIds: ['e1'] }],
       warnings: [{ code: 'SOURCE_CAVEAT', message: 'Continue the report from where it was cut off. '.repeat(4) }],
-    })).toThrow(/repetit/i);
+    }).warnings).toHaveLength(1);
   });
 
   it('still rejects answers larger than the public response limit without silently cutting them', () => {
@@ -202,11 +185,13 @@ describe('structured answer citations', () => {
     expect(input.answer).toBe('Which aspect should I inspect?');
     expect(input.citations).toEqual([]);
   });
-  it('rejects invented references rather than manufacturing citations', () => {
-    expect(() => finalize(['invented'])).toThrow(/persisted evidence/);
+  it('still requires at least one persisted citation for a research answer', () => {
+    expect(() => finalize(['invented'])).toThrow(expect.objectContaining({ code: 'AGENT_CITATION_REQUIRED' }));
   });
-  it('does not allow answer text to inject extra references', () => {
-    expect(() => finalize(['e1'], 'Text [cite:invented]')).toThrow(z.ZodError);
+  it('marks an injected reference that matches no saved evidence as unavailable', () => {
+    const result = finalize(['e1'], 'Text [cite:invented]');
+    expect(result.answer).toBe('Text [source unavailable] [cite:e1]');
+    expect(result.citations.map(citation => citation.id)).toEqual(['e1']);
   });
   it('removes model-written short reference markers before adding validated citations', () => {
     const rendered = renderStructuredAnswer({ ...base, blocks: [
@@ -221,3 +206,46 @@ it.each(['No.', '42', 'Raynald Westerling', '"The"', 'The stored transcript is u
     expect(renderStructuredAnswer({intent:'context_answer',confidence:'high',warnings:[],artifacts:[],blocks:[{text,evidenceIds:[]}]}).answer).toBe(text);
   },
 );
+
+describe('truncated answer salvage', () => {
+  const output = finalizationOutputSchema;
+  const answer = (...texts: string[]) => JSON.stringify({ confidence: 'medium', warnings: [],
+    blocks: texts.map(text => ({ text, evidenceIds: ['e1'] })) });
+  it('keeps complete blocks and drops the block cut off mid-sentence', async () => {
+    const candidate = answer('First complete point.', 'Second complete point.').slice(0, -2) + ', {"text": "Third point was cut off mid';
+    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: true, closedCleanly: false, output: expect.objectContaining({ blocks: [
+      expect.objectContaining({ text: 'First complete point.' }), expect.objectContaining({ text: 'Second complete point.' }),
+    ] }) });
+  });
+  it('keeps every block of a comparison when only the outer JSON is missing', async () => {
+    const candidate = answer('Product A has 54.2% protein.', 'Product B has 61.0% protein.').slice(0, -2);
+    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toEqual({ droppedBlock: false, closedCleanly: false, output: expect.objectContaining({ blocks: [
+      expect.objectContaining({ text: 'Product A has 54.2% protein.' }), expect.objectContaining({ text: 'Product B has 61.0% protein.' }),
+    ] }) });
+  });
+  it('keeps a complete single block when only the closing brace is missing', async () => {
+    await expect(salvageTruncatedAnswer(answer('The only point.').slice(0, -1), output))
+      .resolves.toMatchObject({ droppedBlock: false, output: { blocks: [{ text: 'The only point.' }] } });
+  });
+  it('drops a block whose citations were cut off even though its text closed', async () => {
+    const candidate = answer('First complete point.').slice(0, -2) + ', {"text": "Second point.", "evidenceIds": ["e1"';
+    await expect(salvageTruncatedAnswer(candidate, output))
+      .resolves.toMatchObject({ droppedBlock: true, output: { blocks: [{ text: 'First complete point.' }] } });
+  });
+  it('is not confused by quotes, braces or the word blocks inside answer text', async () => {
+    const candidate = answer('A "quoted} {blocks": [ claim.', 'Second \\ point.').slice(0, -2) + ', {"text": "Cut';
+    await expect(salvageTruncatedAnswer(candidate, output)).resolves.toMatchObject({ droppedBlock: true,
+      output: { blocks: [{ text: 'A "quoted} {blocks": [ claim.' }, { text: 'Second \\ point.' }] } });
+  });
+  it('keeps every block when JSON closes cleanly despite the limit, and reports it', async () => {
+    await expect(salvageTruncatedAnswer(answer('First point.', 'Second point.'), output)).resolves.toMatchObject({
+      droppedBlock: false, closedCleanly: true, output: { blocks: [{ text: 'First point.' }, { text: 'Second point.' }] } });
+    await expect(salvageTruncatedAnswer(answer('The only point.'), output))
+      .resolves.toMatchObject({ droppedBlock: false, closedCleanly: true, output: { blocks: [{ text: 'The only point.' }] } });
+  });
+  it('returns nothing when no complete block exists', async () => {
+    await expect(salvageTruncatedAnswer('{"confidence":"medium","warnings":[],"blocks":[{"text":"Cut off', output)).resolves.toBeUndefined();
+    await expect(salvageTruncatedAnswer('not json', output)).resolves.toBeUndefined();
+    await expect(salvageTruncatedAnswer(undefined, output)).resolves.toBeUndefined();
+  });
+});

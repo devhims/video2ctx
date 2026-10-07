@@ -1,3 +1,4 @@
+import { traceFinalizationFailure } from '../src/agents/runtime/finalization-trace';
 import { durationLimitNotice } from '../src/agents/research/duration-limit-answer';
 import { evidenceFallback } from '../src/agents/research/evidence-fallback';
 import { VideoTooLongError } from '../src/agents/runtime/video-duration-limit';
@@ -213,7 +214,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
   });
 });
 
-test('direct finalization restores cited frame evidence from ancestors and rejects other references', async () => {
+test('direct finalization restores cited frame evidence from ancestors and marks other references unavailable', async () => {
   const { runtime, userId, runId, conversationId } = await seed('agent-frame-context', 'completed');
   await runInDurableObject(runtime, async instance => {
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
@@ -249,11 +250,11 @@ test('direct finalization restores cited frame evidence from ancestors and rejec
       const route = JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Correct the earlier roles.' });
       instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
       const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
-        answer: 'The woman holds the microphone. [cite:uncited-proof]' };
-      await expect(methods.finalizeRun(receipt.runId, 'invalid', input)).rejects.toThrow(/persisted evidence/);
-      const result = await methods.finalizeRun(receipt.runId, 'final', { ...input,
-        answer: 'The woman holds the microphone. [cite:frame-proof]' });
+        answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
+      const result = await methods.finalizeRun(receipt.runId, 'final', input);
+      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable]');
       expect(result.citations).toEqual([citation]);
+      expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
       expect(result.billing.creditsCharged).toBe(0);
       expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)
         .toMatchObject([{ tool_name: 'finalize_answer', credits: 0 }]);
@@ -1787,5 +1788,37 @@ test.each(['inspect_video', 'topic_research'] as const)('persists a duration-onl
     const saved = instance.sql<{ status: string; result_json: string }>`SELECT status, result_json FROM agent_runs WHERE id=${runId}`[0]!;
     expect(saved.status).toBe('completed');
     expect(JSON.parse(saved.result_json).answer).toBe(input.answer);
+  });
+});
+
+
+test('retains rejected answers in private agent traces and revokes them on session deletion', async () => {
+  const { runtime, runId, conversationId, userId } = await seed('rejected-answer-trace', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const manager = (instance as unknown as { traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager }).traceManager;
+    await traceFinalizationFailure(call => manager.track(runId, call), {
+      runId, attemptId: 'answer-attempt', attempt: 1, modelCallId: 'model-call', modelId: 'deepseek',
+      responseId: 'provider-response', startedAt: 100, elapsedMs: 500,
+      schemaVersion: 'answer-blocks-v3', validationStage: 'output_schema', code: 'INVALID_ANSWER_STRUCTURE',
+      candidate: 'private rejected answer', candidateCharacters: 23,
+      validationMessage: 'blocks[1].evidenceIds must contain at least one reference',
+      referenceMap: new Map([['ref_1', 'e1']]), evidence: [], error: new Error('schema failure'),
+    });
+    await manager.publishPending();
+    const row = await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{ trace_id: string }>();
+    expect(row).not.toBeNull();
+    expect(await readAdminToolTrace(env, runId, row!.trace_id)).toMatchObject({
+      name: 'final_answer_rejection', source: 'model', status: 'failed', payloadState: 'complete',
+      input: { candidate: 'private rejected answer', modelId: 'deepseek', responseId: 'provider-response',
+        generationStartedAt: 100, generationElapsedMs: 500, references: [{ alias: 'ref_1', evidenceId: 'e1' }] },
+      error: { code: 'INVALID_ANSWER_STRUCTURE', message: 'blocks[1].evidenceIds must contain at least one reference' },
+    });
+    expect(JSON.stringify(await instance.getRunProgress(runId))).not.toContain('private rejected answer');
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId}`).toHaveLength(1);
+    await instance.deleteSessionAssets(conversationId, userId);
+    await manager.publishPending();
+    expect(await readAdminToolTrace(env, runId, row!.trace_id)).toMatchObject({ payloadState: 'deleted', input: null });
+    const objects = await env.RESEARCH.list({ prefix: 'agent-traces/' });
+    expect(objects.objects.filter(object => object.key.includes(runId))).toHaveLength(0);
   });
 });

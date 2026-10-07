@@ -1,4 +1,5 @@
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
+import { createHash } from 'node:crypto';
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
 import { storedTranscriptFailure, transcriptRetrievalKey } from './providers/youtube/tools/transcript-tool-errors';
 import { agentMaxVideoSeconds } from './runtime/video-duration-limit';
@@ -896,11 +897,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     input: FinalizeAnswerInput,
   ): Promise<AgentTurnResult> {
     const parsedInput = finalizeAnswerInputSchema.parse(input);
-    // The only await before acceptance. Every read, validation and the commit below
-    // run synchronously, so cancellation, evidence deletion or a concurrent finalize
-    // cannot interleave between validating this answer and persisting it.
-    // buildAgentTurnResult copies input.answer verbatim, so this is the accepted answer's hash.
-    const answerHash = await sha256(parsedInput.answer);
+    // Every read, validation and the commit below run synchronously, so cancellation,
+    // evidence deletion or a concurrent finalize cannot interleave between validating
+    // this answer and persisting it.
     if (this.#deleted) throw new Error('Agent run is no longer active.');
     const run = this.requireRun(runId);
     if (run.result_json) return agentTurnResultSchema.parse(JSON.parse(run.result_json));
@@ -945,6 +944,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
     } : undefined);
+    // Hash the accepted text: unmatched citations may have been removed from the input.
+    const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);
     const timestamp = Date.now();
     // The accepted answer and its memory intent commit together, or neither does.

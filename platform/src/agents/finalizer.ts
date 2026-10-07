@@ -11,12 +11,6 @@ import {
 
 const CITATION_MARKER = /\[cite:([A-Za-z0-9:_-]+)\]/g;
 
-export class AgentCitationError extends ApiError {
-  constructor(marker: string, readonly reason: 'missing_evidence' | 'conflicting_evidence') {
-    super(422, 'INVALID_AGENT_CITATION', `Citation ${marker} does not reference persisted evidence unambiguously.`);
-  }
-}
-
 export interface FinalizationIdentity {
   runId: string;
   conversationId: string;
@@ -34,10 +28,7 @@ export function buildAgentTurnResult(
 ): AgentTurnResult {
   const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
   const citations: AgentCitation[] = [];
-  if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && markers.length === 0
-    && !isDurationLimitFallback(input, packets, durationLimitContext)) {
-    throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
-  }
+  const unresolved = new Set<string>();
   for (const marker of markers) {
     const matches = packets.flatMap((packet) => packet.excerpts
       .filter((excerpt) => excerpt.id === marker)
@@ -46,10 +37,13 @@ export function buildAgentTurnResult(
         return source ? [{ source, excerpt }] : [];
       }));
     const match = matches[0];
+    // A reference that matches no saved excerpt, or several different ones, is marked
+    // unavailable. Every remaining citation still resolves to exactly one persisted excerpt.
     if (!match || matches.some(({ source, excerpt }) =>
       source.id !== match.source.id || source.url !== match.source.url ||
       excerpt.text !== match.excerpt.text || excerpt.startMs !== match.excerpt.startMs || excerpt.endMs !== match.excerpt.endMs)) {
-      throw new AgentCitationError(marker, match ? 'conflicting_evidence' : 'missing_evidence');
+      unresolved.add(marker);
+      continue;
     }
     const { source, excerpt } = match;
     citations.push({
@@ -59,15 +53,24 @@ export function buildAgentTurnResult(
       startMs: excerpt.startMs, endMs: excerpt.endMs,
     });
   }
+  if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && citations.length === 0
+    && !isDurationLimitFallback(input, packets, durationLimitContext)) {
+    throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
+  }
+  // The claim stays, visibly unsupported, as it does after a source is deleted.
+  const answer = unresolved.size
+    ? input.answer.replace(CITATION_MARKER, (marker, id: string) => unresolved.has(id) ? '[source unavailable]' : marker)
+    : input.answer;
 
   const warnings = deduplicateWarnings([
     ...packets.flatMap((packet) => packet.warnings),
     ...input.warnings,
+    ...(unresolved.size ? [{ code: 'CITATIONS_UNAVAILABLE', message: `${unresolved.size} citation${unresolved.size === 1 ? '' : 's'} did not match the saved sources and ${unresolved.size === 1 ? 'is' : 'are'} marked [source unavailable].` }] : []),
   ]);
 
   return agentTurnResultSchema.parse({
     ...identity,
-    answer: input.answer,
+    answer,
     intent: input.intent,
     confidence: input.confidence,
     citations,
