@@ -215,7 +215,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   const run = progress?.run;
   const status = run?.status ?? message.status;
   const result = run?.result;
-  return <article className='agent-message agent-assistant-message'>
+  return <article className='agent-message agent-assistant-message' aria-label='Agent message'>
     <span className='agent-avatar' aria-hidden='true'><StarFourIcon size={14} /></span>
     <div className='agent-message-body'>
     <header className='agent-message-header'><strong>Agent</strong><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time><span className={`agent-status status-${status}`}>{status}</span></header>

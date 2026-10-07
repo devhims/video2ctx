@@ -285,6 +285,9 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
   expect(imageRequests).toHaveLength(0);
   const latestAnswer = page.locator('.agent-assistant-message').last();
+  await expect(latestAnswer.locator('.agent-avatar')).toBeVisible();
+  await expect(latestAnswer.locator('.agent-message-header strong')).toHaveCSS('font-weight', '600');
+  await expect(page.locator('.agent-user-message').last().locator('.agent-message-header strong')).toBeVisible();
   const actions = latestAnswer.getByRole('group', { name: 'Answer actions' });
   await expect(actions.getByRole('button')).toHaveCount(3);
   await expect(actions.getByRole('button', { name: 'Upvote answer (coming soon)', exact: true })).toBeDisabled();
@@ -303,6 +306,16 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('markdown-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(latestAnswer.locator('.agent-avatar')).toBeHidden();
+  await expect(latestAnswer.locator('.agent-message-header strong')).toBeHidden();
+  await expect(latestAnswer.locator('.agent-message-header time')).toBeVisible();
+  const mobileUser = page.locator('.agent-user-message').last();
+  await expect(mobileUser.locator('.agent-avatar')).toBeHidden();
+  await expect(mobileUser.locator('.agent-message-header strong')).toBeHidden();
+  await expect(mobileUser.locator('.agent-user-bubble')).toBeVisible();
+  const mobileAnswerBounds = (await latestAnswer.locator('.agent-markdown').boundingBox())!;
+  expect(mobileAnswerBounds.x).toBe(16);
+  expect(mobileAnswerBounds.x + mobileAnswerBounds.width).toBe(374);
   await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Which claims are supported by the transcript?');
   await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeInViewport();
