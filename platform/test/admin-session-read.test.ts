@@ -33,13 +33,12 @@ async function harness() {
     getSessionAssets: async (): Promise<null> => null, getSessionAsset: async (): Promise<null> => null,
     deleteSessionAssets: async (): Promise<null> => null, deleteSessionMemory: async (): Promise<null> => null,
   });
-  const traceOwners = vi.fn(async () => ({ results: [{ user_id: ownerId }] }));
-  const userPage = vi.fn(async () => ({ results: [{ id: ownerId }] }));
+  const indexedOwners = vi.fn(async () => ({ results: [{ user_id: ownerId }] }));
   const env = {
     AGENT_RUNTIME_ENABLED: 'true', AGENT_ACCESS_MODE: 'all',
     DB: { prepare: (sql: string) => ({ bind: () => ({
       first: async () => ({ email: user.email, emailVerified: 1, agentAllowed: 0 }),
-      all: sql.includes('agent_trace_runs') ? traceOwners : userPage,
+      all: sql.includes('agent_session_owners') ? indexedOwners : async () => { throw new Error(`Unexpected query: ${sql}`); },
     }) }) },
     USER_ACCOUNT: { getByName: vi.fn((name: string) => name === ownerName ? ownerAccount : ownAccount) },
     AGENT_RUNTIME: { getByName },
@@ -56,7 +55,7 @@ async function harness() {
   const request = (path: string, init: RequestInit = {}) => app.request(`/v1/agent${path}`, {
     ...init, headers: { cookie: 'session=viewer', ...init.headers },
   }, env, { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext);
-  return { request, env, user, liveSession, getSession, ownAccount, ownerAccount, runtime, getByName, ownerRuntimeName, traceOwners, userPage };
+  return { request, env, user, liveSession, getSession, ownAccount, ownerAccount, runtime, getByName, ownerRuntimeName, indexedOwners };
 }
 
 test('admin opens another user session through its existing link and owner runtime', async () => {
@@ -82,7 +81,7 @@ test('admin reads run state, live snapshots, evidence inventory and a saved asse
   expect(h.runtime.getRunProgress).toHaveBeenCalledWith(runId);
   expect(h.runtime.getSessionAssets).toHaveBeenCalledWith(sessionId, 'session-owner');
   expect(h.runtime.getSessionAsset).toHaveBeenCalledWith(sessionId, 'session-owner', version);
-  expect(h.getByName.mock.calls.every(([name]) => name === h.ownerRuntimeName)).toBe(true);
+  expect(h.getByName).toHaveBeenCalledWith(h.ownerRuntimeName);
 });
 
 test('admin debugging works without an Agent grant while admission and session listing still require that grant', async () => {
@@ -109,8 +108,7 @@ test.each(['role', 'unverified', 'banned', 'impersonated', 'api-key', 'demo-head
     `/sessions/${sessionId}/assets`, `/sessions/${sessionId}/assets/${version}`]) {
     expect((await h.request(path, { headers })).status).toBe(404);
   }
-  expect(h.traceOwners).not.toHaveBeenCalled();
-  expect(h.userPage).not.toHaveBeenCalled();
+  expect(h.indexedOwners).not.toHaveBeenCalled();
   expect(h.runtime.getConversation).not.toHaveBeenCalled();
   expect(h.runtime.getRun).not.toHaveBeenCalled();
   expect(h.runtime.getSessionAsset).not.toHaveBeenCalled();
@@ -131,29 +129,39 @@ test('existing operator emails use the same live browser-session authorization',
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(200);
 });
 
-test('old sessions without diagnostic traces and queued sessions resolve through the owner catalog', async () => {
+test('queued sessions resolve through the owner index without reading the runtime', async () => {
   const h = await harness();
-  h.traceOwners.mockResolvedValue({ results: [] });
-  expect((await h.request(`/sessions/${sessionId}`)).status).toBe(200);
-  expect(h.userPage).toHaveBeenCalledOnce();
   h.ownerAccount.pendingAgentRun.mockResolvedValue({ run: {
     runId, userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), status: 'pending',
   }, admittedAt: 100, message: 'Waiting for admission' } as any);
-  h.runtime.getConversation.mockClear();
   const queued = await h.request(`/sessions/${sessionId}`);
   expect(await queued.json()).toMatchObject({ readOnly: true, messages: [{ role: 'user', content: 'Waiting for admission' }, { role: 'assistant', status: 'pending' }] });
   expect(h.runtime.getConversation).not.toHaveBeenCalled();
 });
 
+test('owners read their own sessions without an admin probe, even while live auth is down', async () => {
+  const h = await harness();
+  h.user.id = 'session-owner';
+  h.getSession.mockRejectedValue(new Error('Auth unavailable'));
+  const response = await h.request(`/sessions/${sessionId}`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ readOnly: false });
+  for (const path of [`/${sessionId}/runs/${runId}`, `/${sessionId}/runs/${runId}/events`,
+    `/sessions/${sessionId}/assets`, `/sessions/${sessionId}/assets/${version}`]) {
+    expect((await h.request(path)).status).toBe(200);
+  }
+  expect(h.getSession).not.toHaveBeenCalled();
+  expect(h.indexedOwners).not.toHaveBeenCalled();
+});
+
 test('missing, deleted and ambiguous sessions do not expose a runtime', async () => {
   const h = await harness();
-  h.traceOwners.mockResolvedValue({ results: [] });
-  h.userPage.mockResolvedValue({ results: [] });
+  h.indexedOwners.mockResolvedValue({ results: [] });
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(404);
-  h.traceOwners.mockResolvedValue({ results: [{ user_id: 'session-owner' }] });
+  h.indexedOwners.mockResolvedValue({ results: [{ user_id: 'session-owner' }] });
   h.ownerAccount.getSession.mockResolvedValue(null as any);
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(404);
-  h.traceOwners.mockResolvedValue({ results: [{ user_id: 'session-owner' }, { user_id: 'other-owner' }] });
+  h.indexedOwners.mockResolvedValue({ results: [{ user_id: 'session-owner' }, { user_id: 'other-owner' }] });
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(404);
   expect(h.getByName).not.toHaveBeenCalled();
 });
@@ -162,7 +170,7 @@ test('failed live authorization or owner lookup fails closed with a retryable er
   const h = await harness();
   h.getSession.mockRejectedValueOnce(new Error('Auth unavailable'));
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(503);
-  h.traceOwners.mockRejectedValueOnce(new Error('DB unavailable'));
+  h.indexedOwners.mockRejectedValueOnce(new Error('DB unavailable'));
   expect((await h.request(`/sessions/${sessionId}`)).status).toBe(503);
   expect(h.getByName).not.toHaveBeenCalled();
 });
@@ -174,5 +182,5 @@ test('admin status never redirects deletions to another user', async () => {
   }
   expect(h.runtime.deleteSessionAssets).not.toHaveBeenCalled();
   expect(h.runtime.deleteSessionMemory).not.toHaveBeenCalled();
-  expect(h.traceOwners).not.toHaveBeenCalled();
+  expect(h.indexedOwners).not.toHaveBeenCalled();
 });

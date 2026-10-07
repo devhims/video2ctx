@@ -20,7 +20,7 @@ import {
 } from '../../durable-objects/user-account';
 import { ApiError, body } from '../../lib/http';
 import { requireAdminSession } from '../../lib/admin-access';
-import { mapInBatches } from '../../lib/map-in-batches';
+import { indexSessionOwner, otherSessionOwners } from '../../lib/session-owners';
 import { creditBalance } from '../../lib/entitlements';
 import { requireDataPrincipal, requireUser } from '../../middlewares/authentication';
 import type { App } from '../../types';
@@ -31,19 +31,13 @@ export const AGENT_ROUTE_PATTERNS = ['/agent/*'] as const;
 for (const path of AGENT_ROUTE_PATTERNS) {
   agentRoutes.use(path, requireDataPrincipal, async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    // Debugging is browser-only and read-only. Starting runs and listing one's
-    // sessions still use the independent Agent rollout gate.
-    if (isSessionDebugRead(c) && c.req.header('cookie')) {
-      try {
-        const adminId = await requireAdminSession(c);
-        c.set('adminSessionAccess', adminId === requireUser(c).id);
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 403) throw error;
-      }
-    }
-    if (!c.get('adminSessionAccess')) await requireAgentAccess(c);
-    else if (String(c.env.AGENT_RUNTIME_ENABLED) !== 'true') {
-      throw new ApiError(503, 'AGENT_DISABLED', 'The agent endpoint is not enabled.');
+    try {
+      await requireAgentAccess(c);
+    } catch (error) {
+      // Admin debugging reads need no Agent grant. readSessionAs verifies the
+      // live admin session before any read and otherwise rethrows this denial.
+      if (!(error instanceof ApiError) || error.status !== 403 || !isSessionDebugRead(c)) throw error;
+      c.set('agentAccessDenied', error);
     }
     await next();
   });
@@ -140,16 +134,19 @@ agentRoutes.get('/agent/sessions/:sessionId', async (c) => {
   }
 
   c.header('Cache-Control', 'no-store');
-  const ownerId = await sessionReadOwner(c, path.data.sessionId);
+  const found = await readSessionAs(c, path.data.sessionId, async ownerId => {
+    const account = await userAccountForUser(c.env, ownerId);
+    let session;
+    try {
+      session = await account.getSession(path.data.sessionId);
+    } catch {
+      throw new ApiError(503, 'AGENT_SESSION_CATALOG_UNAVAILABLE', 'The agent session catalog is temporarily unavailable.');
+    }
+    return session ? { account, session } : null;
+  });
+  if (!found) throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found.');
+  const { ownerId, value: { account, session } } = found;
   const readOnly = ownerId !== requireUser(c).id;
-  const account = await userAccountForUser(c.env, ownerId);
-  let session;
-  try {
-    session = await account.getSession(path.data.sessionId);
-  } catch {
-    throw new ApiError(503, 'AGENT_SESSION_CATALOG_UNAVAILABLE', 'The agent session catalog is temporarily unavailable.');
-  }
-  if (!session) throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found.');
 
   const agent = await agentForConversation(c.env, ownerId, path.data.sessionId);
   let page;
@@ -191,16 +188,17 @@ function requireSessionAssetResult<T>(value:T | null):T {
 // Owner identity selects the Durable Object; the object also validates ownership.
 agentRoutes.get('/agent/sessions/:sessionId/assets', async c => {
   const {sessionId} = sessionAssetPath(c);
-  const ownerId = await sessionReadOwner(c, sessionId);
-  return c.json(requireSessionAssetResult(await (await agentForConversation(c.env,ownerId,sessionId)).getSessionAssets(sessionId,ownerId)));
+  const found = await readSessionAs(c, sessionId, async ownerId =>
+    (await agentForConversation(c.env,ownerId,sessionId)).getSessionAssets(sessionId,ownerId));
+  return c.json(requireSessionAssetResult(found?.value ?? null));
 });
 agentRoutes.get('/agent/sessions/:sessionId/assets/:version', async c => {
   const {sessionId} = sessionAssetPath(c);
   const version = sessionAssetPath(c).version!;
-  const ownerId = await sessionReadOwner(c, sessionId);
-  const data = await (await agentForConversation(c.env,ownerId,sessionId)).getSessionAsset(sessionId,ownerId,version);
-  if (data === null) throw new ApiError(404,'SESSION_ASSET_NOT_FOUND','Session asset not found.');
-  return c.json({data});
+  const found = await readSessionAs(c, sessionId, async ownerId =>
+    (await agentForConversation(c.env,ownerId,sessionId)).getSessionAsset(sessionId,ownerId,version));
+  if (!found) throw new ApiError(404,'SESSION_ASSET_NOT_FOUND','Session asset not found.');
+  return c.json({data: found.value});
 });
 agentRoutes.delete('/agent/sessions/:sessionId/assets/:version?', async c => {
   const user = requireUser(c);
@@ -233,12 +231,17 @@ agentRoutes.post('/agent', async (c) => {
   }
 
   const agent = await agentForConversation(c.env, principal.id, conversationId);
+  // Indexed after the response so admission never waits on the debug lookup.
+  const indexOwner = () => c.executionCtx.waitUntil(indexSessionOwner(c.env, principal.id, conversationId));
   try {
     const account = await userAccountForUser(c.env, principal.id);
     if (!parsedRequest.conversationId && !parsedRequest.parentMessageId) {
       const queued = await timeAgentAdmission(c, 'enqueue', async () => await account.enqueueAgentRun(request, { userId: principal.id, creditsRemaining }));
-      if (queued.receipt) return c.json(responseOptions.responseFormat === 'compact'
-        ? compactAgentRun(queued.receipt, responseOptions.include) : withSessionId(agentRunReceiptSchema.parse(queued.receipt)), 202);
+      if (queued.receipt) {
+        indexOwner();
+        return c.json(responseOptions.responseFormat === 'compact'
+          ? compactAgentRun(queued.receipt, responseOptions.include) : withSessionId(agentRunReceiptSchema.parse(queued.receipt)), 202);
+      }
     }
     if (await account.pendingAgentRun(conversationId)) {
       throw new ApiError(409, 'AGENT_CONVERSATION_BUSY', 'The conversation is still starting. Poll the admitted run before sending a follow-up.');
@@ -266,6 +269,7 @@ agentRoutes.post('/agent', async (c) => {
         { sessionId: receipt.conversationId, runId: receipt.runId },
       );
     }
+    indexOwner();
     return c.json(responseOptions.responseFormat === 'compact'
       ? compactAgentRun(receipt, responseOptions.include) : withSessionId(agentRunReceiptSchema.parse(receipt)), 202);
   } catch (error) {
@@ -285,17 +289,18 @@ agentRoutes.get('/agent/:sessionId/runs/:runId', async (c) => {
   }
 
   c.header('Cache-Control', 'no-store');
-  const ownerId = await sessionReadOwner(c, path.data.sessionId);
-  const agent = await agentForConversation(c.env, ownerId, path.data.sessionId);
-  let run;
-  try {
-    const account = await userAccountForUser(c.env, ownerId);
-    const pending = await account.pendingAgentRun(path.data.sessionId, path.data.runId);
-    run = pending?.run ?? await agent.getRun(path.data.runId);
-  } catch {
-    throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
-  }
-  if (!run) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
+  const found = await readSessionAs(c, path.data.sessionId, async ownerId => {
+    try {
+      const agent = await agentForConversation(c.env, ownerId, path.data.sessionId);
+      const account = await userAccountForUser(c.env, ownerId);
+      const pending = await account.pendingAgentRun(path.data.sessionId, path.data.runId);
+      return pending?.run ?? await agent.getRun(path.data.runId);
+    } catch {
+      throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.');
+    }
+  });
+  if (!found) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
+  const run = found.value;
   return c.json(responseOptions.responseFormat === 'compact' ? compactAgentRun(run, responseOptions.include) : legacyAgentRun(run));
 });
 
@@ -304,18 +309,21 @@ agentRoutes.get('/agent/:sessionId/runs/:runId', async (c) => {
 agentRoutes.get('/agent/:sessionId/runs/:runId/events', async (c) => {
   const path = runPathSchema.safeParse(c.req.param());
   if (!path.success) throw new ApiError(422, 'INVALID_AGENT_RUN_PATH', 'The session and run identifiers must be UUIDs.');
-  const ownerId = await sessionReadOwner(c, path.data.sessionId);
-  const account = await userAccountForUser(c.env, ownerId);
-  const agent = await agentForConversation(c.env, ownerId, path.data.sessionId);
-  const read = async () => {
-    const pending = await account.pendingAgentRun(path.data.sessionId, path.data.runId);
-    return pending ? { run: compactAgentRun(pending.run, []), phase: 'queued', tools: [] }
-      : await agent.getRunProgress(path.data.runId);
-  };
-  let initial;
-  try { initial = await read(); }
-  catch { throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.'); }
-  if (!initial) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
+  const found = await readSessionAs(c, path.data.sessionId, async ownerId => {
+    const account = await userAccountForUser(c.env, ownerId);
+    const agent = await agentForConversation(c.env, ownerId, path.data.sessionId);
+    const read = async () => {
+      const pending = await account.pendingAgentRun(path.data.sessionId, path.data.runId);
+      return pending ? { run: compactAgentRun(pending.run, []), phase: 'queued', tools: [] }
+        : await agent.getRunProgress(path.data.runId);
+    };
+    let initial;
+    try { initial = await read(); }
+    catch { throw new ApiError(503, 'AGENT_UNAVAILABLE', 'The agent runtime is temporarily unavailable.'); }
+    return initial ? { read, initial } : null;
+  });
+  if (!found) throw new ApiError(404, 'AGENT_RUN_NOT_FOUND', 'Agent run not found.');
+  const { read, initial } = found.value;
   c.header('Cache-Control', 'no-store, no-transform');
   c.header('X-Accel-Buffering', 'no');
   const response = streamSSE(c, async stream => {
@@ -414,47 +422,41 @@ function isSessionDebugRead(c: Context<App>): boolean {
     || /^\/v1\/agent\/[^/]+\/runs\/[^/]+(?:\/events)?$/.test(c.req.path);
 }
 
-/** Resolve the existing owner, never change the authenticated billing identity. */
-async function sessionReadOwner(c: Context<App>, sessionId: string): Promise<string> {
+/**
+ * Reads as the authenticated owner first, exactly as owners always have. Only a
+ * miss, or a viewer without an Agent grant, consults the live admin session and
+ * the owner index. The principal and billing identity never change.
+ */
+async function readSessionAs<T>(c: Context<App>, sessionId: string, read: (ownerId: string) => Promise<T | null | undefined>)
+  : Promise<{ ownerId: string; value: T } | null> {
   const viewerId = requireUser(c).id;
-  if (!c.get('adminSessionAccess')) return viewerId;
+  const denied = c.get('agentAccessDenied');
+  if (denied && !await isLiveAdmin(c)) throw denied;
+  const own = await read(viewerId) ?? null;
+  if (own !== null) return { ownerId: viewerId, value: own };
+  if (!denied && !await isLiveAdmin(c)) return null;
+  let owners;
   try {
-    const ownAccount = await userAccountForUser(c.env, viewerId);
-    if (await ownAccount.getSession(sessionId)) return viewerId;
-    const indexed = await c.env.DB.prepare(
-      'SELECT DISTINCT user_id FROM agent_trace_runs WHERE session_id=? LIMIT 2',
-    ).bind(sessionId).all<{ user_id: string }>();
-    // Caller-supplied UUIDs can collide across accounts. A bare link cannot
-    // identify which owner was intended when the trace index is ambiguous.
-    if (indexed.results.length > 1) throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found.');
-    const ownerId = indexed.results[0]?.user_id;
-    if (ownerId) {
-      const account = await userAccountForUser(c.env, ownerId);
-      if (await account.getSession(sessionId)) return ownerId;
-    } else {
-      // Queued sessions and sessions predating diagnostic traces have no index.
-      // Page through accounts with bounded RPC concurrency for those links.
-      let after = '';
-      while (true) {
-        const page = await c.env.DB.prepare('SELECT id FROM user WHERE id>? ORDER BY id LIMIT 25')
-          .bind(after).all<{ id: string }>();
-        const matches = await mapInBatches(page.results, async user => {
-          if (user.id === viewerId) return null;
-          const account = await userAccountForUser(c.env, user.id);
-          return await account.getSession(sessionId) ? user.id : null;
-        });
-        const found = matches.filter((id): id is string => id !== null);
-        if (found.length > 1) throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found.');
-        if (found[0]) return found[0];
-        if (page.results.length < 25) break;
-        after = page.results.at(-1)!.id;
-      }
-    }
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
+    owners = await otherSessionOwners(c.env, sessionId, viewerId);
+  } catch {
     throw new ApiError(503, 'AGENT_SESSION_CATALOG_UNAVAILABLE', 'The agent session catalog is temporarily unavailable.');
   }
-  throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found.');
+  // Caller-supplied UUIDs can collide across accounts. A bare link cannot
+  // identify the intended owner when the index holds more than one.
+  if (owners.length !== 1) return null;
+  const value = await read(owners[0]!) ?? null;
+  return value === null ? null : { ownerId: owners[0]!, value };
+}
+
+/** Browser-only, uncached admin check. Auth outages fail closed with a retryable 503. */
+async function isLiveAdmin(c: Context<App>): Promise<boolean> {
+  try {
+    await requireAdminSession(c);
+    return true;
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+    throw error;
+  }
 }
 
 function parseResponseOptions(c: Context<App>) {

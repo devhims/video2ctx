@@ -25,17 +25,21 @@ For Sources history, user DO reference ownership, and restoration from shared as
 For session evidence reuse, memory, citation versions and deletion invariants, read `reference/engineering/SESSION_EVIDENCE.md`.
 
 Admin browser sessions can open another user's existing dashboard session link in
-a read-only debugging view. Session, run, SSE, and evidence GET routes check
-`requireAdminSession` with the cookie cache disabled before resolving the owner.
-The owner selects the account and conversation Durable Objects; the authenticated
-principal stays unchanged. Normal reads, admission, listing, and deletion keep
-their existing access rules. This allows debugging without an Agent tester grant.
-The shared `agent_trace_runs` index locates the owner of indexed sessions. For
-queued sessions and older sessions without traces, the route pages through users
-and checks account catalogs with bounded RPC concurrency. Those legacy or missing
-links can take longer as the user count grows. No storage migration is needed.
-The owner's current catalog must still contain the session, so stale trace rows
-cannot restore a deleted session. Ambiguous trace owners return not found.
+a read-only debugging view. Session, run, SSE, and evidence GET routes first read
+as the authenticated owner, unchanged. Only a miss, or a viewer without an Agent
+grant, checks `requireAdminSession` with the cookie cache disabled, so ordinary
+owner reads never wait on or fail because of the admin check. The owner selects
+the account and conversation Durable Objects; the authenticated principal stays
+unchanged. Admission, listing, and deletion keep their existing access rules.
+
+D1 `agent_session_owners` maps a session ID to its owner for these lookups only.
+`POST /v1/agent` writes it in `waitUntil` after responding, so admission never
+waits on it and a failed write only hides that link from admins. Migration 0022
+seeds it from `agent_trace_runs`; the hourly cron (`backfillSessionOwners`) then
+indexes older sessions from account catalogs, 200 users per run, until its cursor
+completes. Reads still go through the owner's current catalog or runtime, so
+stale rows cannot restore deleted data. Session IDs are caller-supplied, so more
+than one indexed owner returns not found.
 
 ## Agent date context
 

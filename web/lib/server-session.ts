@@ -73,11 +73,9 @@ export async function fetchServerAdminAccess(requestHeaders: Headers, options: S
   return fetchServerAccess(requestHeaders, '/v1/admin/access', options);
 }
 
+/** Agent users keep a single access check. Only others ask whether they may debug as an admin. */
 export async function fetchServerSessionReadAccess(requestHeaders: Headers, options: ServerSessionOptions = {}): Promise<boolean> {
-  const [agentAccess, adminAccess] = await Promise.all([
-    fetchServerAgentAccess(requestHeaders, options), fetchServerAdminAccess(requestHeaders, options),
-  ]);
-  return agentAccess || adminAccess;
+  return await fetchServerAgentAccess(requestHeaders, options) || await fetchServerAdminAccess(requestHeaders, options);
 }
 
 async function fetchServerAccess(requestHeaders: Headers, path: string, options: ServerSessionOptions): Promise<boolean> {
