@@ -60,7 +60,7 @@
 .agent-user-message .agent-message-body { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .agent-message-header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 20px; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
 .agent-message-header strong { color: var(--ink); font-weight: 600; }
-.agent-assistant-message .agent-message-header { gap: 10px; margin-bottom: 12px; }
+.agent-assistant-message .agent-message-header { gap: 10px; margin-bottom: 8px; }
 .agent-user-message .agent-message-header { justify-content: flex-end; margin-bottom: 0; padding: 0 4px; }
 .agent-message time { color: var(--muted); font-size: 10px; font-weight: 400; }
 .agent-avatar { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; background: var(--color-dashboard-surface-muted); color: var(--muted); border-radius: 50%; }
@@ -120,7 +120,7 @@
 .agent-sessions .agent-answer-action:hover:not(:disabled) { background: var(--color-dashboard-surface-muted); color: var(--ink); }
 .agent-sessions .agent-answer-action:disabled { cursor: default; }
 .agent-sessions-error { max-width: 700px; padding: 48px; margin: auto; }
-.agent-trace { margin: 12px 0 18px; color: var(--muted); font-size: 12px; }
+.agent-trace { margin: 6px 0 18px; color: var(--muted); font-size: 12px; }
 .agent-sessions .agent-trace-toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; min-height: 36px; padding: 8px 12px; background: transparent; border: 0; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: left; }
 .agent-trace-toggle > span { font-size: 10px; margin-left: 8px; }
 .agent-sessions .agent-trace-toggle[aria-disabled='true'] { cursor: default; }
