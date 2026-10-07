@@ -1,3 +1,5 @@
+import { withModelFailover } from '../src/agents/runtime/model-failover';
+import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
 import { simulateReadableStream, tool } from 'ai';
 import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -94,11 +96,16 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
   const finalizer = new MockLanguageModelV4({ doStream: [stream(invalid), stream(output)] });
   models.select.mockImplementation((_env, _session, _effort, metadata) =>
     metadata.model_role === 'classifier' ? classifier : finalizer);
+  const { captures, trace } = captureRejections();
+  options.traceToolCall = trace;
   const drafts: Array<{ answer: string; state: string }> = [];
   options.onDraft = draft => drafts.push(draft);
 
   await executeResearchRun(options);
 
+  expect(captures).toHaveLength(1);
+  expect(captures[0]?.input).toMatchObject({ candidate: JSON.stringify(invalid), validationStage: 'rendered_answer',
+    issues: [expect.objectContaining({ path: ['blocks'] })] });
   expect(finalizer.doStreamCalls).toHaveLength(2);
   expect(finalizer.doGenerateCalls).toHaveLength(0);
   expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
@@ -1203,4 +1210,64 @@ it.each([false, true])('does not save an answer after both finalizer models fail
   expect(primary.doGenerateCalls).toHaveLength(1);
   expect(fallback.doGenerateCalls).toHaveLength(1);
   expect(options.finalize).not.toHaveBeenCalled();
+});
+
+
+function captureRejections() {
+  const captures: Array<{ id: string; input: Record<string, unknown>; error?: unknown }> = [];
+  const trace: TraceToolCall = async call => {
+    if (call.name !== 'final_answer_rejection') return call.execute();
+    const captured = { id: call.toolCallId, input: structuredClone(call.input) as Record<string, unknown>, error: undefined as unknown };
+    captures.push(captured);
+    try { return await call.execute(); } catch (error) { captured.error = error; throw error; }
+  };
+  return { captures, trace };
+}
+
+it.each([true, false])('saves each rejected fallback answer before repair, repair succeeds: %s', async repaired => {
+  const { options, classifier } = setup('context_answer', true);
+  const packet: EvidencePacket = { packetId: 'measurement', kind: 'youtube_transcript',
+    sources: [{ id: 's1', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: 'e1', sourceId: 's1', text: 'The protein content is 54.2%.', startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { findings: [{ claim: 'The protein content is 54.2%.',
+      excerptIds: ['e1'], entities: [], quantities: [{ metric: 'protein', value: 54.2, unit: '%', basis: null,
+        kind: 'measured', quote: 'The protein content is 54.2%.' }], uncertainty: null }] } }], warnings: [], usage: [] };
+  options.conversationHistory![0]!.evidence = [packet];
+  const { captures, trace } = captureRejections();
+  options.traceToolCall = trace;
+  const output = { confidence: 'medium', warnings: [], blocks: [
+    { text: 'Here is the correction to my previous response.', evidenceIds: [] },
+    { text: 'The protein content is 54.2g.', evidenceIds: ['ref_1'] },
+  ] };
+  let calls = 0;
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => { throw new Error('Provider connection failed'); } });
+  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: async () => {
+    expect(captures).toHaveLength(calls);
+    calls++;
+    const value = structuredClone(output);
+    if (repaired && calls === 2) value.blocks[1]!.text = 'The protein content is 54.2%.';
+    return { content: [{ type: 'text', text: JSON.stringify(value) }],
+      response: { id: `response-${calls}`, modelId: 'deepseek-actual', timestamp: new Date() },
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const finalizer = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'finalizer' });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
+  const result = executeResearchRun(options);
+  if (repaired) await result;
+  else await expect(result).rejects.toThrow();
+  expect(primary.doGenerateCalls).toHaveLength(1);
+  expect(fallback.doGenerateCalls).toHaveLength(2);
+  expect(captures).toHaveLength(repaired ? 1 : 2);
+  expect(new Set(captures.map(capture => capture.id)).size).toBe(captures.length);
+  captures.forEach((capture, index) => {
+    expect(capture.input).toMatchObject({ attempt: index + 1, modelId: 'deepseek-actual', responseId: `response-${index + 1}`,
+      candidate: JSON.stringify(output), candidateCharacters: JSON.stringify(output).length, captureTruncated: false,
+      validationStage: 'grounded_facts', code: 'UNGROUNDED_ANSWER',
+      groundingIssue: { code: 'UNSUPPORTED_MEASUREMENT', blockIndex: 1, value: 54.2, unit: 'g', evidenceIds: ['e1'] },
+      references: [{ alias: 'ref_1', evidenceId: 'e1', packetId: 'measurement', sourceId: 's1', videoId: 'abcdefghijk' }] });
+    expect(capture.error).toMatchObject({ code: 'UNGROUNDED_ANSWER', message: expect.stringContaining("blocks[1] contains 54.2g without support in that block's evidenceIds") });
+  });
+  expect(options.finalize).toHaveBeenCalledTimes(repaired ? 1 : 0);
 });
