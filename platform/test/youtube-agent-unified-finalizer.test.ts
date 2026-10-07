@@ -1271,3 +1271,65 @@ it.each([true, false])('saves each rejected fallback answer before repair, repai
   });
   expect(options.finalize).toHaveBeenCalledTimes(repaired ? 1 : 0);
 });
+
+it.each([false, true])('hands four analyses directly to answer generation after the research target is reached; targeted gap: %s', async hasGap => {
+  const { options } = setup('context_answer');
+  const ids = ['abcdefghijk', 'lmnopqrstuv', 'zzzzzzzzzzz', 'xxxxxxxxxxx'];
+  const packets: EvidencePacket[] = ids.map((videoId, index) => ({ packetId: `analysis-${index}`, kind: 'youtube_transcript',
+    sources: [{ id: `source-${index}`, videoId, provider: 'youtube', kind: 'transcript', title: `Video ${index}` }],
+    excerpts: [{ id: `e${index}`, sourceId: `source-${index}`, text: `Supported recommendation ${index}.`, startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { summary: 'Supported travel finding.', findings: [{
+      claim: `Supported recommendation ${index}.`, excerptIds: [`e${index}`], entities: [], quantities: [], uncertainty: null,
+    }], coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 }, selectedExcerptCount: 1 } }],
+    warnings: [], usage: [] }));
+  const version = 'a'.repeat(64);
+  options.persistedRoute = { route: 'topic_research', researchVideoCount: 4, visualEvidence: 'none', useStoryboard: false };
+  options.recoveredEvidence = packets;
+  options.conversationHistory = [];
+  const searchTools = vi.fn(async () => ({}));
+  const readEvidence = vi.fn(async () => ({ packets: [packets[0]!] }));
+  const readTranscriptEvidence = vi.fn();
+  options.session = { searchTools, readEvidence, readTranscriptEvidence, evidence: () => packets,
+    brief: () => ({ assets: [{ version, kind: 'transcript', videoId: ids[0], current: true, collectedAt: 1, details: {} }], memories: [] }),
+  } as unknown as NonNullable<typeof options.session>;
+  const report = { requirements: [{ question: 'Suggest places to visit', evidenceIds: ['e0', 'e1', 'e2', 'e3'] }],
+    gaps: hasGap ? [{ question: 'Is the first place accessible in October?', read: { kind: 'asset', version, offset: 3, query: 'October' } }] : [] };
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'research-handoff', toolName: 'finalize_answer', input: JSON.stringify(report) }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  let answerCalls = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => {
+    answerCalls++;
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+      blocks: [{ text: hasGap && answerCalls === 1 ? 'The' : 'Here are the supported travel recommendations.', evidenceIds: ['ref_1'] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const traces: Array<{ name: string; output: unknown }> = [];
+  options.traceToolCall = async call => { const output = await call.execute(); traces.push({ name: call.name, output }); return output; };
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId,
+    conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, packets, 0));
+
+  await executeResearchRun(options);
+
+  expect(core.doGenerateCalls).toHaveLength(1);
+  expect(core.doGenerateCalls[0]?.toolChoice).toEqual({ type: 'tool', toolName: 'finalize_answer' });
+  expect(finalizer.doGenerateCalls).toHaveLength(hasGap ? 2 : 1);
+  for (const call of finalizer.doGenerateCalls) {
+    expect(call.responseFormat?.type).toBe('json');
+    expect(call.tools ?? []).toHaveLength(0);
+    const prompt = JSON.stringify(call.prompt);
+    expect(prompt).toContain('researchPreparation');
+    expect(prompt).toContain('Supported recommendation 3.');
+    expect(prompt).not.toContain('Gather stored context needed');
+  }
+  expect(searchTools).toHaveBeenCalledOnce(); // Research setup only, no finalizer preparation loop.
+  expect(readTranscriptEvidence).not.toHaveBeenCalled();
+  expect(readEvidence).toHaveBeenCalledTimes(hasGap ? 1 : 0);
+  if (hasGap) expect(readEvidence).toHaveBeenCalledWith(version, 3, 'October');
+  expect(traces).toContainEqual({ name: 'research_handoff', output: expect.objectContaining({ mode: hasGap ? 'targeted_reads' : 'direct_answer', readCount: hasGap ? 1 : 0, incomplete: false }) });
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
