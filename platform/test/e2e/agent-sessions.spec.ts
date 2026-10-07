@@ -128,7 +128,9 @@ test('failed runs show the error, and running history can retrieve the completed
   await page.goto('/dashboard/sessions/cd056140-7d4c-4516-bb9e-c97914439553');
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeDisabled();
-  await expect(page.locator('.agent-assistant-message > header .agent-status')).toHaveText('completed');
+  await expect(page.locator('.agent-assistant-message .agent-message-header .agent-status')).toHaveText('completed');
+  await expect(page.locator('.agent-assistant-message .agent-message-header time')).toHaveCount(1);
+  await expect(page.locator('.agent-assistant-message .agent-avatar')).toHaveCount(1);
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
   await page.getByRole('textbox', { name: 'Follow-up message' }).fill('More detail');
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
@@ -283,6 +285,17 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
   expect(imageRequests).toHaveLength(0);
   const latestAnswer = page.locator('.agent-assistant-message').last();
+  const actions = latestAnswer.getByRole('group', { name: 'Answer actions' });
+  await expect(actions.getByRole('button')).toHaveCount(3);
+  await expect(actions.getByRole('button', { name: 'Upvote answer (coming soon)', exact: true })).toBeDisabled();
+  await expect(actions.getByRole('button', { name: 'Downvote answer (coming soon)', exact: true })).toBeDisabled();
+  await expect(latestAnswer.locator('.agent-run-footer')).toContainText('Run ID:');
+  await expect(latestAnswer.locator('.agent-run-footer button')).toHaveCount(0);
+  const answerBounds = (await latestAnswer.locator('.agent-markdown').boundingBox())!;
+  const actionBounds = (await actions.boundingBox())!;
+  const sourcesBounds = (await latestAnswer.locator('.agent-sources').boundingBox())!;
+  expect(actionBounds.y).toBeGreaterThanOrEqual(answerBounds.y + answerBounds.height);
+  expect(actionBounds.y + actionBounds.height).toBeLessThanOrEqual(sourcesBounds.y);
   await expect(page.locator('.agent-assistant-message').first().getByRole('button', { name: 'Copy answer', exact: true })).toBeVisible();
   await latestAnswer.getByRole('button', { name: 'Copy answer', exact: true }).click();
   await expect(latestAnswer.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();

@@ -188,7 +188,8 @@
   .agent-composer-dock { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .agent-prompt-bar textarea { font-size: 16px; }
   .agent-sessions .agent-send { width: 44px; height: 44px; }
-  .agent-sessions .agent-answer-action { flex-basis: 44px; width: 44px; height: 44px; }
+  .agent-answer-actions { gap: 0; }
+  .agent-sessions .agent-answer-action { flex-basis: 36px; width: 36px; height: 44px; }
   .agent-prompt-shortcut { display: none; }
   .agent-prompt-shortcut + .agent-send { margin-left: auto; }
   .agent-tool-chip summary { display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content 12px; column-gap: 9px; row-gap: 4px; }

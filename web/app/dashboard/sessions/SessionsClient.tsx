@@ -6,7 +6,7 @@ import { projectItemPath } from '../dashboard-routes';
 import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon, CopyIcon, ThumbsUpIcon, ThumbsDownIcon } from '@phosphor-icons/react';
+import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
@@ -384,11 +384,23 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
   </div>;
 }
 
+function AnswerActionIcon({ kind }: { kind: 'copy' | 'up' | 'down' }) {
+  return <svg width={18} height={18} viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth={1.6} strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+    {kind === 'copy' ? <>
+      <rect x={8} y={8} width={12} height={13} rx={3} />
+      <path d='M15 8V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h2' />
+    </> : <g transform={kind === 'down' ? 'translate(0 24) scale(1 -1)' : undefined}>
+      <rect x={3} y={10} width={5} height={10} rx={2} />
+      <path d='m8 10 3.2-6.4c.5-.9 1.8-.8 2.1.2.4 1.3.4 2.7 0 4L13 9h5a3 3 0 0 1 2.9 3.7l-1.2 5a3 3 0 0 1-2.9 2.3H11a3 3 0 0 1-3-3Z' />
+    </g>}
+  </svg>;
+}
+
 function AnswerActions({ answer }: { answer: string }) {
   return <div className='agent-answer-actions' role='group' aria-label='Answer actions'>
     <CopyAnswer answer={answer} />
-    <button type='button' className='agent-answer-action' disabled aria-label='Upvote answer (coming soon)' title='Feedback coming soon'><ThumbsUpIcon size={16} aria-hidden='true' /></button>
-    <button type='button' className='agent-answer-action' disabled aria-label='Downvote answer (coming soon)' title='Feedback coming soon'><ThumbsDownIcon size={16} aria-hidden='true' /></button>
+    <button type='button' className='agent-answer-action' disabled aria-label='Upvote answer (coming soon)' title='Feedback coming soon'><AnswerActionIcon kind='up' /></button>
+    <button type='button' className='agent-answer-action' disabled aria-label='Downvote answer (coming soon)' title='Feedback coming soon'><AnswerActionIcon kind='down' /></button>
   </div>;
 }
 
@@ -398,7 +410,7 @@ function CopyAnswer({ answer }: { answer: string }) {
   return <button type='button' className='agent-answer-action agent-copy-answer' aria-label={status || 'Copy answer'} title={status || 'Copy answer'} onClick={async () => {
     try { await navigator.clipboard.writeText(answer); setStatus('Copied'); }
     catch { setStatus('Could not copy'); }
-  }}>{status === 'Copied' ? <CheckIcon size={16} aria-hidden='true' /> : status ? <WarningCircleIcon size={16} aria-hidden='true' /> : <CopyIcon size={16} aria-hidden='true' />}<span className='sr-only' aria-live='polite'>{status}</span></button>;
+  }}>{status === 'Copied' ? <CheckIcon size={18} aria-hidden='true' /> : status ? <WarningCircleIcon size={18} aria-hidden='true' /> : <AnswerActionIcon kind='copy' />}<span className='sr-only' aria-live='polite'>{status}</span></button>;
 }
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }
