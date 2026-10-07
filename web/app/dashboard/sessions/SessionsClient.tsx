@@ -44,7 +44,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fsessions')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
-      <DashboardHeader title='Agent'><Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link></DashboardHeader>
+      <DashboardHeader title='Agent'>{agentAccess && <Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link>}</DashboardHeader>
       {accountError && <p role='alert'>{accountError}</p>}
       {children}
     </div>
@@ -52,9 +52,9 @@ export function AgentShell({ children }: { children: ReactNode }) {
 }
 
 export default function SessionsClient({ sessionId }: { sessionId?: string }) {
-  const { agentAccess, accessReady } = useDashboardSession();
+  const { agentAccess, adminAccess, accessReady } = useDashboardSession();
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
-    {!accessReady ? <SessionLoading /> : !agentAccess ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
+    {!accessReady ? <SessionLoading /> : !(agentAccess || (sessionId && adminAccess)) ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
       : sessionId ? <SessionHistory key={sessionId} sessionId={sessionId} /> : <SessionList />}
   </section>;
 }
@@ -121,6 +121,7 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
 
 function SessionHistory({ sessionId }: { sessionId: string }) {
   const cache = useAgentSessionCache();
+  const { agentAccess } = useDashboardSession();
   const messagesRef = useRef<HTMLDivElement>(null);
   const [pendingMessage, showPendingMessage] = useOptimistic<PendingMessage | null>(null);
   const [session, setSession] = useState<AgentSessionDetail | undefined>(() => cache.readSessionPreview(sessionId));
@@ -176,11 +177,14 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     finally { setOlderLoading(false); }
   };
   return <>
-    <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
+    <div className='agent-thread-nav'>{agentAccess
+      ? <Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
+      : <Link className='agent-back' href='/dashboard/admin'><ArrowLeftIcon size={14} aria-hidden='true' />Back to admin</Link>}
       <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {session && <header className='agent-heading'><div><h2>{session.title}</h2>
-      <p className='agent-id'>Session ID: {sessionId}</p></div></header>}
-    {session && <SessionAssets sessionId={sessionId} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
+      <p className='agent-id'>Session ID: {sessionId}</p>
+      {session.readOnly && <p role='status'>Admin debugging view. This session is read-only.</p>}</div></header>}
+    {session && <SessionAssets sessionId={sessionId} readOnly={session.readOnly} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
     {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
@@ -191,7 +195,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
       {pendingMessage && <PendingUserMessage message={pendingMessage} />}
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
-    {session && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting} onSendAction={showPendingMessage}
+    {session && !session.readOnly && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting} onSendAction={showPendingMessage}
       disabled={loading} processing={session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
   </>;
 }

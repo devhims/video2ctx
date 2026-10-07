@@ -24,6 +24,19 @@ For Sources history, user DO reference ownership, and restoration from shared as
 
 For session evidence reuse, memory, citation versions and deletion invariants, read `reference/engineering/SESSION_EVIDENCE.md`.
 
+Admin browser sessions can open another user's existing dashboard session link in
+a read-only debugging view. Session, run, SSE, and evidence GET routes check
+`requireAdminSession` with the cookie cache disabled before resolving the owner.
+The owner selects the account and conversation Durable Objects; the authenticated
+principal stays unchanged. Normal reads, admission, listing, and deletion keep
+their existing access rules. This allows debugging without an Agent tester grant.
+The shared `agent_trace_runs` index locates the owner of indexed sessions. For
+queued sessions and older sessions without traces, the route pages through users
+and checks account catalogs with bounded RPC concurrency. Those legacy or missing
+links can take longer as the user count grows. No storage migration is needed.
+The owner's current catalog must still contain the session, so stale trace rows
+cannot restore a deleted session. Ambiguous trace owners return not found.
+
 ## Agent date context
 
 Models otherwise assume the year from their training data. `POST /v1/agent` accepts an optional IANA `timeZone`, which the dashboard fills from the browser. The run row stores it in `agent_runs.time_zone`, and `currentDateGuidance(created_at, time_zone)` in `platform/src/agents/runtime/current-date.ts` renders one date line from the run's admission time. Every phase and recovery of a run therefore agrees on "today". The line is appended to the end of the classifier, research loop, context-gathering and finalizer instructions, never to the untrusted user payload. It carries the date only, so it changes once a day and leaves the cached prompt prefix intact. Missing or older runs use UTC. The visual and transcript analysts do not receive it.

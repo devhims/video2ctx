@@ -73,6 +73,13 @@ export async function fetchServerAdminAccess(requestHeaders: Headers, options: S
   return fetchServerAccess(requestHeaders, '/v1/admin/access', options);
 }
 
+export async function fetchServerSessionReadAccess(requestHeaders: Headers, options: ServerSessionOptions = {}): Promise<boolean> {
+  const [agentAccess, adminAccess] = await Promise.all([
+    fetchServerAgentAccess(requestHeaders, options), fetchServerAdminAccess(requestHeaders, options),
+  ]);
+  return agentAccess || adminAccess;
+}
+
 async function fetchServerAccess(requestHeaders: Headers, path: string, options: ServerSessionOptions): Promise<boolean> {
   const cookie = requestHeaders.get('cookie');
   if (!cookie) return false;

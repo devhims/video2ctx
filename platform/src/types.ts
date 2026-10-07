@@ -24,6 +24,7 @@ export interface AppVariables {
   user: AppUser | null;
   requestId: string;
   requestStartedAt?: number;
+  adminSessionAccess?: boolean;
   agentAdmissionTimings?: Array<{ stage: string; durationMs: number }>;
   dataRequestTimings?: Array<{ stage: string; durationMs: number }>;
 }
