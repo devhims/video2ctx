@@ -6,7 +6,7 @@ import { projectItemPath } from '../dashboard-routes';
 import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, YoutubeLogoIcon, CopyIcon } from '@phosphor-icons/react';
+import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, RobotIcon, CopyIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
@@ -185,7 +185,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
     <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {session?.messages.map(message => message.role === 'user'
-        ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><header><strong>You</strong><time dateTime={new Date(message.createdAt).toISOString()}>{formatTime(message.createdAt)}</time></header><div className='agent-answer'>{message.content}</div></article>
+        ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label='Your message'><UserMessageContent content={message.content} createdAt={message.createdAt} /></article>
         : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} initiallyOpen={message.runId === session.lastRunId} onProgress={onProgress} />)}
       {pendingMessage && <PendingUserMessage message={pendingMessage} />}
     </div>
@@ -216,7 +216,9 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   const status = run?.status ?? message.status;
   const result = run?.result;
   return <article className='agent-message agent-assistant-message'>
-    <header><span className='agent-avatar'><YoutubeLogoIcon size={17} aria-hidden='true' /></span><strong>Agent</strong><span className={`agent-status status-${status}`}>{status}</span><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time></header>
+    <span className='agent-avatar' aria-hidden='true'><RobotIcon size={14} /></span>
+    <div className='agent-message-body'>
+    <header className='agent-message-header'><strong>Agent</strong><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time><span className={`agent-status status-${status}`}>{status}</span></header>
     {!open && <><AgentMarkdown>{message.content}</AgentMarkdown><button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View sources and tool activity <CaretRightIcon size={13} aria-hidden='true' /></button></>}
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
@@ -243,10 +245,22 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {(result?.answer || message.content) && <CopyAnswer answer={result?.answer || message.content} />}
       <p className='agent-id'>Run ID: {message.runId}</p>
     </div>
+    </div>
   </article>;
 }
 
-interface PendingMessage { key: string; message: string }
+function UserMessageContent({ content, createdAt, pending = false }: { content: string; createdAt: number; pending?: boolean }) {
+  return <>
+    <span className='agent-avatar' aria-hidden='true'><UserIcon size={14} /></span>
+    <div className='agent-message-body'>
+      <header className='agent-message-header'><strong>You</strong><time dateTime={new Date(createdAt).toISOString()}>{formatTime(createdAt)}</time></header>
+      <div className='agent-user-bubble agent-answer'>{content}</div>
+      {pending && <span className='agent-delivery-status' role='status'>Sending…</span>}
+    </div>
+  </>;
+}
+
+interface PendingMessage { key: string; message: string; createdAt: number }
 
 function PendingUserMessage({ message }: { message: PendingMessage }) {
   const ref = useRef<HTMLElement>(null);
@@ -255,8 +269,7 @@ function PendingUserMessage({ message }: { message: PendingMessage }) {
     ref.current?.focus({ preventScroll: true });
   }, [message.key]);
   return <article ref={ref} className='agent-message agent-user-message agent-pending-message' tabIndex={-1} aria-label='Your message'>
-    <header><strong>You</strong><span className='agent-delivery-status' role='status'>Sending…</span></header>
-    <div className='agent-answer'>{message.message}</div>
+    <UserMessageContent content={message.message} createdAt={message.createdAt} pending />
   </article>;
 }
 
@@ -274,7 +287,7 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, o
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (disabled || inFlight.current || sending || !draft.trim()) return;
-    const request = { message: draft.trim(), draft, key: String(++submissionCount.current) };
+    const request = { message: draft.trim(), draft, key: String(++submissionCount.current), createdAt: Date.now() };
     inFlight.current = true;
     setDraft(''); setError(''); onSending?.(true);
     startTransition(async () => {
