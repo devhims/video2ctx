@@ -1,5 +1,6 @@
 'use client';
 
+import { agentToolLabel } from '../../../lib/agent-tool-labels';
 import { platformRequest } from '../../../lib/platform-request';
 import { projectItemPath } from '../dashboard-routes';
 
@@ -354,8 +355,8 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
         <span className='agent-tool-label'>
-          <span className='agent-tool-name'>{tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
-          {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Metadata only' : 'Images'}</span>}
+          <span className='agent-tool-name'>{agentToolLabel(tool)}</span>
+          {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Preview Details' : 'Preview Images'}</span>}
         </span>
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>

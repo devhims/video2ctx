@@ -205,8 +205,8 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await page.reload();
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   const latest = page.locator('.agent-assistant-message').last();
-  await expect(latest.getByText('get video transcript', { exact: true })).toBeVisible();
-  await latest.getByText('get video transcript', { exact: true }).click();
+  await expect(latest.getByText('Loading Transcript', { exact: true })).toBeVisible();
+  await latest.getByText('Loading Transcript', { exact: true }).click();
   await expect(latest.locator('pre')).toContainText('P7bxbDSnZRM');
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('follow-up-streaming.png'), fullPage: true });
@@ -219,7 +219,7 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await expect(page.getByText('Retry this follow-up: explain the differences.', { exact: true })).toBeVisible();
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
   await page.locator('.agent-assistant-message').last().getByRole('button', { name: /^Tool activity \(1\)/ }).click();
-  await page.locator('.agent-assistant-message').last().getByText('get video transcript', { exact: true }).click();
+  await page.locator('.agent-assistant-message').last().getByText('Loaded Transcript', { exact: true }).click();
   await expect(page.getByText('1 source · 4 evidence excerpts', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
@@ -443,10 +443,10 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Metadata only', { exact: true }).click();
+  await latest.getByText('Preview Details', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
   await expect(latest.locator('details').filter({ hasText: 'Metadata only. No images were downloaded or inspected.' }).locator('img')).toHaveCount(0);
-  await latest.getByText('Images', { exact: true }).click();
+  await latest.getByText('Preview Images', { exact: true }).click();
   const first = latest.getByRole('button', { name: 'Open sheet at 0:00 to 0:55', exact: true });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await expect(latest.getByRole('button', { name: 'Open sheet at 2:00 to 2:55', exact: true })).toBeDisabled();
@@ -464,7 +464,7 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await expect(first).toBeFocused();
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Images', { exact: true }).click();
+  await latest.getByText('Preview Images', { exact: true }).click();
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await page.setViewportSize({ width: 390, height: 844 });
   await first.click();
@@ -475,9 +475,9 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   legacy = true;
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Metadata only', { exact: true }).click();
+  await latest.getByText('Preview Details', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
-  await latest.getByText('Images', { exact: true }).click();
+  await latest.getByText('Preview Images', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
@@ -507,8 +507,8 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
-  await latest.getByText('Retrieve saved frames', { exact: true }).click();
+  await expect(latest.getByText('Analyzed Frames', { exact: true })).toBeVisible();
+  await latest.getByText('Reused Frames', { exact: true }).click();
   await expect(latest.getByText('Used saved session images. No new frames were extracted.')).toBeVisible();
   const first = latest.getByRole('button', { name: 'Open frame at 0:14' });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 1280);
@@ -536,8 +536,8 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   frames.splice(0);
   await page.reload();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
-  await latest.getByText('Retrieve saved frames', { exact: true }).click();
+  await expect(latest.getByText('Analyzed Frames', { exact: true })).toBeVisible();
+  await latest.getByText('Reused Frames', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
@@ -619,7 +619,7 @@ for (const failure of [
 });
 
 
-test('storyboard activity distinguishes instant failures from interrupted calls', async ({ page, context }, testInfo) => {
+test('tool activity uses readable labels and distinguishes failures from interrupted calls', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
     status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
@@ -635,24 +635,33 @@ test('storyboard activity distinguishes instant failures from interrupted calls'
           startedAt: 9000, input: { videoId: 'K48wIslK7zg', maxSheets: 7 } },
         { toolCallId: 'future-status', name: 'search_context', operation: 'context', status: 'provider_waiting',
           startedAt: 10000, input: {} },
+        { toolCallId: 'search', name: 'search_youtube', operation: 'search', status: 'completed',
+          startedAt: 100, finishedAt: 200, input: { query: 'Product Hunt launch advice' } },
+        { toolCallId: 'browse', name: 'browse_youtube', operation: 'browse', status: 'completed',
+          startedAt: 100, finishedAt: 200, input: { category: 'news' } },
       ],
     })}\n\n`,
   }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
   await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('get video storyboard', { exact: true })).toHaveCount(3);
+  await expect(latest.getByText('Loaded Previews', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Searched YouTube', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Browsed Categories', { exact: true })).toBeVisible();
   const failed = latest.locator('details').filter({ hasText: /K48wislK7zg/ });
+  await expect(failed.locator('.agent-tool-name')).toHaveText('Loading Failed');
   await expect(failed.locator('summary')).toContainText('<0.1s');
-  const interrupted = latest.locator('details').filter({ has: page.getByText('Images', { exact: true }) });
+  const interrupted = latest.locator('details').filter({ has: page.getByText('Preview Images', { exact: true }) });
+  await expect(interrupted.locator('.agent-tool-name')).toHaveText('Loading Interrupted');
   await expect(interrupted.locator('summary')).toContainText('Interrupted');
   await expect(interrupted.locator('summary')).not.toContainText('0.0s');
   await interrupted.locator('summary').click();
   await expect(interrupted).toContainText('The run ended without a recorded result');
   await expect(interrupted).toContainText('Duration is unavailable.');
   await expect(interrupted).not.toContainText('did not complete successfully');
-  await expect(latest.getByRole('button', { name: /^Tool activity/ })).toContainText('1 completed');
+  await expect(latest.getByRole('button', { name: /^Tool activity/ })).toContainText('3 completed');
   const unknown = latest.locator('details').filter({ has: page.getByText('Unknown status', { exact: true }) });
+  await expect(unknown.locator('.agent-tool-name')).toHaveText('Status Unknown');
   await unknown.locator('summary').click();
   await expect(unknown).toContainText('does not recognize the tool status');
   await expect(unknown).not.toContainText('did not complete successfully');
