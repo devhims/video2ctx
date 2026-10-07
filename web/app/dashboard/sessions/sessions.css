@@ -184,7 +184,7 @@
   .agent-session-meta { display: flex; justify-content: space-between; width: 100%; padding-left: 48px; }
   .agent-avatar, .agent-message-header strong { display: none; }
   .agent-message time { font-size: 9px; }
-  .agent-user-bubble, .agent-markdown { font-size: 16px; line-height: 1.7; }
+  .agent-user-bubble, .agent-markdown { font-size: 14px; line-height: 1.7; }
   .agent-composer-dock { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .agent-prompt-bar textarea { font-size: 16px; }
   .agent-sessions .agent-send { width: 44px; height: 44px; }
