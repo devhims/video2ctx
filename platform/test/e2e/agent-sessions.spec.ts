@@ -143,7 +143,7 @@ test('failed runs show the error, and running history can retrieve the completed
     await expect(send.locator('.agent-spin')).toBeVisible();
     await composer.fill('More detail');
     await composer.press('Enter');
-    await page.locator('.agent-composer').evaluate((form: HTMLFormElement) => form.requestSubmit());
+    await page.evaluate("document.querySelector('.agent-composer').requestSubmit()");
     await expect(composer).toHaveValue('More detail');
     expect(submissions).toBe(0);
   } finally { release(); }
@@ -626,7 +626,10 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
   expect(bounds.x).toBeGreaterThanOrEqual(0);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
   expect(bounds.height).toBeLessThanOrEqual(844);
-  expect(await preview.getByLabel('Evidence content').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(await preview.getByLabel('Evidence content').evaluate(element => {
+    const content = element as unknown as { scrollHeight: number; clientHeight: number };
+    return content.scrollHeight > content.clientHeight;
+  })).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('session-evidence-viewer-mobile.png') });
   await preview.getByRole('button', { name: 'Close evidence preview' }).click();
   await expect(view).toBeFocused();
@@ -658,10 +661,10 @@ for (const kind of ['comments', 'frames']) {
   test(`saved ${kind} render in their dedicated evidence viewer`, async ({ page, context }) => {
     await login(context, 'allowed');
     const version = 'c'.repeat(64);
-    const image = await page.evaluate(() => {
+    const image = await page.evaluate<string>(`(() => {
       const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 18;
       return canvas.toDataURL('image/jpeg').split(',')[1];
-    });
+    })()`);
     await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, route => route.fulfill({ json: route.request().url().endsWith(version)
       ? { data: kind === 'comments' ? { comments: [{ id: 'comment-1', author: { name: 'Sam' }, text: 'The comparison was helpful.', publishedTimeText: '2 days ago', likeCount: 3, replies: [{ id: 'reply-1', author: { name: 'Alex' }, text: 'Agreed, especially the first example.' }] }] }
         : { frames: [{ timestampMs: 6000, imageBase64: image }] } }
