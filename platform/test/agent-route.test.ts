@@ -167,7 +167,7 @@ describe('agent routes', () => {
 
   test('does not start a run when its deletion registry cannot be written', async () => {
     const harness = agentHarness();
-    harness.registerConversation.mockRejectedValueOnce(new Error('Account deletion is in progress.'));
+    harness.continueConversation.mockRejectedValueOnce(new Error('Account deletion is in progress.'));
     const response = await postAgent(harness.env, { message: 'Research' });
     expect(response.status).toBe(503);
     expect(harness.startRun).not.toHaveBeenCalled();
@@ -186,6 +186,20 @@ describe('agent routes', () => {
     expect(harness.instanceNames[0]).not.toBe(harness.instanceNames[1]);
   });
 
+  test('rejects a sessionId this account does not have before starting work', async () => {
+    const harness = agentHarness();
+    harness.continueConversation.mockResolvedValueOnce(false);
+    vi.mocked(executionContext.waitUntil).mockClear();
+    const sessionId = crypto.randomUUID();
+    const response = await postAgent(harness.env, { message: 'Reuse someone else\'s ID', sessionId });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'AGENT_SESSION_NOT_FOUND' } });
+    expect(harness.continueConversation).toHaveBeenCalledWith(sessionId);
+    expect(harness.startRun).not.toHaveBeenCalled();
+    expect(harness.recordSession).not.toHaveBeenCalled();
+    expect(executionContext.waitUntil).not.toHaveBeenCalled();
+  });
+
   test('records an admitted conversation in the authenticated user account', async () => {
     const harness = agentHarness();
     const response = await postAgent(harness.env, {
@@ -195,7 +209,7 @@ describe('agent routes', () => {
     expect(response.status).toBe(202);
     const receipt = await response.json<{ sessionId: string; runId: string }>();
     expect(harness.accountInstanceNames).toHaveLength(1);
-    expect(harness.registerConversation.mock.invocationCallOrder[0]).toBeLessThan(harness.startRun.mock.invocationCallOrder[0]!);
+    expect(harness.continueConversation.mock.invocationCallOrder[0]).toBeLessThan(harness.startRun.mock.invocationCallOrder[0]!);
     expect(harness.recordSession).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: receipt.sessionId,
       runId: receipt.runId,
@@ -640,7 +654,7 @@ describe('agent routes', () => {
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual(withSessionId(receipt));
     expect(harness.startRun).not.toHaveBeenCalled();
-    expect(harness.registerConversation).not.toHaveBeenCalled();
+    expect(harness.continueConversation).not.toHaveBeenCalled();
     expect(harness.accessUser).toHaveBeenCalledTimes(1);
     expect(harness.enqueueAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'Research' }),
@@ -733,7 +747,7 @@ function agentHarness(enabled = 'true') {
   const getRun = vi.fn(async () => null as unknown);
   const getRunProgress = vi.fn(async () => null as unknown);
   const getConversation = vi.fn(async (): Promise<AgentConversationPage | null> => null);
-  const registerConversation = vi.fn(async () => undefined);
+  const continueConversation = vi.fn(async (_conversationId: string) => true);
   const recordSession = vi.fn(async () => undefined);
   const listSessions = vi.fn(async (): Promise<UserSessionPage> => ({ sessions: [], nextCursor: null }));
   const getSession = vi.fn(async (): Promise<UserSessionSummary | null> => null);
@@ -751,7 +765,7 @@ function agentHarness(enabled = 'true') {
   const pendingAgentRun = vi.fn().mockResolvedValue(null);
   const accountGetByName = vi.fn((name: string) => {
     accountInstanceNames.push(name);
-    return { registerConversation, recordSession, listSessions, getSession, enqueueAgentRun, pendingAgentRun };
+    return { continueConversation, recordSession, listSessions, getSession, enqueueAgentRun, pendingAgentRun };
   });
   return {
     env: {
@@ -770,7 +784,7 @@ function agentHarness(enabled = 'true') {
     accountGetByName,
     enqueueAgentRun, pendingAgentRun,
     accountInstanceNames,
-    registerConversation,
+    continueConversation,
     recordSession,
     listSessions,
     getSession,

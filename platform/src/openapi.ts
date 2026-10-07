@@ -666,7 +666,7 @@ export const openApiDocument = {
         tags: ['Agents'],
         operationId: 'startAgentRun',
         summary: 'Start a durable agent run',
-        description: 'Starts a new session when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.',
+        description: 'Starts a new session when sessionId is omitted; the server always generates session IDs. A supplied sessionId must be one this account already has, otherwise the request returns 404 AGENT_SESSION_NOT_FOUND. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.',
         security: dataSecurity,
         parameters: agentResponseParameters,
         requestBody: jsonBody(schemaRef('AgentRequest')),
@@ -2367,7 +2367,7 @@ export const openApiDocument = {
         required: ['message'],
         properties: {
           message: { type: 'string', minLength: 1, maxLength: 10000 },
-          sessionId: { type: 'string', format: 'uuid', description: 'Continue an existing agent session.' },
+          sessionId: { type: 'string', format: 'uuid', description: 'Continue an existing session returned by a previous request on this account. Unknown IDs return 404; omit it to start a new session.' },
           conversationId: { type: 'string', format: 'uuid', deprecated: true, description: 'Deprecated request alias for sessionId. If both are supplied, they must match. Responses return only sessionId.' },
           parentMessageId: { type: 'string', format: 'uuid', description: 'Optional completed assistant message to use as the parent. Omit it to continue from the latest completed turn.' },
           timeZone: { type: 'string', maxLength: 64, example: 'Asia/Kolkata', description: 'Optional IANA time zone. The agent interprets relative dates such as today, this week, and this year from the date in this zone when the run is admitted. Defaults to UTC. An unrecognized zone returns 422.' },
