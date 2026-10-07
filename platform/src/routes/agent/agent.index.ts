@@ -434,13 +434,19 @@ async function readSessionAs<T>(c: Context<App>, sessionId: string, read: (owner
   if (denied && !await isLiveAdmin(c)) throw denied;
   const own = await read(viewerId) ?? null;
   if (own !== null) return { ownerId: viewerId, value: own };
+  const catalogUnavailable = () =>
+    new ApiError(503, 'AGENT_SESSION_CATALOG_UNAVAILABLE', 'The agent session catalog is temporarily unavailable.');
+  // A miss inside the viewer's own session (a missing asset or run) stays a
+  // miss. Session IDs can collide, so falling through could mix another
+  // account's data into the viewer's conversation.
+  let ownsSession;
+  try { ownsSession = await (await userAccountForUser(c.env, viewerId)).getSession(sessionId); }
+  catch { throw catalogUnavailable(); }
+  if (ownsSession) return null;
   if (!denied && !await isLiveAdmin(c)) return null;
   let owners;
-  try {
-    owners = await otherSessionOwners(c.env, sessionId, viewerId);
-  } catch {
-    throw new ApiError(503, 'AGENT_SESSION_CATALOG_UNAVAILABLE', 'The agent session catalog is temporarily unavailable.');
-  }
+  try { owners = await otherSessionOwners(c.env, sessionId, viewerId); }
+  catch { throw catalogUnavailable(); }
   // Caller-supplied UUIDs can collide across accounts. A bare link cannot
   // identify the intended owner when the index holds more than one.
   if (owners.length !== 1) return null;

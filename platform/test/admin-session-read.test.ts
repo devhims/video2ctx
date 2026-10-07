@@ -154,6 +154,20 @@ test('owners read their own sessions without an admin probe, even while live aut
   expect(h.indexedOwners).not.toHaveBeenCalled();
 });
 
+test('a miss inside the admin\'s own session never falls through to another account with the same ID', async () => {
+  const h = await harness();
+  // The admin owns this session ID too, but has no such asset or run in it.
+  h.ownAccount.getSession.mockResolvedValue({ conversationId: sessionId } as any);
+  for (const path of [`/sessions/${sessionId}/assets/${version}`, `/${sessionId}/runs/${runId}`, `/${sessionId}/runs/${runId}/events`]) {
+    expect((await h.request(path)).status).toBe(404);
+  }
+  expect(h.indexedOwners).not.toHaveBeenCalled();
+  expect(h.getSession).not.toHaveBeenCalled();
+  expect(h.runtime.getSessionAsset).not.toHaveBeenCalled();
+  expect(h.runtime.getRun).not.toHaveBeenCalled();
+  expect(h.runtime.getRunProgress).not.toHaveBeenCalled();
+});
+
 test('missing, deleted and ambiguous sessions do not expose a runtime', async () => {
   const h = await harness();
   h.indexedOwners.mockResolvedValue({ results: [] });

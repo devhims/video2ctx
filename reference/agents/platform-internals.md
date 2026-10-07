@@ -28,7 +28,9 @@ Admin browser sessions can open another user's existing dashboard session link i
 a read-only debugging view. Session, run, SSE, and evidence GET routes first read
 as the authenticated owner, unchanged. Only a miss, or a viewer without an Agent
 grant, checks `requireAdminSession` with the cookie cache disabled, so ordinary
-owner reads never wait on or fail because of the admin check. The owner selects
+owner reads never wait on or fail because of the admin check. A miss inside the
+viewer's own session, such as a deleted asset or unknown run, returns not found
+and never consults another account, even one with the same caller-supplied ID. The owner selects
 the account and conversation Durable Objects; the authenticated principal stays
 unchanged. Admission, listing, and deletion keep their existing access rules.
 
