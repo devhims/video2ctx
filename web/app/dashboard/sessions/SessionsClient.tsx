@@ -336,18 +336,12 @@ function isStoryboardMetadata(tool: AgentProgress['tools'][number]) {
 function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: AgentMessage['status'] }) {
   const [expanded, setExpanded] = useState(status !== 'completed');
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
-  const running = isActiveAgentRun(status);
-  // Tool calls can finish between research steps. Only the run's completion
-  // closes the trace, after which it remains available for manual inspection.
+  // Collapse activity when the run completes, leaving it available for inspection.
   useEffect(() => { if (status === 'completed') setExpanded(false); }, [status]);
-  const open = running || expanded;
   if (!tools.length) return null;
-  return <div className='agent-trace'>
-    <button className='agent-trace-toggle' aria-expanded={open} aria-disabled={running} title={running ? 'Tool activity stays open until the answer is finalized' : undefined} onClick={() => { if (!running) setExpanded(!open); }}>
-      <CaretRightIcon size={13} className={open ? 'is-open' : ''} aria-hidden='true' />
-      Tool activity ({tools.length})<span>{running ? 'In progress' : `${tools.filter(tool => tool.status === 'completed').length} completed`}</span>
-    </button>
-    {open && <ol>{tools.map(tool => <li key={tool.toolCallId}>
+  return <details className='agent-trace' open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary>Tool Activity ({tools.length})</summary>
+    {expanded && <ol>{tools.map(tool => <li key={tool.toolCallId}>
       <details className='agent-tool-chip' open={!!expandedTools[tool.toolCallId]}><summary onClick={event => {
         event.preventDefault();
         setExpandedTools(current => ({ ...current, [tool.toolCallId]: !current[tool.toolCallId] }));
@@ -382,7 +376,7 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
         </div>
       </details>
     </li>)}</ol>}
-  </div>;
+  </details>;
 }
 
 function AnswerActionIcon({ kind }: { kind: 'copy' | 'up' | 'down' }) {

@@ -109,8 +109,9 @@
 .agent-sources a:hover { background: var(--color-dashboard-surface-muted); }
 .agent-sources a > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-sources svg, .agent-source-number { flex-shrink: 0; color: var(--muted); }
-.agent-caveats { margin: 20px 0; font-size: 11px; color: var(--muted); line-height: 1.7; }
-.agent-caveats summary { cursor: pointer; }
+.agent-caveats, .agent-trace { font-size: 11px; color: var(--muted); line-height: 1.7; }
+.agent-caveats { margin: 20px 0; }
+.agent-caveats summary, .agent-trace > summary { padding: 0; cursor: pointer; }
 .agent-caveats ul { padding-left: 18px; }
 .agent-caveats li { margin-top: 7px; }
 .agent-answer-actions { display: flex; align-items: center; gap: 4px; margin-top: 8px; margin-inline-start: -8px; }
@@ -119,12 +120,7 @@
 .agent-sessions .agent-answer-action:hover:not(:disabled) { background: var(--color-dashboard-surface-muted); color: var(--ink); }
 .agent-sessions .agent-answer-action:disabled { cursor: default; }
 .agent-sessions-error { max-width: 700px; padding: 48px; margin: auto; }
-.agent-trace { margin: 6px 0 18px; color: var(--muted); font-size: 12px; }
-.agent-sessions .agent-trace-toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; min-height: 36px; padding: 8px 12px; background: transparent; border: 0; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: left; }
-.agent-trace-toggle > span { font-size: 10px; margin-left: 8px; }
-.agent-sessions .agent-trace-toggle[aria-disabled='true'] { cursor: default; }
-.agent-trace-toggle svg { transition: transform 160ms ease; }
-.agent-trace-toggle .is-open { transform: rotate(90deg); }
+.agent-trace { margin: 6px 0 18px; }
 /* Long tool inputs must not set the grid's minimum width. */
 .agent-trace ol { padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; list-style: none; }
 .agent-trace > ol > li { min-width: 0; }
@@ -169,7 +165,6 @@
 @keyframes agent-pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) {
   .agent-spin, .agent-loading > span { animation: none; }
-  .agent-trace-toggle svg { transition: none; }
 }
 @media (max-width: 700px) {
   .agent-sessions { padding: 22px 20px 32px; }
@@ -184,7 +179,6 @@
   .agent-session-meta { display: flex; justify-content: space-between; width: 100%; padding-left: 48px; }
   .agent-avatar, .agent-message-header strong { display: none; }
   .agent-message time { font-size: 9px; }
-  .agent-sessions .agent-trace-toggle { min-height: 44px; }
   .agent-user-bubble, .agent-markdown { font-size: 14px; line-height: 1.7; }
   .agent-composer-dock { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .agent-prompt-bar textarea { font-size: 16px; }
