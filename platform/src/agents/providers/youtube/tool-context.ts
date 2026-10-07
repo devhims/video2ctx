@@ -56,8 +56,8 @@ export interface AgentToolContext {
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
   saveStoryboardPreviews?: SaveStoryboardPreviews;
-  /** Notes for the answer, such as unverified figures. Never rejects the answer. */
-  reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): FinalizeAnswerInput['warnings'];
+  /** Qualify likely unit errors in place and add notes, such as unverified figures. Never rejects the answer. */
+  reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): { blocks: { text: string; evidenceIds: string[] }[]; warnings: FinalizeAnswerInput['warnings'] };
   runId: string;
   provider: YouTubeAgentProvider;
   transcriptPolicy:

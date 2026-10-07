@@ -1355,7 +1355,7 @@ describe('YouTube AgentCore loop control', () => {
     }
   });
 
-  it('saves a finalizer unit change with a note instead of regenerating the answer', async () => {
+  it('marks a finalizer unit change inline with a note instead of regenerating the answer', async () => {
     const packet = transcriptAnalysisPacket();
     packet.excerpts[0]!.text = 'The lab measured 54.2% protein.';
     packet.artifacts[0]!.data = {
@@ -1381,7 +1381,7 @@ describe('YouTube AgentCore loop control', () => {
     expect(result.finishReason).toBe('timeout-finalized');
     expect(context.finalize).toHaveBeenCalledTimes(1);
     const saved = vi.mocked(context.finalize).mock.calls[0]![1];
-    expect(saved.answer).toContain('54.2g');
+    expect(saved.answer).toContain('54.2g (unverified)');
     expect(saved.warnings).toContainEqual({ code: 'UNVERIFIED_FIGURES', message: "Couldn't match 54.2 g to the cited sources. Check these figures against the videos." });
   });
 

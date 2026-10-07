@@ -207,22 +207,22 @@ sequenceDiagram
     end
 ```
 
-The finalizer resolves inline excerpt IDs against saved source records and exact text. The application constructs the returned citations; the model no longer duplicates packet/source declarations. Unknown or conflicting references are removed from the answer, with a `CITATIONS_REMOVED` note. A research answer left with no resolvable citation is rejected. These checks establish provenance, not the truth of a claim or the quality of an interpretation.
+The finalizer resolves inline excerpt IDs against saved source records and exact text. The application constructs the returned citations; the model no longer duplicates packet/source declarations. Unknown or conflicting references are shown as `[source unavailable]` where they appeared, with a `CITATIONS_UNAVAILABLE` note. A research answer left with no resolvable citation is rejected. These checks establish provenance, not the truth of a claim or the quality of an interpretation.
 
 The reserved finalization phase uses `Output.object` with native provider `response_format: json_schema`. Its `answer-blocks-v3` schema contains confidence, blocks and warnings. The application supplies the classified intent and retains persisted artifacts. Every research/inspection block requires one to twelve references in both the transmitted schema and local validation. Clarification has a separate schema and is normally rendered directly from classification. JSON-schema support does not replace citation membership validation or guarantee factual grounding.
 
-Answer validation rejects only an answer the application cannot render or persist: output that fails the transmitted schema, an answer cut off with no complete block, and a research answer with no resolvable citation. Every other check repairs the answer deterministically or attaches a note, and never triggers regeneration:
+Answer validation rejects only an answer the application cannot render or persist, or one that is not an answer: output that fails the transmitted schema, an answer cut off with no complete block, a research answer with no resolvable citation, and an answer made only of filler or a promise of future work. Every other check repairs the answer deterministically or attaches a note, and never triggers regeneration:
 
 | Check | Outcome |
 | --- | --- |
-| Inline marker for a reference its block did not declare | Marker removed |
-| Reference that matches no saved excerpt, or several different ones | Citation removed, `CITATIONS_REMOVED` note |
+| Inline marker for a reference its block did not declare | Kept in place; persisted validation decides whether it resolves. A marker with no usable reference shows `[source unavailable]` |
+| Reference that matches no saved excerpt, or several different ones | Shown as `[source unavailable]`, `CITATIONS_UNAVAILABLE` note |
 | Output-token limit reached | Blocks whose objects closed are kept and a block cut off mid-way is dropped, `ANSWER_TRUNCATED` note. JSON that closes cleanly despite the limit may have been closed early, so its last block is dropped. Regenerated only when no complete block remains |
-| Mass or percentage figure absent from the block's own cited excerpts and findings | Answer kept, `UNVERIFIED_FIGURES` note listing the figures |
+| Mass or percentage figure absent from the block's own cited excerpts and findings | `UNVERIFIED_FIGURES` note listing the figures. When a cited source has the same value with a different unit, the figure is also marked `(unverified)` where it appears |
 | Comparison subject without a citation and no `ANSWER_SCOPE_SHORTFALL` | Answer kept, `PARTIAL_EVIDENCE` note naming the subject |
 | First-message request whose answer omits the exact stored text | Answer replaced by the stored message, quoted exactly |
 | Unsolicited `needsEvidence` field | Ignored |
-| Numbered-item count mismatch, filler-only answer | Logged as `agent_answer_review` and traced as `answer_review` only |
+| Numbered-item count mismatch | Logged as `agent_answer_review` and traced as `answer_review` only |
 
 Names, translated place names and paraphrased prose are never checked against literal source text. Optional entity metadata remains readable for existing evidence but is advisory. Notes appear under Source notes and limitations. These checks do not establish semantic correctness or catch every unsupported number.
 

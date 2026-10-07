@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import { analyzeTranscriptWithModel } from '../src/agents/providers/youtube/transcript-analyst';
-import { assertTranscriptFacts, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning, type TranscriptFacts } from '../src/agents/runtime/transcript-grounding';
+import { assertTranscriptFacts, markUnitMismatches, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning, type TranscriptFacts } from '../src/agents/runtime/transcript-grounding';
 import { evidencePacketForModel, finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -75,7 +75,7 @@ describe('transcript grounding', () => {
       { text: 'The first result is 54.2%.', evidenceIds: ['e1'] },
       { text: 'The results are 54.2% and 69.11%.', evidenceIds: ['e2'] },
     ];
-    expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([{ blockIndex: 1, value: 54.2, unit: '%' }]);
+    expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([{ blockIndex: 1, value: 54.2, unit: '%', kind: 'not_found' }]);
     blocks[1]!.evidenceIds.push('e1');
     expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([]);
   });
@@ -108,7 +108,7 @@ describe('transcript grounding', () => {
   });
   it('notes changed units while treating entity metadata as advisory', () => {
     expect(unverifiedAnswerFigures([{ text: 'NAKPRO contains 54.2% protein.', evidenceIds: ['e1'] }], [packet()])).toEqual([]);
-    expect(unverifiedAnswerFigures([{ text: 'NAKPRO contains 54.2g protein.', evidenceIds: ['e1'] }], [packet()])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g' }]);
+    expect(unverifiedAnswerFigures([{ text: 'NAKPRO contains 54.2g protein.', evidenceIds: ['e1'] }], [packet()])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' }]);
     const other = packet({ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }] });
     other.artifacts[0]!.data = { ...other.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }], excerptIds: ['e2'] }] };
     other.excerpts[0]!.id = 'e2';
@@ -224,7 +224,7 @@ describe('transcript grounding', () => {
   it('accepts an explicit serving size preserved in a validated quantity quote', () => {
     const evidence = packet({ ...facts, quantities: [{ ...facts.quantities[0]!, quote: '54.2% protein in a 45g serving' }] });
     expect(unverifiedAnswerFigures([{ text: '54.2% protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toEqual([]);
-    expect(unverifiedAnswerFigures([{ text: '54.2g protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g' }]);
+    expect(unverifiedAnswerFigures([{ text: '54.2g protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' }]);
   });
 
   it('accepts a figure found in the cited transcript text itself', () => {
@@ -242,9 +242,9 @@ describe('transcript grounding', () => {
 
   it('writes one plain note listing each unverified figure once', () => {
     expect(unverifiedFiguresWarning([])).toBeUndefined();
-    expect(unverifiedFiguresWarning([{ blockIndex: 0, value: 24, unit: 'g' }, { blockIndex: 2, value: 24, unit: 'g' }, { blockIndex: 1, value: 12, unit: '%' }]))
+    expect(unverifiedFiguresWarning([{ blockIndex: 0, value: 24, unit: 'g', kind: 'not_found' }, { blockIndex: 2, value: 24, unit: 'g', kind: 'not_found' }, { blockIndex: 1, value: 12, unit: '%', kind: 'unit_mismatch' }]))
       .toEqual({ code: 'UNVERIFIED_FIGURES', message: "Couldn't match 24 g and 12% to the cited sources. Check these figures against the videos." });
-    const many = Array.from({ length: 10 }, (_, value) => ({ blockIndex: 0, value, unit: 'mg' }));
+    const many = Array.from({ length: 10 }, (_, value) => ({ blockIndex: 0, value, unit: 'mg', kind: 'not_found' as const }));
     expect(unverifiedFiguresWarning(many)?.message).toContain('(and 2 more)');
   });
 
@@ -254,6 +254,18 @@ describe('transcript grounding', () => {
     for (const text of texts) for (const evidenceIds of [[], ['e1'], ['missing']]) {
       expect(() => unverifiedAnswerFigures([{ text, evidenceIds }], evidence)).not.toThrow();
     }
+  });
+  it('marks a likely unit error inline and leaves figures merely not found unmarked', () => {
+    const figures = unverifiedAnswerFigures([{ text: 'Protein is 54.2 grams, fat is 3%, and 54.2g appears twice.', evidenceIds: ['e1'] }], [packet()]);
+    expect(figures).toEqual([
+      { blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' },
+      { blockIndex: 0, value: 3, unit: '%', kind: 'not_found' },
+      { blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' },
+    ]);
+    const marked = markUnitMismatches('Protein is 54.2 grams, fat is 3%, and 54.2g appears twice.', figures);
+    expect(marked).toBe('Protein is 54.2 grams (unverified), fat is 3%, and 54.2g (unverified) appears twice.');
+    expect(markUnitMismatches(marked, figures)).toBe(marked);
+    expect(markUnitMismatches('Protein is 54.2%.', figures)).toBe('Protein is 54.2%.');
   });
 });
 

@@ -78,10 +78,13 @@ function hasUnit(quote: string, unit: string): boolean {
 function numbers(text: string): number[] {
   return sourceNumbers(normalized(text));
 }
+const MEASUREMENT = /(?<![\d.+-])([+-]?[0-9]+(?:\.[0-9]+)?)\s*(%|percent(?:age)?|mg|kg|grams?|g|प्रतिशत|परसेंटेज|परसेंट|ग्राम|ग्रा)(?![\p{L}\d])/gu;
+function measurementUnit(rawUnit: string): string {
+  return Object.entries(unitAliases).find(([, aliases]) => aliases.includes(rawUnit.toLowerCase()))?.[0] ?? rawUnit;
+}
 /** Deliberately limited to explicit adjacent mass/percentage notation, not semantic fact checking. */
 function explicitMeasurements(text: string): Array<{ value: number; unit: string }> {
-  return [...normalized(text).matchAll(/(?<![\d.+-])([+-]?[0-9]+(?:\.[0-9]+)?)\s*(%|percent(?:age)?|mg|kg|grams?|g|प्रतिशत|परसेंटेज|परसेंट|ग्राम|ग्रा)(?![\p{L}\d])/gu)]
-    .map(([, value, rawUnit]) => ({ value: Number(value), unit: Object.entries(unitAliases).find(([, aliases]) => aliases.includes(rawUnit!))?.[0] ?? rawUnit! }));
+  return [...normalized(text).matchAll(MEASUREMENT)].map(([, value, rawUnit]) => ({ value: Number(value), unit: measurementUnit(rawUnit!) }));
 }
 
 /** Validate numerical support only. Entity metadata and prose are not literal-match gates. */
@@ -120,7 +123,11 @@ export function transcriptSourceContext(videoId: string, packets: readonly Evide
   return { ...(title ? { title } : {}), ...(channel ? { channel } : {}) };
 }
 
-export interface UnverifiedFigure { blockIndex: number; value: number; unit: string }
+export interface UnverifiedFigure {
+  blockIndex: number; value: number; unit: string;
+  /** unit_mismatch: a cited source has this value with a different unit, a likely error. */
+  kind: 'unit_mismatch' | 'not_found';
+}
 
 /** Advisory only: mass and percentage figures that a block's own citations do not contain.
  * Never rejects an answer. The result becomes a user-visible note. */
@@ -141,10 +148,19 @@ export function unverifiedAnswerFigures(blocks: readonly { text: string; evidenc
     ];
     const supported = sourceTexts.flatMap(explicitMeasurements);
     for (const fact of explicitMeasurements(block.text)) {
-      if (!supported.some(item => item.value === fact.value && item.unit === fact.unit)) figures.push({ blockIndex, ...fact });
+      if (supported.some(item => item.value === fact.value && item.unit === fact.unit)) continue;
+      figures.push({ blockIndex, ...fact, kind: supported.some(item => item.value === fact.value) ? 'unit_mismatch' : 'not_found' });
     }
   }
   return figures;
+}
+
+/** Mark likely unit errors where they appear, so the claim is qualified in place. */
+export function markUnitMismatches(text: string, figures: readonly UnverifiedFigure[]): string {
+  const mismatched = figures.filter(figure => figure.kind === 'unit_mismatch');
+  if (!mismatched.length) return text;
+  return text.replace(new RegExp(`${MEASUREMENT.source}(?! \\(unverified\\))`, 'giu'), (match, value: string, rawUnit: string) =>
+    mismatched.some(figure => figure.value === Number(value) && figure.unit === measurementUnit(rawUnit)) ? `${match} (unverified)` : match);
 }
 
 export function unverifiedFiguresWarning(figures: readonly UnverifiedFigure[]): { code: string; message: string } | undefined {

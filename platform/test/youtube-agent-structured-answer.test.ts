@@ -40,28 +40,34 @@ describe('structured answer citations', () => {
       { text: `- A supported observation. ${marker}`, evidenceIds: ['e1'] },
     ] }, new Map([['ref_1', 'e1']])).answer).toBe('- A supported observation. [cite:e1]');
   });
-  it('removes an inline alias for evidence undeclared for the block', () => {
+  it('keeps an undeclared inline reference in place for persistence to verify', () => {
     const table='| Test | Source |\n| --- | --- |\n| Coding | [cite:ref_2] |';
-    expect(renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','invented']])).answer)
-      .toBe('| Test | Source |\n| --- | --- |\n| Coding | |\n\nSources: [cite:e1]');
+    expect(renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_2','e2']])).answer)
+      .toBe('| Test | Source |\n| --- | --- |\n| Coding | [cite:e2] |\n\nSources: [cite:e1]');
   });
-  it.each(['[cite:ref_2]', '(source marker:ref_2]'])('removes wrong-block references even when another block declares them: %s', marker => {
+  it.each(['[cite:ref_2]', '(source marker:ref_2]'])('keeps a reference another block declares where the model placed it: %s', marker => {
     expect(renderStructuredAnswer({ ...base, blocks: [
       { text: `First source ${marker}.`, evidenceIds: ['e1'] },
       { text: 'Second source.', evidenceIds: ['e2'] },
-    ] }, new Map([['ref_2', 'e2']])).answer).toBe('First source. [cite:e1]\n\nSecond source. [cite:e2]');
+    ] }, new Map([['ref_2', 'e2']])).answer).toBe('First source [cite:e2]. [cite:e1]\n\nSecond source. [cite:e2]');
   });
-  it('removes untrusted marker text instead of rejecting the answer', () => {
+  it('marks a marker with no usable reference as unavailable without echoing its text', () => {
     const answer = renderStructuredAnswer({ ...base, blocks: [
       { text: 'A supported first block.', evidenceIds: ['e1'] },
       { text: 'Another claim [cite:untrusted marker payload].', evidenceIds: ['e1'] },
     ] }).answer;
-    expect(answer).toBe('A supported first block. [cite:e1]\n\nAnother claim. [cite:e1]');
+    expect(answer).toBe('A supported first block. [cite:e1]\n\nAnother claim [source unavailable]. [cite:e1]');
     expect(answer).not.toContain('untrusted marker payload');
   });
-  it.each(['[cite:ref_1, ref_2]', '[cite: ref_1]'])('replaces a malformed marker with the block references: %s', marker => {
+  it.each([
+    ['[cite:ref_1, ref_2]', 'Claim [cite:e1] [cite:e2].'],
+    ['[cite: ref_1]', 'Claim [cite:e1]. [cite:e2]'],
+  ])('splits a marker holding several references: %s', (marker, expected) => {
     expect(renderStructuredAnswer({ ...base, blocks: [{ text: `Claim ${marker}.`, evidenceIds: ['e1', 'e2'] }] },
-      new Map([['ref_1', 'e1'], ['ref_2', 'e2']])).answer).toBe('Claim. [cite:e1] [cite:e2]');
+      new Map([['ref_1', 'e1'], ['ref_2', 'e2']])).answer).toBe(expected);
+  });
+  it.each(['The', "I'll look up the transcript."])('rejects a filler-only answer for one repair: %s', text => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] })).toThrow(/fragment or promise/);
   });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
@@ -182,8 +188,10 @@ describe('structured answer citations', () => {
   it('still requires at least one persisted citation for a research answer', () => {
     expect(() => finalize(['invented'])).toThrow(expect.objectContaining({ code: 'AGENT_CITATION_REQUIRED' }));
   });
-  it('does not allow answer text to inject extra references', () => {
-    expect(finalize(['e1'], 'Text [cite:invented]').answer).toBe('Text [cite:e1]');
+  it('marks an injected reference that matches no saved evidence as unavailable', () => {
+    const result = finalize(['e1'], 'Text [cite:invented]');
+    expect(result.answer).toBe('Text [source unavailable] [cite:e1]');
+    expect(result.citations.map(citation => citation.id)).toEqual(['e1']);
   });
   it('removes model-written short reference markers before adding validated citations', () => {
     const rendered = renderStructuredAnswer({ ...base, blocks: [

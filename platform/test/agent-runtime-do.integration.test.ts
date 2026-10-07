@@ -214,7 +214,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
   });
 });
 
-test('direct finalization restores cited frame evidence from ancestors and removes other references', async () => {
+test('direct finalization restores cited frame evidence from ancestors and marks other references unavailable', async () => {
   const { runtime, userId, runId, conversationId } = await seed('agent-frame-context', 'completed');
   await runInDurableObject(runtime, async instance => {
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
@@ -252,9 +252,9 @@ test('direct finalization restores cited frame evidence from ancestors and remov
       const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
         answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
       const result = await methods.finalizeRun(receipt.runId, 'final', input);
-      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof]');
+      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable]');
       expect(result.citations).toEqual([citation]);
-      expect(result.warnings).toContainEqual({ code: 'CITATIONS_REMOVED', message: 'Removed 1 citation that did not match the saved sources.' });
+      expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
       expect(result.billing.creditsCharged).toBe(0);
       expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)
         .toMatchObject([{ tool_name: 'finalize_answer', credits: 0 }]);

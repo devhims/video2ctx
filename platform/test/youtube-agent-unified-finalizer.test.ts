@@ -466,7 +466,7 @@ it('constrains generated citation IDs to supplied evidence and transmits no memo
   expect(format.schema).not.toHaveProperty('properties.memoryUpdates');
 });
 
-it.each(['generate', 'stream'] as const)('QA 012: %s removes a misplaced inline citation instead of regenerating a comparison', async mode => {
+it.each(['generate', 'stream'] as const)('QA 012: %s keeps a misplaced inline citation in place instead of regenerating a comparison', async mode => {
   const { options, classifier, output } = setup('context_answer', true);
   const second: EvidencePacket = { ...evidence, packetId: 'other-frame',
     sources: [{ id: 'other-video', provider: 'youtube', kind: 'video', videoId: 'zzzzzzzzzzz' }],
@@ -504,14 +504,16 @@ it.each(['generate', 'stream'] as const)('QA 012: %s removes a misplaced inline 
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
   const compact = compactAgentResult(result);
-  // The second row cited a reference its block never declared, so only that marker is removed.
-  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace(' [cite:ref_2]', ''));
-  expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz']);
-  expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([['other-observation', 60000]]);
+  // The second row cites real evidence its block never declared; it stays where the model put it.
+  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace('[cite:ref_2]', '[2]'));
+  expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz', 'abcdefghijk']);
+  expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([
+    ['other-observation', 60000], ['frame-observation', 30000],
+  ]);
   expect(result.answer).not.toContain('[source unavailable]');
 });
 
-it('QA 012: removes an invented inline citation and saves the answer on the first attempt', async () => {
+it('QA 012: marks an invented inline citation unavailable and saves the answer on the first attempt', async () => {
   const { options, output } = setup('context_answer', true);
   const classifier = models.select({}, {}, '', { model_role: 'classifier' });
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
@@ -525,8 +527,9 @@ it('QA 012: removes an invented inline citation and saves the answer on the firs
   await executeResearchRun(options);
 
   expect(finalizer.doGenerateCalls).toHaveLength(1);
-  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-    answer: 'The woman holds the microphone. [cite:frame-observation]' }));
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.answer).toBe('The woman holds the microphone. [source unavailable] [cite:frame-observation]');
+  expect(result.citations.map(citation => citation.id)).toEqual(['frame-observation']);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
@@ -837,19 +840,28 @@ it('reserves the final model step for an answer when history pagination exceeds 
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({warnings:expect.arrayContaining([expect.objectContaining({code:'PARTIAL_EVIDENCE'})])}));
 });
 
-it.each(['The', "I'll look up the full message history to find your exact first message."])('saves a filler-only answer and records it for review: %s', async text => {
+it.each(['The', "I'll look up the full message history to find your exact first message."])('repairs a filler-only answer before persistence: %s', async text => {
   const { options, classifier, output } = setup('context_answer');
+  let calls = 0;
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
-    content: [{ type: 'text', text: JSON.stringify({...output, blocks:[{text,evidenceIds:[]}]}) }],
+    content: [{ type: 'text', text: JSON.stringify(calls++ ? output : {...output, blocks:[{text,evidenceIds:[]}]}) }],
     finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   }) });
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
-  const reviews: unknown[] = [];
-  options.traceToolCall = async call => { if (call.name === 'answer_review') reviews.push(call.input); return call.execute(); };
   await executeResearchRun(options);
-  expect(finalizer.doGenerateCalls).toHaveLength(1);
-  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:text}));
-  expect(reviews).toEqual([expect.objectContaining({ attempt: 1, fillerOnly: true, notes: [] })]);
+  expect(calls).toBe(2);
+  expect(JSON.stringify(finalizer.doGenerateCalls[1]!.prompt)).toContain('fragment or promise');
+  expect(options.finalize).toHaveBeenCalledTimes(1);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:output.blocks[0]!.text}));
+});
+
+it('fails after one repair instead of persisting a repeated filler-only answer', async () => {
+  const {options,classifier,output}=setup('context_answer');
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,blocks:[{text:'The',evidenceIds:[]}]})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).not.toHaveBeenCalled();
 });
 
 it('recovers an exact-first-message request with a synchronous history read inside the response allowance', async () => {
@@ -1252,7 +1264,7 @@ function measurementPacket(): EvidencePacket {
         kind: 'measured', quote: 'The protein content is 54.2%.' }], uncertainty: null }] } }], warnings: [], usage: [] };
 }
 
-it('saves an unverified figure with a note and a review trace instead of regenerating', async () => {
+it('marks a likely unit error inline, adds a note and a review trace, instead of regenerating', async () => {
   const { options, classifier } = setup('context_answer', true);
   const packet = measurementPacket();
   options.conversationHistory![0]!.evidence = [packet];
@@ -1269,11 +1281,11 @@ it('saves an unverified figure with a note and a review trace instead of regener
 
   expect(finalizer.doGenerateCalls).toHaveLength(1);
   const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
-  expect(result.answer).toBe('The protein content is 54.2g. [cite:e1]');
+  expect(result.answer).toBe('The protein content is 54.2g (unverified). [cite:e1]');
   expect(result.warnings).toContainEqual({ code: 'UNVERIFIED_FIGURES', message: "Couldn't match 54.2 g to the cited sources. Check these figures against the videos." });
   expect(traced.filter(call => call.name === 'final_answer_rejection')).toHaveLength(0);
   expect(traced.find(call => call.name === 'answer_review')?.input).toMatchObject({ attempt: 1, notes: ['UNVERIFIED_FIGURES'],
-    unverifiedFigures: [{ blockIndex: 0, value: 54.2, unit: 'g' }] });
+    unverifiedFigures: [{ blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' }] });
 });
 
 it('regression: a Hindi-transcript place name cited from another video no longer fails the answer', async () => {

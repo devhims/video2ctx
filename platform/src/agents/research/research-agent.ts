@@ -15,14 +15,14 @@ import { createFrameAnalyst } from '../providers/youtube/frame-analyst';
 import type { ClassificationDiagnostic } from './capability-router';
 import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research-plan';
-import { transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning } from '../runtime/transcript-grounding';
+import { markUnitMismatches, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
 import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
 import { FinalizationStallError, withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
-import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, fillerOnlyAnswer, salvageTruncatedAnswer } from '../structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, salvageTruncatedAnswer } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
@@ -430,8 +430,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       regionRestricted: new Set(),
     },
     reviewAnswerBlocks: blocks => {
-      const note = unverifiedFiguresWarning(unverifiedAnswerFigures(blocks, [...evidence.values()]));
-      return note ? [note] : [];
+      const figures = unverifiedAnswerFigures(blocks, [...evidence.values()]);
+      const note = unverifiedFiguresWarning(figures);
+      return { blocks: blocks.map((block, index) => ({ ...block, text: markUnitMismatches(block.text, figures.filter(figure => figure.blockIndex === index)) })),
+        warnings: note ? [note] : [] };
     },
     finalize: async (id, input) => {
       await startFinalization();
@@ -1151,6 +1153,8 @@ async function runUnifiedFinalizer(options: {
       const figures = unverifiedAnswerFigures(output.blocks, options.evidence);
       const figuresNote = unverifiedFiguresWarning(figures);
       if (figuresNote) notes.push(figuresNote);
+      // A likely unit error is qualified where it appears, not only in the notes.
+      for (const [index, block] of output.blocks.entries()) block.text = markUnitMismatches(block.text, figures.filter(figure => figure.blockIndex === index));
       validationStage = 'rendered_answer';
       const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds);
       input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
@@ -1173,13 +1177,12 @@ async function runUnifiedFinalizer(options: {
       input.warnings = mergeWarnings(notes, input.warnings);
       const signals = {
         notes: notes.map(note => note.code),
-        unverifiedFigures: figures.slice(0, 20).map(({ blockIndex, value, unit }) => ({ blockIndex, value, unit })),
+        unverifiedFigures: figures.slice(0, 20).map(({ blockIndex, value, unit, kind }) => ({ blockIndex, value, unit, kind })),
         numberedItemsMismatch: !conversational && numberedItemsMismatch(output, numberedItemCount),
-        fillerOnly: fillerOnlyAnswer(output),
         replacedFirstMessageAnswer,
         missingComparisonVideos,
       };
-      if (notes.length || signals.numberedItemsMismatch || signals.fillerOnly || replacedFirstMessageAnswer) {
+      if (notes.length || signals.numberedItemsMismatch || replacedFirstMessageAnswer) {
         console.log(JSON.stringify({ event: 'agent_answer_review', runId: options.context.runId, attempt: attempt + 1, ...signals }));
         await options.context.traceToolCall?.({ toolCallId: `answer-review:${attemptId}`, name: 'answer_review',
           operation: 'finalization_review', source: 'execution', input: { attemptId, attempt: attempt + 1, ...signals },

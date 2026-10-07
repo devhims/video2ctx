@@ -37,8 +37,8 @@ export function buildAgentTurnResult(
         return source ? [{ source, excerpt }] : [];
       }));
     const match = matches[0];
-    // A reference that matches no saved excerpt, or several different ones, is removed.
-    // Every remaining citation still resolves to exactly one persisted excerpt.
+    // A reference that matches no saved excerpt, or several different ones, is marked
+    // unavailable. Every remaining citation still resolves to exactly one persisted excerpt.
     if (!match || matches.some(({ source, excerpt }) =>
       source.id !== match.source.id || source.url !== match.source.url ||
       excerpt.text !== match.excerpt.text || excerpt.startMs !== match.excerpt.startMs || excerpt.endMs !== match.excerpt.endMs)) {
@@ -57,14 +57,15 @@ export function buildAgentTurnResult(
     && !isDurationLimitFallback(input, packets, durationLimitContext)) {
     throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
   }
+  // The claim stays, visibly unsupported, as it does after a source is deleted.
   const answer = unresolved.size
-    ? input.answer.replace(/[ \t]*\[cite:([A-Za-z0-9:_-]+)\]/g, (marker, id: string) => unresolved.has(id) ? '' : marker)
+    ? input.answer.replace(CITATION_MARKER, (marker, id: string) => unresolved.has(id) ? '[source unavailable]' : marker)
     : input.answer;
 
   const warnings = deduplicateWarnings([
     ...packets.flatMap((packet) => packet.warnings),
     ...input.warnings,
-    ...(unresolved.size ? [{ code: 'CITATIONS_REMOVED', message: `Removed ${unresolved.size} citation${unresolved.size === 1 ? '' : 's'} that did not match the saved sources.` }] : []),
+    ...(unresolved.size ? [{ code: 'CITATIONS_UNAVAILABLE', message: `${unresolved.size} citation${unresolved.size === 1 ? '' : 's'} did not match the saved sources and ${unresolved.size === 1 ? 'is' : 'are'} marked [source unavailable].` }] : []),
   ]);
 
   return agentTurnResultSchema.parse({

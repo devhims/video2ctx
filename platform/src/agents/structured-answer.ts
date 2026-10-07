@@ -49,7 +49,7 @@ export function numberedItemsMismatch(output: Pick<z.infer<typeof finalizationOu
   return numbers.size !== expected || !Array.from({ length: expected }, (_, index) => index + 1).every(number => numbers.has(number));
 }
 
-/** Log-only signal for answers made only of filler or a promise of future work. */
+/** An answer made only of filler or a promise of future work is not an answer. */
 export function fillerOnlyAnswer(output: { blocks: { text: string }[] }): boolean {
   const fragment = /^(?:the|a|an|and|but|because|however|therefore)[,:]?$/i;
   const promise = /^(?:I(?:['’]ll| will| am going to)|Let me) (?:first )?(?:look up|check|search|retrieve|fetch|inspect|read|analy[sz]e)\b[^.!?]*(?:[.!?])?$/i;
@@ -108,20 +108,23 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
+  // Not an answer at all: the one content check that still earns a repair.
+  if (fillerOnlyAnswer(input)) throw new z.ZodError([{ code: 'custom', path: ['blocks'],
+    message: 'The answer is only a fragment or promise of future work. Answer the request now, or state the concrete missing context. Do not report planned work as completed.' }]);
   const answer = input.blocks.map(block => {
     const declared = new Set(block.evidenceIds);
     const placed = new Set<string>();
-    // Inline placement can position only references declared for this block.
-    // A marker for any other reference is removed; persisted evidence validation
-    // still owns whether the declared IDs are valid.
+    // Inline references stay where the model placed them, even when the block did not
+    // declare them; persisted evidence validation decides whether each one resolves.
+    // A marker with no usable reference is shown as unavailable rather than dropped.
     const text = block.text
       .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
-      .replace(/([ \t]*)(?:\[cite:([^\]]+)\]|\(source marker:([^\]]+)\])/g, (_marker, space: string, inlineId: string | undefined, escapedId: string | undefined) => {
-        const rawId = inlineId ?? escapedId!;
-        const id = aliases.get(rawId) ?? rawId;
-        if (!declared.has(id)) return '';
-        placed.add(id);
-        return `${space}[cite:${id}]`;
+      .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
+        const ids = (inlineId ?? escapedId!).split(',').map(raw => raw.trim()).filter(Boolean)
+          .map(raw => aliases.get(raw) ?? raw).filter(id => /^[A-Za-z0-9:_-]{1,300}$/.test(id));
+        if (!ids.length) return '[source unavailable]';
+        for (const id of ids) placed.add(id);
+        return ids.map(id => `[cite:${id}]`).join(' ');
       });
     const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
     // Appending text to the final table row would create an extra cell.
