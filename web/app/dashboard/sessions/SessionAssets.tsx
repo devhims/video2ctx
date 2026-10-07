@@ -110,11 +110,11 @@ export function SessionAssets({ sessionId, revision, onDeleted }: {
     <details className={`agent-session-assets ${styles.panel}`} onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className={styles.summary}>
         <CaretRightIcon className={styles.caret} size={14} aria-hidden='true' />
-        <ArchiveIcon size={17} aria-hidden='true' /><span>Session evidence and memory</span>
+        <ArchiveIcon size={17} aria-hidden='true' /><span>Session Assets</span>
       </summary>
       {open && <div className={styles.body}>
         <div className={styles.toolbar}>
-          <p>Saved evidence can be reused in follow-ups. Ask the agent to fetch it again for fresh data.</p>
+          <p>Session assets are automatically used in the conversation when needed.</p>
           <div className={styles.actions}>
             <button className={styles.button} disabled={busy || loading} onClick={() => setRefresh(value => value + 1)}>
               <ArrowClockwiseIcon className={loading ? 'agent-spin' : undefined} size={15} aria-hidden='true' />Refresh

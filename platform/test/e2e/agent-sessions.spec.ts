@@ -570,7 +570,7 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
     await route.fulfill({ json: { assets, memories } });
   });
   await page.goto(`/dashboard/sessions/${sessionId}`);
-  await page.getByText('Session evidence and memory', { exact: true }).click();
+  await page.getByText('Session Assets', { exact: true }).click();
   const panel = page.locator('.agent-session-assets');
   await expect(panel.getByRole('heading', { name: 'Evidence (2)' })).toBeVisible();
   await expect(panel.getByText('Previous version', { exact: true })).toBeVisible();
@@ -642,7 +642,7 @@ for (const kind of ['comments', 'frames']) {
         : { frames: [{ timestampMs: 6000, imageBase64: image }] } }
       : { assets: [{ version, kind, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} }], memories: [] } }));
     await page.goto(`/dashboard/sessions/${sessionId}`);
-    await page.getByText('Session evidence and memory', { exact: true }).click();
+    await page.getByText('Session Assets', { exact: true }).click();
     await page.locator('.agent-session-assets').getByRole('button', { name: 'View', exact: true }).click();
     const preview = page.getByRole('dialog', { name: kind === 'comments' ? 'Video comments' : 'Video frames', exact: true });
     if (kind === 'comments') {
