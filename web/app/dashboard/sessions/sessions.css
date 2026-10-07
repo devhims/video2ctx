@@ -18,7 +18,6 @@
 .agent-prompt-bar textarea:focus-visible { outline: none; }
 .agent-prompt-bar textarea::placeholder { color: var(--muted); opacity: 1; }
 .agent-prompt-controls { display: flex; align-items: center; gap: 12px; padding: 4px 0 0 8px; }
-.agent-prompt-context { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .agent-prompt-shortcut { margin-left: auto; font-size: 10px; color: var(--muted); }
 .agent-sessions .agent-send { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; padding: 0; margin-left: auto; border: 0; border-radius: var(--radius-dashboard-sm); background: var(--ink); color: var(--paper); }
 .agent-sessions .agent-send:hover:not(:disabled) { background: var(--color-dashboard-ink-soft); }

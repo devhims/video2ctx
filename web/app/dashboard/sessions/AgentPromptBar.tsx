@@ -3,7 +3,7 @@
 // Adapted from Beautiful UI's PromptBar, Copyright (c) 2026 Shane Levine.
 // See web/licenses/beautiful-ui.txt for the MIT license.
 import { useEffect, useLayoutEffect, useRef, type FormEvent } from 'react';
-import { ArrowUpIcon, ArrowClockwiseIcon, CircleNotchIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
+import { ArrowUpIcon, ArrowClockwiseIcon, CircleNotchIcon } from '@phosphor-icons/react';
 
 export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, processing, uncertain, error }: {
   value: string; onChange: (value: string) => void; onSubmit: (event: FormEvent) => void;
@@ -42,7 +42,6 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
           }
         }} />
       <div className='agent-prompt-controls'>
-        <span className='agent-prompt-context'><YoutubeLogoIcon size={16} aria-hidden='true' />YouTube</span>
         <span className='agent-prompt-shortcut' aria-hidden='true'>Shift + Enter for a new line</span>
         <button className='agent-send' type='submit' aria-label={sendLabel} title={sendLabel}
           aria-busy={sending || processing} disabled={disabled || sending || processing || !value.trim()}>
