@@ -24,6 +24,8 @@ export interface AppVariables {
   user: AppUser | null;
   requestId: string;
   requestStartedAt?: number;
+  /** Set only on admin-debuggable session reads; other routes reject immediately. */
+  agentAccessDenied?: Error;
   agentAdmissionTimings?: Array<{ stage: string; durationMs: number }>;
   dataRequestTimings?: Array<{ stage: string; durationMs: number }>;
 }

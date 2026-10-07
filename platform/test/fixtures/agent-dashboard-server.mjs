@@ -91,7 +91,17 @@ createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/v1/agent')) {
     if (cookie.includes('agent-ui=unavailable')) return reply(503, { error: { code: 'AUTH_UNAVAILABLE', message: 'Access verification is temporarily unavailable.' } });
-    if (!allowed) return reply(signedIn ? 403 : 401, { error: { code: 'AGENT_ACCESS_REQUIRED' } });
+    const debugRead = req.method === 'GET' && signedIn && admin && (
+      /^\/v1\/agent\/sessions\/[^/]+(?:\/assets(?:\/[^/]+)?)?$/.test(url.pathname)
+      || /^\/v1\/agent\/[^/]+\/runs\/[^/]+(?:\/events)?$/.test(url.pathname));
+    if (!allowed && !debugRead) return reply(signedIn ? 403 : 401, { error: { code: 'AGENT_ACCESS_REQUIRED' } });
+    if (debugRead && url.pathname.startsWith(`/v1/agent/sessions/${otherId}/assets`)) {
+      if (url.pathname.endsWith('/assets')) return reply(200, {
+        assets: [{ version: 'a'.repeat(64), kind: 'transcript', videoId: 'P7bxbDSnZRM', collectedAt: stamp, details: {} }],
+        memories: [{ id: 'memory-1', topic: 'Saved context', kind: 'finding', text: 'Customer session context', evidenceIds: [], updatedAt: stamp }],
+      });
+      return reply(200, { data: { segments: [{ startMs: 1000, text: 'Saved customer transcript' }] } });
+    }
     if (url.pathname === '/v1/agent' && req.method === 'POST') {
       let raw = ''; for await (const chunk of req) raw += chunk;
       const input = JSON.parse(raw);
@@ -133,7 +143,10 @@ createServer(async (req, res) => {
     }
     const detailId = /^\/v1\/agent\/sessions\/([^/]+)$/.exec(url.pathname)?.[1];
     if (detailId) {
-      if (detailId === otherId) return reply(404, { error: { code: 'AGENT_SESSION_NOT_FOUND', message: 'Agent session not found.' } });
+      if (detailId === otherId) return debugRead
+        ? reply(200, { ...summary, sessionId: otherId, lastRunId: otherId, title: 'Customer debugging session', readOnly: true,
+          messages: [message('user', 2, otherId), message('assistant', 2, otherId)], nextCursor: null })
+        : reply(404, { error: { code: 'AGENT_SESSION_NOT_FOUND', message: 'Agent session not found.' } });
       const current = summaries.find(row => row.sessionId === detailId);
       if (!current) return reply(404, {});
       const older = url.searchParams.has('cursor');

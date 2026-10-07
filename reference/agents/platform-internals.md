@@ -24,6 +24,25 @@ For Sources history, user DO reference ownership, and restoration from shared as
 
 For session evidence reuse, memory, citation versions and deletion invariants, read `reference/engineering/SESSION_EVIDENCE.md`.
 
+Admin browser sessions can open another user's existing dashboard session link in
+a read-only debugging view. Session, run, SSE, and evidence GET routes first read
+as the authenticated owner, unchanged. Only a miss, or a viewer without an Agent
+grant, checks `requireAdminSession` with the cookie cache disabled, so ordinary
+owner reads never wait on or fail because of the admin check. A miss inside the
+viewer's own session, such as a deleted asset or unknown run, returns not found
+and never consults another account, even one with the same caller-supplied ID. The owner selects
+the account and conversation Durable Objects; the authenticated principal stays
+unchanged. Admission, listing, and deletion keep their existing access rules.
+
+D1 `agent_session_owners` maps a session ID to its owner for these lookups only.
+`POST /v1/agent` writes it in `waitUntil` after responding, so admission never
+waits on it and a failed write only hides that link from admins. Migration 0022
+seeds it from `agent_trace_runs`, which covers sessions since 2026-09-30. Older
+untraced sessions are intentionally not indexed and return not found to admins.
+Reads still go through the owner's current catalog or runtime, so
+stale rows cannot restore deleted data. Session IDs are caller-supplied, so more
+than one indexed owner returns not found.
+
 ## Agent date context
 
 Models otherwise assume the year from their training data. `POST /v1/agent` accepts an optional IANA `timeZone`, which the dashboard fills from the browser. The run row stores it in `agent_runs.time_zone`, and `currentDateGuidance(created_at, time_zone)` in `platform/src/agents/runtime/current-date.ts` renders one date line from the run's admission time. Every phase and recovery of a run therefore agrees on "today". The line is appended to the end of the classifier, research loop, context-gathering and finalizer instructions, never to the untrusted user payload. It carries the date only, so it changes once a day and leaves the cached prompt prefix intact. Missing or older runs use UTC. The visual and transcript analysts do not receive it.

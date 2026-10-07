@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test';
 
+test('admin without Agent access opens a customer session link in a read-only debugging view', async ({ page, context }) => {
+  await context.addCookies([
+    { name: 'agent-ui', value: 'denied', url: 'http://127.0.0.1:3021' },
+    { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+  ]);
+  await page.goto('/dashboard/sessions/5a04cf06-ea91-4b07-b892-ce87f63954de');
+  await expect(page.getByRole('heading', { name: 'Customer debugging session' })).toBeVisible();
+  await expect(page.getByText('Admin debugging view. This session is read-only.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to admin', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'New session', exact: true })).toHaveCount(0);
+  await page.getByText('Tool Activity (1)', { exact: true }).click();
+  await expect(page.getByText('Loaded Transcript', { exact: true })).toBeVisible();
+  await expect(page.locator('textarea')).toHaveCount(0);
+  await page.getByText('Session Assets', { exact: true }).click();
+  await expect(page.getByText('Customer session context', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Clear saved data|Delete transcript|Forget/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await expect(page.getByText('Saved customer transcript', { exact: true })).toBeVisible();
+});
+
 test('an admin can grant, search and remove Agent access on desktop and mobile', async ({ page, context }, testInfo) => {
   await context.addCookies([
     { name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },

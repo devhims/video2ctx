@@ -203,6 +203,18 @@ describe('agent routes', () => {
     }));
   });
 
+  test('indexes the session owner after responding, and a failed index write never fails admission', async () => {
+    const harness = agentHarness();
+    harness.dbRun.mockRejectedValueOnce(new Error('D1 unavailable'));
+    vi.mocked(executionContext.waitUntil).mockClear();
+    const response = await postAgent(harness.env, { message: 'Research the owner index' });
+    expect(response.status).toBe(202);
+    const receipt = await response.json<{ sessionId: string }>();
+    expect(executionContext.waitUntil).toHaveBeenCalledOnce();
+    await vi.mocked(executionContext.waitUntil).mock.calls[0]![0];
+    expect(harness.dbRun).toHaveBeenCalledWith(expect.stringContaining('agent_session_owners'), receipt.sessionId, expect.any(Number), 'agent-user');
+  });
+
   test('returns stable message identities, conversation turn, and zero execution counts at admission', async () => {
     const harness = agentHarness();
     const response = await postAgent(harness.env, {
@@ -734,6 +746,7 @@ function agentHarness(enabled = 'true') {
     return { startRun, getRun, getRunProgress, getConversation, getSessionAssets, getSessionAsset, deleteSessionAssets, deleteSessionMemory };
   });
   const accountInstanceNames: string[] = [];
+  const dbRun = vi.fn(async (..._args: unknown[]) => ({}));
   const enqueueAgentRun = vi.fn().mockResolvedValue({ legacy: true });
   const pendingAgentRun = vi.fn().mockResolvedValue(null);
   const accountGetByName = vi.fn((name: string) => {
@@ -744,12 +757,12 @@ function agentHarness(enabled = 'true') {
     env: {
       AGENT_RUNTIME_ENABLED: enabled,
       AGENT_ACCESS_MODE: 'allowlist',
-      DB: { prepare: () => ({ bind: () => ({ first: accessUser }) }) },
+      DB: { prepare: (sql: string) => ({ bind: (...values: unknown[]) => ({ first: accessUser, run: () => dbRun(sql, ...values) }) }) },
       AGENT_RUNTIME: { getByName },
       USER_ACCOUNT: { getByName: accountGetByName },
     } as unknown as Env,
     getByName, getSessionAssets, getSessionAsset, deleteSessionAssets, deleteSessionMemory,
-    instanceNames,
+    instanceNames, dbRun,
     accessUser,
     startRun,
     getRun, getRunProgress,

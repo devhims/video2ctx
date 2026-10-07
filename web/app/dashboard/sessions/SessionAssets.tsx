@@ -51,8 +51,8 @@ function timestamp(value: number) {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-export function SessionAssets({ sessionId, revision, onDeleted }: {
-  sessionId: string; revision: string; onDeleted: () => void;
+export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false }: {
+  sessionId: string; revision: string; onDeleted: () => void; readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<Inventory>();
@@ -94,7 +94,7 @@ export function SessionAssets({ sessionId, revision, onDeleted }: {
   }
   function confirm(value: Confirmation) { setDeleteError(''); setConfirmation(value); }
   async function remove() {
-    if (!confirmation) return;
+    if (!confirmation || readOnly) return;
     setBusy(true); setDeleteError('');
     try {
       await platformRequest(`/v1/agent/sessions/${sessionId}/${confirmation.path}`, {
@@ -119,10 +119,10 @@ export function SessionAssets({ sessionId, revision, onDeleted }: {
             <button className={styles.button} disabled={busy || loading} onClick={() => setRefresh(value => value + 1)}>
               <ArrowClockwiseIcon className={loading ? 'agent-spin' : undefined} size={15} aria-hidden='true' />Refresh
             </button>
-            <button className={`${styles.button} ${styles.danger}`} disabled={busy || !inventory || (!inventory.assets.length && !inventory.memories.length)}
+            {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy || !inventory || (!inventory.assets.length && !inventory.memories.length)}
               onClick={() => confirm({ path: 'assets', label: 'all stored evidence and memory in this session' })}>
               <TrashIcon size={15} aria-hidden='true' />Clear saved data
-            </button>
+            </button>}
           </div>
         </div>
         {error && <p className='alert error' role='alert'>{error}</p>}
@@ -147,11 +147,11 @@ export function SessionAssets({ sessionId, revision, onDeleted }: {
                   </div>
                   <div className={styles.actions}>
                     <button className={`${styles.button} ${styles.viewButton}`} aria-label='View' title={`View ${assetName(asset.kind).toLowerCase()}`} disabled={busy} onClick={() => void view(asset)}><EyeIcon size={15} aria-hidden='true' /><span>View</span></button>
-                    <button className={`${styles.button} ${styles.iconButton} ${styles.danger}`} disabled={busy}
+                    {!readOnly && <button className={`${styles.button} ${styles.iconButton} ${styles.danger}`} disabled={busy}
                       aria-label={`Delete ${assetName(asset.kind).toLowerCase()} for ${asset.videoId}`} title='Delete evidence'
                       onClick={() => confirm({ path: `assets/${asset.version}`, label: `this ${assetName(asset.kind).toLowerCase()}` })}>
                       <TrashIcon size={16} aria-hidden='true' />
-                    </button>
+                    </button>}
                   </div>
                 </div>
               </li>)}</ul>}
@@ -165,18 +165,18 @@ export function SessionAssets({ sessionId, revision, onDeleted }: {
                   <div className={styles.copy}><strong>{memory.topic}</strong><p className={styles.memoryText}>{memory.text}</p>
                     <p className={styles.metadata}>{memory.evidenceIds.length} {memory.evidenceIds.length === 1 ? 'source reference' : 'source references'}</p>
                   </div>
-                  <button className={`${styles.button} ${styles.danger}`} disabled={busy} onClick={() => confirm({ path: `memory/${encodeURIComponent(memory.id)}`, label: 'this memory' })}>
+                  {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy} onClick={() => confirm({ path: `memory/${encodeURIComponent(memory.id)}`, label: 'this memory' })}>
                     <TrashIcon size={15} aria-hidden='true' />Forget
-                  </button>
+                  </button>}
                 </div>
               </li>)}</ul>}
-            <p className={styles.help}>To correct remembered context, describe the correction in a follow-up.</p>
+            {!readOnly && <p className={styles.help}>To correct remembered context, describe the correction in a follow-up.</p>}
           </section>
         </>}
       </div>}
     </details>
     <AssetViewer selection={selected} onClose={closeAsset} onRetry={asset => void view(asset)} />
-    <DeleteConfirmation confirmation={confirmation} busy={busy} error={deleteError} onClose={() => setConfirmation(undefined)} onConfirm={() => void remove()} />
+    {!readOnly && <DeleteConfirmation confirmation={confirmation} busy={busy} error={deleteError} onClose={() => setConfirmation(undefined)} onConfirm={() => void remove()} />}
   </>;
 }
 
