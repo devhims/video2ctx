@@ -1,6 +1,5 @@
 import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
 import type { AgentRequest, AgentAdmission } from '../agents/contracts';
-import type { SessionOwnerEntry } from '../lib/session-owners';
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 import { RECENT_SOURCE_LIMIT, saveReferencedSourceSchema, sourceReferenceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionPayload, sourceRevisionSchema, type RecentSource, type SaveReferencedSource, type SourceReference } from '../lib/source-history';
@@ -653,13 +652,6 @@ export class UserAccountDO extends DurableObject<Env> {
     const parsedConversationId = z.string().uuid().parse(conversationId);
     const row = this.readSession(parsedConversationId);
     return row ? toSessionSummary(row) : null;
-  }
-
-  /** Every catalogued session, for the one-time admin owner index backfill. */
-  listSessionOwnerEntries(): SessionOwnerEntry[] {
-    return this.ctx.storage.sql.exec<{ conversation_id: string; created_at: number }>(
-      'SELECT conversation_id, created_at FROM user_sessions ORDER BY conversation_id',
-    ).toArray().map(row => ({ conversationId: row.conversation_id, createdAt: row.created_at }));
   }
 
   private listRows(cursor: UserSessionCursor | undefined, limit: number): SessionRow[] {

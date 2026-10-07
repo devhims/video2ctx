@@ -212,10 +212,7 @@ describe('agent routes', () => {
     const receipt = await response.json<{ sessionId: string }>();
     expect(executionContext.waitUntil).toHaveBeenCalledOnce();
     await vi.mocked(executionContext.waitUntil).mock.calls[0]![0];
-    const [sql, sessions, userId] = harness.dbRun.mock.calls[0]!;
-    expect(sql).toContain('agent_session_owners');
-    expect(JSON.parse(sessions as string)).toEqual([{ conversationId: receipt.sessionId, createdAt: expect.any(Number) }]);
-    expect(userId).toBe('agent-user');
+    expect(harness.dbRun).toHaveBeenCalledWith(expect.stringContaining('agent_session_owners'), receipt.sessionId, expect.any(Number), 'agent-user');
   });
 
   test('returns stable message identities, conversation turn, and zero execution counts at admission', async () => {

@@ -4,7 +4,6 @@ import app from './app';
 import { queueDigests } from './lib/digests';
 import { handleQueue } from './queues';
 import { reconcileMonitorSchedules } from './lib/monitor-scheduler';
-import { backfillSessionOwners } from './lib/session-owners';
 import { videoCatalog } from './lib/video-catalog';
 
 export { ImportWorkflow, MonitorWorkflow } from './workflows';
@@ -25,7 +24,6 @@ export default {
       await Promise.all([
         videoCatalog(env)?.reconcile(),
         reconcileMonitorSchedules(env, controller.scheduledTime),
-        backfillSessionOwners(env).catch(() => console.error({ event: 'agent_session_owner_backfill_failed' })),
       ]);
     } else if (controller.cron === '0 8 * * *') {
       await queueDigests(env, 'daily');

@@ -35,9 +35,9 @@ unchanged. Admission, listing, and deletion keep their existing access rules.
 D1 `agent_session_owners` maps a session ID to its owner for these lookups only.
 `POST /v1/agent` writes it in `waitUntil` after responding, so admission never
 waits on it and a failed write only hides that link from admins. Migration 0022
-seeds it from `agent_trace_runs`; the hourly cron (`backfillSessionOwners`) then
-indexes older sessions from account catalogs, 200 users per run, until its cursor
-completes. Reads still go through the owner's current catalog or runtime, so
+seeds it from `agent_trace_runs`, which covers sessions since 2026-09-30. Older
+untraced sessions are intentionally not indexed and return not found to admins.
+Reads still go through the owner's current catalog or runtime, so
 stale rows cannot restore deleted data. Session IDs are caller-supplied, so more
 than one indexed owner returns not found.
 
