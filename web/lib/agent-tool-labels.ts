@@ -35,3 +35,21 @@ export function agentToolLabel(tool: AgentProgress['tools'][number]) {
     default: return 'Status Unknown';
   }
 }
+
+/** Progress copy for an active run. Reasoning is invisible, so it is named; otherwise a
+ * long silent wait during finalization reads as a hang. */
+export function agentProgressLabel(progress?: Pick<AgentProgress, 'phase' | 'draft'>) {
+  switch (progress?.phase) {
+    case 'classification': return 'Understanding your request.';
+    case 'research': return 'Researching YouTube sources.';
+    case 'finalization': {
+      const draft = progress.draft;
+      if (draft?.activity === 'gathering') return 'Gathering context.';
+      if (draft?.state === 'revising') return 'Revising the answer.';
+      if (draft?.activity === 'thinking') return 'Thinking.';
+      if (draft?.activity === 'writing') return 'Writing the answer.';
+      return 'Preparing the answer.';
+    }
+    default: return 'Waiting for the run to start.';
+  }
+}

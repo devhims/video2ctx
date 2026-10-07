@@ -706,8 +706,9 @@ test.each([true, false])(
         }),
       });
       const finalizer = new MockLanguageModelV4({
-        doGenerate: async () => {
-          const search = finalizerCalls++ === 0;
+        doGenerate: async call => {
+          // Only a context-gathering call may search; the answer call is structured JSON.
+          const search = finalizerCalls++ === 0 && call.responseFormat?.type !== 'json';
           return {
             content: search
               ? [
@@ -760,7 +761,9 @@ test.each([true, false])(
         ...(resume ? { finalizationDeadlineAt: Date.now() + 30000 } : {}),
       });
       expect(coreCalls).toBe(resume ? 0 : 2);
-      expect(finalizerCalls).toBe(3);
+      // Fresh research already loaded the evidence, so the finalizer answers directly.
+      // A resumed run has no research in this process and still searches stored context.
+      expect(finalizerCalls).toBe(resume ? 3 : 1);
       expect(ctx.finalize).toHaveBeenCalledTimes(1);
       expect((await vi.mocked(ctx.finalize).mock.results[0]!.value).citations[0]?.id).toBe(excerptId);
       expect(p.transcript).toHaveBeenCalledTimes(1);

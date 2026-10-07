@@ -109,10 +109,10 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
     issues: [expect.objectContaining({ path: ['confidence'] })] });
   expect(finalizer.doStreamCalls).toHaveLength(2);
   expect(finalizer.doGenerateCalls).toHaveLength(0);
-  expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
-  expect(drafts).toContainEqual({ answer: 'The', state: 'streaming' });
-  expect(drafts).toContainEqual({ answer: '', state: 'revising' });
-  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'revising' });
+  expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
+  expect(drafts).toContainEqual({ answer: 'The', state: 'streaming', activity: 'writing' });
+  expect(drafts).toContainEqual({ answer: '', state: 'revising', activity: 'thinking' });
+  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'revising', activity: 'writing' });
   expect(options.finalize).toHaveBeenCalledOnce();
 });
 
@@ -888,7 +888,7 @@ it('recovers an exact-first-message request with a synchronous history read insi
     expect(searchTools).not.toHaveBeenCalled();
     expect(finalizer.doGenerateCalls).toHaveLength(0);
     expect(JSON.stringify(finalizer.doStreamCalls[0]!.prompt)).toContain(original);
-    expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
+    expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
@@ -1221,7 +1221,7 @@ it('restarts a stalled GLM draft on DeepSeek without consuming a schema repair o
     expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: output.blocks[0]!.text }));
     const abandoned = drafts.findIndex(draft => draft.answer.includes('Abandoned'));
     expect(abandoned).toBeGreaterThanOrEqual(0);
-    expect(drafts.slice(abandoned + 1)).toContainEqual({ answer: '', state: 'streaming' });
+    expect(drafts.slice(abandoned + 1)).toContainEqual({ answer: '', state: 'streaming', activity: 'thinking' });
     expect(drafts.at(-1)?.answer).toBe(output.blocks[0]!.text);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
@@ -1413,4 +1413,75 @@ it.each(['supported_inline', 'inline_only_mismatch'] as const)('judges figures b
     expect(result.citations.map(citation => citation.id)).toContain('e1');
     expect(result.answer).toContain('54.2g (unverified)');
   }
+});
+
+it('answers straight from research evidence, without a context-gathering model call', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const searchTools = vi.fn(async () => ({}));
+  const readEvidence = vi.fn();
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence, searchTools } as unknown as NonNullable<typeof options.session>;
+  const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
+  options.onDraft = draft => drafts.push(draft);
+  // Research runs in this process and hands off at once.
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
+      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
+      blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['frame-observation'] }] }) }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
+  const finalizer = new MockLanguageModelV4({ doStream: async () => streamedFinalizerResponse(output) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  await executeResearchRun(options);
+  // One finalizer call, and it is the answer: no context model call, searches or reads.
+  expect(core.doGenerateCalls).toHaveLength(1);
+  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  expect(finalizer.doStreamCalls).toHaveLength(1);
+  expect(finalizer.doStreamCalls[0]!.responseFormat?.type).toBe('json');
+  // Research builds its own session tools once; the finalizer builds none.
+  expect(searchTools).toHaveBeenCalledTimes(1);
+  expect(readEvidence).not.toHaveBeenCalled();
+  expect(drafts.map(draft => draft.activity)).not.toContain('gathering');
+  expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
+  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'streaming', activity: 'writing' });
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('keeps gathering stored context when a resumed run reaches finalization without research', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.finalizationDeadlineAt = Date.now() + 60_000;
+  options.recoveredEvidence = [evidence];
+  const searchTools = vi.fn(async () => ({}));
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), searchTools } as unknown as NonNullable<typeof options.session>;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: call.responseFormat?.type === 'json'
+    ? JSON.stringify(output) : 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockReturnValue(finalizer);
+  await executeResearchRun(options);
+  expect(searchTools).toHaveBeenCalledOnce();
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('still gathers stored context for a question about earlier conversation, and says so', async () => {
+  const { options, classifier, output } = setup('context_answer');
+  options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'mixed', reason: 'Use earlier context.' };
+  const searchTools = vi.fn(async () => ({}));
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), readHistory: () => ({ messages: [] }), searchTools } as unknown as NonNullable<typeof options.session>;
+  const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
+  options.onDraft = draft => drafts.push(draft);
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: async () => ({ content: [{ type: 'text', text: 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }),
+    doStream: async () => streamedFinalizerResponse(output),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(searchTools).toHaveBeenCalledOnce();
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(finalizer.doStreamCalls).toHaveLength(1);
+  expect(drafts.slice(0, 2)).toEqual([
+    { answer: '', state: 'streaming', activity: 'gathering' },
+    { answer: '', state: 'streaming', activity: 'thinking' },
+  ]);
+  expect(options.finalize).toHaveBeenCalledOnce();
 });

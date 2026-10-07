@@ -696,6 +696,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         onEvidence: packets => { for (const packet of packets) evidence.set(packet.packetId,packet); },
         toolFailures: [...toolFailures.values()],
         researchInterrupted: error !== finalizationHandoff,
+        researchRan: options.finalizationDeadlineAt === undefined,
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
         onDraft: options.onDraft,
@@ -772,6 +773,8 @@ async function runUnifiedFinalizer(options: {
   prior?: PriorEvidenceAccess;
   toolFailures: EvidenceToolFailure[];
   researchInterrupted?: boolean;
+  /** Research ran in this process immediately before finalization, rather than before a restart. */
+  researchRan?: boolean;
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
 }): Promise<AgentTurnResult> {
@@ -813,6 +816,11 @@ async function runUnifiedFinalizer(options: {
   const contextMessages: ModelMessage[] = [];
   // History-only answers read messages and memory; saved source content is out of scope.
   const historyOnly = isHistoryOnlyRoute(options.decision);
+  // Research that just ran in this process has loaded this turn's evidence, and research
+  // routes never ask about earlier conversation. A resumed run keeps gathering, because
+  // its research ran before the restart and only stored context can recover it.
+  const synthesisOnly = options.researchRan === true
+    && (options.decision.route === 'topic_research' || options.decision.route === 'inspect_video');
   if (options.context.session && !conversational && contextExpired && !historyOnly) {
     // Recovery has only response time left. Restore saved comparison packets
     // synchronously from SQLite, without repeating R2 reads or model work.
@@ -836,6 +844,32 @@ async function runUnifiedFinalizer(options: {
   } else if (options.context.session && !conversational) {
     try {
       const gathered = await withRunDeadline(contextDeadlineAt, options.context.signal, async signal => {
+        // Read each comparison subject before model-selected searches can favor one side.
+        // This reuses exact stored versions and never calls the provider.
+        const assets = options.context.session!.brief().assets;
+        const reads = await Promise.allSettled((historyOnly ? [] : comparisonVideoIds).map(async videoId => {
+          const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
+            .sort((a,b) => b.collectedAt - a.collectedAt)[0];
+          if (!asset) return;
+          const result = options.context.session!.readTranscriptEvidence
+            ? await options.context.session!.readTranscriptEvidence(asset.version)
+            : await options.context.session!.readEvidence(asset.version);
+          signal.throwIfAborted();
+          if (result.nextOffset !== undefined) contextIncomplete = true;
+          const delivery = deliver(result.packets, 'comparison_preload');
+          if (delivery.withheld.length) contextIncomplete = true;
+          options.onEvidence?.(delivery.admitted);
+          for (const packet of delivery.admitted) {
+            if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
+          }
+        }));
+        signal.throwIfAborted();
+        if (reads.some(result => result.status === 'rejected')) contextIncomplete = true;
+        prepared = prepareEvidence();
+        // A model-driven pass over stored context would repeat what research just loaded
+        // and delay the answer by several model calls.
+        if (synthesisOnly) return undefined;
+        options.onDraft?.({ answer: '', state: 'streaming', activity: 'gathering' });
         const searchTools = await options.context.session!.searchTools?.(found => {
           options.context.signal.throwIfAborted();
           if (Date.now() >= contextDeadlineAt) throw new Error('Finalization context timeout.');
@@ -886,28 +920,6 @@ async function runUnifiedFinalizer(options: {
             if (Date.now() >= contextDeadlineAt) throw new Error('Finalization context timeout.');
           }) } : {}),
         };
-        // Read each comparison subject before model-selected searches can favor one side.
-        // This reuses exact stored versions and never calls the provider.
-        const assets = options.context.session!.brief().assets;
-        const reads = await Promise.allSettled((historyOnly ? [] : comparisonVideoIds).map(async videoId => {
-          const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
-            .sort((a,b) => b.collectedAt - a.collectedAt)[0];
-          if (!asset) return;
-          const result = options.context.session!.readTranscriptEvidence
-            ? await options.context.session!.readTranscriptEvidence(asset.version)
-            : await options.context.session!.readEvidence(asset.version);
-          signal.throwIfAborted();
-          if (result.nextOffset !== undefined) contextIncomplete = true;
-          const delivery = deliver(result.packets, 'comparison_preload');
-          if (delivery.withheld.length) contextIncomplete = true;
-          options.onEvidence?.(delivery.admitted);
-          for (const packet of delivery.admitted) {
-            if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
-          }
-        }));
-        signal.throwIfAborted();
-        if (reads.some(result => result.status === 'rejected')) contextIncomplete = true;
-        prepared = prepareEvidence();
         return generateText({
           model: options.model,
           system: [
@@ -943,8 +955,10 @@ async function runUnifiedFinalizer(options: {
           timeout:{totalMs:Math.max(1, contextDeadlineAt - Date.now())},
         });
       }, 'Finalization context timeout.');
-      contextMessages.push(...gathered.response.messages);
-      if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
+      if (gathered) {
+        contextMessages.push(...gathered.response.messages);
+        if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
+      }
     } catch (error) {
       if (modelFallbackExhaustion(error)) throw error;
       options.context.signal.throwIfAborted();
@@ -1072,7 +1086,8 @@ async function runUnifiedFinalizer(options: {
         candidateCharacters = 0;
         let streamError: unknown;
         const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
-        options.onDraft({ answer: '', state });
+        // Reasoning arrives before any answer text; the reader sees that as thinking.
+        options.onDraft({ answer: '', state, activity: 'thinking' });
         const streamed = streamText({ ...generationOptions, onError: ({ error }) => { streamError = error; }, onChunk: ({ chunk }) => {
           if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;
           progress();
@@ -1094,11 +1109,11 @@ async function runUnifiedFinalizer(options: {
             latestDraft = renderPartialAnswer(partial);
             const now = Date.now();
             if (!latestDraft || latestDraft === publishedDraft || now - lastPublishedAt < 500) continue;
-            options.onDraft({ answer: latestDraft, state });
+            options.onDraft({ answer: latestDraft, state, activity: 'writing' });
             publishedDraft = latestDraft;
             lastPublishedAt = now;
           }
-          if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
+          if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state, activity: 'writing' });
           const text = await streamed.text;
           candidate = text;
           generationCompleted = true;

@@ -22,6 +22,8 @@ export const agentToolTraceSchema = z.object({
 export const agentDraftSchema = z.object({
   answer: z.string().max(20_000),
   state: z.enum(['streaming', 'revising']),
+  /** What finalization is doing now: reading stored context, reasoning before any text, or writing. */
+  activity: z.enum(['gathering', 'thinking', 'writing']).optional(),
 });
 export type AgentDraft = z.infer<typeof agentDraftSchema>;
 
