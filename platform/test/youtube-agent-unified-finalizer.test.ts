@@ -1423,7 +1423,8 @@ it('answers straight from research evidence, without a context-gathering model c
   const readEvidence = vi.fn();
   // A new session: the only stored message is the current request.
   options.conversationHistory = [];
-  options.session = { brief: () => ({ assets: [], memories: [], historyMessages: 1 }), evidence: () => [], readEvidence, searchTools } as unknown as NonNullable<typeof options.session>;
+  const hasHistoryOutside = vi.fn(() => false);
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence, searchTools, hasHistoryOutside } as unknown as NonNullable<typeof options.session>;
   const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
   options.onDraft = draft => drafts.push(draft);
   // Research runs in this process and hands off at once.
@@ -1446,6 +1447,7 @@ it('answers straight from research evidence, without a context-gathering model c
   expect(drafts.map(draft => draft.activity)).not.toContain('gathering');
   expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
   expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'streaming', activity: 'writing' });
+  expect(hasHistoryOutside).toHaveBeenCalledWith([options.userMessageId]);
   expect(options.finalize).toHaveBeenCalledOnce();
 });
 
@@ -1494,7 +1496,8 @@ function freshResearch(configure: (options: ReturnType<typeof setup>['options'])
   options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
   options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
   const searchTools = vi.fn(async () => ({}));
-  options.session = { brief: () => ({ assets: [], memories: [], historyMessages: 3 }), evidence: () => [], readEvidence: vi.fn(), searchTools } as unknown as NonNullable<typeof options.session>;
+  const hasHistoryOutside = vi.fn((_ids: Iterable<string>) => false);
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), searchTools, hasHistoryOutside } as unknown as NonNullable<typeof options.session>;
   configure(options);
   const core = new MockLanguageModelV4({ doGenerate: async () => ({
     content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
@@ -1509,7 +1512,7 @@ function freshResearch(configure: (options: ReturnType<typeof setup>['options'])
     const event = typeof line === 'string' && line.startsWith('{') ? JSON.parse(line) : undefined;
     if (event?.event === 'agent_finalizer_context_plan') plans.push(event.plan);
   });
-  return { options, finalizer, plans, restore: () => log.mockRestore() };
+  return { options, finalizer, plans, hasHistoryOutside, restore: () => log.mockRestore() };
 }
 
 it('keeps gathering after research when the conversation is older than the prompt window', async () => {
@@ -1517,7 +1520,7 @@ it('keeps gathering after research when the conversation is older than the promp
   // Research may read it, but its tool results never reach the answer model.
   const { options, finalizer, plans, restore } = freshResearch(options => {
     options.message = 'Inspect this new review using my original budget.';
-    options.session = { ...options.session!, brief: () => ({ assets: [], memories: [], historyMessages: 21 }) } as unknown as typeof options.session;
+    (options.session as unknown as { hasHistoryOutside: () => boolean }).hasHistoryOutside = () => true;
   });
   try { await executeResearchRun(options); } finally { restore(); }
   expect(plans).toEqual(['gather_older_conversation']);
@@ -1538,8 +1541,17 @@ it('keeps gathering after research when the evidence budget would cut a passage'
 });
 
 it('skips gathering after research when the window and evidence are complete', async () => {
-  const { options, finalizer, plans, restore } = freshResearch(() => {});
+  const { options, finalizer, plans, hasHistoryOutside, restore } = freshResearch(() => {});
   try { await executeResearchRun(options); } finally { restore(); }
   expect(plans).toEqual(['skip']);
+  // Coverage is judged by stored IDs: the current request plus every prompt turn's messages.
+  expect(hasHistoryOutside).toHaveBeenCalledWith([options.userMessageId, 'prior-u', 'prior-a']);
   expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
+});
+
+it('keeps gathering after research when the run has no stored request ID', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => { delete (options as { userMessageId?: string }).userMessageId; });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_older_conversation']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
 });

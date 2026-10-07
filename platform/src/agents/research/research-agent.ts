@@ -112,6 +112,8 @@ export async function executeResearchRun(options: {
   /** Trusted line naming the run's date, from its admission time and the user's time zone. */
   currentDate?: string;
   sessionAffinity: string;
+  /** Stored ID of the request this run answers. */
+  userMessageId?: string;
   signal: AbortSignal;
   conversationHistory: ConversationTurn[];
   recoveredSearchUsed?: boolean;
@@ -231,6 +233,7 @@ export async function executeResearchRun(options: {
     deliverEvidence: options.deliverEvidence,
     deliverSavedAssets: options.deliverSavedAssets,
     runId: options.runId,
+    userMessageId: options.userMessageId,
     currentDate: options.currentDate,
     maxVideoSeconds: agentMaxVideoSeconds(options.env),
     provider,
@@ -767,7 +770,7 @@ async function runUnifiedFinalizer(options: {
   model: LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
-  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'session' | 'traceToolCall' | 'currentDate' | 'deliverEvidence'>;
+  context: Pick<AgentToolContext, 'runId' | 'userMessageId' | 'signal' | 'finalize' | 'session' | 'traceToolCall' | 'currentDate' | 'deliverEvidence'>;
   evidence: EvidencePacket[];
   /** Earlier-turn evidence referenced but not loaded, with its billed read path. */
   prior?: PriorEvidenceAccess;
@@ -822,9 +825,11 @@ async function runUnifiedFinalizer(options: {
   // gathering, because its research ran before the restart.
   const afterResearch = options.researchRan === true
     && (options.decision.route === 'topic_research' || options.decision.route === 'inspect_video');
-  const historyMessages = options.context.session?.brief().historyMessages;
-  // Each prompt turn is one user and one assistant message, plus the current request.
-  const olderConversation = historyMessages === undefined || historyMessages > 2 * (options.conversationHistory?.length ?? 0) + 1;
+  // Compare stored message IDs with the request and the prompt's turns. Without both,
+  // assume older conversation exists and keep gathering.
+  const promptMessageIds = (options.conversationHistory ?? []).flatMap(turn => [turn.userMessageId, turn.agentMessageId]);
+  const olderConversation = !options.context.userMessageId || !options.context.session?.hasHistoryOutside
+    || options.context.session.hasHistoryOutside([options.context.userMessageId, ...promptMessageIds]);
   if (options.context.session && !conversational && contextExpired && !historyOnly) {
     // Recovery has only response time left. Restore saved comparison packets
     // synchronously from SQLite, without repeating R2 reads or model work.

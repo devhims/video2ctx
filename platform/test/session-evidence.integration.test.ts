@@ -737,6 +737,8 @@ test.each([true, false])(
       });
       const ctx = context(store, sessionProvider(p, store));
       ctx.session = store;
+      // A new session: no stored message besides this request.
+      ctx.userMessageId = 'current-request';
       ctx.finalize = vi.fn(async (_tool, input) =>
         buildAgentTurnResult(
           {
@@ -1064,4 +1066,26 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
         if (parent) expect(parent.stage).not.toBe(span.stage);
       }
     }
+  }));
+
+test('history coverage uses stored message IDs, so deleted answers cannot hide older turns', async () =>
+  within('history-coverage-deleted-answers', async (store) => {
+    // Review case: 10 completed turns, the budget stated in turn 1, the prompt holding the latest 8.
+    for (let turn = 1; turn <= 10; turn++) {
+      store.search.upsertHistory({ id: `u${turn}`, role: 'user', text: turn === 1 ? 'My budget is ₹13,750.' : `Question ${turn}`,
+        ordinal: turn * 2, parentId: turn === 1 ? null : `a${turn - 1}`, createdAt: turn });
+      store.search.upsertHistory({ id: `a${turn}`, role: 'assistant', text: `Answer ${turn}`,
+        ordinal: turn * 2 + 1, parentId: `u${turn}`, createdAt: turn });
+    }
+    store.search.upsertHistory({ id: 'current', role: 'user', text: 'Inspect this review using my original budget.',
+      ordinal: 22, parentId: 'a10', createdAt: 11 });
+    // Evidence deletion removes four stored answers inside the window.
+    store.search.removeHistory(['a3', 'a4', 'a5', 'a6']);
+    const prompt = Array.from({ length: 8 }, (_, index) => index + 3).flatMap(turn => [`u${turn}`, `a${turn}`]);
+    // A count comparison is fooled: 21 - 4 = 17 = 8 turns × 2 + 1.
+    expect(store.search.historyCount()).toBe(17);
+    expect(store.hasHistoryOutside(['current', ...prompt])).toBe(true);
+    // When every stored message is the request or a prompt turn, nothing older exists.
+    store.search.removeHistory(['u1', 'a1', 'u2', 'a2']);
+    expect(store.hasHistoryOutside(['current', ...prompt])).toBe(false);
   }));

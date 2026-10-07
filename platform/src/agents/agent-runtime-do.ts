@@ -649,6 +649,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         finalizationDeadlineAt: row.finalization_deadline_at ?? undefined,
         env: this.env,
         runId,
+        userMessageId: row.user_message_id,
         message: row.execution_message ?? row.message,
         currentDate: currentDateGuidance(row.created_at, row.time_zone),
         sessionAffinity: this.sessionAffinity,

@@ -59,6 +59,8 @@ export interface AgentToolContext {
   /** Qualify likely unit errors in place and add notes, such as unverified figures. Never rejects the answer. */
   reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): { blocks: { text: string; evidenceIds: string[] }[]; warnings: FinalizeAnswerInput['warnings'] };
   runId: string;
+  /** Stored ID of the request this run answers, when the run belongs to a session. */
+  userMessageId?: string;
   provider: YouTubeAgentProvider;
   transcriptPolicy:
     | {

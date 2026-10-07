@@ -70,6 +70,8 @@ export interface SessionAccess {
     query?: string,
   ): Promise<{ packets: EvidencePacket[]; nextOffset?: number; needsInspection?: boolean }>;
   readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
+  /** Whether stored history holds any message outside the given message IDs. */
+  hasHistoryOutside?(messageIds: Iterable<string>): boolean;
   searchHistory?(query: string): Promise<{ content: string }[]>;
   /** onEvidence admits found packets and returns those the model may receive. */
   searchTools?(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }): Promise<ToolSet>;
@@ -151,6 +153,9 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   readHistory(offset = 0, role?: 'user' | 'assistant') {
     return this.search.readHistory(offset, role);
+  }
+  hasHistoryOutside(messageIds: Iterable<string>) {
+    return this.search.hasHistoryOutside(messageIds);
   }
   searchHistory(query: string) {
     return this.search.searchHistory(query);
