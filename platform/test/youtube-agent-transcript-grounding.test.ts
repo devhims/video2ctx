@@ -267,5 +267,20 @@ describe('transcript grounding', () => {
     expect(markUnitMismatches(marked, figures)).toBe(marked);
     expect(markUnitMismatches('Protein is 54.2%.', figures)).toBe('Protein is 54.2%.');
   });
+  it('marks a Hindi-digit figure in place, exactly where the checker found it', () => {
+    const text = 'प्रोटीन ५४.२ ग्राम है।';
+    const figures = unverifiedAnswerFigures([{ text, evidenceIds: ['e1'] }], [packet()]);
+    expect(figures).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g', kind: 'unit_mismatch' }]);
+    expect(markUnitMismatches(text, figures)).toBe('प्रोटीन ५४.२ ग्राम (unverified) है।');
+  });
+
+  it('reads fullwidth and uppercase figures the same way for detection and marking', () => {
+    const text = 'Protein is ５４．２g, or 54.2 G.';
+    const figures = unverifiedAnswerFigures([{ text, evidenceIds: ['e1'] }], [packet()]);
+    expect(figures.map(({ value, unit, kind }) => ({ value, unit, kind }))).toEqual([
+      { value: 54.2, unit: 'g', kind: 'unit_mismatch' }, { value: 54.2, unit: 'g', kind: 'unit_mismatch' },
+    ]);
+    expect(markUnitMismatches(text, figures)).toBe('Protein is ５４．２g (unverified), or 54.2 G (unverified).');
+  });
 });
 

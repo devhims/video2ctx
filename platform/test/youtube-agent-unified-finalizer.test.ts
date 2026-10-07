@@ -1360,3 +1360,53 @@ it.each([true, false])('saves each unrenderable fallback answer before repair, r
   });
   expect(options.finalize).toHaveBeenCalledTimes(repaired ? 1 : 0);
 });
+
+it.each(['generate', 'stream'] as const)('%s keeps complete blocks of a truncated answer without regenerating', async mode => {
+  const { options, classifier } = setup('context_answer', true);
+  const candidate = '{"confidence":"medium","warnings":[],"blocks":[{"text":"The woman holds the microphone.","evidenceIds":["ref_1"]},{"text":"Another incomplete';
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: async () => ({ content: [{ type: 'text', text: candidate }], finishReason: { unified: 'length', raw: 'length' }, usage, warnings: [] }),
+    doStream: async () => ({ stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start' as const, warnings: [] }, { type: 'text-start' as const, id: 'answer' },
+      { type: 'text-delta' as const, id: 'answer', delta: candidate }, { type: 'text-end' as const, id: 'answer' },
+      { type: 'finish' as const, finishReason: { unified: 'length' as const, raw: 'length' }, usage },
+    ], initialDelayInMs: null, chunkDelayInMs: null }) }),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+  await executeResearchRun(options);
+  expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    answer: 'The woman holds the microphone. [cite:frame-observation]',
+    warnings: expect.arrayContaining([expect.objectContaining({ code: 'ANSWER_TRUNCATED' })]) }));
+});
+
+it.each(['supported_inline', 'inline_only_mismatch'] as const)('judges figures by the citations the answer renders, declared or inline: %s', async scenario => {
+  const { options, classifier } = setup('context_answer', true);
+  const percent = measurementPacket();
+  const grams: EvidencePacket = { ...percent, packetId: 'grams', artifacts: [],
+    sources: [{ id: 's2', provider: 'youtube', kind: 'transcript', videoId: 'zzzzzzzzzzz' }],
+    excerpts: [{ id: 'e2', sourceId: 's2', text: 'Product B contains 54.2g protein.', startMs: 0, endMs: 1000 }] };
+  const packets = [percent, grams];
+  options.conversationHistory![0]!.evidence = packets;
+  // Source A says 54.2%, source B says 54.2g. The first answer cites B inline while declaring
+  // only A; the second cites A only inline and gets the unit wrong.
+  const text = scenario === 'supported_inline' ? 'Product B contains 54.2g protein. [cite:e2]' : 'Product A contains 54.2g protein. [cite:e1]';
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({
+    confidence: 'medium', warnings: [], blocks: [{ text, evidenceIds: scenario === 'supported_inline' ? ['e1'] : [] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, packets, 0));
+  await executeResearchRun(options);
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  if (scenario === 'supported_inline') {
+    expect(result.citations.map(citation => citation.id)).toContain('e2');
+    expect(result.answer).not.toContain('(unverified)');
+    expect(result.warnings.map(warning => warning.code)).not.toContain('UNVERIFIED_FIGURES');
+  } else {
+    expect(result.citations.map(citation => citation.id)).toContain('e1');
+    expect(result.answer).toContain('54.2g (unverified)');
+  }
+});

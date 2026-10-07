@@ -22,7 +22,7 @@ import { FinalizationStallError, withFinalizationAttempt } from './finalization-
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
-import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, salvageTruncatedAnswer } from '../structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, salvageTruncatedAnswer, blockReferences } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
@@ -430,7 +430,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       regionRestricted: new Set(),
     },
     reviewAnswerBlocks: blocks => {
-      const figures = unverifiedAnswerFigures(blocks, [...evidence.values()]);
+      const figures = unverifiedAnswerFigures(blocks.map(block => ({ text: block.text, evidenceIds: blockReferences(block) })), [...evidence.values()]);
       const note = unverifiedFiguresWarning(figures);
       return { blocks: blocks.map((block, index) => ({ ...block, text: markUnitMismatches(block.text, figures.filter(figure => figure.blockIndex === index)) })),
         warnings: note ? [note] : [] };
@@ -1150,7 +1150,9 @@ async function runUnifiedFinalizer(options: {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);
       }
       validationStage = 'answer_notes';
-      const figures = unverifiedAnswerFigures(output.blocks, options.evidence);
+      // Judge each block by every reference it will render, declared or inline.
+      const references = output.blocks.map(block => blockReferences(block, prepared.fullIds));
+      const figures = unverifiedAnswerFigures(output.blocks.map((block, index) => ({ text: block.text, evidenceIds: references[index]! })), options.evidence);
       const figuresNote = unverifiedFiguresWarning(figures);
       if (figuresNote) notes.push(figuresNote);
       // A likely unit error is qualified where it appears, not only in the notes.
@@ -1162,7 +1164,7 @@ async function runUnifiedFinalizer(options: {
       // A history-only answer carries no source content, so incidental subjects need no citations.
       let missingComparisonVideos: string[] = [];
       if (comparisonVideoIds.length && !conversational && !historyOnly) {
-        const citedIds = new Set(output.blocks.flatMap(block => block.evidenceIds));
+        const citedIds = new Set(references.flat());
         const citedVideos = new Set(options.evidence.flatMap(packet => packet.excerpts.filter(excerpt => citedIds.has(excerpt.id))
           .flatMap(excerpt => packet.sources.filter(source => source.id === excerpt.sourceId).flatMap(source => source.videoId ? [source.videoId] : []))));
         missingComparisonVideos = comparisonVideoIds.filter(id => !citedVideos.has(id));

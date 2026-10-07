@@ -78,13 +78,18 @@ function hasUnit(quote: string, unit: string): boolean {
 function numbers(text: string): number[] {
   return sourceNumbers(normalized(text));
 }
-const MEASUREMENT = /(?<![\d.+-])([+-]?[0-9]+(?:\.[0-9]+)?)\s*(%|percent(?:age)?|mg|kg|grams?|g|प्रतिशत|परसेंटेज|परसेंट|ग्राम|ग्रा)(?![\p{L}\d])/gu;
-function measurementUnit(rawUnit: string): string {
-  return Object.entries(unitAliases).find(([, aliases]) => aliases.includes(rawUnit.toLowerCase()))?.[0] ?? rawUnit;
+// Matches the original text, so detection and inline marking agree on every figure and
+// its position. Digits may be ASCII, Devanagari or fullwidth; units are case-insensitive.
+const DIGIT = '0-9०-९０-９';
+const MEASUREMENT = new RegExp(`(?<![${DIGIT}.．+-])([+-]?[${DIGIT}]+(?:[.．][${DIGIT}]+)?)\\s*(%|％|percent(?:age)?|mg|kg|grams?|g|प्रतिशत|परसेंटेज|परसेंट|ग्राम|ग्रा)(?![\\p{L}\\p{N}])`, 'giu');
+function measurement(rawValue: string, rawUnit: string): { value: number; unit: string } {
+  const value = Number(rawValue.normalize('NFKC').replace(/[०-९]/gu, digit => String(digit.charCodeAt(0) - 0x966)));
+  const unit = rawUnit.normalize('NFKC').toLowerCase();
+  return { value, unit: Object.entries(unitAliases).find(([, aliases]) => aliases.includes(unit))?.[0] ?? unit };
 }
 /** Deliberately limited to explicit adjacent mass/percentage notation, not semantic fact checking. */
 function explicitMeasurements(text: string): Array<{ value: number; unit: string }> {
-  return [...normalized(text).matchAll(MEASUREMENT)].map(([, value, rawUnit]) => ({ value: Number(value), unit: measurementUnit(rawUnit!) }));
+  return [...text.matchAll(MEASUREMENT)].map(([, value, unit]) => measurement(value!, unit!));
 }
 
 /** Validate numerical support only. Entity metadata and prose are not literal-match gates. */
@@ -159,8 +164,11 @@ export function unverifiedAnswerFigures(blocks: readonly { text: string; evidenc
 export function markUnitMismatches(text: string, figures: readonly UnverifiedFigure[]): string {
   const mismatched = figures.filter(figure => figure.kind === 'unit_mismatch');
   if (!mismatched.length) return text;
-  return text.replace(new RegExp(`${MEASUREMENT.source}(?! \\(unverified\\))`, 'giu'), (match, value: string, rawUnit: string) =>
-    mismatched.some(figure => figure.value === Number(value) && figure.unit === measurementUnit(rawUnit)) ? `${match} (unverified)` : match);
+  return text.replace(MEASUREMENT, (match, rawValue: string, rawUnit: string, offset: number) => {
+    const { value, unit } = measurement(rawValue, rawUnit);
+    const marked = text.startsWith(' (unverified)', offset + match.length);
+    return !marked && mismatched.some(figure => figure.value === value && figure.unit === unit) ? `${match} (unverified)` : match;
+  });
 }
 
 export function unverifiedFiguresWarning(figures: readonly UnverifiedFigure[]): { code: string; message: string } | undefined {

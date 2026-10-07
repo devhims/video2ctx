@@ -105,6 +105,21 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
   }).filter(Boolean).join('\n\n').slice(0, 20_000);
 }
 
+const INLINE_MARKER = /\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g;
+
+/** References one inline marker names, after aliasing. Unusable text yields none. */
+function markerReferences(raw: string, aliases: ReadonlyMap<string, string>): string[] {
+  return raw.split(',').map(part => part.trim()).filter(Boolean)
+    .map(part => aliases.get(part) ?? part).filter(id => /^[A-Za-z0-9:_-]{1,300}$/.test(id));
+}
+
+/** Every reference a block's rendered citations come from: declared and inline. The
+ * figure and coverage checks use this same set, so they judge what the reader sees. */
+export function blockReferences(block: { text: string; evidenceIds: readonly string[] }, aliases: ReadonlyMap<string, string> = new Map()): string[] {
+  const inline = [...block.text.matchAll(INLINE_MARKER)].flatMap(([, inlineId, escapedId]) => markerReferences((inlineId ?? escapedId)!, aliases));
+  return [...new Set([...block.evidenceIds.map(id => aliases.get(id) ?? id), ...inline])];
+}
+
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
@@ -119,9 +134,8 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     // A marker with no usable reference is shown as unavailable rather than dropped.
     const text = block.text
       .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
-      .replace(/\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
-        const ids = (inlineId ?? escapedId!).split(',').map(raw => raw.trim()).filter(Boolean)
-          .map(raw => aliases.get(raw) ?? raw).filter(id => /^[A-Za-z0-9:_-]{1,300}$/.test(id));
+      .replace(INLINE_MARKER, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
+        const ids = markerReferences((inlineId ?? escapedId)!, aliases);
         if (!ids.length) return '[source unavailable]';
         for (const id of ids) placed.add(id);
         return ids.map(id => `[cite:${id}]`).join(' ');
