@@ -61,6 +61,7 @@ test('new follow-ups receive focus and saved answers keep full Markdown styling'
   const latestUser = page.locator('.agent-user-message').last();
   await expect(latestUser).toContainText('Explain the evidence for this conclusion.');
   await expect(latestUser).toBeFocused();
+  await expect(latestUser).toHaveCSS('outline-style', 'none');
   await expect(latestUser).toBeInViewport();
   const userBounds = (await latestUser.boundingBox())!;
   const dockBounds = (await page.locator('.agent-composer-dock').boundingBox())!;
@@ -379,6 +380,7 @@ for (const newSession of [true, false]) {
       const bubble = page.locator('.agent-user-message').filter({ hasText: text });
       await expect(bubble).toBeVisible({ timeout: 1500 });
       await expect(bubble).toBeFocused();
+      await expect(bubble).toHaveCSS('outline-style', 'none');
       await expect(bubble.getByRole('status')).toHaveText('Sending…');
       await expect(composer).toHaveValue('');
       await expect(page.getByRole('button', { name: 'Sending…' })).toBeDisabled();

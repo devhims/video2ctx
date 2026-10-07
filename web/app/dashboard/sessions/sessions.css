@@ -203,7 +203,7 @@
   .agent-tool-target:empty { display: none; }
 }
 
-.agent-user-message:focus-visible { outline: 2px solid var(--color-dashboard-focus); outline-offset: 4px; }
+.agent-user-message:focus { outline: none; }
 .agent-session-loading { max-width: 660px; padding: 4px 0 26px; }
 .agent-loading-title { width: 45%; height: 22px; margin-bottom: 34px; }
 .agent-loading-user { width: 58%; margin: 0 0 34px auto; padding: 18px; border-radius: 14px; background: var(--color-dashboard-surface-muted); }
