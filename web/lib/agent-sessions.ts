@@ -20,7 +20,7 @@ export const agentRunSchema = z.object({
     outcome: z.string(), answer: z.string(),
     sources: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().optional() })),
     warnings: z.array(z.object({ code: z.string(), message: z.string() })),
-    coverage: z.object({ reviewedVideos: z.number(), targetVideos: z.number() }).optional(),
+    coverage: z.object({ reviewedVideos: z.number(), targetVideos: z.number(), metadataVideos: z.number().optional() }).optional(),
   }).optional(),
   billing: z.object({ creditsCharged: z.number(), creditsRemaining: z.number() }).optional(),
 });

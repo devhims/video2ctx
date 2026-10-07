@@ -134,6 +134,75 @@ test('failed runs show the error, and running history can retrieve the completed
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
 });
 
+test('coverage labels keep metadata checks separate from content reviews', async ({ page, context }) => {
+  await login(context, 'allowed');
+  const cases = [
+    { coverage: { reviewedVideos: 0, targetVideos: 2, metadataVideos: 0 }, labels: ['Metadata checked for 0 videos'] },
+    { coverage: { reviewedVideos: 0, targetVideos: 2, metadataVideos: 1 }, labels: ['Metadata checked for 1 video'] },
+    { coverage: { reviewedVideos: 0, targetVideos: 2, metadataVideos: 2 }, labels: ['Metadata checked for 2 videos'] },
+    { coverage: { reviewedVideos: 2, targetVideos: 2, metadataVideos: 2 }, labels: ['Metadata checked for 2 videos', '2 videos reviewed'] },
+    { coverage: { reviewedVideos: 1, targetVideos: 1 }, labels: ['1 video reviewed'] },
+  ];
+  for (const { coverage, labels } of cases) {
+    await page.unroute('**/api/platform/v1/agent/*/runs/*/events');
+    await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+      run: { runId: new URL(route.request().url()).pathname.split('/').at(-2), sessionId, status: 'completed', result: { outcome: 'answered',
+        answer: 'Both videos are under five minutes.', sources: [], warnings: [], coverage } }, phase: 'completed', tools: [],
+    })}\n\n` }));
+    await page.goto(`/dashboard/sessions/${sessionId}`);
+    const meta = page.locator('.agent-assistant-message').last().locator('.agent-result-meta');
+    await expect(meta.locator('.agent-outcome')).toHaveText('answered');
+    await expect(meta.locator('span:not(.agent-outcome)')).toHaveText(labels);
+    if (coverage.metadataVideos !== undefined && coverage.reviewedVideos === 0) await expect(meta).not.toContainText('reviewed');
+    if (coverage.metadataVideos === undefined) await expect(meta).not.toContainText('Metadata checked');
+  }
+});
+
+test('the credit badge re-reads current usage after a run is final, never the receipt balance', async ({ page, context }) => {
+  await login(context, 'allowed');
+  // Browser usage reads return the live ledger; the fixture's run receipts keep reporting 679.
+  let balance = 679;
+  let reads = 0;
+  await page.route('**/api/platform/v1/usage', route => { reads++; return route.fulfill({ json: { creditBalance: balance } }); });
+  const badge = (value: number) => page.getByRole('button', { name: `${value} credits remaining`, exact: true });
+  // A failed run that is final in its first snapshot still refreshes.
+  balance = 677;
+  await page.goto('/dashboard/sessions/f1611a8b-cb84-4305-a365-328bd06bedac');
+  await expect(page.getByText('Classification returned an invalid routing decision.')).toBeVisible();
+  await expect(badge(677)).toBeVisible();
+
+  // A new session keeps the shared fixture session free of extra turns for later tests.
+  await page.goto('/dashboard/sessions');
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill('Explain the main difference again.');
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  const latest = page.locator('.agent-assistant-message').last();
+  await expect(latest.locator('.agent-status')).toHaveText('running');
+  balance = 674; // the run settles while it is still displayed as running
+  await composer.fill('Keep this unsent draft');
+  await expect(latest.locator('.agent-status')).toHaveText('completed');
+  await expect(badge(674)).toBeVisible();
+  await expect(composer).toHaveValue('Keep this unsent draft');
+
+  // Manual refresh reads once; remounted run views do not add duplicate reads.
+  balance = 671;
+  const beforeRefresh = reads;
+  await page.getByRole('button', { name: 'Refresh session', exact: true }).click();
+  await expect(badge(671)).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(reads).toBe(beforeRefresh + 1);
+  await expect(composer).toHaveValue('Keep this unsent draft');
+
+  // Returning to a visible tab re-reads once without polling.
+  balance = 668;
+  await page.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+  await expect(badge(668)).toBeVisible();
+  const settled = reads;
+  await page.waitForTimeout(1_000);
+  expect(reads).toBe(settled);
+});
+
 test('restricted accounts see Agent navigation but cannot open a session; signed-out accounts must log in', async ({ page, context }) => {
   for (const role of ['denied', 'signed-out']) {
     await login(context, role);

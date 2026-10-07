@@ -15,7 +15,7 @@ import { SessionLoading } from './SessionLoading';
 import { DashboardSkeleton } from '../DashboardSkeleton';
 import { HistoryEmptyState } from '../HistoryEmptyState';
 import { FramePreviews } from './FramePreviews';
-import { useAccountResource } from '../DashboardDataProvider';
+import { useAccountResource, useCreditRefresh } from '../DashboardDataProvider';
 import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
@@ -128,6 +128,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
   const [revision, setRevision] = useState(0);
   const [olderLoading, setOlderLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const credits = useCreditRefresh();
   const onProgress = useCallback((progress: AgentProgress) => {
     setSession(current => current ? { ...current, messages: current.messages.map(message =>
       message.role === 'assistant' && message.runId === progress.run.runId
@@ -176,7 +177,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
   };
   return <>
     <div className='agent-thread-nav'><Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
-      <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
+      <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => { setRevision(value => value + 1); void credits.refresh(); }}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
     {session && <header className='agent-heading'><div><h2>{session.title}</h2>
       <p className='agent-id'>Session ID: {sessionId}</p></div></header>}
     {session && <SessionAssets sessionId={sessionId} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
@@ -202,6 +203,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
   const [progress, setProgress] = useState<AgentProgress>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  const credits = useCreditRefresh();
   useEffect(() => {
     // Keep an active run connected even when its answer details are collapsed.
     if (!open && !isActiveAgentRun(message.status)) return;
@@ -209,9 +211,11 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     void watchAgentRun(sessionId, message.runId, controller.signal, snapshot => {
       if (controller.signal.aborted) return;
       setProgress(snapshot); setError(''); onProgress(snapshot);
+      // A run may already be final in its first snapshot (fast or recovered runs).
+      if (!isActiveAgentRun(snapshot.run.status)) void credits.afterRunTerminal(snapshot.run.runId);
     }).catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); });
     return () => controller.abort();
-  }, [open, sessionId, message.runId, revision, onProgress]);
+  }, [open, sessionId, message.runId, revision, onProgress, credits]);
   const run = progress?.run;
   const status = run?.status ?? message.status;
   const result = run?.result;
@@ -228,7 +232,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {run?.error && <div role='alert' className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
       {result && <>
-        <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
+        <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <CoverageLabel coverage={result.coverage} />}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
         {result.warnings.filter(warning => ['FINAL_SYNTHESIS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'].includes(warning.code)).map(warning =>
           <div key={warning.code} role='alert' className='alert error'><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable' : 'Answer incomplete'}</strong><p>{warning.message}</p></div>)}
         <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
@@ -247,6 +251,16 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
 }
 
 interface PendingMessage { key: string; message: string }
+
+/** Metadata-scoped research reports metadata checks separately: they are not content reviews. */
+function CoverageLabel({ coverage }: { coverage: NonNullable<NonNullable<AgentProgress['run']['result']>['coverage']> }) {
+  const videos = (count: number) => `${count} ${count === 1 ? 'video' : 'videos'}`;
+  if (coverage.metadataVideos === undefined) return <span>{videos(coverage.reviewedVideos)} reviewed</span>;
+  return <>
+    <span>Metadata checked for {videos(coverage.metadataVideos)}</span>
+    {coverage.reviewedVideos > 0 && <span>{videos(coverage.reviewedVideos)} reviewed</span>}
+  </>;
+}
 
 function PendingUserMessage({ message }: { message: PendingMessage }) {
   const ref = useRef<HTMLElement>(null);

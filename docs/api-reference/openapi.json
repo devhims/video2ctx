@@ -7870,6 +7870,12 @@
                         "minimum": 0,
                         "exclusiveMinimum": true,
                         "maximum": 9007199254740991
+                      },
+                      "metadataVideos": {
+                        "description": "Only for explicitly metadata-scoped research: distinct videos whose cited video metadata the answer used. This is not a content review.",
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
                       }
                     },
                     "required": [
@@ -8246,6 +8252,13 @@
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 100
+                          },
+                          "evidenceScope": {
+                            "type": "string",
+                            "enum": [
+                              "content",
+                              "metadata"
+                            ]
                           }
                         },
                         "required": [
@@ -9442,6 +9455,12 @@
                     "minimum": 0,
                     "exclusiveMinimum": true,
                     "maximum": 9007199254740991
+                  },
+                  "metadataVideos": {
+                    "description": "Only for explicitly metadata-scoped research: distinct videos whose cited video metadata the answer used. This is not a content review.",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
@@ -9818,6 +9837,13 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 100
+                      },
+                      "evidenceScope": {
+                        "type": "string",
+                        "enum": [
+                          "content",
+                          "metadata"
+                        ]
                       }
                     },
                     "required": [
