@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAccountResource } from './DashboardDataProvider';
 import { DashboardSidebar, type DashboardSidebarSection } from './DashboardSidebar';
@@ -22,6 +22,7 @@ export function WorkspaceShell({
   const { user, demoEnabled, signOut } = useDashboardSession();
   const { data: projects } = useAccountResource('projects', []);
   const { data: usage } = useAccountResource('usage', null);
+  const [mobileNotificationsTarget, setMobileNotificationsTarget] = useState<HTMLDivElement | null>(null);
   return (
     <main className='workspace-shell'>
       <DashboardSidebar
@@ -35,11 +36,12 @@ export function WorkspaceShell({
         accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
         credits={usage?.creditBalance}
         onSignOut={() => void signOut()}
+        mobileActions={section !== 'developer' ? <div ref={setMobileNotificationsTarget} /> : undefined}
       />
       <div className={`workspace-main ${pageStyles.pages}`}>
         <DashboardHeader title={title}>
           {section !== 'developer' && <PlatformStatus path={`/dashboard/${section === 'discover' ? 'sources' : section}`} />}
-          {section !== 'developer' && <WorkspaceNotifications />}
+          {section !== 'developer' && <WorkspaceNotifications mobileContainer={mobileNotificationsTarget} />}
         </DashboardHeader>
         {children}
       </div>

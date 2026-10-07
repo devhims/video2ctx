@@ -61,6 +61,7 @@ test('new follow-ups receive focus and saved answers keep full Markdown styling'
   const latestUser = page.locator('.agent-user-message').last();
   await expect(latestUser).toContainText('Explain the evidence for this conclusion.');
   await expect(latestUser).toBeFocused();
+  await expect(latestUser).toHaveCSS('outline-style', 'none');
   await expect(latestUser).toBeInViewport();
   const userBounds = (await latestUser.boundingBox())!;
   const dockBounds = (await page.locator('.agent-composer-dock').boundingBox())!;
@@ -109,6 +110,13 @@ test('allowed account can search, paginate, open history and read cited answers'
   await expect(page.getByRole('link', { name: /Fable Vs Astra Debate Is Over/ })).toHaveAttribute('href', 'https://www.youtube.com/watch?v=P7bxbDSnZRM');
   await page.getByText('Source notes and limitations (1)').click();
   await expect(page.getByText(/These are the speaker/)).toBeVisible();
+  const activity = page.locator('.agent-trace > summary');
+  await expect(activity).toHaveText(/^Tool Activity \(\d+\)$/);
+  for (const side of ['top', 'right', 'bottom', 'left']) await expect(activity).toHaveCSS(`padding-${side}`, '0px');
+  for (const property of ['font-size', 'color', 'line-height']) {
+    const expected = await page.evaluate<string>(`getComputedStyle(document.querySelector('.agent-caveats > summary')).getPropertyValue('${property}')`);
+    await expect(activity).toHaveCSS(property, expected);
+  }
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('session-desktop.png'), fullPage: true });
   await page.getByRole('button', { name: 'Load older messages' }).click();
@@ -125,13 +133,38 @@ test('failed runs show the error, and running history can retrieve the completed
   await page.goto('/dashboard/sessions/f1611a8b-cb84-4305-a365-328bd06bedac');
   await expect(page.getByText('Classification returned an invalid routing decision.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sources', exact: true })).toHaveCount(0);
-  await page.goto('/dashboard/sessions/cd056140-7d4c-4516-bb9e-c97914439553');
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/platform/v1/agent/${activeId}/runs/*/events`, async route => { await pending; await route.continue(); });
+  let submissions = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/platform/v1/agent/')) submissions++;
+  });
+  await page.goto(`/dashboard/sessions/${activeId}`);
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  const send = page.locator('.agent-send');
+  try {
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveAccessibleName('Agent is working…');
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    await expect(send.locator('.agent-spin')).toBeVisible();
+    await composer.fill('More detail');
+    await composer.press('Enter');
+    await page.evaluate("document.querySelector('.agent-composer').requestSubmit()");
+    await expect(composer).toHaveValue('More detail');
+    expect(submissions).toBe(0);
+  } finally { release(); }
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeDisabled();
-  await expect(page.locator('.agent-assistant-message > header .agent-status')).toHaveText('completed');
+  await expect(send).toBeDisabled();
+  await expect(page.locator('.agent-assistant-message .agent-message-header .agent-status')).toHaveText('completed');
+  await expect(page.locator('.agent-assistant-message .agent-message-header time')).toHaveCount(1);
+  await expect(page.locator('.agent-assistant-message .agent-avatar')).toHaveCount(1);
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
-  await page.getByRole('textbox', { name: 'Follow-up message' }).fill('More detail');
-  await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
+  await expect(send).toHaveAccessibleName('Send follow-up');
+  await expect(send).toHaveAttribute('aria-busy', 'false');
+  await expect(send.locator('.agent-spin')).toHaveCount(0);
+  await expect(send).toBeEnabled();
+  await expect(composer).toHaveValue('More detail');
 });
 
 test('restricted accounts see Agent navigation but cannot open a session; signed-out accounts must log in', async ({ page, context }) => {
@@ -203,8 +236,8 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await page.reload();
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
   const latest = page.locator('.agent-assistant-message').last();
-  await expect(latest.getByText('get video transcript', { exact: true })).toBeVisible();
-  await latest.getByText('get video transcript', { exact: true }).click();
+  await expect(latest.getByText('Loading Transcript', { exact: true })).toBeVisible();
+  await latest.getByText('Loading Transcript', { exact: true }).click();
   await expect(latest.locator('pre')).toContainText('P7bxbDSnZRM');
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('follow-up-streaming.png'), fullPage: true });
@@ -216,8 +249,8 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await page.reload();
   await expect(page.getByText('Retry this follow-up: explain the differences.', { exact: true })).toBeVisible();
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
-  await page.locator('.agent-assistant-message').last().getByRole('button', { name: /^Tool activity \(1\)/ }).click();
-  await page.locator('.agent-assistant-message').last().getByText('get video transcript', { exact: true }).click();
+  await page.locator('.agent-assistant-message').last().getByText(/^Tool Activity \(\d+\)$/).click();
+  await page.locator('.agent-assistant-message').last().getByText('Loaded Transcript', { exact: true }).click();
   await expect(page.getByText('1 source · 4 evidence excerpts', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
@@ -283,6 +316,20 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
   expect(imageRequests).toHaveLength(0);
   const latestAnswer = page.locator('.agent-assistant-message').last();
+  await expect(latestAnswer.locator('.agent-avatar')).toBeVisible();
+  await expect(latestAnswer.locator('.agent-message-header strong')).toHaveCSS('font-weight', '600');
+  await expect(page.locator('.agent-user-message').last().locator('.agent-message-header strong')).toBeVisible();
+  const actions = latestAnswer.getByRole('group', { name: 'Answer actions' });
+  await expect(actions.getByRole('button')).toHaveCount(3);
+  await expect(actions.getByRole('button', { name: 'Upvote answer (coming soon)', exact: true })).toBeDisabled();
+  await expect(actions.getByRole('button', { name: 'Downvote answer (coming soon)', exact: true })).toBeDisabled();
+  await expect(latestAnswer.locator('.agent-run-footer')).toContainText('Run ID:');
+  await expect(latestAnswer.locator('.agent-run-footer button')).toHaveCount(0);
+  const answerBounds = (await latestAnswer.locator('.agent-markdown').boundingBox())!;
+  const actionBounds = (await actions.boundingBox())!;
+  const sourcesBounds = (await latestAnswer.locator('.agent-sources').boundingBox())!;
+  expect(actionBounds.y).toBeGreaterThanOrEqual(answerBounds.y + answerBounds.height);
+  expect(actionBounds.y + actionBounds.height).toBeLessThanOrEqual(sourcesBounds.y);
   await expect(page.locator('.agent-assistant-message').first().getByRole('button', { name: 'Copy answer', exact: true })).toBeVisible();
   await latestAnswer.getByRole('button', { name: 'Copy answer', exact: true }).click();
   await expect(latestAnswer.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
@@ -290,6 +337,16 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await page.evaluate('window.scrollTo(0, 0)');
   await page.screenshot({ path: testInfo.outputPath('markdown-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(latestAnswer.locator('.agent-avatar')).toBeHidden();
+  await expect(latestAnswer.locator('.agent-message-header strong')).toBeHidden();
+  await expect(latestAnswer.locator('.agent-message-header time')).toBeVisible();
+  const mobileUser = page.locator('.agent-user-message').last();
+  await expect(mobileUser.locator('.agent-avatar')).toBeHidden();
+  await expect(mobileUser.locator('.agent-message-header strong')).toBeHidden();
+  await expect(mobileUser.locator('.agent-user-bubble')).toBeVisible();
+  const mobileAnswerBounds = (await latestAnswer.locator('.agent-markdown').boundingBox())!;
+  expect(mobileAnswerBounds.x).toBe(16);
+  expect(mobileAnswerBounds.x + mobileAnswerBounds.width).toBe(374);
   await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Which claims are supported by the transcript?');
   await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeInViewport();
@@ -330,6 +387,7 @@ for (const newSession of [true, false]) {
       const bubble = page.locator('.agent-user-message').filter({ hasText: text });
       await expect(bubble).toBeVisible({ timeout: 1500 });
       await expect(bubble).toBeFocused();
+      await expect(bubble).toHaveCSS('outline-style', 'none');
       await expect(bubble.getByRole('status')).toHaveText('Sending…');
       await expect(composer).toHaveValue('');
       await expect(page.getByRole('button', { name: 'Sending…' })).toBeDisabled();
@@ -416,11 +474,11 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   })}\n\n` }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Metadata only', { exact: true }).click();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await latest.getByText('Preview Details', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
-  await expect(latest.locator('details').filter({ hasText: 'Metadata only. No images were downloaded or inspected.' }).locator('img')).toHaveCount(0);
-  await latest.getByText('Images', { exact: true }).click();
+  await expect(latest.locator('.agent-tool-chip').filter({ hasText: 'Metadata only. No images were downloaded or inspected.' }).locator('img')).toHaveCount(0);
+  await latest.getByText('Preview Images', { exact: true }).click();
   const first = latest.getByRole('button', { name: 'Open sheet at 0:00 to 0:55', exact: true });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await expect(latest.getByRole('button', { name: 'Open sheet at 2:00 to 2:55', exact: true })).toBeDisabled();
@@ -437,8 +495,8 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await expect(modal).not.toBeVisible();
   await expect(first).toBeFocused();
   await page.reload();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Images', { exact: true }).click();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await latest.getByText('Preview Images', { exact: true }).click();
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 2400);
   await page.setViewportSize({ width: 390, height: 844 });
   await first.click();
@@ -448,10 +506,10 @@ test('storyboard traces distinguish metadata and show saved sheets across reload
   await modal.getByRole('button', { name: 'Close sheet preview' }).click();
   legacy = true;
   await page.reload();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await latest.getByText('Metadata only', { exact: true }).click();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await latest.getByText('Preview Details', { exact: true }).click();
   await expect(latest.getByText('Metadata only. No images were downloaded or inspected.')).toBeVisible();
-  await latest.getByText('Images', { exact: true }).click();
+  await latest.getByText('Preview Images', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
@@ -480,9 +538,9 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   })}\n\n` }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
-  await latest.getByText('Retrieve saved frames', { exact: true }).click();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await expect(latest.getByText('Analyzed Frames', { exact: true })).toBeVisible();
+  await latest.getByText('Reused Frames', { exact: true }).click();
   await expect(latest.getByText('Used saved session images. No new frames were extracted.')).toBeVisible();
   const first = latest.getByRole('button', { name: 'Open frame at 0:14' });
   await expect(first.locator('img')).toHaveJSProperty('naturalWidth', 1280);
@@ -509,37 +567,130 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   await expect(modal).not.toBeVisible();
   frames.splice(0);
   await page.reload();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('Analyze saved frames', { exact: true })).toBeVisible();
-  await latest.getByText('Retrieve saved frames', { exact: true }).click();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await expect(latest.getByText('Analyzed Frames', { exact: true })).toBeVisible();
+  await latest.getByText('Reused Frames', { exact: true }).click();
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
-test('views stored session evidence and deletes assets with their dependent memory',async({page,context},testInfo)=>{
-  await login(context,'allowed');
-  const version='a'.repeat(64);
-  let assets=[{version,kind:'transcript',current:false,videoId:'P7bxbDSnZRM',collectedAt:1789111800000,details:{language:'en',segments:1}}];
-  let memories=[{id:'finding:opening',topic:'Opening',kind:'finding',text:'The speaker introduces the comparison.',evidenceIds:['excerpt'],updatedAt:1789111800000}];
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`,async route=>{
-    if(route.request().method()==='DELETE') {assets=[];memories=[];await route.fulfill({json:{deleted:true}});return;}
-    if(route.request().url().endsWith(version)) {await route.fulfill({json:{data:{segments:[{startMs:0,text:'The speaker introduces the comparison.'}]}}});return;}
-    await route.fulfill({json:{assets,memories}});
+test('saved evidence opens a focused viewer with loading, retry, and safe deletion', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  const version = 'a'.repeat(64);
+  const otherVersion = 'b'.repeat(64);
+  let assets = [
+    { version, kind: 'transcript', current: false, videoId: 'P7bxbDSnZRM', collectedAt: 1789111800000, details: { language: 'en', segments: 60 } },
+    { version: otherVersion, kind: 'comments', current: true, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} },
+  ];
+  let memories = [{ id: 'finding:opening', topic: 'Opening', kind: 'finding', text: 'The speaker introduces the comparison.', evidenceIds: ['excerpt'], updatedAt: 1789111800000 }];
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0;
+  let deletions = 0;
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, async route => {
+    if (route.request().method() === 'DELETE') {
+      if (++deletions === 1) { await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Deletion is temporarily unavailable.' } } }); return; }
+      assets = route.request().url().endsWith(version) ? assets.filter(asset => asset.version !== version) : [];
+      memories = [];
+      await route.fulfill({ json: { deleted: true } }); return;
+    }
+    if (route.request().url().endsWith(version)) {
+      const attempt = ++reads;
+      if (attempt === 1) await held;
+      if (attempt === 2) { await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Saved evidence is temporarily unavailable.' } } }); return; }
+      await route.fulfill({ json: { data: { segments: Array.from({ length: 60 }, (_, index) => ({ startMs: index * 6000, text: 'The speaker introduces the comparison.' })) } } }); return;
+    }
+    await route.fulfill({ json: { assets, memories } });
   });
   await page.goto(`/dashboard/sessions/${sessionId}`);
-  await page.getByText('Session evidence and memory',{exact:true}).click();
-  const panel=page.locator('.agent-session-assets');
-  await expect(panel.getByRole('heading',{name:'Evidence (1)'})).toBeVisible();
-  await expect(panel.getByText('Previous version',{exact:false})).toBeVisible();
-  await panel.getByRole('button',{name:'View',exact:true}).click();
-  await expect(panel.getByRole('region',{name:'Stored asset'})).toContainText('The speaker introduces the comparison.');
-  await page.screenshot({path:testInfo.outputPath('session-evidence.png')});
-  await panel.getByRole('button',{name:'Delete',exact:true}).click();
-  await expect(panel.getByText(/Related saved findings/)).toBeVisible();
-  await panel.getByRole('button',{name:'Confirm deletion'}).click();
-  await expect(panel.getByRole('heading',{name:'Evidence (0)'})).toBeVisible();
-  await expect(panel.getByRole('heading',{name:'Memory (0)'})).toBeVisible();
-  await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
+  await page.getByText('Session Assets', { exact: true }).click();
+  const panel = page.locator('.agent-session-assets');
+  await expect(panel.getByRole('heading', { name: 'Evidence (2)' })).toBeVisible();
+  await expect(panel.getByText('Previous version', { exact: true })).toBeVisible();
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-list.png') });
+  const view = panel.getByRole('button', { name: 'View', exact: true }).first();
+  await expect(view.locator('span')).toBeVisible();
+  const request = page.waitForRequest(request => request.url().endsWith(version));
+  await view.click();
+  await request;
+  const preview = page.getByRole('dialog', { name: 'Transcript', exact: true });
+  try {
+    await expect(preview.getByRole('status')).toHaveText('Loading evidence…');
+    await expect(preview.getByRole('button', { name: 'Close evidence preview' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(preview).not.toBeVisible();
+    await expect(view).toBeFocused();
+  } finally { release(); }
+  await view.click();
+  await expect(preview.getByRole('alert')).toHaveText('Saved evidence is temporarily unavailable.');
+  await preview.getByRole('button', { name: 'Try again' }).click();
+  await expect(preview.getByText('The speaker introduces the comparison.', { exact: true })).toHaveCount(60);
+  await expect(preview).toContainText('P7bxbDSnZRM');
+  await expect(panel.getByText('The speaker introduces the comparison.', { exact: true })).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-viewer.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const bounds = (await preview.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  expect(bounds.height).toBeLessThanOrEqual(844);
+  expect(await preview.getByLabel('Evidence content').evaluate(element => {
+    const content = element as unknown as { scrollHeight: number; clientHeight: number };
+    return content.scrollHeight > content.clientHeight;
+  })).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-viewer-mobile.png') });
+  await preview.getByRole('button', { name: 'Close evidence preview' }).click();
+  await expect(view).toBeFocused();
+  await expect(view.locator('span')).toBeHidden();
+  expect((await view.boundingBox())!.width).toBe(44);
+  expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-list-mobile.png') });
+  await panel.getByRole('button', { name: 'Delete transcript for P7bxbDSnZRM', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete saved data?' });
+  await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await expect(confirmation).toContainText('Related saved findings');
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(confirmation.getByRole('alert')).toHaveText('Deletion is temporarily unavailable.');
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(panel.getByRole('heading', { name: 'Evidence (2)' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Delete transcript for P7bxbDSnZRM', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Evidence (1)' })).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Memory (0)' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Clear saved data' }).click();
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(panel.getByRole('heading', { name: 'Evidence (0)' })).toBeVisible();
+  await expect(panel.getByText('No reusable evidence yet. Evidence collected by the agent will appear here.')).toBeVisible();
 });
+
+for (const kind of ['comments', 'frames']) {
+  test(`saved ${kind} render in their dedicated evidence viewer`, async ({ page, context }) => {
+    await login(context, 'allowed');
+    const version = 'c'.repeat(64);
+    const image = await page.evaluate<string>(`(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 18;
+      return canvas.toDataURL('image/jpeg').split(',')[1];
+    })()`);
+    await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, route => route.fulfill({ json: route.request().url().endsWith(version)
+      ? { data: kind === 'comments' ? { comments: [{ id: 'comment-1', author: { name: 'Sam' }, text: 'The comparison was helpful.', publishedTimeText: '2 days ago', likeCount: 3, replies: [{ id: 'reply-1', author: { name: 'Alex' }, text: 'Agreed, especially the first example.' }] }] }
+        : { frames: [{ timestampMs: 6000, imageBase64: image }] } }
+      : { assets: [{ version, kind, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} }], memories: [] } }));
+    await page.goto(`/dashboard/sessions/${sessionId}`);
+    await page.getByText('Session Assets', { exact: true }).click();
+    await page.locator('.agent-session-assets').getByRole('button', { name: 'View', exact: true }).click();
+    const preview = page.getByRole('dialog', { name: kind === 'comments' ? 'Video comments' : 'Video frames', exact: true });
+    if (kind === 'comments') {
+      await expect(preview.getByText('Sam', { exact: true })).toBeVisible();
+      await expect(preview.getByText('The comparison was helpful.', { exact: true })).toBeVisible();
+      await expect(preview.getByText('Agreed, especially the first example.', { exact: true })).toBeVisible();
+      await expect(preview.getByText('3 likes', { exact: true })).toBeVisible();
+      await expect(preview.locator('pre')).toHaveCount(0);
+    } else await expect(preview.getByRole('img', { name: 'Saved video evidence at 6 seconds' })).toHaveJSProperty('naturalWidth', 32);
+    await page.keyboard.press('Escape');
+    await expect(preview).not.toBeVisible();
+  });
+}
 
 for (const failure of [
   { code: 'FINAL_SYNTHESIS_UNAVAILABLE', reason: 'The answer reached its output limit, and the repair attempt timed out. Please try again in a few minutes. Any evidence already saved remains available in this session.' },
@@ -593,7 +744,7 @@ for (const failure of [
 });
 
 
-test('storyboard activity distinguishes instant failures from interrupted calls', async ({ page, context }, testInfo) => {
+test('tool activity uses readable labels and distinguishes failures from interrupted calls', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({
     status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
@@ -609,26 +760,42 @@ test('storyboard activity distinguishes instant failures from interrupted calls'
           startedAt: 9000, input: { videoId: 'K48wIslK7zg', maxSheets: 7 } },
         { toolCallId: 'future-status', name: 'search_context', operation: 'context', status: 'provider_waiting',
           startedAt: 10000, input: {} },
+        { toolCallId: 'search', name: 'search_youtube', operation: 'search', status: 'completed',
+          startedAt: 100, finishedAt: 200, input: { query: 'Product Hunt launch advice' } },
+        { toolCallId: 'browse', name: 'browse_youtube', operation: 'browse', status: 'completed',
+          startedAt: 100, finishedAt: 200, input: { category: 'news' } },
       ],
     })}\n\n`,
   }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const latest = page.locator('.agent-assistant-message').last();
-  await latest.getByRole('button', { name: /^Tool activity/ }).click();
-  await expect(latest.getByText('get video storyboard', { exact: true })).toHaveCount(3);
-  const failed = latest.locator('details').filter({ hasText: /K48wislK7zg/ });
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await expect(latest.getByText('Loaded Previews', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Searched YouTube', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Browsed Categories', { exact: true })).toBeVisible();
+  const failed = latest.locator('.agent-tool-chip').filter({ hasText: /K48wislK7zg/ });
+  await expect(failed.locator('.agent-tool-name')).toHaveText('Loading Failed');
   await expect(failed.locator('summary')).toContainText('<0.1s');
-  const interrupted = latest.locator('details').filter({ has: page.getByText('Images', { exact: true }) });
+  const interrupted = latest.locator('.agent-tool-chip').filter({ has: page.getByText('Preview Images', { exact: true }) });
+  await expect(interrupted.locator('.agent-tool-name')).toHaveText('Loading Interrupted');
   await expect(interrupted.locator('summary')).toContainText('Interrupted');
   await expect(interrupted.locator('summary')).not.toContainText('0.0s');
   await interrupted.locator('summary').click();
   await expect(interrupted).toContainText('The run ended without a recorded result');
   await expect(interrupted).toContainText('Duration is unavailable.');
   await expect(interrupted).not.toContainText('did not complete successfully');
-  await expect(latest.getByRole('button', { name: /^Tool activity/ })).toContainText('1 completed');
-  const unknown = latest.locator('details').filter({ has: page.getByText('Unknown status', { exact: true }) });
+  await expect(latest.getByText(/^Tool Activity \(\d+\)$/)).toHaveText('Tool Activity (6)');
+  const unknown = latest.locator('.agent-tool-chip').filter({ has: page.getByText('Unknown status', { exact: true }) });
+  await expect(unknown.locator('.agent-tool-name')).toHaveText('Status Unknown');
   await unknown.locator('summary').click();
   await expect(unknown).toContainText('does not recognize the tool status');
   await expect(unknown).not.toContainText('did not complete successfully');
   await page.screenshot({ path: testInfo.outputPath('storyboard-interrupted.png') });
+  const activity = latest.getByText(/^Tool Activity \(\d+\)$/);
+  await activity.focus();
+  await activity.press('Enter');
+  await expect(latest.locator('.agent-trace')).not.toHaveAttribute('open');
+  await activity.press('Space');
+  await expect(latest.locator('.agent-trace')).toHaveAttribute('open', '');
+  await expect(latest.getByText('Searched YouTube', { exact: true })).toBeVisible();
 });

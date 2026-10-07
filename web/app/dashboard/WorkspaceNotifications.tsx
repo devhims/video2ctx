@@ -1,12 +1,22 @@
 'use client';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { useAccountResource } from './DashboardDataProvider';
 import { DEFAULT_NOTIFICATION_PREFERENCES, type DashboardNotification } from '../../lib/dashboard-data';
 import { platformRequest as api } from '../../lib/platform-request';
 import { Icon } from './DashboardSidebar';
-export function WorkspaceNotifications() {
+function subscribeToMobileNavigation(onChange: () => void) {
+  const query = window.matchMedia('(max-width: 700px)');
+  query.addEventListener('change', onChange);
+  return () => query.removeEventListener('change', onChange);
+}
+const isMobileNavigation = () => window.matchMedia('(max-width: 700px)').matches;
+const serverMobileNavigation = () => false;
+
+export function WorkspaceNotifications({ mobileContainer }: { mobileContainer?: HTMLElement | null }) {
   const router = useRouter();
+  const mobile = useSyncExternalStore(subscribeToMobileNavigation, isMobileNavigation, serverMobileNavigation);
   const { data: notifications, setData: setNotifications } = useAccountResource('notifications', []);
   const { data: preferences } = useAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES);
   const read = async (id: string) => {
@@ -18,7 +28,7 @@ export function WorkspaceNotifications() {
       setNotifications((items) => items.map((n) => (n.id === id ? { ...n, read_at: before } : n)));
     }
   };
-  return (
+  const menu = (
     <NotificationMenu
       notifications={notifications}
       enabled={preferences.inApp}
@@ -36,6 +46,7 @@ export function WorkspaceNotifications() {
       }}
     />
   );
+  return mobile && mobileContainer ? createPortal(menu, mobileContainer) : menu;
 }
 function NotificationMenu({
   notifications,
