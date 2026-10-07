@@ -6,7 +6,7 @@ import { projectItemPath } from '../dashboard-routes';
 import { SessionAssets } from './SessionAssets';
 import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon, CopyIcon } from '@phosphor-icons/react';
+import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon, CopyIcon, ThumbsUpIcon, ThumbsDownIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
@@ -219,10 +219,10 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     <span className='agent-avatar' aria-hidden='true'><StarFourIcon size={14} /></span>
     <div className='agent-message-body'>
     <header className='agent-message-header'><strong>Agent</strong><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time><span className={`agent-status status-${status}`}>{status}</span></header>
-    {!open && <><AgentMarkdown>{message.content}</AgentMarkdown><button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View sources and tool activity <CaretRightIcon size={13} aria-hidden='true' /></button></>}
+    {!open && <><AgentMarkdown>{message.content}</AgentMarkdown>{message.content && <AnswerActions answer={message.content} />}<button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View sources and tool activity <CaretRightIcon size={13} aria-hidden='true' /></button></>}
     {open && <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
-      {!run && message.content && <AgentMarkdown>{message.content}</AgentMarkdown>}
+      {!run && message.content && <><AgentMarkdown>{message.content}</AgentMarkdown><AnswerActions answer={message.content} /></>}
       {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
@@ -234,6 +234,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
         {result.warnings.filter(warning => ['FINAL_SYNTHESIS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'].includes(warning.code)).map(warning =>
           <div key={warning.code} role='alert' className='alert error'><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable' : 'Answer incomplete'}</strong><p>{warning.message}</p></div>)}
         <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
+        {result.answer && <AnswerActions answer={result.answer} />}
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {
           const href = safeSourceUrl(source.url);
           return <li key={source.id}>{href ? <a href={href} target='_blank' rel='noreferrer'><span className='agent-source-number'>[{source.id}]</span><span>{source.title}</span><ArrowUpRightIcon size={13} aria-hidden='true' /></a> : <span>[{source.id}] {source.title}</span>}</li>;
@@ -241,10 +242,9 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
         {!!result.warnings.length && <details className='agent-caveats'><summary>Source notes and limitations ({result.warnings.length})</summary><ul>{result.warnings.map((warning, index) => <li key={index}>{warning.message}</li>)}</ul></details>}
       </>}
     </div>}
-    <div className='agent-answer-actions'>
-      {(result?.answer || message.content) && <CopyAnswer answer={result?.answer || message.content} />}
+    <footer className='agent-run-footer'>
       <p className='agent-id'>Run ID: {message.runId}</p>
-    </div>
+    </footer>
     </div>
   </article>;
 }
@@ -384,10 +384,18 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
   </div>;
 }
 
+function AnswerActions({ answer }: { answer: string }) {
+  return <div className='agent-answer-actions' role='group' aria-label='Answer actions'>
+    <CopyAnswer answer={answer} />
+    <button type='button' className='agent-answer-action' disabled aria-label='Upvote answer (coming soon)' title='Feedback coming soon'><ThumbsUpIcon size={16} aria-hidden='true' /></button>
+    <button type='button' className='agent-answer-action' disabled aria-label='Downvote answer (coming soon)' title='Feedback coming soon'><ThumbsDownIcon size={16} aria-hidden='true' /></button>
+  </div>;
+}
+
 function CopyAnswer({ answer }: { answer: string }) {
   const [status, setStatus] = useState('');
   useEffect(() => { if (!status) return; const timer = setTimeout(() => setStatus(''), 2_000); return () => clearTimeout(timer); }, [status]);
-  return <button className='agent-copy-answer' aria-label={status || 'Copy answer'} title={status || 'Copy answer'} onClick={async () => {
+  return <button type='button' className='agent-answer-action agent-copy-answer' aria-label={status || 'Copy answer'} title={status || 'Copy answer'} onClick={async () => {
     try { await navigator.clipboard.writeText(answer); setStatus('Copied'); }
     catch { setStatus('Could not copy'); }
   }}>{status === 'Copied' ? <CheckIcon size={16} aria-hidden='true' /> : status ? <WarningCircleIcon size={16} aria-hidden='true' /> : <CopyIcon size={16} aria-hidden='true' />}<span className='sr-only' aria-live='polite'>{status}</span></button>;

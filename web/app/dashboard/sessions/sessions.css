@@ -113,9 +113,11 @@
 .agent-caveats summary { cursor: pointer; }
 .agent-caveats ul { padding-left: 18px; }
 .agent-caveats li { margin-top: 7px; }
-.agent-answer-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 10px; color: var(--muted); }
-.agent-answer-actions .agent-id { min-width: 0; }
-.agent-sessions .agent-copy-answer { display: inline-grid; place-items: center; flex: 0 0 2rem; width: 2rem; height: 2rem; border: 0; background: transparent; padding: 0; color: var(--muted); }
+.agent-answer-actions { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.agent-run-footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.agent-sessions .agent-answer-action { display: inline-grid; place-items: center; flex: 0 0 2rem; width: 2rem; height: 2rem; border: 0; background: transparent; padding: 0; color: var(--muted); }
+.agent-sessions .agent-answer-action:hover:not(:disabled) { background: var(--color-dashboard-surface-muted); color: var(--ink); }
+.agent-sessions .agent-answer-action:disabled { cursor: default; }
 .agent-sessions-error { max-width: 700px; padding: 48px; margin: auto; }
 .agent-trace { margin: 12px 0 18px; color: var(--muted); font-size: 12px; }
 .agent-sessions .agent-trace-toggle { display: flex; align-items: center; gap: 7px; padding: 6px 0; background: transparent; border: 0; color: var(--muted); font-size: 11px; text-align: left; }
@@ -186,7 +188,7 @@
   .agent-composer-dock { bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .agent-prompt-bar textarea { font-size: 16px; }
   .agent-sessions .agent-send { width: 44px; height: 44px; }
-  .agent-sessions .agent-copy-answer { flex-basis: 44px; width: 44px; height: 44px; }
+  .agent-sessions .agent-answer-action { flex-basis: 44px; width: 44px; height: 44px; }
   .agent-prompt-shortcut { display: none; }
   .agent-prompt-shortcut + .agent-send { margin-left: auto; }
   .agent-tool-chip summary { display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content 12px; column-gap: 9px; row-gap: 4px; }
