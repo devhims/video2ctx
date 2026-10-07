@@ -56,16 +56,41 @@ export function fillerOnlyAnswer(output: { blocks: { text: string }[] }): boolea
   return output.blocks.every(block => fragment.test(block.text.trim()) || promise.test(block.text.trim()));
 }
 
-/** Keep the complete blocks of an answer cut off at the output-token limit. The last
- * block may be cut short even when the JSON closes, so it is always dropped. */
-export async function salvageTruncatedAnswer<T extends { blocks: unknown[] }>(candidate: string | undefined, schema: z.ZodType<T>): Promise<T | undefined> {
+/** Keep the complete blocks of an answer cut off at the output-token limit.
+ * A block counts as complete only if its own object closed in the raw text. JSON that
+ * closes cleanly despite the limit may have been closed early, so its last block is dropped. */
+export async function salvageTruncatedAnswer<T extends { blocks: unknown[] }>(candidate: string | undefined, schema: z.ZodType<T>): Promise<{ output: T; droppedBlock: boolean } | undefined> {
   const { value, state } = await parsePartialJson(candidate);
   if (state !== 'repaired-parse' && state !== 'successful-parse') return undefined;
   if (!value || typeof value !== 'object' || !Array.isArray((value as { blocks?: unknown }).blocks)) return undefined;
-  const complete = (value as { blocks: unknown[] }).blocks.slice(0, -1);
-  if (!complete.length) return undefined;
-  const parsed = schema.safeParse({ ...value, blocks: complete });
-  return parsed.success ? parsed.data : undefined;
+  const blocks = (value as { blocks: unknown[] }).blocks;
+  const keep = state === 'successful-parse' ? blocks.length - 1 : Math.min(blocks.length, closedBlockCount(candidate!));
+  if (keep < 1) return undefined;
+  const parsed = schema.safeParse({ ...value, blocks: blocks.slice(0, keep) });
+  return parsed.success ? { output: parsed.data, droppedBlock: keep < blocks.length } : undefined;
+}
+
+/** Count entries of the top-level `blocks` array whose objects close in raw JSON text. */
+function closedBlockCount(text: string): number {
+  const stack: string[] = [];
+  let inString = false, escaped = false, token = '', lastKey: string | undefined, blocksDepth = -1, closed = 0;
+  for (const char of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') { inString = false; if (stack.length === 1) lastKey = token; }
+      else token += char;
+    } else if (char === '"') { inString = true; token = ''; }
+    else if (char === '{' || char === '[') {
+      if (char === '[' && stack.length === 1 && lastKey === 'blocks') blocksDepth = 2;
+      stack.push(char);
+    } else if (char === '}' || char === ']') {
+      stack.pop();
+      if (char === '}' && stack.length === blocksDepth) closed += 1;
+      if (stack.length < blocksDepth) blocksDepth = -1;
+    } else if (char === ',' && stack.length === 1) lastKey = undefined;
+  }
+  return closed;
 }
 
 /** Render provisional model text only. Citations remain hidden until validation commits the answer. */

@@ -1126,18 +1126,22 @@ async function runUnifiedFinalizer(options: {
       // answer deterministically or attaches a note; none of it rejects the answer.
       const salvaged = finishReason === 'length' ? await salvageTruncatedAnswer(candidate, outputSchema) : undefined;
       if (finishReason === 'length' && !salvaged) throw new Error('Final answer was truncated by the output token limit.');
-      const output = salvaged ?? result.output;
+      const output = salvaged?.output ?? result.output;
       if (!output) throw new Error('Final answer generation returned no structured output.');
       const notes: AgentWarning[] = [];
-      if (salvaged) notes.push({ code: 'ANSWER_TRUNCATED', message: 'This answer reached its length limit, so the unfinished last part was removed.' });
-      let insertedFirstMessage = false;
+      if (salvaged) notes.push({ code: 'ANSWER_TRUNCATED', message: salvaged.droppedBlock
+        ? 'This answer reached its length limit, so the unfinished last part was removed.'
+        : 'This answer reached its length limit and may be missing later parts.' });
+      let replacedFirstMessageAnswer = false;
       if (historySelection === 'first_user_message') {
         const first = historyPage?.messages.find(message => message.role === 'user');
         if (!first) throw new ApiError(502, 'AGENT_HISTORY_UNAVAILABLE', 'The first stored user message could not be retrieved. Please retry.');
-        // The application holds the exact text, so it quotes it rather than asking the model again.
+        // The application holds the exact answer. An answer without it is wrong, so it is
+        // replaced rather than corrected, which would leave the wrong statement visible.
         if (!output.blocks.some(block => block.text.includes(first.text))) {
-          output.blocks[0]!.text = `Your first message, word for word:\n\n${first.text.split('\n').map(line => `> ${line}`).join('\n')}\n\n${output.blocks[0]!.text}`;
-          insertedFirstMessage = true;
+          output.blocks = [{ text: `Your first message in this session was:\n\n${first.text.split('\n').map(line => `> ${line}`).join('\n')}`, evidenceIds: [] }];
+          output.warnings = [];
+          replacedFirstMessageAnswer = true;
         }
       }
       for (const block of output.blocks) {
@@ -1172,10 +1176,10 @@ async function runUnifiedFinalizer(options: {
         unverifiedFigures: figures.slice(0, 20).map(({ blockIndex, value, unit }) => ({ blockIndex, value, unit })),
         numberedItemsMismatch: !conversational && numberedItemsMismatch(output, numberedItemCount),
         fillerOnly: fillerOnlyAnswer(output),
-        insertedFirstMessage,
+        replacedFirstMessageAnswer,
         missingComparisonVideos,
       };
-      if (notes.length || signals.numberedItemsMismatch || signals.fillerOnly || insertedFirstMessage) {
+      if (notes.length || signals.numberedItemsMismatch || signals.fillerOnly || replacedFirstMessageAnswer) {
         console.log(JSON.stringify({ event: 'agent_answer_review', runId: options.context.runId, attempt: attempt + 1, ...signals }));
         await options.context.traceToolCall?.({ toolCallId: `answer-review:${attemptId}`, name: 'answer_review',
           operation: 'finalization_review', source: 'execution', input: { attemptId, attempt: attempt + 1, ...signals },

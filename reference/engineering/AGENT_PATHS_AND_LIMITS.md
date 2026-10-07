@@ -217,10 +217,10 @@ Answer validation rejects only an answer the application cannot render or persis
 | --- | --- |
 | Inline marker for a reference its block did not declare | Marker removed |
 | Reference that matches no saved excerpt, or several different ones | Citation removed, `CITATIONS_REMOVED` note |
-| Output-token limit reached | Last block dropped and complete blocks kept, `ANSWER_TRUNCATED` note; regenerated only when no complete block remains |
+| Output-token limit reached | Blocks whose objects closed are kept and a block cut off mid-way is dropped, `ANSWER_TRUNCATED` note. JSON that closes cleanly despite the limit may have been closed early, so its last block is dropped. Regenerated only when no complete block remains |
 | Mass or percentage figure absent from the block's own cited excerpts and findings | Answer kept, `UNVERIFIED_FIGURES` note listing the figures |
 | Comparison subject without a citation and no `ANSWER_SCOPE_SHORTFALL` | Answer kept, `PARTIAL_EVIDENCE` note naming the subject |
-| First-message request whose answer omits the exact stored text | Application quotes the stored message ahead of the answer |
+| First-message request whose answer omits the exact stored text | Answer replaced by the stored message, quoted exactly |
 | Unsolicited `needsEvidence` field | Ignored |
 | Numbered-item count mismatch, filler-only answer | Logged as `agent_answer_review` and traced as `answer_review` only |
 

@@ -917,7 +917,7 @@ it('fails after one repair when the answer is still unrenderable', async () => {
   expect(options.finalize).not.toHaveBeenCalled();
 });
 
-it('quotes the stored first message when the answer paraphrases it, without regenerating', async () => {
+it('replaces a paraphrased first-message answer with the stored wording, without regenerating', async () => {
   const {options,classifier,output}=setup('context_answer');
   options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read the first message.'};
   const original='Summarise this video: https://youtu.be/abcdefghijk?si=keep-original';
@@ -929,9 +929,24 @@ it('quotes the stored first message when the answer paraphrases it, without rege
   await executeResearchRun(options);
   expect(attempts).toBe(1);
   expect(options.finalize).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(options.finalize).mock.calls[0]![1].answer)
-    .toBe(`Your first message, word for word:\n\n> ${original}\n\nYou asked for a summary of the video.`);
+  expect(vi.mocked(options.finalize).mock.calls[0]![1].answer).toBe(`Your first message in this session was:\n\n> ${original}`);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+});
+
+
+it('replaces a contradictory first-message answer instead of keeping both statements', async () => {
+  const {options,classifier,output}=setup('context_answer');
+  options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read the first message.'};
+  options.session={brief:()=>({historyMessages:4,assets:[],memories:[]}),readHistory:()=>({messages:[{role:'user',text:'Tell me about Manali.'}]}),searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+  const finalizer=new MockLanguageModelV4({doGenerate:async call=>({content:[{type:'text',text:call.responseFormat?.type==='json'
+    ? JSON.stringify({...output,warnings:[{code:'SOURCE_CAVEAT',message:'Earlier messages may be missing.'}],blocks:[{text:'Your first message was: How do I make pizza?',evidenceIds:[]}]})
+    : 'Context available.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  await executeResearchRun(options);
+  const saved=vi.mocked(options.finalize).mock.calls[0]![1];
+  expect(saved.answer).toBe('Your first message in this session was:\n\n> Tell me about Manali.');
+  expect(saved.answer).not.toContain('pizza');
+  expect(saved.warnings.map(warning=>warning.code)).not.toContain('SOURCE_CAVEAT');
 });
 
 
