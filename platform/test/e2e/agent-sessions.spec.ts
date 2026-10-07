@@ -541,31 +541,121 @@ test('frame traces show original images, enlarge, navigate, and handle missing p
   await expect(latest.getByText('Image previews were not saved for this tool call.')).toBeVisible();
 });
 
-test('views stored session evidence and deletes assets with their dependent memory',async({page,context},testInfo)=>{
-  await login(context,'allowed');
-  const version='a'.repeat(64);
-  let assets=[{version,kind:'transcript',current:false,videoId:'P7bxbDSnZRM',collectedAt:1789111800000,details:{language:'en',segments:1}}];
-  let memories=[{id:'finding:opening',topic:'Opening',kind:'finding',text:'The speaker introduces the comparison.',evidenceIds:['excerpt'],updatedAt:1789111800000}];
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`,async route=>{
-    if(route.request().method()==='DELETE') {assets=[];memories=[];await route.fulfill({json:{deleted:true}});return;}
-    if(route.request().url().endsWith(version)) {await route.fulfill({json:{data:{segments:[{startMs:0,text:'The speaker introduces the comparison.'}]}}});return;}
-    await route.fulfill({json:{assets,memories}});
+test('saved evidence opens a focused viewer with loading, retry, and safe deletion', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  const version = 'a'.repeat(64);
+  const otherVersion = 'b'.repeat(64);
+  let assets = [
+    { version, kind: 'transcript', current: false, videoId: 'P7bxbDSnZRM', collectedAt: 1789111800000, details: { language: 'en', segments: 60 } },
+    { version: otherVersion, kind: 'comments', current: true, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} },
+  ];
+  let memories = [{ id: 'finding:opening', topic: 'Opening', kind: 'finding', text: 'The speaker introduces the comparison.', evidenceIds: ['excerpt'], updatedAt: 1789111800000 }];
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0;
+  let deletions = 0;
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, async route => {
+    if (route.request().method() === 'DELETE') {
+      if (++deletions === 1) { await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Deletion is temporarily unavailable.' } } }); return; }
+      assets = route.request().url().endsWith(version) ? assets.filter(asset => asset.version !== version) : [];
+      memories = [];
+      await route.fulfill({ json: { deleted: true } }); return;
+    }
+    if (route.request().url().endsWith(version)) {
+      const attempt = ++reads;
+      if (attempt === 1) await held;
+      if (attempt === 2) { await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Saved evidence is temporarily unavailable.' } } }); return; }
+      await route.fulfill({ json: { data: { segments: Array.from({ length: 60 }, (_, index) => ({ startMs: index * 6000, text: 'The speaker introduces the comparison.' })) } } }); return;
+    }
+    await route.fulfill({ json: { assets, memories } });
   });
   await page.goto(`/dashboard/sessions/${sessionId}`);
-  await page.getByText('Session evidence and memory',{exact:true}).click();
-  const panel=page.locator('.agent-session-assets');
-  await expect(panel.getByRole('heading',{name:'Evidence (1)'})).toBeVisible();
-  await expect(panel.getByText('Previous version',{exact:false})).toBeVisible();
-  await panel.getByRole('button',{name:'View',exact:true}).click();
-  await expect(panel.getByRole('region',{name:'Stored asset'})).toContainText('The speaker introduces the comparison.');
-  await page.screenshot({path:testInfo.outputPath('session-evidence.png')});
-  await panel.getByRole('button',{name:'Delete',exact:true}).click();
-  await expect(panel.getByText(/Related saved findings/)).toBeVisible();
-  await panel.getByRole('button',{name:'Confirm deletion'}).click();
-  await expect(panel.getByRole('heading',{name:'Evidence (0)'})).toBeVisible();
-  await expect(panel.getByRole('heading',{name:'Memory (0)'})).toBeVisible();
-  await expect(panel.getByRole('region',{name:'Stored asset'})).toHaveCount(0);
+  await page.getByText('Session evidence and memory', { exact: true }).click();
+  const panel = page.locator('.agent-session-assets');
+  await expect(panel.getByRole('heading', { name: 'Evidence (2)' })).toBeVisible();
+  await expect(panel.getByText('Previous version', { exact: true })).toBeVisible();
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-list.png') });
+  const view = panel.getByRole('button', { name: 'View', exact: true }).first();
+  await expect(view.locator('span')).toBeVisible();
+  const request = page.waitForRequest(request => request.url().endsWith(version));
+  await view.click();
+  await request;
+  const preview = page.getByRole('dialog', { name: 'Transcript', exact: true });
+  try {
+    await expect(preview.getByRole('status')).toHaveText('Loading evidence…');
+    await expect(preview.getByRole('button', { name: 'Close evidence preview' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(preview).not.toBeVisible();
+    await expect(view).toBeFocused();
+  } finally { release(); }
+  await view.click();
+  await expect(preview.getByRole('alert')).toHaveText('Saved evidence is temporarily unavailable.');
+  await preview.getByRole('button', { name: 'Try again' }).click();
+  await expect(preview.getByText('The speaker introduces the comparison.', { exact: true })).toHaveCount(60);
+  await expect(preview).toContainText('P7bxbDSnZRM');
+  await expect(panel.getByText('The speaker introduces the comparison.', { exact: true })).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-viewer.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const bounds = (await preview.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  expect(bounds.height).toBeLessThanOrEqual(844);
+  expect(await preview.getByLabel('Evidence content').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-viewer-mobile.png') });
+  await preview.getByRole('button', { name: 'Close evidence preview' }).click();
+  await expect(view).toBeFocused();
+  await expect(view.locator('span')).toBeHidden();
+  expect((await view.boundingBox())!.width).toBe(44);
+  expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('session-evidence-list-mobile.png') });
+  await panel.getByRole('button', { name: 'Delete transcript for P7bxbDSnZRM', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete saved data?' });
+  await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await expect(confirmation).toContainText('Related saved findings');
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(confirmation.getByRole('alert')).toHaveText('Deletion is temporarily unavailable.');
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(panel.getByRole('heading', { name: 'Evidence (2)' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Delete transcript for P7bxbDSnZRM', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(confirmation).not.toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Evidence (1)' })).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Memory (0)' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Clear saved data' }).click();
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(panel.getByRole('heading', { name: 'Evidence (0)' })).toBeVisible();
+  await expect(panel.getByText('No reusable evidence yet. Evidence collected by the agent will appear here.')).toBeVisible();
 });
+
+for (const kind of ['comments', 'frames']) {
+  test(`saved ${kind} render in their dedicated evidence viewer`, async ({ page, context }) => {
+    await login(context, 'allowed');
+    const version = 'c'.repeat(64);
+    const image = await page.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 18;
+      return canvas.toDataURL('image/jpeg').split(',')[1];
+    });
+    await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, route => route.fulfill({ json: route.request().url().endsWith(version)
+      ? { data: kind === 'comments' ? { comments: [{ id: 'comment-1', author: { name: 'Sam' }, text: 'The comparison was helpful.', publishedTimeText: '2 days ago', likeCount: 3, replies: [{ id: 'reply-1', author: { name: 'Alex' }, text: 'Agreed, especially the first example.' }] }] }
+        : { frames: [{ timestampMs: 6000, imageBase64: image }] } }
+      : { assets: [{ version, kind, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} }], memories: [] } }));
+    await page.goto(`/dashboard/sessions/${sessionId}`);
+    await page.getByText('Session evidence and memory', { exact: true }).click();
+    await page.locator('.agent-session-assets').getByRole('button', { name: 'View', exact: true }).click();
+    const preview = page.getByRole('dialog', { name: kind === 'comments' ? 'Video comments' : 'Video frames', exact: true });
+    if (kind === 'comments') {
+      await expect(preview.getByText('Sam', { exact: true })).toBeVisible();
+      await expect(preview.getByText('The comparison was helpful.', { exact: true })).toBeVisible();
+      await expect(preview.getByText('Agreed, especially the first example.', { exact: true })).toBeVisible();
+      await expect(preview.getByText('3 likes', { exact: true })).toBeVisible();
+      await expect(preview.locator('pre')).toHaveCount(0);
+    } else await expect(preview.getByRole('img', { name: 'Saved video evidence at 6 seconds' })).toHaveJSProperty('naturalWidth', 32);
+    await page.keyboard.press('Escape');
+    await expect(preview).not.toBeVisible();
+  });
+}
 
 for (const failure of [
   { code: 'FINAL_SYNTHESIS_UNAVAILABLE', reason: 'The answer reached its output limit, and the repair attempt timed out. Please try again in a few minutes. Any evidence already saved remains available in this session.' },
