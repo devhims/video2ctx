@@ -192,7 +192,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
     {session && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting} onSendAction={showPendingMessage}
-      disabled={loading || session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
+      disabled={loading} processing={session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
   </>;
 }
 
@@ -274,8 +274,8 @@ function PendingUserMessage({ message }: { message: PendingMessage }) {
   </article>;
 }
 
-function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, onSendAction }: {
-  sessionId?: string; disabled?: boolean; onSending?: (sending: boolean) => void;
+function MessageComposer({ sessionId, disabled = false, processing = false, onAdmitted, onSending, onSendAction }: {
+  sessionId?: string; disabled?: boolean; processing?: boolean; onSending?: (sending: boolean) => void;
   onSendAction: (message: PendingMessage) => void; onAdmitted: (receipt: AgentAdmission, message: string) => void;
 }) {
   const cache = useAgentSessionCache();
@@ -287,7 +287,7 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, o
   const submissionCount = useRef(0);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (disabled || inFlight.current || sending || !draft.trim()) return;
+    if (disabled || processing || inFlight.current || sending || !draft.trim()) return;
     const request = { message: draft.trim(), draft, key: String(++submissionCount.current), createdAt: Date.now() };
     inFlight.current = true;
     setDraft(''); setError(''); onSending?.(true);
@@ -310,8 +310,8 @@ function MessageComposer({ sessionId, disabled = false, onAdmitted, onSending, o
   };
   return <><AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
     label={sessionId ? 'Follow-up message' : 'Start a new session'}
-    sendLabel={sending ? 'Sending…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
-    disabled={disabled} sending={sending} uncertain={uncertain} error={error} />
+    sendLabel={sending ? 'Sending…' : processing ? 'Agent is working…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
+    disabled={disabled || processing} sending={sending} processing={processing} uncertain={uncertain} error={error} />
     {uncertain && <Link href='/dashboard/sessions'>Check Sessions for the submitted run</Link>}
   </>;
 }

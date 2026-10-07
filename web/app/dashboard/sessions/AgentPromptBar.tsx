@@ -5,9 +5,9 @@
 import { useEffect, useLayoutEffect, useRef, type FormEvent } from 'react';
 import { ArrowUpIcon, ArrowClockwiseIcon, CircleNotchIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 
-export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, uncertain, error }: {
+export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, processing, uncertain, error }: {
   value: string; onChange: (value: string) => void; onSubmit: (event: FormEvent) => void;
-  label: string; sendLabel: string; disabled: boolean; sending: boolean; uncertain: boolean; error: string;
+  label: string; sendLabel: string; disabled: boolean; sending: boolean; processing: boolean; uncertain: boolean; error: string;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -38,15 +38,15 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
             event.preventDefault();
-            if (!disabled && !sending && value.trim()) event.currentTarget.form?.requestSubmit();
+            if (!disabled && !sending && !processing && value.trim()) event.currentTarget.form?.requestSubmit();
           }
         }} />
       <div className='agent-prompt-controls'>
         <span className='agent-prompt-context'><YoutubeLogoIcon size={16} aria-hidden='true' />YouTube</span>
         <span className='agent-prompt-shortcut' aria-hidden='true'>Shift + Enter for a new line</span>
         <button className='agent-send' type='submit' aria-label={sendLabel} title={sendLabel}
-          disabled={disabled || sending || !value.trim()}>
-          {sending ? <CircleNotchIcon size={19} className='agent-spin' aria-hidden='true' /> : uncertain
+          aria-busy={sending || processing} disabled={disabled || sending || processing || !value.trim()}>
+          {sending || processing ? <CircleNotchIcon size={19} className='agent-spin' aria-hidden='true' /> : uncertain
             ? <ArrowClockwiseIcon size={19} aria-hidden='true' /> : <ArrowUpIcon size={20} weight='bold' aria-hidden='true' />}
         </button>
       </div>

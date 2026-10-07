@@ -125,15 +125,38 @@ test('failed runs show the error, and running history can retrieve the completed
   await page.goto('/dashboard/sessions/f1611a8b-cb84-4305-a365-328bd06bedac');
   await expect(page.getByText('Classification returned an invalid routing decision.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sources', exact: true })).toHaveCount(0);
-  await page.goto('/dashboard/sessions/cd056140-7d4c-4516-bb9e-c97914439553');
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/platform/v1/agent/${activeId}/runs/*/events`, async route => { await pending; await route.continue(); });
+  let submissions = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/platform/v1/agent/')) submissions++;
+  });
+  await page.goto(`/dashboard/sessions/${activeId}`);
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  const send = page.locator('.agent-send');
+  try {
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveAccessibleName('Agent is working…');
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    await expect(send.locator('.agent-spin')).toBeVisible();
+    await composer.fill('More detail');
+    await composer.press('Enter');
+    await page.locator('.agent-composer').evaluate((form: HTMLFormElement) => form.requestSubmit());
+    await expect(composer).toHaveValue('More detail');
+    expect(submissions).toBe(0);
+  } finally { release(); }
   await expect(page.getByText('Researching YouTube sources.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeDisabled();
+  await expect(send).toBeDisabled();
   await expect(page.locator('.agent-assistant-message .agent-message-header .agent-status')).toHaveText('completed');
   await expect(page.locator('.agent-assistant-message .agent-message-header time')).toHaveCount(1);
   await expect(page.locator('.agent-assistant-message .agent-avatar')).toHaveCount(1);
   await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
-  await page.getByRole('textbox', { name: 'Follow-up message' }).fill('More detail');
-  await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeEnabled();
+  await expect(send).toHaveAccessibleName('Send follow-up');
+  await expect(send).toHaveAttribute('aria-busy', 'false');
+  await expect(send.locator('.agent-spin')).toHaveCount(0);
+  await expect(send).toBeEnabled();
+  await expect(composer).toHaveValue('More detail');
 });
 
 test('restricted accounts see Agent navigation but cannot open a session; signed-out accounts must log in', async ({ page, context }) => {
