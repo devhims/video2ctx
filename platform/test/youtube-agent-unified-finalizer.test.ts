@@ -1,3 +1,5 @@
+import { withModelFailover } from '../src/agents/runtime/model-failover';
+import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
 import { simulateReadableStream, tool } from 'ai';
 import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -94,11 +96,16 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
   const finalizer = new MockLanguageModelV4({ doStream: [stream(invalid), stream(output)] });
   models.select.mockImplementation((_env, _session, _effort, metadata) =>
     metadata.model_role === 'classifier' ? classifier : finalizer);
+  const { captures, trace } = captureRejections();
+  options.traceToolCall = trace;
   const drafts: Array<{ answer: string; state: string }> = [];
   options.onDraft = draft => drafts.push(draft);
 
   await executeResearchRun(options);
 
+  expect(captures).toHaveLength(1);
+  expect(captures[0]?.input).toMatchObject({ candidate: JSON.stringify(invalid), validationStage: 'rendered_answer',
+    issues: [expect.objectContaining({ path: ['blocks'] })] });
   expect(finalizer.doStreamCalls).toHaveLength(2);
   expect(finalizer.doGenerateCalls).toHaveLength(0);
   expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
@@ -1203,4 +1210,126 @@ it.each([false, true])('does not save an answer after both finalizer models fail
   expect(primary.doGenerateCalls).toHaveLength(1);
   expect(fallback.doGenerateCalls).toHaveLength(1);
   expect(options.finalize).not.toHaveBeenCalled();
+});
+
+
+function captureRejections() {
+  const captures: Array<{ id: string; input: Record<string, unknown>; error?: unknown }> = [];
+  const trace: TraceToolCall = async call => {
+    if (call.name !== 'final_answer_rejection') return call.execute();
+    const captured = { id: call.toolCallId, input: structuredClone(call.input) as Record<string, unknown>, error: undefined as unknown };
+    captures.push(captured);
+    try { return await call.execute(); } catch (error) { captured.error = error; throw error; }
+  };
+  return { captures, trace };
+}
+
+it.each([true, false])('saves each rejected fallback answer before repair, repair succeeds: %s', async repaired => {
+  const { options, classifier } = setup('context_answer', true);
+  const packet: EvidencePacket = { packetId: 'measurement', kind: 'youtube_transcript',
+    sources: [{ id: 's1', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: 'e1', sourceId: 's1', text: 'The protein content is 54.2%.', startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { findings: [{ claim: 'The protein content is 54.2%.',
+      excerptIds: ['e1'], entities: [], quantities: [{ metric: 'protein', value: 54.2, unit: '%', basis: null,
+        kind: 'measured', quote: 'The protein content is 54.2%.' }], uncertainty: null }] } }], warnings: [], usage: [] };
+  options.conversationHistory![0]!.evidence = [packet];
+  const { captures, trace } = captureRejections();
+  options.traceToolCall = trace;
+  const output = { confidence: 'medium', warnings: [], blocks: [
+    { text: 'Here is the correction to my previous response.', evidenceIds: [] },
+    { text: 'The protein content is 54.2g.', evidenceIds: ['ref_1'] },
+  ] };
+  let calls = 0;
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => { throw new Error('Provider connection failed'); } });
+  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: async () => {
+    expect(captures).toHaveLength(calls);
+    calls++;
+    const value = structuredClone(output);
+    if (repaired && calls === 2) value.blocks[1]!.text = 'The protein content is 54.2%.';
+    return { content: [{ type: 'text', text: JSON.stringify(value) }],
+      response: { id: `response-${calls}`, modelId: 'deepseek-actual', timestamp: new Date() },
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const finalizer = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'finalizer' });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
+  const result = executeResearchRun(options);
+  if (repaired) await result;
+  else await expect(result).rejects.toThrow();
+  expect(primary.doGenerateCalls).toHaveLength(1);
+  expect(fallback.doGenerateCalls).toHaveLength(2);
+  expect(captures).toHaveLength(repaired ? 1 : 2);
+  expect(new Set(captures.map(capture => capture.id)).size).toBe(captures.length);
+  captures.forEach((capture, index) => {
+    expect(capture.input).toMatchObject({ attempt: index + 1, modelId: 'deepseek-actual', responseId: `response-${index + 1}`,
+      candidate: JSON.stringify(output), candidateCharacters: JSON.stringify(output).length, captureTruncated: false,
+      validationStage: 'grounded_facts', code: 'UNGROUNDED_ANSWER',
+      groundingIssue: { code: 'UNSUPPORTED_MEASUREMENT', blockIndex: 1, value: 54.2, unit: 'g', evidenceIds: ['e1'] },
+      references: [{ alias: 'ref_1', evidenceId: 'e1', packetId: 'measurement', sourceId: 's1', videoId: 'abcdefghijk' }] });
+    expect(capture.error).toMatchObject({ code: 'UNGROUNDED_ANSWER', message: expect.stringContaining("blocks[1] contains 54.2g without support in that block's evidenceIds") });
+  });
+  expect(options.finalize).toHaveBeenCalledTimes(repaired ? 1 : 0);
+});
+
+it.each([false, true])('hands four analyses directly to answer generation after the research target is reached; targeted gap: %s', async hasGap => {
+  const { options } = setup('context_answer');
+  const ids = ['abcdefghijk', 'lmnopqrstuv', 'zzzzzzzzzzz', 'xxxxxxxxxxx'];
+  const packets: EvidencePacket[] = ids.map((videoId, index) => ({ packetId: `analysis-${index}`, kind: 'youtube_transcript',
+    sources: [{ id: `source-${index}`, videoId, provider: 'youtube', kind: 'transcript', title: `Video ${index}` }],
+    excerpts: [{ id: `e${index}`, sourceId: `source-${index}`, text: `Supported recommendation ${index}.`, startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { summary: 'Supported travel finding.', findings: [{
+      claim: `Supported recommendation ${index}.`, excerptIds: [`e${index}`], entities: [], quantities: [], uncertainty: null,
+    }], coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 }, selectedExcerptCount: 1 } }],
+    warnings: [], usage: [] }));
+  const version = 'a'.repeat(64);
+  options.persistedRoute = { route: 'topic_research', researchVideoCount: 4, visualEvidence: 'none', useStoryboard: false };
+  options.recoveredEvidence = packets;
+  options.conversationHistory = [];
+  const searchTools = vi.fn(async () => ({}));
+  const readEvidence = vi.fn(async () => ({ packets: [packets[0]!] }));
+  const readTranscriptEvidence = vi.fn();
+  options.session = { searchTools, readEvidence, readTranscriptEvidence, evidence: () => packets,
+    brief: () => ({ assets: [{ version, kind: 'transcript', videoId: ids[0], current: true, collectedAt: 1, details: {} }], memories: [] }),
+  } as unknown as NonNullable<typeof options.session>;
+  const report = { requirements: [{ question: 'Suggest places to visit', evidenceIds: ['e0', 'e1', 'e2', 'e3'] }],
+    gaps: hasGap ? [{ question: 'Is the first place accessible in October?', read: { kind: 'asset', version, offset: 3, query: 'October' } }] : [] };
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'research-handoff', toolName: 'finalize_answer', input: JSON.stringify(report) }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  let answerCalls = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => {
+    answerCalls++;
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+      blocks: [{ text: hasGap && answerCalls === 1 ? 'The' : 'Here are the supported travel recommendations.', evidenceIds: ['ref_1'] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const traces: Array<{ name: string; output: unknown }> = [];
+  options.traceToolCall = async call => { const output = await call.execute(); traces.push({ name: call.name, output }); return output; };
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId,
+    conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, packets, 0));
+
+  await executeResearchRun(options);
+
+  expect(core.doGenerateCalls).toHaveLength(1);
+  expect(core.doGenerateCalls[0]?.toolChoice).toEqual({ type: 'tool', toolName: 'finalize_answer' });
+  expect(finalizer.doGenerateCalls).toHaveLength(hasGap ? 2 : 1);
+  for (const call of finalizer.doGenerateCalls) {
+    expect(call.responseFormat?.type).toBe('json');
+    expect(call.tools ?? []).toHaveLength(0);
+    const prompt = JSON.stringify(call.prompt);
+    expect(prompt).toContain('researchPreparation');
+    expect(prompt).toContain('Supported recommendation 3.');
+    expect(prompt).not.toContain('Gather stored context needed');
+  }
+  expect(searchTools).toHaveBeenCalledOnce(); // Research setup only, no finalizer preparation loop.
+  expect(readTranscriptEvidence).not.toHaveBeenCalled();
+  expect(readEvidence).toHaveBeenCalledTimes(hasGap ? 1 : 0);
+  if (hasGap) expect(readEvidence).toHaveBeenCalledWith(version, 3, 'October');
+  expect(traces).toContainEqual({ name: 'research_handoff', output: expect.objectContaining({ mode: hasGap ? 'targeted_reads' : 'direct_answer', readCount: hasGap ? 1 : 0, incomplete: false }) });
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledOnce();
 });

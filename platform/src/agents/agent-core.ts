@@ -17,6 +17,7 @@ import {
 } from './runtime/model-budget';
 import {
   FINALIZATION_RETRY_STEPS,
+  FINALIZE_REMAINING_BUDGET_MS,
   getFinalizationReason,
   hasExecutedToolResult,
   hasTerminalToolCallWithoutResult,
@@ -34,6 +35,8 @@ export interface AgentCoreDefinition {
   activeTools: readonly string[];
   unavailableTools?: () => readonly string[];
   finalizationToolName: string;
+  /** Terminal tool reports research coverage instead of generating the answer. */
+  finalizationIsHandoff?: boolean;
   toolCallLimits?: Readonly<Record<string, number>>;
   isToolBudgetExhausted?: () => boolean;
 }
@@ -138,6 +141,13 @@ export async function runAgentCoreWithModel(options: {
       console.warn(
         `[agent-core] forcing ${finalizationToolName}: runId=${options.context.runId} reason=${reason} step=${stepNumber} maxSteps=${MAX_MODEL_STEPS}`,
       );
+      // A normal breadth/step limit should collect the handoff on the research
+      // model. Time/cost exhaustion still transfers immediately without more work.
+      const reportBudgetAvailable = hardBudgetMs - (Date.now() - startedAt) > FINALIZE_REMAINING_BUDGET_MS
+        && (!options.modelBudget || options.modelBudget.currentCostMicros()
+          < options.modelBudget.limitMicros - FINALIZATION_COST_RESERVE_MICROS);
+      if (options.definition.finalizationIsHandoff && reportBudgetAvailable && (reason === 'tool_budget' || reason === 'last_step'))
+        return forceFinalization(options.model, finalizationToolName);
       options.onFinalizationRequested?.();
       return forceFinalization(options.finalizationModel ?? options.model, finalizationToolName);
     },
