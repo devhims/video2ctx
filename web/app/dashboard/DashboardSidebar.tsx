@@ -44,11 +44,12 @@ type DashboardSidebarProps<Project extends SidebarProject> = {
   accountName?: string;
   credits?: number;
   onSignOut: () => void;
+  mobileActions?: ReactNode;
 };
 
 const COLLAPSED_KEY = 'video2ctx.sidebar.collapsed';
 
-export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onOpenProjectItem, onSignIn, accountName, credits, onSignOut }: DashboardSidebarProps<Project>) {
+export function DashboardSidebar<Project extends SidebarProject>({ activeSection, projects, onNavigate, onNewProject, onOpenProject, onOpenProjectItem, onSignIn, accountName, credits, onSignOut, mobileActions }: DashboardSidebarProps<Project>) {
   const { user, adminAccess, isSigningOut } = useDashboardSession();
   const projectsResource = useAccountResource('projects', []);
   const [collapsed, setCollapsed] = useState(false);
@@ -154,7 +155,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
 
   return <>
     <aside className={styles.sidebar} data-dashboard-sidebar data-collapsed={collapsed} aria-label='Workspace sidebar'>{content()}</aside>
-    <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' prefetch={false} aria-label='video2ctx home'>{brand}</Link></div>
+    <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' prefetch={false} aria-label='video2ctx home'>{brand}</Link>{mobileActions && <div className={styles.mobileActions}>{mobileActions}</div>}</div>
     <dialog ref={dialog} className={styles.drawer} aria-label='Dashboard navigation' onClose={() => setMobileOpen(false)} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}><div className={styles.drawerContent}>{content(true)}</div></dialog>
   </>;
 }

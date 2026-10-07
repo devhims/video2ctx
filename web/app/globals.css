@@ -407,7 +407,7 @@ html,body{overflow-x:clip}
 }
 @media(max-width:43.75rem){
   .sync-state{display:none}
-  .notification-popover{position:fixed;top:4.75rem;right:var(--space-md);left:var(--space-md);width:auto}
+  .notification-popover{position:fixed;top:4rem;right:var(--space-md);left:var(--space-md);width:auto;max-height:calc(100dvh - 5rem);overflow-y:auto}
   .settings-notification-card{grid-template-columns:1fr;gap:var(--space-lg);padding:var(--space-md)}
 }
 

@@ -592,7 +592,7 @@ test('settings cards load independently and preserve their layout', async ({ pag
   } finally { await scenario.clear(); }
 });
 
-test('notification panel stays opaque and above the Sources form on a narrow screen', async ({ page }, testInfo) => {
+test('notifications move into mobile navigation and keep their read actions and overlay', async ({ page }, testInfo) => {
   const scenario = await accountScenario(page, { responses: { '/v1/notifications': { body: { notifications: Array.from({ length: 5 }, (_, index) => ({
     id: `notice-${index}`, type: 'monitor', title: 'New video', body: 'A monitor found a match', data_json: '{}',
     read_at: null, created_at: Date.now() - index * 60_000,
@@ -601,6 +601,13 @@ test('notification panel stays opaque and above the Sources form on a narrow scr
     await page.setViewportSize({ width: 491, height: 610 });
     await page.goto('/dashboard/sources');
     const trigger = page.getByRole('button', { name: '5 unread notifications' });
+    await expect(trigger).toHaveCount(1);
+    await expect(page.locator('.topbar .notification-trigger')).toHaveCount(0);
+    const menuBox = (await page.getByRole('button', { name: 'Open navigation', exact: true }).boundingBox())!;
+    const triggerBox = (await trigger.boundingBox())!;
+    expect(triggerBox.y).toBe(menuBox.y);
+    expect(triggerBox.height).toBeGreaterThanOrEqual(44);
+    expect(triggerBox.x).toBeGreaterThan(menuBox.x + menuBox.width);
     await trigger.click();
     const panel = page.getByRole('dialog', { name: 'Notifications' });
     await expect(panel).toBeVisible();
@@ -620,6 +627,28 @@ test('notification panel stays opaque and above the Sources form on a narrow scr
     })`);
     expect(overlay.panelIsTopmost).toBe(true);
     expect(overlay.background).not.toMatch(/\/\s*0(?:\.0+)?\)/);
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await expect(page.locator('.notification-trigger')).toHaveCount(1);
+    await expect(page.locator('.topbar .notification-trigger')).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 610 });
+    await expect(page.locator('.topbar .notification-trigger')).toHaveCount(0);
+    await trigger.click();
+    await expect(panel).toBeVisible();
+    const narrowPanel = (await panel.boundingBox())!;
+    expect(narrowPanel.x).toBeGreaterThanOrEqual(0);
+    expect(narrowPanel.x + narrowPanel.width).toBeLessThanOrEqual(320);
+    expect(narrowPanel.y + narrowPanel.height).toBeLessThanOrEqual(610);
+    const marked: string[] = [];
+    await page.route('**/api/platform/v1/notifications/*/read', route => {
+      marked.push(route.request().url());
+      return route.fulfill({ json: {} });
+    });
+    await panel.getByRole('button', { name: 'Mark all read', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Notifications', exact: true })).toBeVisible();
+    await expect.poll(() => marked.length).toBe(5);
+    await expect(panel.getByText('You’re all caught up')).toBeVisible();
+    await panel.getByRole('button', { name: 'Notification settings', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard\/settings$/);
   } finally { await scenario.clear(); }
 });
 
@@ -1688,6 +1717,7 @@ test('QA 003 Add sources into a project that already has the D1 whole source kee
     await page.getByRole('link', { name: 'View project', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Saved sources 1' })).toBeVisible();
     await page.getByRole('button', { name: new RegExp(`^${item.title}`) }).last().click();
+    await expect(page.getByRole('status').filter({ hasText: 'Showing saved project data' })).toBeVisible();
     await expect(page.getByRole('heading', { name: item.title, exact: true })).toBeVisible();
     expect(opens).toBe(1);
   } finally { await scenario.clear(); }
