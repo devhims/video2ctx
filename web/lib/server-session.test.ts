@@ -49,6 +49,30 @@ describe('server dashboard session', () => {
 });
 
 describe('agent dashboard gate', () => {
+  test('direct session links accept Agent access or admin access independently', async () => {
+    const { fetchServerSessionReadAccess } = await import('./server-session.ts');
+    for (const [agentAccess, adminAccess] of [[true, false], [false, true], [false, false]]) {
+      const allowed = await fetchServerSessionReadAccess(new Headers({ cookie: 'fixture=session' }), {
+        fetch: async input => String(input).endsWith('/v1/admin/access')
+          ? Response.json({ enabled: adminAccess }) : Response.json({ enabled: agentAccess }),
+      });
+      assert.equal(allowed, agentAccess || adminAccess);
+    }
+  });
+  test('Agent users never wait on, or fail because of, the admin check', async () => {
+    const { fetchServerSessionReadAccess } = await import('./server-session.ts');
+    const paths: string[] = [];
+    const allowed = await fetchServerSessionReadAccess(new Headers({ cookie: 'fixture=session' }), {
+      fetch: async input => {
+        paths.push(new URL(String(input)).pathname);
+        return String(input).endsWith('/v1/admin/access')
+          ? Response.json({ error: { code: 'AUTH_UNAVAILABLE', message: 'Admin access could not be verified.' } }, { status: 503 })
+          : Response.json({ enabled: true });
+      },
+    });
+    assert.equal(allowed, true);
+    assert.deepEqual(paths, ['/v1/agent/access']);
+  });
   test('requires an authenticated cookie and a positive backend decision', async () => {
     const { fetchServerAgentAccess } = await import('./server-session.ts');
     let calls = 0;

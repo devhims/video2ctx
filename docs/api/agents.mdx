@@ -67,7 +67,16 @@ returns `{ "enabled": true }`; denied accounts receive 403 and disabled or unava
 checks receive 503. Restricted access requires a verified email in the Agent-only
 D1 allowlist. Operator access is separate. The dashboard checks
 access again on login, page refresh, navigation, and window focus. Every session and
-run read checks access again, and accounts can only read their own sessions.
+run read checks access again. Regular accounts, API keys, and CLI sessions can
+only read their own sessions.
+
+An admin signed in through the browser can open any user's existing dashboard
+session link for debugging, even without an Agent tester grant. This read-only
+view includes conversation history, run activity, saved evidence, and memory.
+It hides the message composer and deletion controls. Admin authorization is
+checked against the live browser session on every read and stream reconnect.
+Impersonated sessions cannot use this access. Starting runs, listing personal
+sessions, and deleting data keep their existing permission checks.
 
 ## Dashboard chat and live activity
 

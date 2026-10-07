@@ -708,7 +708,7 @@ export const openApiDocument = {
         tags: ['Agents'],
         operationId: 'getAgentSession',
         summary: 'Read an agent session',
-        description: 'Returns the authenticated user’s session metadata and a chronological page of user and assistant messages. The first page contains the newest turns, ordered oldest to newest within the page. Use nextCursor to load older turns. Tool calls, evidence packets, and internal events are not included.',
+        description: 'Returns the authenticated user’s session metadata and a chronological page of user and assistant messages. A verified live admin browser session can also read another user’s session for debugging, even without an Agent rollout grant; readOnly is true for that view. API keys and CLI sessions remain owner-scoped. The first page contains the newest turns, ordered oldest to newest within the page. Use nextCursor to load older turns. Tool calls, evidence packets, and internal events are not included.',
         security: dataSecurity,
         parameters: [
           pathParameter('sessionId', 'Session UUID returned by agent admission.'),
@@ -724,7 +724,7 @@ export const openApiDocument = {
     },
     '/v1/agent/sessions/{sessionId}/assets': {
       get: {tags:['Agents'],operationId:'listAgentSessionAssets',summary:'List session evidence and memory',security:dataSecurity,
-        description:'Returns the authenticated owner’s stored evidence inventory and derived session memory. Raw evidence is loaded separately by version.',
+        description:'Returns the authenticated owner’s stored evidence inventory and derived session memory. Live admin browser sessions can read another user’s inventory for debugging. Raw evidence is loaded separately by version. Deletion remains owner-scoped.',
         parameters:[pathParameter('sessionId','Session UUID.')],responses:{'200':jsonResponse('Evidence inventory and memory.',{type:'object',properties:{assets:{type:'array',items:{type:'object'}},memories:{type:'array',items:{type:'object'}}}}),...standardErrors}},
       delete: {tags:['Agents'],operationId:'deleteAgentSessionAssets',summary:'Delete all session evidence and memory',security:dataSecurity,
         description:'Deletes stored evidence, source excerpts and memory. Conversation messages remain, with deleted source references marked unavailable.',
@@ -732,6 +732,7 @@ export const openApiDocument = {
     },
     '/v1/agent/sessions/{sessionId}/assets/{version}': {
       get: {tags:['Agents'],operationId:'getAgentSessionAsset',summary:'Read a stored session asset',security:dataSecurity,
+        description:'Reads an owner’s saved evidence. Live admin browser sessions can read another user’s evidence for debugging. API keys and CLI sessions remain owner-scoped.',
         parameters:[pathParameter('sessionId','Session UUID.'),pathParameter('version','Immutable evidence version, a SHA-256 hash.')],
         responses:{'200':jsonResponse('Raw transcript, comments, storyboard or frame payload. Images use JPEG base64.',{type:'object',properties:{data:{type:'object'}}}),...standardErrors}},
       delete: {tags:['Agents'],operationId:'deleteAgentSessionAsset',summary:'Delete one evidence version and dependent memory',security:dataSecurity,
@@ -748,7 +749,7 @@ export const openApiDocument = {
         tags: ['Agents'],
         operationId: 'getAgentRun',
         summary: 'Get a durable agent run',
-        description: 'Reads the current status and, once complete, the persisted result from the conversation-scoped Durable Object.',
+        description: 'Reads the current status and, once complete, the persisted result from the conversation-scoped Durable Object. Live admin browser sessions can read another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped.',
         security: dataSecurity,
         parameters: [
           pathParameter('sessionId', 'Session UUID returned by agent admission.'),
@@ -778,7 +779,7 @@ export const openApiDocument = {
     '/v1/agent/{sessionId}/runs/{runId}/events': {
       get: {
         tags: ['Agents'], operationId: 'streamAgentRun', summary: 'Watch an agent run and its tool activity',
-        description: 'Streams persisted snapshots as SSE. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.',
+        description: 'Streams persisted snapshots as SSE. Live admin browser sessions can observe another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.',
         security: dataSecurity,
         parameters: [pathParameter('sessionId', 'Session UUID returned by agent admission.'), pathParameter('runId', 'Agent run UUID returned by agent admission.')],
         responses: {
@@ -2437,6 +2438,7 @@ export const openApiDocument = {
           properties: {
             messages: { type: 'array', maxItems: 200, items: schemaRef('AgentConversationMessage') },
             nextCursor: { type: ['string', 'null'] },
+            readOnly: { type: 'boolean', description: 'True when an admin is inspecting another user’s session. Follow-ups and deletion remain owner-scoped.' },
           },
         }],
       },

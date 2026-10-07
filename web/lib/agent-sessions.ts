@@ -12,7 +12,7 @@ const messageSchema = z.object({
   conversationTurn: z.number(), role: z.enum(['user', 'assistant']), status: statusSchema,
   content: z.string(), createdAt: z.number(), updatedAt: z.number(),
 });
-export const agentSessionDetailSchema = summarySchema.extend({ messages: z.array(messageSchema), nextCursor: z.string().nullable() });
+export const agentSessionDetailSchema = summarySchema.extend({ messages: z.array(messageSchema), nextCursor: z.string().nullable(), readOnly: z.boolean().optional() });
 export const agentRunSchema = z.object({
   sessionId: z.string().uuid(), runId: z.string().uuid(), status: statusSchema,
   request: z.object({ message: z.string() }).optional(), error: z.string().optional(),
