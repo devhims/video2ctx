@@ -1,6 +1,5 @@
 import { traceFinalizationFailure, type FinalizationFailureCapture } from '../src/agents/runtime/finalization-trace';
 import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
-import { TranscriptGroundingError } from '../src/agents/runtime/transcript-grounding';
 
 const capture = (): FinalizationFailureCapture => ({ runId: 'run', attemptId: 'attempt', attempt: 1,
   modelCallId: 'call', modelId: 'deepseek', startedAt: 100, elapsedMs: 200,
@@ -19,22 +18,21 @@ function recorder(storageFailure = false) {
   return { trace, recorded };
 }
 
-it('bounds private payloads and prioritizes the offending references without propagating storage failures', async () => {
+it('bounds private payloads and resolves references without propagating storage failures', async () => {
   const value = capture();
   value.candidate = 'a'.repeat(40_000);
   value.candidateCharacters = 40_000;
   value.validationMessage = 'b'.repeat(5_000);
   value.schemaIssues = Array.from({ length: 45 }, () => ({ path: ['blocks', 0], code: 'custom', message: 'c'.repeat(2_000) }));
   value.referenceMap = new Map(Array.from({ length: 140 }, (_, i) => [`ref_${i}`, `e${i}`]));
-  value.error = new TranscriptGroundingError('Unsupported quantity', [], { code: 'UNSUPPORTED_MEASUREMENT',
-    blockIndex: 0, value: 99, unit: '%', evidenceIds: ['e139', 'tool-excerpt'] });
+  value.evidence = [{ packetId: 'packet', kind: 'youtube_transcript', sources: [{ id: 'source', provider: 'youtube', videoId: 'aaaaaaaaaaa', title: 'Video', url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' }],
+    excerpts: [{ id: 'e0', sourceId: 'source', text: 'quote' }], artifacts: [], warnings: [] }] as unknown as FinalizationFailureCapture['evidence'];
   const { trace, recorded } = recorder(true);
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     await expect(traceFinalizationFailure(trace, value)).resolves.toBeUndefined();
     expect(recorded.input).toMatchObject({ captureTruncated: true, candidate: 'a'.repeat(32_000), candidateCharacters: 40_000,
-      references: expect.arrayContaining([expect.objectContaining({ alias: 'ref_139', evidenceId: 'e139' }),
-        expect.objectContaining({ alias: 'tool-excerpt', evidenceId: 'tool-excerpt' })]) });
+      references: expect.arrayContaining([expect.objectContaining({ alias: 'ref_0', evidenceId: 'e0', packetId: 'packet', sourceId: 'source', videoId: 'aaaaaaaaaaa' })]) });
     const input = recorded.input as { issues: Array<{ message: string }>; references: unknown[] };
     expect(input.issues).toHaveLength(40);
     expect(input.issues[0]?.message).toHaveLength(1_000);

@@ -92,7 +92,8 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
       { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: 'stop' }, usage },
     ], initialDelayInMs: null, chunkDelayInMs: null }) };
   };
-  const invalid = { ...output, blocks: [{ text: 'The', evidenceIds: [] }] };
+  // A confidence outside the schema is an unrenderable answer, the one case still regenerated.
+  const invalid = { ...output, confidence: 'unsure', blocks: [{ text: 'The', evidenceIds: [] }] };
   const finalizer = new MockLanguageModelV4({ doStream: [stream(invalid), stream(output)] });
   models.select.mockImplementation((_env, _session, _effort, metadata) =>
     metadata.model_role === 'classifier' ? classifier : finalizer);
@@ -104,8 +105,8 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
   await executeResearchRun(options);
 
   expect(captures).toHaveLength(1);
-  expect(captures[0]?.input).toMatchObject({ candidate: JSON.stringify(invalid), validationStage: 'rendered_answer',
-    issues: [expect.objectContaining({ path: ['blocks'] })] });
+  expect(captures[0]?.input).toMatchObject({ candidate: JSON.stringify(invalid), validationStage: 'output_schema',
+    issues: [expect.objectContaining({ path: ['confidence'] })] });
   expect(finalizer.doStreamCalls).toHaveLength(2);
   expect(finalizer.doGenerateCalls).toHaveLength(0);
   expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
@@ -465,7 +466,7 @@ it('constrains generated citation IDs to supplied evidence and transmits no memo
   expect(format.schema).not.toHaveProperty('properties.memoryUpdates');
 });
 
-it.each(['generate', 'stream'] as const)('QA 012: %s repairs misplaced inline citations before saving a comparison', async mode => {
+it.each(['generate', 'stream'] as const)('QA 012: %s removes a misplaced inline citation instead of regenerating a comparison', async mode => {
   const { options, classifier, output } = setup('context_answer', true);
   const second: EvidencePacket = { ...evidence, packetId: 'other-frame',
     sources: [{ id: 'other-video', provider: 'youtube', kind: 'video', videoId: 'zzzzzzzzzzz' }],
@@ -498,21 +499,19 @@ it.each(['generate', 'stream'] as const)('QA 012: %s repairs misplaced inline ci
   await executeResearchRun(options);
 
   const calls = mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls;
-  expect(calls).toHaveLength(2);
-  expect(JSON.stringify(calls[1]!.prompt)).toContain('validationFeedback');
+  expect(calls).toHaveLength(1);
   expect(options.finalize).toHaveBeenCalledOnce();
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
   const compact = compactAgentResult(result);
-  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace('[cite:ref_2]', '[2]'));
-  expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz', 'abcdefghijk']);
-  expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([
-    ['other-observation', 60000], ['frame-observation', 30000],
-  ]);
+  // The second row cited a reference its block never declared, so only that marker is removed.
+  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace(' [cite:ref_2]', ''));
+  expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz']);
+  expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([['other-observation', 60000]]);
   expect(result.answer).not.toContain('[source unavailable]');
 });
 
-it('QA 012: never persists a repeated invalid inline citation after repair is exhausted', async () => {
+it('QA 012: removes an invented inline citation and saves the answer on the first attempt', async () => {
   const { options, output } = setup('context_answer', true);
   const classifier = models.select({}, {}, '', { model_role: 'classifier' });
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
@@ -523,10 +522,11 @@ it('QA 012: never persists a repeated invalid inline citation after repair is ex
   models.select.mockImplementation((_env, _session, _effort, metadata) =>
     metadata.model_role === 'classifier' ? classifier : finalizer);
 
-  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
+  await executeResearchRun(options);
 
-  expect(finalizer.doGenerateCalls).toHaveLength(2);
-  expect(options.finalize).not.toHaveBeenCalled();
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    answer: 'The woman holds the microphone. [cite:frame-observation]' }));
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
@@ -689,7 +689,7 @@ it.each(['generate', 'stream'] as const)('PR 150: %s answer and repair schemas c
 it.each(['generate', 'stream'] as const)('PR 150: %s ignores malformed unsolicited memory on a repair', async mode => {
   const { options, classifier, output } = setup('context_answer', true);
   const responses = [
-    { ...output, blocks: [{ text: 'The', evidenceIds: ['ref_1'] }] },
+    { ...output, confidence: 'unsure' },
     { ...output, memoryUpdates: 'Malformed repair fragment' },
   ];
   const finalizer = new MockLanguageModelV4({
@@ -760,7 +760,7 @@ it('reads stored evidence on demand before finalizing and hands only the answer 
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
-it.each(['abcdefghijk', 'zzzzzzzzzzz'])('repairs an unexpected inspection request without rerouting or retrieval: %s', async videoId => {
+it.each(['abcdefghijk', 'zzzzzzzzzzz'])('ignores an unexpected inspection request without rerouting or retrieval: %s', async videoId => {
   const {options,classifier,output}=setup('context_answer',true);
   let attempts=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
@@ -770,12 +770,13 @@ it.each(['abcdefghijk', 'zzzzzzzzzzz'])('repairs an unexpected inspection reques
   })});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier' ? classifier : finalizer);
   await executeResearchRun(options);
-  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
   expect(options.persistRoute).toHaveBeenCalledTimes(1);
   expect(options.persistRoute).toHaveBeenCalledWith(expect.objectContaining({route:'finalize'}));
   expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   expect(options.finalize).toHaveBeenCalledOnce();
+  expect(vi.mocked(options.finalize).mock.calls[0]![1]).not.toHaveProperty('needsEvidence');
 });
 
 it('answers with an explicit evidence gap instead of requesting another inspection', async () => {
@@ -836,18 +837,19 @@ it('reserves the final model step for an answer when history pagination exceeds 
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({warnings:expect.arrayContaining([expect.objectContaining({code:'PARTIAL_EVIDENCE'})])}));
 });
 
-it.each(['The', "I'll look up the full message history to find your exact first message."])('repairs an incomplete answer before persistence: %s', async text => {
+it.each(['The', "I'll look up the full message history to find your exact first message."])('saves a filler-only answer and records it for review: %s', async text => {
   const { options, classifier, output } = setup('context_answer');
-  let calls = 0;
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
-    content: [{ type: 'text', text: JSON.stringify(calls++ ? output : {...output, blocks:[{text,evidenceIds:[]}]}) }],
+    content: [{ type: 'text', text: JSON.stringify({...output, blocks:[{text,evidenceIds:[]}]}) }],
     finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   }) });
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
+  const reviews: unknown[] = [];
+  options.traceToolCall = async call => { if (call.name === 'answer_review') reviews.push(call.input); return call.execute(); };
   await executeResearchRun(options);
-  expect(calls).toBe(2);
-  expect(options.finalize).toHaveBeenCalledTimes(1);
-  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:output.blocks[0]!.text}));
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:text}));
+  expect(reviews).toEqual([expect.objectContaining({ attempt: 1, fillerOnly: true, notes: [] })]);
 });
 
 it('recovers an exact-first-message request with a synchronous history read inside the response allowance', async () => {
@@ -898,23 +900,24 @@ it('reads the exact first user message before generation and blocks video escala
   }});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
   await executeResearchRun(options);
-  expect(answers).toBe(2);
+  expect(answers).toBe(1);
+  expect(vi.mocked(options.finalize).mock.calls[0]![1].answer).toContain(`> ${original}`);
   expect(readHistory).toHaveBeenCalledTimes(1);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
   expect(options.finalize).toHaveBeenCalledTimes(1);
 });
 
-it('fails after one repair instead of persisting a repeated non-answer', async () => {
+it('fails after one repair when the answer is still unrenderable', async () => {
   const {options,classifier,output}=setup('context_answer');
-  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,blocks:[{text:'The',evidenceIds:[]}]})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
+  const finalizer=new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify({...output,confidence:'unsure'})}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
   await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
   expect(finalizer.doGenerateCalls).toHaveLength(2);
   expect(options.finalize).not.toHaveBeenCalled();
 });
 
-it('repairs a paraphrased first message using the original stored wording', async () => {
+it('quotes the stored first message when the answer paraphrases it, without regenerating', async () => {
   const {options,classifier,output}=setup('context_answer');
   options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read the first message.'};
   const original='Summarise this video: https://youtu.be/abcdefghijk?si=keep-original';
@@ -924,8 +927,10 @@ it('repairs a paraphrased first message using the original stored wording', asyn
     ? JSON.stringify({...output,blocks:[{text:attempts++ ? original : 'You asked for a summary of the video.',evidenceIds:[]}]}) : 'Context available.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
   await executeResearchRun(options);
-  expect(attempts).toBe(2);
+  expect(attempts).toBe(1);
   expect(options.finalize).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(options.finalize).mock.calls[0]![1].answer)
+    .toBe(`Your first message, word for word:\n\n> ${original}\n\nYou asked for a summary of the video.`);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
@@ -976,7 +981,6 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
       { ...packet, packetId: `older-full:${packet.packetId}` },
     ]),
     readTranscriptEvidence,readEvidence,searchTools} as unknown as NonNullable<typeof options.session>;
-  let attempts=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
     expect(readTranscriptEvidence).toHaveBeenCalledTimes(recovered ? 0 : 2);
     const answer=call.responseFormat?.type==='json';
@@ -986,14 +990,14 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
     }
     return {content:[{type:'text',text:answer?JSON.stringify({confidence:'medium',warnings:[],blocks:[
       {text:'The first video explains method 1.',evidenceIds:['ref_1']},
-      ...(attempts++ || recovered ? [{text:'The second video explains method 2.',evidenceIds:['ref_2']}] : []),
+      {text:'The second video explains method 2.',evidenceIds:['ref_2']},
     ]}):'Context is ready.'}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
   }});
   models.select.mockImplementation((_env,_session,_effort,metadata)=>metadata.model_role==='classifier'?classifier:finalizer);
   options.finalize=vi.fn(async(_id,input)=>buildAgentTurnResult({runId:options.runId,conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
     {userId:'user',creditsRemaining:100},input,packets,0));
   await executeResearchRun(options);
-  expect(attempts).toBe(recovered ? 1 : 2);
+  expect(finalizer.doGenerateCalls.filter(call => call.responseFormat?.type === 'json')).toHaveLength(1);
   if (recovered) {
     expect(finalizer.doGenerateCalls).toHaveLength(1);
     expect(readEvidence).not.toHaveBeenCalled();
@@ -1224,20 +1228,78 @@ function captureRejections() {
   return { captures, trace };
 }
 
-it.each([true, false])('saves each rejected fallback answer before repair, repair succeeds: %s', async repaired => {
-  const { options, classifier } = setup('context_answer', true);
-  const packet: EvidencePacket = { packetId: 'measurement', kind: 'youtube_transcript',
+function measurementPacket(): EvidencePacket {
+  return { packetId: 'measurement', kind: 'youtube_transcript',
     sources: [{ id: 's1', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
     excerpts: [{ id: 'e1', sourceId: 's1', text: 'The protein content is 54.2%.', startMs: 0, endMs: 1000 }],
     artifacts: [{ type: 'youtube_transcript_analysis', data: { findings: [{ claim: 'The protein content is 54.2%.',
       excerptIds: ['e1'], entities: [], quantities: [{ metric: 'protein', value: 54.2, unit: '%', basis: null,
         kind: 'measured', quote: 'The protein content is 54.2%.' }], uncertainty: null }] } }], warnings: [], usage: [] };
+}
+
+it('saves an unverified figure with a note and a review trace instead of regenerating', async () => {
+  const { options, classifier } = setup('context_answer', true);
+  const packet = measurementPacket();
+  options.conversationHistory![0]!.evidence = [packet];
+  const traced: Array<{ name: string; input: unknown }> = [];
+  options.traceToolCall = async call => { traced.push({ name: call.name, input: call.input }); return call.execute(); };
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({
+    confidence: 'medium', warnings: [], blocks: [{ text: 'The protein content is 54.2g.', evidenceIds: ['ref_1'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
+
+  await executeResearchRun(options);
+
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.answer).toBe('The protein content is 54.2g. [cite:e1]');
+  expect(result.warnings).toContainEqual({ code: 'UNVERIFIED_FIGURES', message: "Couldn't match 54.2 g to the cited sources. Check these figures against the videos." });
+  expect(traced.filter(call => call.name === 'final_answer_rejection')).toHaveLength(0);
+  expect(traced.find(call => call.name === 'answer_review')?.input).toMatchObject({ attempt: 1, notes: ['UNVERIFIED_FIGURES'],
+    unverifiedFigures: [{ blockIndex: 0, value: 54.2, unit: 'g' }] });
+});
+
+it('regression: a Hindi-transcript place name cited from another video no longer fails the answer', async () => {
+  const { options, classifier } = setup('context_answer', true);
+  // Session ba0c904a: findings about Rohtang Pass came from Hindi transcripts, while only
+  // another video recorded the English name. Names are never a reason to reject.
+  const hindi: EvidencePacket = { packetId: 'hindi', kind: 'youtube_transcript',
+    sources: [{ id: 'hs', provider: 'youtube', kind: 'transcript', videoId: 'VSulyCSlx-4', title: 'Manali Tour Plan 2026' }],
+    excerpts: [{ id: 'h1', sourceId: 'hs', text: 'दोस्तों रोहतांग पास मनाली से बस 50 कि.मी. की दूरी पर है', startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { groundingVersion: 1, findings: [{ claim: 'Rohtang Pass is about 50 km from Manali and a taxi costs ₹3500–₹4000.',
+      excerptIds: ['h1'], entities: [], quantities: [], uncertainty: null }] } }], warnings: [], usage: [] };
+  const named: EvidencePacket = { packetId: 'named', kind: 'youtube_transcript',
+    sources: [{ id: 'ns', provider: 'youtube', kind: 'transcript', videoId: 'Hc2n2K_VKh0', title: 'Manali in October 2026 | Rohtang Pass' }],
+    excerpts: [{ id: 'n1', sourceId: 'ns', text: 'रोहतांग पास अक्टूबर के अंत तक बंद हो जाता है', startMs: 0, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_transcript_analysis', data: { groundingVersion: 1, findings: [{ claim: 'Rohtang Pass usually closes by the end of October.',
+      excerptIds: ['n1'], entities: [{ name: 'Rohtang Pass', quote: 'Rohtang Pass', source: 'title' }], quantities: [], uncertainty: null }] } }], warnings: [], usage: [] };
+  options.conversationHistory![0]!.evidence = [hindi, named];
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({
+    confidence: 'medium', warnings: [], blocks: [{ text: 'A Rohtang Pass taxi costs ₹3,500 to ₹4,000, and the pass is about 50 km from Manali.', evidenceIds: ['ref_1'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [hindi, named], 0));
+
+  await executeResearchRun(options);
+
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.answer).toContain('Rohtang Pass taxi');
+  expect(result.warnings.map(warning => warning.code)).not.toContain('UNVERIFIED_FIGURES');
+});
+
+it.each([true, false])('saves each unrenderable fallback answer before repair, repair succeeds: %s', async repaired => {
+  const { options, classifier } = setup('context_answer', true);
+  const packet = measurementPacket();
   options.conversationHistory![0]!.evidence = [packet];
   const { captures, trace } = captureRejections();
   options.traceToolCall = trace;
-  const output = { confidence: 'medium', warnings: [], blocks: [
+  const output = { confidence: 'unsure', warnings: [], blocks: [
     { text: 'Here is the correction to my previous response.', evidenceIds: [] },
-    { text: 'The protein content is 54.2g.', evidenceIds: ['ref_1'] },
+    { text: 'The protein content is 54.2%.', evidenceIds: ['ref_1'] },
   ] };
   let calls = 0;
   const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => { throw new Error('Provider connection failed'); } });
@@ -1245,7 +1307,7 @@ it.each([true, false])('saves each rejected fallback answer before repair, repai
     expect(captures).toHaveLength(calls);
     calls++;
     const value = structuredClone(output);
-    if (repaired && calls === 2) value.blocks[1]!.text = 'The protein content is 54.2%.';
+    if (repaired && calls === 2) value.confidence = 'medium';
     return { content: [{ type: 'text', text: JSON.stringify(value) }],
       response: { id: `response-${calls}`, modelId: 'deepseek-actual', timestamp: new Date() },
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
@@ -1264,10 +1326,10 @@ it.each([true, false])('saves each rejected fallback answer before repair, repai
   captures.forEach((capture, index) => {
     expect(capture.input).toMatchObject({ attempt: index + 1, modelId: 'deepseek-actual', responseId: `response-${index + 1}`,
       candidate: JSON.stringify(output), candidateCharacters: JSON.stringify(output).length, captureTruncated: false,
-      validationStage: 'grounded_facts', code: 'UNGROUNDED_ANSWER',
-      groundingIssue: { code: 'UNSUPPORTED_MEASUREMENT', blockIndex: 1, value: 54.2, unit: 'g', evidenceIds: ['e1'] },
+      validationStage: 'output_schema', code: 'INVALID_ANSWER_STRUCTURE',
+      issues: [expect.objectContaining({ path: ['confidence'] })],
       references: [{ alias: 'ref_1', evidenceId: 'e1', packetId: 'measurement', sourceId: 's1', videoId: 'abcdefghijk' }] });
-    expect(capture.error).toMatchObject({ code: 'UNGROUNDED_ANSWER', message: expect.stringContaining("blocks[1] contains 54.2g without support in that block's evidenceIds") });
+    expect(capture.error).toMatchObject({ code: 'INVALID_ANSWER_STRUCTURE' });
   });
   expect(options.finalize).toHaveBeenCalledTimes(repaired ? 1 : 0);
 });

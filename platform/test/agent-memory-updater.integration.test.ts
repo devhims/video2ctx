@@ -75,20 +75,6 @@ const memoryLedger = (userId: string) => env.DB.prepare(
 ).bind(userId).all<{ operation_id: string; credits: number; provider_cost_micros: number }>().then(rows => rows.results);
 
 /** Holds the next SHA-256 digest open: the async gap before acceptance validation. */
-function holdNextDigest() {
-  const digest = crypto.subtle.digest.bind(crypto.subtle);
-  let release!: () => void;
-  let entered!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const reached = new Promise<void>(resolve => { entered = resolve; });
-  const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementationOnce(async (...args: Parameters<typeof digest>) => {
-    entered();
-    await gate;
-    return digest(...args);
-  });
-  return { reached, release, restore: () => spy.mockRestore() };
-}
-
 test('an accepted answer commits one memory job; the updater applies a cited finding once and settles its cost once', async () => {
   const { runtime, userId, addRun } = await seed('memory-job-accepted');
   let settled = -1;
@@ -308,38 +294,33 @@ test('failed and cancelled runs commit no memory job', async () => {
   });
 });
 
-test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('%s during the async acceptance gap commits neither the answer nor its memory job', async race => {
+test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('acceptance has no async gap: a later %s cannot split the answer from its memory job', async race => {
   const { runtime, userId, conversationId, addRun } = await seed(`memory-acceptance-${race}`);
   await runInDurableObject(runtime, async instance => {
     const runId = await addRun(instance, 1);
     const { version, excerptId } = await evidence(instance, runId);
     vi.spyOn(internals(instance), 'memoryUpdaterModel').mockReturnValue(deltaModel([]));
-    const hold = holdNextDigest();
     const pending = internals(instance).finalizeRun(runId, 'final', answer(`The woman holds it. [cite:${excerptId}]`));
-    await hold.reached;
+    // Nothing has been awaited yet, yet the answer and its memory job are already committed together.
+    expect(instance.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId}`).toEqual([{ status: 'completed' }]);
+    expect(jobs(instance)).toHaveLength(1);
     if (race === 'cancel') await instance.cancelRun(runId);
     else await instance.deleteSessionAssets(conversationId, userId, race === 'single-delete' ? version : undefined);
-    hold.release();
-    await expect(pending).rejects.toThrow(race === 'cancel' ? 'no longer active' : 'does not reference persisted evidence');
-    hold.restore();
-    expect(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId}`).toEqual([{ result_json: null }]);
-    expect(jobs(instance)).toEqual([]);
+    // A deletion after acceptance redacts the saved answer like any other completed run.
+    await expect(pending).resolves.toMatchObject({ answer: race === 'cancel'
+      ? `The woman holds it. [cite:${excerptId}]` : 'The woman holds it. [source deleted]' });
   });
 });
 
-test('a concurrent finalize accepted during the gap is not overwritten', async () => {
+test('a concurrent finalize returns the answer accepted first', async () => {
   const { runtime, addRun } = await seed('memory-acceptance-concurrent');
   await runInDurableObject(runtime, async instance => {
     const runId = await addRun(instance, 1);
     vi.spyOn(internals(instance), 'memoryUpdaterModel').mockReturnValue(deltaModel([]));
-    const hold = holdNextDigest();
     const first = internals(instance).finalizeRun(runId, 'first', answer('The first answer.'));
-    await hold.reached;
     const second = await internals(instance).finalizeRun(runId, 'second', answer('The second answer.'));
-    hold.release();
     expect(await first).toEqual(second);
-    hold.restore();
-    expect(second.answer).toBe('The second answer.');
+    expect(second.answer).toBe('The first answer.');
     expect(jobs(instance)).toHaveLength(1);
     await internals(instance).processMemoryJobs();
     expect(jobs(instance)).toMatchObject([{ status: 'completed' }]);

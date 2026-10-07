@@ -13,8 +13,9 @@ export function createFinalizeAnswerTool(context: AgentToolContext) {
     inputSchema: structuredAnswerSchema,
     outputSchema: agentTurnResultSchema,
     execute: (input, { toolCallId }) => {
-      context.validateAnswerBlocks?.(input.blocks);
-      return context.finalize(toolCallId, renderStructuredAnswer(input));
+      const answer = renderStructuredAnswer(input);
+      answer.warnings.push(...context.reviewAnswerBlocks?.(input.blocks) ?? []);
+      return context.finalize(toolCallId, answer);
     },
   });
 }

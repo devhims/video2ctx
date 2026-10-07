@@ -5,7 +5,6 @@ import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-a
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
-import { AgentCitationError } from '../finalizer';
 import { sessionBriefForModel, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
 import { createReadPriorEvidenceTool, isHistoryOnlyRoute, preparePriorEvidence, PRIOR_EVIDENCE_GUIDANCE, READ_PRIOR_EVIDENCE_TOOL_NAME,
@@ -16,14 +15,14 @@ import { createFrameAnalyst } from '../providers/youtube/frame-analyst';
 import type { ClassificationDiagnostic } from './capability-router';
 import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research-plan';
-import { assertGroundedAnswerBlocks, transcriptSourceContext, TranscriptGroundingError } from '../runtime/transcript-grounding';
+import { transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
 import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
 import { FinalizationStallError, withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
-import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, assertRequestedNumberedItems } from '../structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, fillerOnlyAnswer, salvageTruncatedAnswer } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
@@ -430,7 +429,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       unavailable: new Set(),
       regionRestricted: new Set(),
     },
-    validateAnswerBlocks: blocks => assertGroundedAnswerBlocks(blocks, [...evidence.values()]),
+    reviewAnswerBlocks: blocks => {
+      const note = unverifiedFiguresWarning(unverifiedAnswerFigures(blocks, [...evidence.values()]));
+      return note ? [note] : [];
+    },
     finalize: async (id, input) => {
       await startFinalization();
       const reviewedVideos = new Set([...evidence.values()].filter(packet =>
@@ -1101,7 +1103,8 @@ async function runUnifiedFinalizer(options: {
           const [finishReason, response, totalUsage] = await Promise.all([
             streamed.finishReason, streamed.response, streamed.totalUsage,
           ]);
-          const output = await streamed.output;
+          // A cut-off answer has no parsable output; its complete blocks are salvaged below.
+          const output = finishReason === 'length' ? undefined : await streamed.output;
           return { text, finishReason, response, totalUsage, output };
         } catch (error) { throw streamError ?? error; }
       }));
@@ -1119,42 +1122,64 @@ async function runUnifiedFinalizer(options: {
       });
       usageRecorded = true;
       validationStage = 'output_schema';
-      const output = result.output;
-      // Reject a stale inspection request even if structured decoding ignored
-      // the unsupported field. Repair the answer without starting another phase.
-      let inspectionRequested = Object.hasOwn(output, 'needsEvidence');
-      if (candidate) {
-        try { inspectionRequested ||= Object.hasOwn(JSON.parse(candidate) ?? {}, 'needsEvidence'); } catch { /* Structured output validation owns malformed JSON. */ }
-      }
-      if (inspectionRequested) {
-        throw new ZodError([{code:'custom',path:['needsEvidence'],message:'Finalization cannot request another inspection. Answer from stored context and state any remaining evidence gap.'}]);
-      }
-      if (finishReason === 'length') throw new Error('Final answer was truncated by the output token limit.');
+      // Only an unrenderable answer is retried. Everything below either repairs the
+      // answer deterministically or attaches a note; none of it rejects the answer.
+      const salvaged = finishReason === 'length' ? await salvageTruncatedAnswer(candidate, outputSchema) : undefined;
+      if (finishReason === 'length' && !salvaged) throw new Error('Final answer was truncated by the output token limit.');
+      const output = salvaged ?? result.output;
+      if (!output) throw new Error('Final answer generation returned no structured output.');
+      const notes: AgentWarning[] = [];
+      if (salvaged) notes.push({ code: 'ANSWER_TRUNCATED', message: 'This answer reached its length limit, so the unfinished last part was removed.' });
+      let insertedFirstMessage = false;
       if (historySelection === 'first_user_message') {
         const first = historyPage?.messages.find(message => message.role === 'user');
-        if (first && !output.blocks.some(block => block.text.includes(first.text))) throw new ZodError([{code:'custom',path:['blocks'],message:'Quote the exact first stored user message from historyPage verbatim. Do not substitute a later message, paraphrase, or promise a lookup.'}]);
         if (!first) throw new ApiError(502, 'AGENT_HISTORY_UNAVAILABLE', 'The first stored user message could not be retrieved. Please retry.');
+        // The application holds the exact text, so it quotes it rather than asking the model again.
+        if (!output.blocks.some(block => block.text.includes(first.text))) {
+          output.blocks[0]!.text = `Your first message, word for word:\n\n${first.text.split('\n').map(line => `> ${line}`).join('\n')}\n\n${output.blocks[0]!.text}`;
+          insertedFirstMessage = true;
+        }
       }
-      if (!conversational) assertRequestedNumberedItems(output, numberedItemCount);
       for (const block of output.blocks) {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);
       }
-      validationStage = 'grounded_facts';
-      assertGroundedAnswerBlocks(output.blocks, options.evidence);
+      validationStage = 'answer_notes';
+      const figures = unverifiedAnswerFigures(output.blocks, options.evidence);
+      const figuresNote = unverifiedFiguresWarning(figures);
+      if (figuresNote) notes.push(figuresNote);
       validationStage = 'rendered_answer';
       const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds);
       input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
         packet.warnings.filter(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED'))]);
       // A history-only answer carries no source content, so incidental subjects need no citations.
+      let missingComparisonVideos: string[] = [];
       if (comparisonVideoIds.length && !conversational && !historyOnly) {
         const citedIds = new Set(output.blocks.flatMap(block => block.evidenceIds));
         const citedVideos = new Set(options.evidence.flatMap(packet => packet.excerpts.filter(excerpt => citedIds.has(excerpt.id))
           .flatMap(excerpt => packet.sources.filter(source => source.id === excerpt.sourceId).flatMap(source => source.videoId ? [source.videoId] : []))));
-        const missing = comparisonVideoIds.filter(id => !citedVideos.has(id));
-        input.artifacts.push({type:'research_coverage',data:{targetVideos:comparisonVideoIds.length,requiredVideos:comparisonVideoIds.length,reviewedVideos:comparisonVideoIds.length-missing.length}});
-        if (missing.length && !output.warnings.some(warning => warning.code === 'ANSWER_SCOPE_SHORTFALL')) {
-          throw new ZodError([{code:'custom',path:['blocks'],message:`Comparison is missing cited evidence for ${missing.join(', ')}. Cover every subject or explicitly explain the missing evidence and add ANSWER_SCOPE_SHORTFALL.`}]);
+        missingComparisonVideos = comparisonVideoIds.filter(id => !citedVideos.has(id));
+        input.artifacts.push({type:'research_coverage',data:{targetVideos:comparisonVideoIds.length,requiredVideos:comparisonVideoIds.length,reviewedVideos:comparisonVideoIds.length-missingComparisonVideos.length}});
+        if (missingComparisonVideos.length && !output.warnings.some(warning => warning.code === 'ANSWER_SCOPE_SHORTFALL')) {
+          const names = missingComparisonVideos.map(videoId => options.evidence.flatMap(packet => packet.sources)
+            .find(source => source.videoId === videoId && source.title)?.title ?? videoId);
+          notes.push({ code: 'PARTIAL_EVIDENCE', message: `This comparison doesn't cite evidence for ${names.join(', ')}.`.slice(0, 1_000) });
         }
+      }
+      // Application notes lead the list so the warning cap never drops them.
+      input.warnings = mergeWarnings(notes, input.warnings);
+      const signals = {
+        notes: notes.map(note => note.code),
+        unverifiedFigures: figures.slice(0, 20).map(({ blockIndex, value, unit }) => ({ blockIndex, value, unit })),
+        numberedItemsMismatch: !conversational && numberedItemsMismatch(output, numberedItemCount),
+        fillerOnly: fillerOnlyAnswer(output),
+        insertedFirstMessage,
+        missingComparisonVideos,
+      };
+      if (notes.length || signals.numberedItemsMismatch || signals.fillerOnly || insertedFirstMessage) {
+        console.log(JSON.stringify({ event: 'agent_answer_review', runId: options.context.runId, attempt: attempt + 1, ...signals }));
+        await options.context.traceToolCall?.({ toolCallId: `answer-review:${attemptId}`, name: 'answer_review',
+          operation: 'finalization_review', source: 'execution', input: { attemptId, attempt: attempt + 1, ...signals },
+          execute: async () => signals }).catch(() => console.warn(JSON.stringify({ event: 'agent_answer_review_trace_failed', runId: options.context.runId })));
       }
       if (intent === 'rejected') input.warnings.push({ code: 'OUT_OF_SCOPE', message: 'This request is outside YouTube research and understanding.' });
       validationStage = 'citations_and_persistence';
@@ -1191,7 +1216,6 @@ async function runUnifiedFinalizer(options: {
       const failureCode = errorMessage(error) === 'Persistence phase timeout.' ? 'PERSISTENCE_TIMEOUT'
           : error instanceof ApiError ? error.code
           : finishReason === 'length' ? 'ANSWER_TOKEN_LIMIT'
-          : error instanceof TranscriptGroundingError ? 'UNGROUNDED_ANSWER'
           : error instanceof ZodError || generationError ? 'INVALID_ANSWER_STRUCTURE'
           : options.context.signal.aborted ? 'FINALIZATION_ABORTED'
           : error instanceof FinalizationStallError ? 'FINALIZATION_STALLED'
@@ -1207,8 +1231,7 @@ async function runUnifiedFinalizer(options: {
         candidateCharacters: generationCompleted || generationError ? candidate?.length ?? 0
           : Math.max(candidate?.length ?? 0, candidateCharacters),
         schemaIssues, referenceMap: prepared.fullIds, evidence: options.evidence, error,
-        validationMessage: error instanceof TranscriptGroundingError || error instanceof ZodError
-          || referenceValidationError(error) ? errorMessage(error) : undefined,
+        validationMessage: error instanceof ZodError || referenceValidationError(error) ? errorMessage(error) : undefined,
       });
       console.warn(JSON.stringify({ event: 'agent_finalization_attempt_failed', runId: options.context.runId,
         attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt,
@@ -1217,15 +1240,14 @@ async function runUnifiedFinalizer(options: {
         maxOutputTokens: finalizationOutputTokenLimit(options.decision, attempt > 0),
         remainingMs: Math.max(0, finalizationHardDeadline(options.deadlineAt) - Date.now()),
         ...progressDiagnostics(),
-        citationFailure: error instanceof AgentCitationError ? error.reason : undefined,
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
         code: failureCode }));
       const referenceError = referenceValidationError(error);
-      if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && !(error instanceof TranscriptGroundingError) && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
+      if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
       feedback = { errors: finishReason === 'length'
           ? 'The previous answer exceeded the enforced output-token ceiling. Shorten wording and remove repetition while preserving requested items and evidence. Return a complete answer within the repair ceiling.'
           : isAgentCoreTimeout(error) ? 'The previous generation ran out of time. Use the partial candidate where valid, shorten the answer, and return complete JSON now.'
-          : schemaIssues ?? (referenceError || error instanceof TranscriptGroundingError ? errorMessage(error) : 'Return complete valid JSON matching the supplied schema.'),
+          : schemaIssues ?? (referenceError ? errorMessage(error) : 'Return complete valid JSON matching the supplied schema.'),
         previousCandidate: candidate?.slice(0, 32_000) };
     }
   }

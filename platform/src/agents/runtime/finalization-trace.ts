@@ -1,6 +1,5 @@
 import type { EvidencePacket } from '../contracts';
 import type { TraceToolCall } from './tool-call-trace';
-import { TranscriptGroundingError } from './transcript-grounding';
 
 const CANDIDATE_LIMIT = 32_000;
 const ISSUE_LIMIT = 40;
@@ -36,14 +35,8 @@ export interface FinalizationFailureCapture {
  * trace capture, publication, access and deletion path as ordinary agent tools. */
 export async function traceFinalizationFailure(trace: TraceToolCall | undefined, capture: FinalizationFailureCapture): Promise<void> {
   if (!trace) return;
-  const issue = capture.error instanceof TranscriptGroundingError ? capture.error.answerIssue : undefined;
   const references = [...capture.referenceMap].map(([alias, evidenceId]) => ({ alias, evidenceId }));
-  const cited = new Set(issue?.evidenceIds ?? []);
-  for (const evidenceId of cited) {
-    if (!references.some(ref => ref.evidenceId === evidenceId)) references.push({ alias: evidenceId, evidenceId });
-  }
-  // Put the offending block's references first if the full mapping needs truncation.
-  references.sort((a, b) => Number(cited.has(b.evidenceId)) - Number(cited.has(a.evidenceId)));
+  const excerpts = new Map(capture.evidence.flatMap(packet => packet.excerpts.map(excerpt => [excerpt.id, { packet, excerpt }] as const)));
   const schemaIssues = capture.schemaIssues ?? [];
   const message = capture.validationMessage ?? 'Final answer generation did not complete.';
   const recordedError = Object.assign(new Error(message.slice(0, 4_000)), {
@@ -64,10 +57,8 @@ export async function traceFinalizationFailure(trace: TraceToolCall | undefined,
       || schemaIssues.some(item => item.message.length > 1_000),
     issues: schemaIssues.slice(0, ISSUE_LIMIT).map(item => ({ code: item.code,
       path: item.path.map(String), message: item.message.slice(0, 1_000) })),
-    groundingIssue: issue,
     references: references.slice(0, REFERENCE_LIMIT).map(ref => {
-      const packet = capture.evidence.find(packet => packet.excerpts.some(excerpt => excerpt.id === ref.evidenceId));
-      const excerpt = packet?.excerpts.find(excerpt => excerpt.id === ref.evidenceId);
+      const { packet, excerpt } = excerpts.get(ref.evidenceId) ?? {};
       const source = packet?.sources.find(source => source.id === excerpt?.sourceId);
       return { ...ref, packetId: packet?.packetId, sourceId: excerpt?.sourceId,
         videoId: source?.videoId, assetVersions: packet?.assetVersions };

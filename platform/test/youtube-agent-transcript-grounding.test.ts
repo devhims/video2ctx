@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import { analyzeTranscriptWithModel } from '../src/agents/providers/youtube/transcript-analyst';
-import { assertGroundedAnswerBlocks, assertTranscriptFacts, transcriptSourceContext, type TranscriptFacts } from '../src/agents/runtime/transcript-grounding';
+import { assertTranscriptFacts, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning, type TranscriptFacts } from '../src/agents/runtime/transcript-grounding';
 import { evidencePacketForModel, finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
 import type { EvidencePacket } from '../src/agents/contracts';
 
@@ -66,7 +66,7 @@ describe('transcript grounding', () => {
     expect(prepared.fullIds.size).toBe(10);
   });
 
-  it('identifies the comparison block missing its own numerical citation', () => {
+  it('notes the comparison block missing its own numerical citation', () => {
     const first = packet();
     const second = packet({ ...facts, entities: [], quantities: [{ ...facts.quantities[0]!, value: 69.11, quote: '69.11%' }] });
     second.excerpts[0]!.id = 'e2';
@@ -75,9 +75,9 @@ describe('transcript grounding', () => {
       { text: 'The first result is 54.2%.', evidenceIds: ['e1'] },
       { text: 'The results are 54.2% and 69.11%.', evidenceIds: ['e2'] },
     ];
-    expect(() => assertGroundedAnswerBlocks(blocks, [first, second])).toThrow("blocks[1] contains 54.2% without support in that block's evidenceIds");
+    expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([{ blockIndex: 1, value: 54.2, unit: '%' }]);
     blocks[1]!.evidenceIds.push('e1');
-    expect(() => assertGroundedAnswerBlocks(blocks, [first, second])).not.toThrow();
+    expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([]);
   });
 
   it('accepts an exact Hindi quote and a name supported by video metadata', () => {
@@ -106,13 +106,13 @@ describe('transcript grounding', () => {
     expect(projected.fullIds.get('ref_1')).toBe('e1');
     expect(JSON.stringify(original)).toBe(before);
   });
-  it('rejects changed units while treating entity metadata as advisory', () => {
-    expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO contains 54.2% protein.', evidenceIds: ['e1'] }], [packet()])).not.toThrow();
-    expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO contains 54.2g protein.', evidenceIds: ['e1'] }], [packet()])).toThrow('54.2g');
+  it('notes changed units while treating entity metadata as advisory', () => {
+    expect(unverifiedAnswerFigures([{ text: 'NAKPRO contains 54.2% protein.', evidenceIds: ['e1'] }], [packet()])).toEqual([]);
+    expect(unverifiedAnswerFigures([{ text: 'NAKPRO contains 54.2g protein.', evidenceIds: ['e1'] }], [packet()])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g' }]);
     const other = packet({ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }] });
     other.artifacts[0]!.data = { ...other.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }], excerptIds: ['e2'] }] };
     other.excerpts[0]!.id = 'e2';
-    expect(() => assertGroundedAnswerBlocks([{ text: 'OWN contains 54.2% protein.', evidenceIds: ['e1'] }], [packet(), other])).not.toThrow();
+    expect(unverifiedAnswerFigures([{ text: 'OWN contains 54.2% protein.', evidenceIds: ['e1'] }], [packet(), other])).toEqual([]);
   });
   it('selects metadata only from the requested video', () => {
     const metadata = packet();
@@ -134,16 +134,17 @@ describe('transcript grounding', () => {
     expect(result.excerpts[0]?.text).toBe('Open eye provides an API.');
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Captions can contain grammatical errors');
   });
-  it('keeps supported findings and their excerpts when another finding is ungrounded', async () => {
+  it('keeps an ungrounded finding marked unverified instead of discarding it', async () => {
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({ findings: [
       { ...facts, windowIndexes: [0] },
       { ...facts, claim: 'Contains 54.2g protein.', quantities: [{ ...facts.quantities[0]!, unit: 'g' }], windowIndexes: [1] },
     ], warnings: [] }) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', sourceContext: context, researchQuestion: 'Protein content', focus: 'Reported measurements', segments: [{ text: raw, startMs: 0, endMs: 1000, durationMs: 1000 }, { text: raw, startMs: 70000, endMs: 71000, durationMs: 1000 }], signal: new AbortController().signal });
     expect(model.doGenerateCalls).toHaveLength(1);
-    expect(result.findings).toHaveLength(1);
-    expect(result.excerpts.map(excerpt => excerpt.startMs)).toEqual([0]);
-    expect(result.warnings).toEqual([expect.stringContaining('Removed unsupported details from 1')]);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[1]).toMatchObject({ claim: 'Contains 54.2g protein.', quantities: [], uncertainty: expect.stringContaining('unverified') });
+    expect(result.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 70000]);
+    expect(result.warnings).toEqual([expect.stringContaining('Some figures in 1 transcript finding could not be matched')]);
   });
 
   it('accepts sentence punctuation without accepting fragments of malformed decimals', () => {
@@ -193,9 +194,9 @@ describe('transcript grounding', () => {
     second.excerpts[0]!.id = 'e2';
     second.artifacts[0]!.data = { ...second.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'NAKPRO', quote: 'NAKPRO', source: 'title' }], excerptIds: ['e2'] }] };
     first.artifacts[0]!.data = { ...first.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'NAKPRO IMPACT WHEY', quote: 'NAKPRO IMPACT WHEY', source: 'title' }], excerptIds: ['e1'] }] };
-    expect(() => assertGroundedAnswerBlocks([{ text: 'NAKPRO was tested.', evidenceIds: ['e1'] }], [first, second])).not.toThrow();
+    expect(unverifiedAnswerFigures([{ text: 'NAKPRO was tested.', evidenceIds: ['e1'] }], [first, second])).toEqual([]);
     second.artifacts[0]!.data = { ...second.artifacts[0]!.data as object, findings: [{ ...facts, entities: [{ name: 'OWN', quote: 'OWN', source: 'title' }], excerptIds: ['e2'] }] };
-    expect(() => assertGroundedAnswerBlocks([{ text: 'The shown result is 54.2%.', evidenceIds: ['e1'] }], [first, second])).not.toThrow();
+    expect(unverifiedAnswerFigures([{ text: 'The shown result is 54.2%.', evidenceIds: ['e1'] }], [first, second])).toEqual([]);
   });
 
   it('keeps a translated place finding valid when another video names the same place', () => {
@@ -216,14 +217,43 @@ describe('transcript grounding', () => {
         { name: 'Rohtang Pass', quote: 'Rohtang Pass has snow.', source: 'transcript' },
       ], quantities: [], uncertainty: null, excerptIds: ['e2'] }] };
     const blocks = [{ text: 'Consider a visit to Rohtang Pass.', evidenceIds: ['e1'] }];
-    expect(() => assertGroundedAnswerBlocks(blocks, [first])).not.toThrow();
-    expect(() => assertGroundedAnswerBlocks(blocks, [first, second])).not.toThrow();
+    expect(unverifiedAnswerFigures(blocks, [first])).toEqual([]);
+    expect(unverifiedAnswerFigures(blocks, [first, second])).toEqual([]);
   });
 
   it('accepts an explicit serving size preserved in a validated quantity quote', () => {
     const evidence = packet({ ...facts, quantities: [{ ...facts.quantities[0]!, quote: '54.2% protein in a 45g serving' }] });
-    expect(() => assertGroundedAnswerBlocks([{ text: '54.2% protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).not.toThrow();
-    expect(() => assertGroundedAnswerBlocks([{ text: '54.2g protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toThrow('54.2g');
+    expect(unverifiedAnswerFigures([{ text: '54.2% protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toEqual([]);
+    expect(unverifiedAnswerFigures([{ text: '54.2g protein in a 45g serving.', evidenceIds: ['e1'] }], [evidence])).toEqual([{ blockIndex: 0, value: 54.2, unit: 'g' }]);
   });
 
+  it('accepts a figure found in the cited transcript text itself', () => {
+    const evidence = packet({ ...facts, quantities: [] });
+    evidence.excerpts[0]!.text = 'Each scoop has 24 grams of protein.';
+    expect(unverifiedAnswerFigures([{ text: 'Each scoop has 24g of protein.', evidenceIds: ['e1'] }], [evidence])).toEqual([]);
+  });
+
+  it('ignores uncited blocks and figures outside mass and percentage units', () => {
+    expect(unverifiedAnswerFigures([
+      { text: 'You said 30% earlier in this conversation.', evidenceIds: [] },
+      { text: 'A taxi costs ₹3,500 and the pass is 50 km away at 13,000 ft.', evidenceIds: ['e1'] },
+    ], [packet()])).toEqual([]);
+  });
+
+  it('writes one plain note listing each unverified figure once', () => {
+    expect(unverifiedFiguresWarning([])).toBeUndefined();
+    expect(unverifiedFiguresWarning([{ blockIndex: 0, value: 24, unit: 'g' }, { blockIndex: 2, value: 24, unit: 'g' }, { blockIndex: 1, value: 12, unit: '%' }]))
+      .toEqual({ code: 'UNVERIFIED_FIGURES', message: "Couldn't match 24 g and 12% to the cited sources. Check these figures against the videos." });
+    const many = Array.from({ length: 10 }, (_, value) => ({ blockIndex: 0, value, unit: 'mg' }));
+    expect(unverifiedFiguresWarning(many)?.message).toContain('(and 2 more)');
+  });
+
+  it('never throws, whatever the answer and evidence contain', () => {
+    const texts = ['', '54.2%', '१२ ग्राम प्रोटीन', '[cite:x] 3g', 'NaN% and -0g', '1e9 kg', '. % g mg kg'];
+    const evidence = [packet(), { ...packet(), artifacts: [{ type: 'youtube_transcript_analysis', data: { findings: 'malformed' } }] } as EvidencePacket];
+    for (const text of texts) for (const evidenceIds of [[], ['e1'], ['missing']]) {
+      expect(() => unverifiedAnswerFigures([{ text, evidenceIds }], evidence)).not.toThrow();
+    }
+  });
 });
+

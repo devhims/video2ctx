@@ -214,7 +214,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
   });
 });
 
-test('direct finalization restores cited frame evidence from ancestors and rejects other references', async () => {
+test('direct finalization restores cited frame evidence from ancestors and removes other references', async () => {
   const { runtime, userId, runId, conversationId } = await seed('agent-frame-context', 'completed');
   await runInDurableObject(runtime, async instance => {
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
@@ -250,11 +250,11 @@ test('direct finalization restores cited frame evidence from ancestors and rejec
       const route = JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Correct the earlier roles.' });
       instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
       const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
-        answer: 'The woman holds the microphone. [cite:uncited-proof]' };
-      await expect(methods.finalizeRun(receipt.runId, 'invalid', input)).rejects.toThrow(/persisted evidence/);
-      const result = await methods.finalizeRun(receipt.runId, 'final', { ...input,
-        answer: 'The woman holds the microphone. [cite:frame-proof]' });
+        answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
+      const result = await methods.finalizeRun(receipt.runId, 'final', input);
+      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof]');
       expect(result.citations).toEqual([citation]);
+      expect(result.warnings).toContainEqual({ code: 'CITATIONS_REMOVED', message: 'Removed 1 citation that did not match the saved sources.' });
       expect(result.billing.creditsCharged).toBe(0);
       expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)
         .toMatchObject([{ tool_name: 'finalize_answer', credits: 0 }]);
@@ -1799,10 +1799,10 @@ test('retains rejected answers in private agent traces and revokes them on sessi
     await traceFinalizationFailure(call => manager.track(runId, call), {
       runId, attemptId: 'answer-attempt', attempt: 1, modelCallId: 'model-call', modelId: 'deepseek',
       responseId: 'provider-response', startedAt: 100, elapsedMs: 500,
-      schemaVersion: 'answer-blocks-v3', validationStage: 'grounded_facts', code: 'UNGROUNDED_ANSWER',
+      schemaVersion: 'answer-blocks-v3', validationStage: 'output_schema', code: 'INVALID_ANSWER_STRUCTURE',
       candidate: 'private rejected answer', candidateCharacters: 23,
-      validationMessage: 'blocks[1] contains an unsupported quantity',
-      referenceMap: new Map([['ref_1', 'e1']]), evidence: [], error: new Error('grounding failure'),
+      validationMessage: 'blocks[1].evidenceIds must contain at least one reference',
+      referenceMap: new Map([['ref_1', 'e1']]), evidence: [], error: new Error('schema failure'),
     });
     await manager.publishPending();
     const row = await env.DB.prepare('SELECT trace_id FROM agent_tool_traces WHERE run_id=?').bind(runId).first<{ trace_id: string }>();
@@ -1811,7 +1811,7 @@ test('retains rejected answers in private agent traces and revokes them on sessi
       name: 'final_answer_rejection', source: 'model', status: 'failed', payloadState: 'complete',
       input: { candidate: 'private rejected answer', modelId: 'deepseek', responseId: 'provider-response',
         generationStartedAt: 100, generationElapsedMs: 500, references: [{ alias: 'ref_1', evidenceId: 'e1' }] },
-      error: { code: 'UNGROUNDED_ANSWER', message: 'blocks[1] contains an unsupported quantity' },
+      error: { code: 'INVALID_ANSWER_STRUCTURE', message: 'blocks[1].evidenceIds must contain at least one reference' },
     });
     expect(JSON.stringify(await instance.getRunProgress(runId))).not.toContain('private rejected answer');
     expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId}`).toHaveLength(1);

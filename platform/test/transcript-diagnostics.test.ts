@@ -12,21 +12,18 @@ const response = (value: unknown) => ({ content: [{ type: 'text' as const, text:
 const input = () => ({ videoId: 'abcdefghijk', researchQuestion: 'Explain the API', focus: 'Company name', sourceContext: { title: 'OpenAI API tutorial' }, segments: [{ text: 'Open eye provides an API. Accuracy is 24 percent.', startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
 
 describe('transcript analysis diagnostics', () => {
-  it('records the rejected finding, exact repair feedback and source before retrying', async () => {
+  it('accepts an unverified finding in one call and records its issue and source', async () => {
     const events: TranscriptDiagnostic[] = [];
-    let calls = 0;
-    const model = new MockLanguageModelV4({ doGenerate: async () => {
-      if (calls) expect(events.some(e => e.outcome === 'rejected')).toBe(true);
-      return response(calls++ ? output('OpenAI') : unsupportedMeasurement());
-    } });
-    await analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) });
-    expect(events.map(e => e.outcome)).toEqual(['started', 'rejected', 'started', 'accepted']);
-    expect(events[1]).toMatchObject({ attempt: 1, code: 'GROUNDING_REJECTED', finishReason: 'stop', inputTokens: 100, outputTokens: 100,
+    const model = new MockLanguageModelV4({ doGenerate: async () => response(unsupportedMeasurement()) });
+    const result = await analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) });
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(events.map(e => e.outcome)).toEqual(['started', 'accepted']);
+    expect(events[1]).toMatchObject({ attempt: 1, finishReason: 'stop', inputTokens: 100, outputTokens: 100,
       issues: [expect.objectContaining({ code: 'QUANTITY_NOT_SUPPORTED', findingIndex: 0, fieldIndex: 0 })],
       sourceContext: { title: 'OpenAI API tutorial' }, sourceWindows: [expect.objectContaining({ index: 0, text: 'Open eye provides an API. Accuracy is 24 percent.' })] });
-    expect(events[1]!.repairFeedback).toContain('Unsupported quantity 99');
     expect(events[1]!.rejectedOutput).toContain('99');
-    expect(events[2]!.attemptId).not.toBe(events[0]!.attemptId);
+    expect(result.findings).toEqual([expect.objectContaining({ claim: 'The reported accuracy is unclear.', quantities: [],
+      uncertainty: expect.stringContaining('unverified') })]);
   });
 
   it('preserves rejection and records cancellation even if the provider ignores abort', async () => {
@@ -37,7 +34,7 @@ describe('transcript analysis diagnostics', () => {
     let aborted!: () => void;
     const sawAbort = new Promise<void>(resolve => { aborted = resolve; });
     const model = new MockLanguageModelV4({ doGenerate: async () => {
-      if (!calls++) return response(unsupportedMeasurement());
+      if (!calls++) return { ...response(output('OpenAI')), finishReason: { unified: 'length' as const, raw: undefined } };
       controller.abort(new Error('Research phase timeout.'));
       aborted();
       return new Promise(resolve => { release = resolve; });
@@ -138,13 +135,13 @@ it('identifies an SDK timeout separately from schema and provider errors', async
   expect(events[1]).toMatchObject({ outcome: 'failed', code: 'ANALYSIS_TIMEOUT', cancellationReason: 'sdk_timeout' });
 });
 
-it('keeps diagnostics for a dropped finding even when the remaining analysis is accepted', async () => {
+it('keeps diagnostics for an unverified finding when the analysis is accepted', async () => {
   const events: TranscriptDiagnostic[] = [];
   const good = output('OpenAI');
   const bad = unsupportedMeasurement();
   const model = new MockLanguageModelV4({ doGenerate: async () => response({ findings: [...good.findings, ...bad.findings], warnings: [] }) });
   const result = await analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) });
-  expect(result.findings).toHaveLength(1);
+  expect(result.findings).toHaveLength(2);
   expect(events.map(e => e.outcome)).toEqual(['started', 'accepted']);
   expect(events[1]).toMatchObject({ issueCount: 1, issues: [{ code: 'QUANTITY_NOT_SUPPORTED', findingIndex: 1 }] });
   expect(events[1]!.rejectedOutput).toContain('99');

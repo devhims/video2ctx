@@ -28,16 +28,9 @@ export const transcriptFactsSchema = z.object({
   uncertainty: z.string().min(1).max(240).nullable().default(null),
 });
 export type TranscriptFacts = z.infer<typeof transcriptFactsSchema>;
-export interface AnswerGroundingIssue {
-  code: 'UNSUPPORTED_MEASUREMENT';
-  blockIndex: number;
-  value: number;
-  unit: string;
-  evidenceIds: string[];
-}
 export class TranscriptGroundingError extends Error {
   override readonly name = 'TranscriptGroundingError';
-  constructor(message: string, readonly issues: TranscriptValidationIssue[] = [], readonly answerIssue?: AnswerGroundingIssue) { super(message); }
+  constructor(message: string, readonly issues: TranscriptValidationIssue[] = []) { super(message); }
 }
 
 export const TRANSCRIPT_GROUNDING_GUIDANCE = [
@@ -127,23 +120,38 @@ export function transcriptSourceContext(videoId: string, packets: readonly Evide
   return { ...(title ? { title } : {}), ...(channel ? { channel } : {}) };
 }
 
-/** Check supported measurements per cited block; citation membership is validated separately. */
-export function assertGroundedAnswerBlocks(blocks: readonly { text: string; evidenceIds: string[] }[], packets: readonly EvidencePacket[]): void {
-  const records = packets.flatMap(packet => packet.artifacts.flatMap(artifact => {
+export interface UnverifiedFigure { blockIndex: number; value: number; unit: string }
+
+/** Advisory only: mass and percentage figures that a block's own citations do not contain.
+ * Never rejects an answer. The result becomes a user-visible note. */
+export function unverifiedAnswerFigures(blocks: readonly { text: string; evidenceIds: string[] }[], packets: readonly EvidencePacket[]): UnverifiedFigure[] {
+  const quantities = packets.flatMap(packet => packet.artifacts.flatMap(artifact => {
     if (artifact.type !== 'youtube_transcript_analysis') return [];
-    const parsed = z.object({ sourceContext: transcriptSourceContextSchema.optional(), groundingVersion: z.literal(1).optional(), findings: z.array(transcriptFactsSchema.extend({ excerptIds: z.array(z.string()) })) }).safeParse(artifact.data);
-    if (!parsed.success) return [];
-    return parsed.data.findings.map(finding => ({ ...finding, groundingVersion: parsed.data.groundingVersion }));
+    const parsed = z.object({ findings: z.array(transcriptFactsSchema.extend({ excerptIds: z.array(z.string()) })) }).safeParse(artifact.data);
+    return parsed.success ? parsed.data.findings : [];
   }));
+  const figures: UnverifiedFigure[] = [];
   for (const [blockIndex, block] of blocks.entries()) {
-    const cited = records.filter(record => record.excerptIds.some(id => block.evidenceIds.includes(id)));
-    // Legacy persisted analyses without structured facts remain readable.
-    if (!cited.some(record => record.groundingVersion === 1 || record.quantities.length || record.entities.length)) continue;
+    if (!block.evidenceIds.length) continue;
+    const cited = new Set(block.evidenceIds);
+    const sourceTexts = [
+      ...packets.flatMap(packet => packet.excerpts.filter(excerpt => cited.has(excerpt.id)).map(excerpt => excerpt.text)),
+      ...quantities.filter(finding => finding.excerptIds.some(id => cited.has(id)))
+        .flatMap(finding => finding.quantities.map(item => item.unit ? `${item.value}${canonicalUnit(item.unit)} ${item.quote}` : item.quote)),
+    ];
+    const supported = sourceTexts.flatMap(explicitMeasurements);
     for (const fact of explicitMeasurements(block.text)) {
-      const supported = cited.some(record => record.quantities.some(item => (item.value === fact.value && item.unit && canonicalUnit(item.unit) === fact.unit)
-        || explicitMeasurements(item.quote).some(quoted => quoted.value === fact.value && quoted.unit === fact.unit)));
-      const otherSupport = packets.filter(packet => packet.kind !== 'youtube_transcript').some(packet => packet.excerpts.some(excerpt => block.evidenceIds.includes(excerpt.id) && explicitMeasurements(excerpt.text).some(item => item.value === fact.value && item.unit === fact.unit)));
-      if (!supported && !otherSupport) throw new TranscriptGroundingError(`blocks[${blockIndex}] contains ${fact.value}${fact.unit} without support in that block's evidenceIds. Check the supplied evidence for this exact claim and cite its supporting finding in this block, or remove the unsupported quantity. A citation in another block does not support this block. Preserve the source value and unit.`, [], { code: 'UNSUPPORTED_MEASUREMENT', blockIndex, value: fact.value, unit: fact.unit, evidenceIds: [...block.evidenceIds] });
+      if (!supported.some(item => item.value === fact.value && item.unit === fact.unit)) figures.push({ blockIndex, ...fact });
     }
   }
+  return figures;
+}
+
+export function unverifiedFiguresWarning(figures: readonly UnverifiedFigure[]): { code: string; message: string } | undefined {
+  const labels = [...new Set(figures.map(figure => figure.unit === '%' ? `${figure.value}%` : `${figure.value} ${figure.unit}`))];
+  if (!labels.length) return undefined;
+  const shown = labels.slice(0, 8);
+  const list = shown.length === 1 ? shown[0]! : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+  const more = labels.length > shown.length ? ` (and ${labels.length - shown.length} more)` : '';
+  return { code: 'UNVERIFIED_FIGURES', message: `Couldn't match ${list}${more} to the cited sources. Check these figures against the videos.` };
 }
