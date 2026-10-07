@@ -120,7 +120,9 @@
 .agent-sessions .agent-trace-toggle[aria-disabled='true'] { cursor: default; }
 .agent-trace-toggle svg { transition: transform 160ms ease; }
 .agent-trace-toggle .is-open { transform: rotate(90deg); }
-.agent-trace ol { padding: 0; margin: 8px 0 0; display: grid; gap: 6px; list-style: none; }
+/* Long tool inputs must not set the grid's minimum width. */
+.agent-trace ol { padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; list-style: none; }
+.agent-trace > ol > li { min-width: 0; }
 .agent-tool-chip { border: 1px solid var(--line); border-radius: 8px; }
 .agent-tool-chip summary { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; list-style: none; }
 .agent-tool-chip summary::-webkit-details-marker { display: none; }
@@ -128,12 +130,14 @@
 .agent-tool-icon { display: inline-flex; flex-shrink: 0; }
 .agent-tool-icon.status-completed { color: var(--color-dashboard-success); }
 .agent-tool-icon.status-failed { color: var(--color-dashboard-danger); }
+.agent-tool-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .agent-tool-name { color: var(--ink); font-size: 11px; }
 .agent-tool-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: 10px; }
-.agent-tool-duration { margin-left: auto; white-space: nowrap; font: 10px var(--font-mono); }
+.agent-tool-timing { display: flex; align-items: center; gap: 9px; margin-left: auto; }
+.agent-tool-duration { white-space: nowrap; font: 10px var(--font-mono); }
 .agent-tool-caret { flex-shrink: 0; }
 .agent-tool-chip[open] .agent-tool-caret { transform: rotate(90deg); }
-.agent-tool-content { padding: 4px 14px 10px; border-top: 1px solid var(--line); line-height: 1.6; }
+.agent-tool-content { padding: 4px 14px 10px; border-top: 1px solid var(--line); line-height: 1.6; overflow-wrap: anywhere; }
 .agent-tool-content h4 { margin: 12px 0 6px; font-size: 10px; font-weight: 600; }
 .agent-tool-content pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-dashboard-surface-muted); border-radius: 6px; padding: 10px; font: 11px/1.7 var(--font-mono); margin: 0 0 10px; }
 .agent-tool-content ul { padding-left: 18px; }
@@ -182,7 +186,14 @@
   .agent-sessions .agent-copy-answer { flex-basis: 44px; width: 44px; height: 44px; }
   .agent-prompt-shortcut { display: none; }
   .agent-prompt-shortcut + .agent-send { margin-left: auto; }
-  .agent-tool-name { max-width: 55%; overflow-wrap: anywhere; }
+  .agent-tool-chip summary { display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content 12px; column-gap: 9px; row-gap: 4px; }
+  .agent-tool-icon { grid-column: 1; grid-row: 1; }
+  .agent-tool-label { grid-column: 2; grid-row: 1; flex-wrap: wrap; gap: 2px 9px; }
+  .agent-tool-name { overflow-wrap: anywhere; }
+  .agent-tool-timing { grid-column: 3; grid-row: 1; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .agent-tool-caret { grid-column: 4; grid-row: 1; }
+  .agent-tool-target { grid-column: 2 / -1; grid-row: 2; }
+  .agent-tool-target:empty { display: none; }
 }
 
 .agent-user-message:focus-visible { outline: 2px solid var(--color-dashboard-focus); outline-offset: 4px; }

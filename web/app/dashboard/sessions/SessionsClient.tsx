@@ -340,13 +340,17 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
       }}>
         <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
           : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
-        <span className='agent-tool-name'>{tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
-        {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Metadata only' : 'Images'}</span>}
+        <span className='agent-tool-label'>
+          <span className='agent-tool-name'>{tool.name === 'get_video_frames' ? (tool.output?.sessionReused ? 'Retrieve saved frames' : 'Retrieve video frames') : tool.name === 'analyze_video_frames' ? 'Analyze saved frames' : tool.name.replaceAll('_', ' ')}</span>
+          {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Metadata only' : 'Images'}</span>}
+        </span>
         <span className='agent-tool-target'>{String(tool.input.videoId ?? tool.input.query ?? tool.input.channelId ?? '')}</span>
         <span className='sr-only'>{tool.status}</span>
-        {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{tool.finishedAt - tool.startedAt < 100 ? '<0.1s' : `${((tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s`}</span>}
-        {tool.status === 'interrupted' && <span className='agent-tool-duration'>Interrupted</span>}
-        {tool.status === 'unknown' && <span className='agent-tool-duration'>Unknown status</span>}
+        {(tool.finishedAt !== undefined || tool.status === 'interrupted' || tool.status === 'unknown') && <span className='agent-tool-timing'>
+          {tool.finishedAt !== undefined && <span className='agent-tool-duration'>{tool.finishedAt - tool.startedAt < 100 ? '<0.1s' : `${((tool.finishedAt - tool.startedAt) / 1000).toFixed(1)}s`}</span>}
+          {tool.status === 'interrupted' && <span className='agent-tool-duration'>Interrupted</span>}
+          {tool.status === 'unknown' && <span className='agent-tool-duration'>Unknown status</span>}
+        </span>}
         <CaretRightIcon className='agent-tool-caret' size={12} aria-hidden='true' /></summary>
         <div className='agent-tool-content'>
           {!!Object.keys(tool.input).length && <><h4>Input</h4><pre>{JSON.stringify(tool.input, null, 2)}</pre></>}
