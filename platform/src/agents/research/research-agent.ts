@@ -1,3 +1,4 @@
+import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelFailover, modelFallbackExhaustion, setModelFailoverDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
@@ -970,6 +971,12 @@ async function runUnifiedFinalizer(options: {
     // memory proposals are stripped by the schema and never reach persistence.
     const outputSchema = answerSchema;
     const attemptStartedAt = Date.now();
+    const attemptId = crypto.randomUUID();
+    const modelCallId = `${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}:answer`;
+    let responseModelId: string | undefined;
+    let responseId: string | undefined;
+    let failoverCallIdForTrace: string | undefined;
+    let requestedModelId: string | undefined;
     let candidate: string | undefined;
     let generationCompleted = false;
     let finishReason: string | undefined;
@@ -978,6 +985,7 @@ async function runUnifiedFinalizer(options: {
     let firstContentAt: number | undefined;
     let lastContentAt: number | undefined;
     let textCharacters = 0;
+    let candidateCharacters = 0;
     let reasoningCharacters = 0;
     const progressDiagnostics = () => ({
       streaming: Boolean(options.onDraft),
@@ -992,11 +1000,18 @@ async function runUnifiedFinalizer(options: {
           Math.max(options.deadlineAt, Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS));
       setModelFailoverDeadline(options.model, attemptDeadlineAt);
       const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft) && !hasModelFailover(options.model), async (signal, progress) => withModelStreamFallback(async failoverCallId => {
+        failoverCallIdForTrace = failoverCallId;
+        requestedModelId = typeof options.model === 'string' ? options.model : options.model.modelId;
+        responseModelId = undefined;
+        responseId = undefined;
         const generationOptions = {
         model: options.model,
         providerOptions: { agentDiagnostics: { failoverCallId } },
         onStepFinish: step => {
-          options.modelBudget?.recordUsage({callId:`${options.modelCallPrefix ?? options.context.runId}:timeout-finalizer:${options.decision.route}:${attempt}:answer`,
+          responseModelId = step.response.modelId;
+          responseId = step.response.id;
+          finishReason = step.finishReason;
+          options.modelBudget?.recordUsage({callId:modelCallId,
             category:'timeout_finalizer',modelId:step.response.modelId,pricing:fireworksModelPricing(step.response.modelId),usage:step.usage});
           usageRecorded=true;
         },
@@ -1050,6 +1065,7 @@ async function runUnifiedFinalizer(options: {
         if (!options.onDraft) return generateText(generationOptions);
 
         candidate = undefined;
+        candidateCharacters = 0;
         let streamError: unknown;
         const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
         options.onDraft({ answer: '', state });
@@ -1061,6 +1077,7 @@ async function runUnifiedFinalizer(options: {
           if (chunk.type === 'reasoning-delta') reasoningCharacters += chunk.text.length;
           else {
             textCharacters += chunk.text.length;
+            candidateCharacters += chunk.text.length;
             // Keep bounded partial JSON for repair, never emit it in diagnostics.
             candidate = ((candidate ?? '') + chunk.text).slice(0, 32_000);
           }
@@ -1089,6 +1106,8 @@ async function runUnifiedFinalizer(options: {
         } catch (error) { throw streamError ?? error; }
       }));
       candidate = result.text;
+      responseModelId = result.response.modelId;
+      responseId = result.response.id;
       generationCompleted = true;
       finishReason = result.finishReason;
       if (!usageRecorded) options.modelBudget?.recordUsage({
@@ -1121,7 +1140,7 @@ async function runUnifiedFinalizer(options: {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);
       }
       validationStage = 'grounded_facts';
-      assertGroundedAnswerBlocks(output.blocks.filter(block => block.evidenceIds.length > 0), options.evidence);
+      assertGroundedAnswerBlocks(output.blocks, options.evidence);
       validationStage = 'rendered_answer';
       const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds);
       input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
@@ -1162,7 +1181,7 @@ async function runUnifiedFinalizer(options: {
         runId: options.context.runId, attempt: attempt + 1, reason: 'provider_did_not_report_usage',
         elapsedMs: Date.now() - attemptStartedAt, ...progressDiagnostics() }));
       let schemaIssues = error instanceof ZodError ? error.issues.map(({ path, code, message }) => ({ path, code, message })) : undefined;
-      if (!schemaIssues && candidate && (generationCompleted || generationError) && !isAgentCoreTimeout(error)) {
+      if (!schemaIssues && candidate && validationStage === 'generation' && (generationCompleted || generationError) && !isAgentCoreTimeout(error)) {
         validationStage = 'output_schema';
         try {
           const parsed = outputSchema.safeParse(JSON.parse(candidate));
@@ -1178,6 +1197,19 @@ async function runUnifiedFinalizer(options: {
           : error instanceof FinalizationStallError ? 'FINALIZATION_STALLED'
           : isAgentCoreTimeout(error) ? 'FINALIZATION_ATTEMPT_TIMEOUT' : 'MODEL_GENERATION_FAILED';
       options.onFailure?.(failureCode);
+      await traceFinalizationFailure(options.context.traceToolCall, {
+        runId: options.context.runId, attemptId, attempt: attempt + 1, modelCallId,
+        failoverCallId: failoverCallIdForTrace, modelId: responseModelId ?? generationError?.response?.modelId,
+        requestedModelId, schemaVersion: FINALIZATION_SCHEMA_VERSION,
+        responseId: responseId ?? generationError?.response?.id,
+        startedAt: attemptStartedAt, elapsedMs: Date.now() - attemptStartedAt,
+        validationStage, finishReason, code: failureCode, candidate,
+        candidateCharacters: generationCompleted || generationError ? candidate?.length ?? 0
+          : Math.max(candidate?.length ?? 0, candidateCharacters),
+        schemaIssues, referenceMap: prepared.fullIds, evidence: options.evidence, error,
+        validationMessage: error instanceof TranscriptGroundingError || error instanceof ZodError
+          || referenceValidationError(error) ? errorMessage(error) : undefined,
+      });
       console.warn(JSON.stringify({ event: 'agent_finalization_attempt_failed', runId: options.context.runId,
         attempt: attempt + 1, elapsedMs: Date.now() - attemptStartedAt,
         schemaVersion: FINALIZATION_SCHEMA_VERSION, validationStage, finishReason,
@@ -1188,8 +1220,7 @@ async function runUnifiedFinalizer(options: {
         citationFailure: error instanceof AgentCitationError ? error.reason : undefined,
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
         code: failureCode }));
-      const referenceError = error instanceof ApiError
-        && ['AGENT_CITATION_REQUIRED', 'INVALID_AGENT_CITATION'].includes(error.code);
+      const referenceError = referenceValidationError(error);
       if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && !(error instanceof TranscriptGroundingError) && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
       feedback = { errors: finishReason === 'length'
           ? 'The previous answer exceeded the enforced output-token ceiling. Shorten wording and remove repetition while preserving requested items and evidence. Return a complete answer within the repair ceiling.'
@@ -1199,6 +1230,10 @@ async function runUnifiedFinalizer(options: {
     }
   }
   throw new Error('Finalization repair exhausted.');
+}
+
+function referenceValidationError(error: unknown): boolean {
+  return error instanceof ApiError && ['AGENT_CITATION_REQUIRED', 'INVALID_AGENT_CITATION'].includes(error.code);
 }
 
 function isAgentCoreTimeout(error: unknown): boolean {

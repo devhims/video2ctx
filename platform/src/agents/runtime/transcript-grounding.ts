@@ -28,9 +28,16 @@ export const transcriptFactsSchema = z.object({
   uncertainty: z.string().min(1).max(240).nullable().default(null),
 });
 export type TranscriptFacts = z.infer<typeof transcriptFactsSchema>;
+export interface AnswerGroundingIssue {
+  code: 'UNSUPPORTED_MEASUREMENT';
+  blockIndex: number;
+  value: number;
+  unit: string;
+  evidenceIds: string[];
+}
 export class TranscriptGroundingError extends Error {
   override readonly name = 'TranscriptGroundingError';
-  constructor(message: string, readonly issues: TranscriptValidationIssue[] = []) { super(message); }
+  constructor(message: string, readonly issues: TranscriptValidationIssue[] = [], readonly answerIssue?: AnswerGroundingIssue) { super(message); }
 }
 
 export const TRANSCRIPT_GROUNDING_GUIDANCE = [
@@ -136,7 +143,7 @@ export function assertGroundedAnswerBlocks(blocks: readonly { text: string; evid
       const supported = cited.some(record => record.quantities.some(item => (item.value === fact.value && item.unit && canonicalUnit(item.unit) === fact.unit)
         || explicitMeasurements(item.quote).some(quoted => quoted.value === fact.value && quoted.unit === fact.unit)));
       const otherSupport = packets.filter(packet => packet.kind !== 'youtube_transcript').some(packet => packet.excerpts.some(excerpt => block.evidenceIds.includes(excerpt.id) && explicitMeasurements(excerpt.text).some(item => item.value === fact.value && item.unit === fact.unit)));
-      if (!supported && !otherSupport) throw new TranscriptGroundingError(`blocks[${blockIndex}] contains ${fact.value}${fact.unit} without support in that block's evidenceIds. Check the supplied evidence for this exact claim and cite its supporting finding in this block, or remove the unsupported quantity. A citation in another block does not support this block. Preserve the source value and unit.`);
+      if (!supported && !otherSupport) throw new TranscriptGroundingError(`blocks[${blockIndex}] contains ${fact.value}${fact.unit} without support in that block's evidenceIds. Check the supplied evidence for this exact claim and cite its supporting finding in this block, or remove the unsupported quantity. A citation in another block does not support this block. Preserve the source value and unit.`, [], { code: 'UNSUPPORTED_MEASUREMENT', blockIndex, value: fact.value, unit: fact.unit, evidenceIds: [...block.evidenceIds] });
     }
   }
 }
