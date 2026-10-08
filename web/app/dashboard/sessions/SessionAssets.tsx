@@ -14,7 +14,7 @@ const inventorySchema = z.object({
   })),
   memories: z.array(z.object({
     id: z.string(), topic: z.string(), kind: z.string(), text: z.string(),
-    evidenceIds: z.array(z.string()), updatedAt: z.number(),
+    evidenceIds: z.array(z.string()), updatedAt: z.number(), deletedEvidenceIds: z.array(z.string()).optional(),
   })),
 });
 type Inventory = z.infer<typeof inventorySchema>;
@@ -163,7 +163,7 @@ export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false
                 <div className={styles.row}>
                   <span className={styles.recordIcon}><BrainIcon size={18} aria-hidden='true' /></span>
                   <div className={styles.copy}><strong>{memory.topic}</strong><p className={styles.memoryText}>{memory.text}</p>
-                    <p className={styles.metadata}>{memory.evidenceIds.length} {memory.evidenceIds.length === 1 ? 'source reference' : 'source references'}</p>
+                    <p className={styles.metadata}>{memory.evidenceIds.length} {memory.evidenceIds.length === 1 ? 'source reference' : 'source references'}{memory.deletedEvidenceIds?.length ? ` · ${memory.deletedEvidenceIds.length} deleted, now unverified` : ''}</p>
                   </div>
                   {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy} onClick={() => confirm({ path: `memory/${encodeURIComponent(memory.id)}`, label: 'this memory' })}>
                     <TrashIcon size={15} aria-hidden='true' />Forget

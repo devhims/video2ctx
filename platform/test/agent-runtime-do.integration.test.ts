@@ -884,7 +884,7 @@ test('an exhausted transcript can be requested in another run', async () => {
   });
 });
 
-test('session assets enforce ownership and deletion removes run copies, citations and memory', async()=> {
+test('session assets enforce ownership and deletion removes run copies and citations while marking memory', async()=> {
   const {runtime,runId,userId,conversationId}=await seed('session-asset-owner','running');
   let version='';
   let sharedReference: import('../src/lib/video-catalog').VideoAssetReference;
@@ -909,7 +909,9 @@ test('session assets enforce ownership and deletion removes run copies, citation
   expect(await runtime.getSessionAsset(conversationId,userId,version)).toBeNull();
   const {VideoCatalog}=await import('../src/lib/video-catalog');
   expect(await new VideoCatalog(env.VIDEO_CATALOG,env.VIDEO_ASSETS).readVersion(sharedReference!)).toMatchObject({value:{text:'Private captions'}});
-  expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([]);
+  // The memory stays as recorded; its citation to the deleted source is marked unverified.
+  expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([expect.objectContaining({
+    topic:'caption',text:'A finding',evidenceIds:[expect.any(String)],deletedEvidenceIds:[expect.any(String)]})]);
   await runInDurableObject(runtime,async instance=>{
     expect(instance.sql`SELECT * FROM agent_evidence_packets`).toEqual([]);
     expect(JSON.stringify(instance.sql`SELECT result_json FROM agent_tool_calls`)).not.toContain('Private captions');

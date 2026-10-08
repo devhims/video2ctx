@@ -78,6 +78,7 @@ it.each(['context_answer', 'clarification', 'rejected'] as const)('routes %s thr
   // Earlier conversation informs the answer but is never a source, and reliance on it is stated.
   expect(prompt).toContain('Based on our earlier conversation');
   expect(prompt).toContain('Never cite earlier conversation or present it as verified evidence.');
+  expect(prompt).toContain('A memory entry with deletedEvidenceIds was recorded from sources that were later deleted');
   expect(prompt.indexOf('conversationHistory')).toBeLessThan(prompt.lastIndexOf('Correct your previous statement.'));
 });
 

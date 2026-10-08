@@ -46,6 +46,9 @@ export interface SessionMemory extends MemoryUpdate {
   id: string;
   runId: string;
   updatedAt: number;
+  /** Cited excerpts whose source was deleted after this memory was recorded. The memory
+   * itself is kept as written; these references are now unverified. */
+  deletedEvidenceIds?: string[];
 }
 /** One validated change from the post-answer memory updater. */
 export type MemoryChange = MemoryUpdate & { action: 'upsert' | 'remove' };
@@ -773,11 +776,18 @@ export class SessionEvidenceStore implements SessionAccess {
         this.sql.exec('DELETE FROM session_packets WHERE packet_id=?', row.packet_id);
       }
     }
-    for (const memory of this.brief().memories)
-      if (!version || memory.evidenceIds.some((id) => deletedIds.has(id))) {
+    for (const memory of this.brief().memories) {
+      // Clearing all saved data explicitly includes memory.
+      if (!version) {
         this.sql.exec('DELETE FROM session_memories WHERE id=?', memory.id);
-        this.sql.exec('DELETE FROM session_memory_writes WHERE id=?', memory.id);
+        continue;
       }
+      // Deleting one source keeps the memory as recorded and marks the citations it lost.
+      const deleted = memory.evidenceIds.filter((id) => deletedIds.has(id) && !memory.deletedEvidenceIds?.includes(id));
+      if (!deleted.length) continue;
+      const marked: SessionMemory = { ...memory, deletedEvidenceIds: [...(memory.deletedEvidenceIds ?? []), ...deleted] };
+      this.sql.exec('UPDATE session_memories SET memory_json=? WHERE id=?', JSON.stringify(marked), memory.id);
+    }
     if (!version) this.sql.exec('DELETE FROM session_memory_writes');
     this.sql.exec('UPDATE session_memory_state SET version=version+1 WHERE id=1');
     for (const row of rows) {
