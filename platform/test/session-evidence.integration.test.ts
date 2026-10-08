@@ -1084,3 +1084,18 @@ test('a memory citing two sources keeps its text and live citation when one sour
     // The surviving citation still resolves.
     expect(store.evidenceForCitations([second.excerpts[0]!.id]).length).toBeGreaterThan(0);
   }));
+
+test('a later rewrite of a memory keeps its deleted-source mark until the memory is forgotten', async () =>
+  within('memory-mark-survives-rewrite', async (store) => {
+    const first = await executeGetVideoTranscript({ videoId: id }, context(store, sessionProvider(provider(), store)), 'first');
+    const second = await executeGetVideoTranscript({ videoId: 'lmnopqrstuv' }, context(store, sessionProvider(provider(), store)), 'second');
+    remember(store, 'run1', [{ topic: 'comparison', kind: 'finding', text: 'A opens one way; B another.', evidenceIds: [first.excerpts[0]!.id, second.excerpts[0]!.id] }], [first, second]);
+    await store.delete(first.assetVersions![0]);
+    // The updater rewrites the topic citing only the surviving source; A's claim may still be in the text.
+    remember(store, 'run2', [{ topic: 'comparison', kind: 'finding', text: 'A opens one way; B another; both are short.', evidenceIds: [second.excerpts[0]!.id] }], [second]);
+    expect(store.brief().memories).toEqual([expect.objectContaining({
+      text: 'A opens one way; B another; both are short.', evidenceIds: [second.excerpts[0]!.id], deletedEvidenceIds: [first.excerpts[0]!.id] })]);
+    store.deleteMemory('finding:comparison');
+    remember(store, 'run3', [{ topic: 'comparison', kind: 'finding', text: 'B is short.', evidenceIds: [second.excerpts[0]!.id] }], [second]);
+    expect(store.brief().memories[0]).not.toHaveProperty('deletedEvidenceIds');
+  }));

@@ -734,7 +734,12 @@ export class SessionEvidenceStore implements SessionAccess {
         const update = memoryUpdateSchema.parse(change);
         if (update.kind === 'finding' ? !update.evidenceIds.length : update.evidenceIds.length) continue;
         if (update.evidenceIds.some((evidenceId) => !available.has(evidenceId))) continue;
-        const memory: SessionMemory = { ...update, id, runId: input.runId, updatedAt: Date.now() };
+        // A rewrite can carry facts from a deleted source forward under live citations, so the
+        // deleted-source mark stays with the memory until it is forgotten.
+        const previous = this.sql.exec<{ memory_json: string }>('SELECT memory_json FROM session_memories WHERE id=?', id).toArray()[0];
+        const deletedEvidenceIds = previous ? (JSON.parse(previous.memory_json) as SessionMemory).deletedEvidenceIds : undefined;
+        const memory: SessionMemory = { ...update, id, runId: input.runId, updatedAt: Date.now(),
+          ...(deletedEvidenceIds?.length ? { deletedEvidenceIds } : {}) };
         this.sql.exec(
           'INSERT OR REPLACE INTO session_memories VALUES (?, ?, ?, ?)',
           id,
