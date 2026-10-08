@@ -220,7 +220,7 @@ function DeleteConfirmation({ confirmation, busy, error, onClose, onConfirm }: {
     onCancel={event => { if (busy) event.preventDefault(); }}>
     {confirmation && <div className={styles.confirmationBody}>
       <h2 id={headingId}>Delete saved data?</h2>
-      <p>Delete {confirmation.label}? Related saved findings and source excerpts will also be removed. Conversation messages remain.</p>
+      <p>Delete {confirmation.label}? Related saved findings and source excerpts will also be removed. Conversation messages remain, and the agent can still refer to them as earlier conversation.</p>
       {error && <p className='alert error' role='alert'>{error}</p>}
       <div className={styles.actions}>
         <button className={styles.button} disabled={busy} onClick={onClose}>Cancel</button>
