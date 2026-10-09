@@ -109,7 +109,7 @@ describe('normalized YouTube client', () => {
     expect(response.comments.map((comment) => comment.id)).toEqual(['new-comment']);
   });
 
-  test('selects the default caption for the default audio track', async () => {
+  test('prefers English over a regional default caption when the original language is unknown', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/youtubei/v1/player')) {
@@ -159,6 +159,15 @@ describe('normalized YouTube client', () => {
           }],
         });
       }
+      if (url.startsWith('https://captions.test/en')) {
+        return jsonResponse({
+          events: [{
+            tStartMs: 0,
+            dDurationMs: 1_000,
+            segs: [{ utf8: 'hello' }],
+          }],
+        });
+      }
       if (url.startsWith('https://captions.test/el')) {
         return jsonResponse({
           events: [{
@@ -175,7 +184,65 @@ describe('normalized YouTube client', () => {
       videoId: 'abcdefghijk',
     });
 
-    expect(response.track).toMatchObject({ id: '.es', languageCode: 'es', isDefault: true });
-    expect(response.text).toBe('hola');
+    expect(response.track).toMatchObject({ id: '.en', languageCode: 'en', isDefault: true });
+    expect(response.text).toBe('hello');
+  });
+
+  describe('original-language caption selection', () => {
+    const asr = (language: string) => ({ baseUrl: `https://captions.test/${language}`, vssId: `a.${language}`,
+      languageCode: language, kind: 'asr', name: { simpleText: `${language} (auto-generated)` } });
+    // Auto-dubbed videos list one undubbed audio track among dubbed ones.
+    const dubbedAudio = (original: string, dubbed: string[]) => ({ adaptiveFormats: [
+      ...dubbed.map((language) => ({ audioTrack: { displayName: language, id: `${language}.10`, audioIsDefault: false, isAutoDubbed: true } })),
+      { audioTrack: { displayName: `${original} original`, id: `${original}.4`, audioIsDefault: false } },
+    ] });
+    const client = (player: Record<string, unknown>) => createYouTubeClient({ fetch: vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/youtubei/v1/player')) return jsonResponse({ playabilityStatus: { status: 'OK' }, ...player });
+      if (url.startsWith('https://www.youtube.com/watch')) return new Response('', { status: 404 });
+      const language = /^https:\/\/captions\.test\/([\w-]+)/.exec(url)?.[1];
+      if (language) return jsonResponse({ events: [{ tStartMs: 0, dDurationMs: 1_000, segs: [{ utf8: `text in ${language}` }] }] });
+      throw new Error(`Unexpected request: ${url}`);
+    }) as unknown as typeof fetch });
+    // Video uPEh6ydPGpQ: alphabetical ASR tracks, and a regional default that points at a dubbed language.
+    const dubbedVideo = {
+      streamingData: dubbedAudio('en-US', ['ar', 'bn']),
+      captions: { playerCaptionsTracklistRenderer: {
+        defaultAudioTrackIndex: 0,
+        audioTracks: [{ audioTrackId: 'ar.10', defaultCaptionTrackIndex: 0, hasDefaultTrack: true }, { audioTrackId: 'en-US.4' }],
+        captionTracks: [asr('ar'), asr('bn'), asr('en')],
+        translationLanguages: [],
+      } },
+    };
+
+    test('reads the original audio language of an auto-dubbed video instead of the regional default', async () => {
+      const youtube = client(dubbedVideo);
+      const response = await youtube.getTranscript({ videoId: 'abcdefghijk' });
+      expect(response.track).toMatchObject({ id: 'a.en', languageCode: 'en', isDefault: true });
+      expect(response.text).toBe('text in en');
+      expect((await youtube.getCaptionTracks('abcdefghijk')).defaultTrackId).toBe('a.en');
+    });
+
+    test('prefers a non-English original language over English', async () => {
+      const response = await client({
+        streamingData: dubbedAudio('hi', ['en']),
+        captions: { playerCaptionsTracklistRenderer: { captionTracks: [asr('en'), asr('hi')], translationLanguages: [] } },
+      }).getTranscript({ videoId: 'abcdefghijk' });
+      expect(response.track).toMatchObject({ id: 'a.hi', languageCode: 'hi' });
+    });
+
+    test('keeps an explicitly requested language', async () => {
+      const response = await client(dubbedVideo).getTranscript({ videoId: 'abcdefghijk', language: 'ar' });
+      expect(response.track).toMatchObject({ id: 'a.ar', languageCode: 'ar' });
+    });
+
+    test("falls back to YouTube's default when neither the original language nor English is captioned", async () => {
+      const response = await client({ captions: { playerCaptionsTracklistRenderer: {
+        audioTracks: [{ defaultCaptionTrackIndex: 1, hasDefaultTrack: true }],
+        captionTracks: [asr('el'), asr('es')],
+        translationLanguages: [],
+      } } }).getTranscript({ videoId: 'abcdefghijk' });
+      expect(response.track).toMatchObject({ id: 'a.es', languageCode: 'es' });
+    });
   });
 });

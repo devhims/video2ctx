@@ -227,6 +227,8 @@ console.log(catalog.defaultTrackId);
 
 The result is a `CaptionTrackList`. `sourceTracks` describes uploaded and automatically generated tracks; `autoTranslationTargets` is the complete translation catalog advertised for that video's caption system.
 
+`defaultTrackId` is the track `getTranscript` uses when no `language` or `trackId` is given: the video's original audio language, then English, then YouTube's own default, preferring uploaded over automatically generated tracks. YouTube's default follows the requesting region and interface language, and for auto-dubbed videos it can point at a dubbed language, so it is used only as a fallback.
+
 ### `getTranscript(options)`
 
 Returns a transcript as combined text and timed segments.
