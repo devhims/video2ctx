@@ -175,6 +175,9 @@ export interface AgentRunRejection {
   message: string;
 }
 
+/** Version of the session-history indexing rule; see syncSessionHistory. */
+const HISTORY_REVISION = ':h2';
+
 export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   #traceManager?: ToolCallTraceManager;
   private get traceManager() {
@@ -238,10 +241,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
   private syncSessionHistory() {
     const search = this.sessionStore.search;
+    // The suffix versions the indexing rule. Changing it re-indexes every run once, which
+    // restores answers that earlier versions removed after evidence deletion.
     for (const row of this.ctx.storage.sql.exec<{ [K in keyof RunRow]: RunRow[K] }>(`
       SELECT r.* FROM agent_runs r WHERE NOT EXISTS (
         SELECT 1 FROM session_history_runs h
-        WHERE h.id = r.id AND h.revision = CAST(r.updated_at AS TEXT) || ':' || r.status
+        WHERE h.id = r.id AND h.revision = CAST(r.updated_at AS TEXT) || ':' || r.status || '${HISTORY_REVISION}'
       ) ORDER BY turn_ordinal
     `)) {
       search.upsertHistory({
@@ -249,19 +254,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         ordinal: row.turn_ordinal * 2, parentId: row.parent_message_id, createdAt: row.created_at,
       });
       if (row.status !== 'completed' || !row.result_json) {
-        search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+        search.markHistoryRun(row.id, `${row.updated_at}:${row.status}${HISTORY_REVISION}`);
         continue;
       }
+      // Answers stay in history after evidence deletion, with deleted citations redacted.
       const result = agentTurnResultSchema.parse(JSON.parse(row.result_json));
-      if (result.warnings.some(warning => warning.code === 'SESSION_EVIDENCE_DELETED')) {
-        search.removeHistory([row.agent_message_id]);
-      } else {
-        search.upsertHistory({
-          id: row.agent_message_id, role: 'assistant', text: result.answer,
-          ordinal: row.turn_ordinal * 2 + 1, parentId: row.user_message_id, createdAt: row.updated_at,
-        });
-      }
-      search.markHistoryRun(row.id, `${row.updated_at}:${row.status}`);
+      search.upsertHistory({
+        id: row.agent_message_id, role: 'assistant', text: result.answer,
+        ordinal: row.turn_ordinal * 2 + 1, parentId: row.user_message_id, createdAt: row.updated_at,
+      });
+      search.markHistoryRun(row.id, `${row.updated_at}:${row.status}${HISTORY_REVISION}`);
     }
   }
   private hasSessionOwner(conversationId:string, userId:string) {
@@ -327,9 +329,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       result.citations = result.citations.filter(citation=>!deletedIds.has(citation.id));
       result.answer = result.answer.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker);
       result.artifacts = [];
-      result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. This historical answer is not reusable source evidence.'});
+      result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. Citations to it are marked [source deleted]; this answer remains part of the conversation, not a source.'});
       const serialized = JSON.stringify(result);
-      this.sessionStore.search.removeHistory([row.agent_message_id]);
+      // Deleting a source must not erase the conversation: keep the redacted answer searchable.
+      this.sessionStore.search.upsertHistory({
+        id: row.agent_message_id, role: 'assistant', text: result.answer,
+        ordinal: row.turn_ordinal * 2 + 1, parentId: row.user_message_id, createdAt: row.updated_at,
+      });
       this.sql`UPDATE agent_runs SET result_json=${serialized} WHERE id=${row.id}`;
       this.sql`UPDATE agent_tool_calls SET result_json=${serialized} WHERE run_id=${row.id} AND tool_name='finalize_answer'`;
     }
@@ -1472,7 +1478,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         agentMessageId: parent.agent_message_id,
         parentMessageId: parent.parent_message_id,
         user: parent.execution_message ?? parent.message,
-        assistant: result.warnings.some(warning=>warning.code==='SESSION_EVIDENCE_DELETED') ? '[Historical answer omitted because its supporting evidence was deleted.]' : result.answer,
+        // Kept after evidence deletion with citations redacted; history is context, never a source.
+        assistant: result.answer,
         ...(metadata.length ? { metadata } : {}),
         ...(evidence.length ? { evidence } : {}),
         resourceIds: [...new Set([

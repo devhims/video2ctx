@@ -918,7 +918,7 @@ test('an exhausted transcript can be requested in another run', async () => {
   });
 });
 
-test('session assets enforce ownership and deletion removes run copies, citations and memory', async()=> {
+test('session assets enforce ownership and deletion removes run copies and citations while marking memory', async()=> {
   const {runtime,runId,userId,conversationId}=await seed('session-asset-owner','running');
   let version='';
   let sharedReference: import('../src/lib/video-catalog').VideoAssetReference;
@@ -943,7 +943,9 @@ test('session assets enforce ownership and deletion removes run copies, citation
   expect(await runtime.getSessionAsset(conversationId,userId,version)).toBeNull();
   const {VideoCatalog}=await import('../src/lib/video-catalog');
   expect(await new VideoCatalog(env.VIDEO_CATALOG,env.VIDEO_ASSETS).readVersion(sharedReference!)).toMatchObject({value:{text:'Private captions'}});
-  expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([]);
+  // The memory stays as recorded; its citation to the deleted source is marked unverified.
+  expect((await runtime.getSessionAssets(conversationId,userId))?.memories).toEqual([expect.objectContaining({
+    topic:'caption',text:'A finding',evidenceIds:[expect.any(String)],deletedEvidenceIds:[expect.any(String)]})]);
   await runInDurableObject(runtime,async instance=>{
     expect(instance.sql`SELECT * FROM agent_evidence_packets`).toEqual([]);
     expect(JSON.stringify(instance.sql`SELECT result_json FROM agent_tool_calls`)).not.toContain('Private captions');
@@ -952,7 +954,11 @@ test('session assets enforce ownership and deletion removes run copies, citation
     expect(run?.result?.answer).toContain('[source deleted]');
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
     const store=(instance as unknown as {sessionStore:InstanceType<typeof SessionEvidenceStore>}).sessionStore;
-    expect(await store.search.searchHistory('A caption')).toEqual([]);
+    // The redacted answer stays part of the conversation; the deleted source text does not.
+    const kept = await store.search.searchHistory('A caption');
+    expect(kept).toHaveLength(1);
+    expect(JSON.stringify(kept)).toContain('[source deleted]');
+    expect(JSON.stringify(kept)).not.toContain('Private captions');
     expect((await store.search.searchEvidence(store,'Private captions')).packets).toEqual([]);
   });
 });
@@ -970,7 +976,7 @@ test('persisting a finalizer escalation clears phase deadlines before a restart 
   });
 });
 
-test('backfills original messages including failed retries into Session history without restoring deleted answers',async()=>{
+test('backfills original messages including failed retries, and answers whose evidence was deleted, into Session history',async()=>{
   const {runtime,runId,userId,conversationId}=await seed('session-history-backfill','failed');
   await runInDurableObject(runtime,async(instance)=>{
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
@@ -983,11 +989,12 @@ test('backfills original messages including failed retries into Session history 
       VALUES ('older',${userId},${conversationId},${uid},${aid},0,'Discuss enterprise pricing.','completed','completed',${result},100,0,0)`;
     writer.syncSessionHistory();
     expect(writer.sessionStore.search.readHistory(0,'user').messages.map(message=>message.text)).toEqual(['Discuss enterprise pricing.','Please try again.']);
-    expect(await writer.sessionStore.search.searchHistory('obsolete')).toEqual([]);
+    // Deleting evidence does not erase the conversation.
+    expect(await writer.sessionStore.search.searchHistory('obsolete')).toHaveLength(1);
     expect(await writer.sessionStore.search.searchHistory('Original enterprise')).toEqual([]);
     expect((await writer.sessionStore.search.searchHistory('enterprise pricing'))).toHaveLength(1);
     writer.syncSessionHistory();
-    expect(writer.sessionStore.search.readHistory().messages).toHaveLength(2);
+    expect(writer.sessionStore.search.readHistory().messages).toHaveLength(3);
   });
 });
 
@@ -1854,5 +1861,55 @@ test('retains rejected answers in private agent traces and revokes them on sessi
     expect(await readAdminToolTrace(env, runId, row!.trace_id)).toMatchObject({ payloadState: 'deleted', input: null });
     const objects = await env.RESEARCH.list({ prefix: 'agent-traces/' });
     expect(objects.objects.filter(object => object.key.includes(runId))).toHaveLength(0);
+  });
+});
+
+test('a follow-up still sees an earlier answer after its source is deleted, with citations redacted', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('history-after-deletion', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
+      agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'The budget limit is ₹13,750. [cite:frame-proof]',
+      confidence: 'medium', citations: [{ id: 'frame-proof', sourceId: 'video', provider: 'youtube', videoId: 'abcdefghijk',
+        excerpt: 'Private frame text.', startMs: 0 }], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } });
+    instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
+    instance.sql`INSERT INTO agent_evidence_packets (packet_id,run_id,tool_call_id,packet_json,created_at)
+      VALUES ('frame-proof',${runId},'tool',${JSON.stringify({ packetId: 'frame-proof', kind: 'youtube_frames',
+        sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' }],
+        excerpts: [{ id: 'frame-proof', sourceId: 'video', text: 'Private frame text.', startMs: 0 }], artifacts: [], warnings: [], usage: [] })},1)`;
+  });
+  await runtime.deleteSessionAssets(conversationId, userId);
+  await runInDurableObject(runtime, async instance => {
+    const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({ fiberId: 'follow-up', name: 'agent-runtime-run',
+      status: 'running', createdAt: Date.now(), accepted: true });
+    try {
+      const receipt = await instance.startRun({ message: 'Does that still fit my budget?', conversationId }, { userId, creditsRemaining: 999 });
+      if ('rejected' in receipt) throw Error(receipt.message);
+      const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
+      const history = (instance as unknown as { readConversationHistory(row: unknown): ConversationTurn[] }).readConversationHistory(row);
+      // The earlier answer is still conversation; only its citation to the deleted source is gone.
+      expect(history[0]?.assistant).toBe('The budget limit is ₹13,750. [source deleted]');
+      expect(JSON.stringify(history)).not.toContain('Private frame text.');
+    } finally { fiber.mockRestore(); }
+  });
+});
+
+test('re-indexing restores answers that earlier versions removed from history after evidence deletion', async () => {
+  const { runtime, runId, conversationId } = await seed('history-reindex', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify({ runId, conversationId, userMessageId: row.user_message_id,
+      agentMessageId: row.agent_message_id, intent: 'context_answer', answer: 'An earlier pricing conclusion. [source deleted]',
+      confidence: 'high', citations: [], artifacts: [], warnings: [{ code: 'SESSION_EVIDENCE_DELETED', message: 'Source removed' }],
+      billing: { creditsCharged: 0, creditsRemaining: 99 } })} WHERE id = ${runId}`;
+    const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
+    const writer = instance as unknown as { syncSessionHistory(): void; sessionStore: InstanceType<typeof SessionEvidenceStore> };
+    // State left by the previous rule: answer removed, run marked indexed under the old revision format.
+    writer.syncSessionHistory();
+    writer.sessionStore.search.removeHistory([String(row.agent_message_id)]);
+    instance.sql`UPDATE session_history_runs SET revision = ${`${row.updated_at}:${row.status}`} WHERE id = ${runId}`;
+    expect(await writer.sessionStore.search.searchHistory('pricing conclusion')).toEqual([]);
+    writer.syncSessionHistory();
+    expect(await writer.sessionStore.search.searchHistory('pricing conclusion')).toHaveLength(1);
   });
 });

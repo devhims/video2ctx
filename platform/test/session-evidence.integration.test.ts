@@ -301,7 +301,7 @@ test('version-specific IDs resolve conflicting transcripts without ambiguous cit
     );
     expect(result.citations[0]!.excerpt).toBe('A corrected opening sentence.');
   }));
-test('memory validates evidence, updates a topic, and removes dependent findings on deletion', async () =>
+test('memory validates evidence, updates a topic, and marks dependent findings on deletion', async () =>
   within('memory', async (store) => {
     const packet = await executeGetVideoTranscript(
       { videoId: id },
@@ -325,7 +325,9 @@ test('memory validates evidence, updates a topic, and removes dependent findings
     expect(store.brief().memories).toHaveLength(2);
     expect(store.brief().memories.find((memory) => memory.topic === 'intent')!.text).toBe('Compare interviewers');
     await store.delete(packet.assetVersions![0]);
-    expect(store.brief().memories.map((memory) => memory.topic)).toEqual(['intent']);
+    // Findings that cited the deleted source stay as recorded, with those citations marked deleted.
+    expect(Object.fromEntries(store.brief().memories.map((memory) => [memory.topic, memory.deletedEvidenceIds?.length ?? 0])))
+      .toEqual({ intent: 0, opening: 1 });
     expect(store.evidence()).toEqual([]);
     expect(await store.read(packet.assetVersions![0]!)).toBeNull();
     remember(store,
@@ -333,7 +335,8 @@ test('memory validates evidence, updates a topic, and removes dependent findings
       [{ topic: 'stale', kind: 'finding', text: 'Stale', evidenceIds: [packet.excerpts[0]!.id] }],
       [packet],
     );
-    expect(store.brief().memories).toHaveLength(1);
+    // New memory still cannot cite deleted evidence; only memory recorded before deletion is kept.
+    expect(store.brief().memories.map((memory) => memory.topic).sort()).toEqual(['intent', 'opening']);
   }));
 test('deletion fences in-flight retrieval and does not resurrect assets', async () =>
   within('delete-race', async (store) => {
@@ -566,7 +569,7 @@ test('indexes full transcripts before analysis and searches terms across assets 
     expect((await reopen().search.searchEvidence(reopen(), 'enterprise')).packets).toEqual([]);
   }));
 
-test('searchable context uses Session tools, follows memory corrections and removes deleted findings', async () =>
+test('searchable context uses Session tools, follows memory corrections and keeps findings after source deletion', async () =>
   within('context-search', async (store) => {
     const packet = await executeGetVideoTranscript(
       { videoId: id },
@@ -604,7 +607,8 @@ test('searchable context uses Session tools, follows memory corrections and remo
     expect(found.packets.length).toBeGreaterThan(0);
     expect(received.length).toBe(found.packets.length);
     await store.delete(packet.assetVersions![0]);
-    expect(await run('memory', 'opening')).toEqual([]);
+    // The finding is still searchable memory, now marked as relying on a deleted source.
+    expect((await run('memory', 'opening'))[0]).toMatchObject({ deletedEvidenceIds: [expect.any(String)] });
     expect((await run('evidence', 'clear')).packets).toEqual([]);
     store.deleteMemory('context:focus');
     expect(await run('memory', 'team pricing')).toEqual([]);
@@ -1061,4 +1065,37 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
         if (parent) expect(parent.stage).not.toBe(span.stage);
       }
     }
+  }));
+
+test('a memory citing two sources keeps its text and live citation when one source is deleted', async () =>
+  within('memory-two-sources', async (store) => {
+    const first = await executeGetVideoTranscript({ videoId: id }, context(store, sessionProvider(provider(), store)), 'first');
+    const second = await executeGetVideoTranscript({ videoId: 'lmnopqrstuv' }, context(store, sessionProvider(provider(), store)), 'second');
+    expect(first.assetVersions![0]).not.toBe(second.assetVersions![0]);
+    const evidenceIds = [first.excerpts[0]!.id, second.excerpts[0]!.id];
+    remember(store, 'run1', [{ topic: 'comparison', kind: 'finding', text: 'Both videos open the same way.', evidenceIds }], [first, second]);
+    await store.delete(first.assetVersions![0]);
+    // Recorded as written: same text, same citations, with the deleted one marked.
+    expect(store.brief().memories).toEqual([expect.objectContaining({
+      topic: 'comparison', text: 'Both videos open the same way.', evidenceIds, deletedEvidenceIds: [first.excerpts[0]!.id] })]);
+    // Deleting again marks nothing twice.
+    await store.delete(first.assetVersions![0]);
+    expect(store.brief().memories[0]!.deletedEvidenceIds).toEqual([first.excerpts[0]!.id]);
+    // The surviving citation still resolves.
+    expect(store.evidenceForCitations([second.excerpts[0]!.id]).length).toBeGreaterThan(0);
+  }));
+
+test('a later rewrite of a memory keeps its deleted-source mark until the memory is forgotten', async () =>
+  within('memory-mark-survives-rewrite', async (store) => {
+    const first = await executeGetVideoTranscript({ videoId: id }, context(store, sessionProvider(provider(), store)), 'first');
+    const second = await executeGetVideoTranscript({ videoId: 'lmnopqrstuv' }, context(store, sessionProvider(provider(), store)), 'second');
+    remember(store, 'run1', [{ topic: 'comparison', kind: 'finding', text: 'A opens one way; B another.', evidenceIds: [first.excerpts[0]!.id, second.excerpts[0]!.id] }], [first, second]);
+    await store.delete(first.assetVersions![0]);
+    // The updater rewrites the topic citing only the surviving source; A's claim may still be in the text.
+    remember(store, 'run2', [{ topic: 'comparison', kind: 'finding', text: 'A opens one way; B another; both are short.', evidenceIds: [second.excerpts[0]!.id] }], [second]);
+    expect(store.brief().memories).toEqual([expect.objectContaining({
+      text: 'A opens one way; B another; both are short.', evidenceIds: [second.excerpts[0]!.id], deletedEvidenceIds: [first.excerpts[0]!.id] })]);
+    store.deleteMemory('finding:comparison');
+    remember(store, 'run3', [{ topic: 'comparison', kind: 'finding', text: 'B is short.', evidenceIds: [second.excerpts[0]!.id] }], [second]);
+    expect(store.brief().memories[0]).not.toHaveProperty('deletedEvidenceIds');
   }));

@@ -581,7 +581,8 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
     { version, kind: 'transcript', current: false, videoId: 'P7bxbDSnZRM', collectedAt: 1789111800000, details: { language: 'en', segments: 60 } },
     { version: otherVersion, kind: 'comments', current: true, videoId: 'abcdefghijk', collectedAt: 1789111800000, details: {} },
   ];
-  let memories = [{ id: 'finding:opening', topic: 'Opening', kind: 'finding', text: 'The speaker introduces the comparison.', evidenceIds: ['excerpt'], updatedAt: 1789111800000 }];
+  let memories: Array<{ id: string; topic: string; kind: string; text: string; evidenceIds: string[]; updatedAt: number; deletedEvidenceIds?: string[] }> =
+    [{ id: 'finding:opening', topic: 'Opening', kind: 'finding', text: 'The speaker introduces the comparison.', evidenceIds: ['excerpt'], updatedAt: 1789111800000 }];
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let reads = 0;
@@ -589,8 +590,10 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
   await page.route(`**/api/platform/v1/agent/sessions/${sessionId}/assets**`, async route => {
     if (route.request().method() === 'DELETE') {
       if (++deletions === 1) { await route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Deletion is temporarily unavailable.' } } }); return; }
-      assets = route.request().url().endsWith(version) ? assets.filter(asset => asset.version !== version) : [];
-      memories = [];
+      const single = route.request().url().endsWith(version);
+      assets = single ? assets.filter(asset => asset.version !== version) : [];
+      // Deleting one source keeps memory and marks its citation; clearing everything removes memory.
+      memories = single ? memories.map(memory => ({ ...memory, deletedEvidenceIds: memory.evidenceIds })) : [];
       await route.fulfill({ json: { deleted: true } }); return;
     }
     if (route.request().url().endsWith(version)) {
@@ -648,7 +651,8 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
   await panel.getByRole('button', { name: 'Delete transcript for P7bxbDSnZRM', exact: true }).click();
   const confirmation = page.getByRole('dialog', { name: 'Delete saved data?' });
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
-  await expect(confirmation).toContainText('Related saved findings');
+  await expect(confirmation).toContainText('Saved memories remain, with references to this source marked deleted and unverified.');
+  await expect(confirmation).toContainText('Conversation messages remain');
   await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
   await expect(confirmation.getByRole('alert')).toHaveText('Deletion is temporarily unavailable.');
   await confirmation.getByRole('button', { name: 'Cancel' }).click();
@@ -657,9 +661,12 @@ test('saved evidence opens a focused viewer with loading, retry, and safe deleti
   await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
   await expect(confirmation).not.toBeVisible();
   await expect(panel.getByRole('heading', { name: 'Evidence (1)' })).toBeVisible();
-  await expect(panel.getByRole('heading', { name: 'Memory (0)' })).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Memory (1)' })).toBeVisible();
+  await expect(panel.getByText('1 source reference · 1 deleted, now unverified')).toBeVisible();
   await panel.getByRole('button', { name: 'Clear saved data' }).click();
+  await expect(confirmation).toContainText('All saved sources, excerpts, and memories in this session will be removed.');
   await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
+  await expect(panel.getByRole('heading', { name: 'Memory (0)' })).toBeVisible();
   await expect(panel.getByRole('heading', { name: 'Evidence (0)' })).toBeVisible();
   await expect(panel.getByText('No reusable evidence yet. Evidence collected by the agent will appear here.')).toBeVisible();
 });
