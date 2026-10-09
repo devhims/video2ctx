@@ -32,6 +32,24 @@ describe.skipIf(process.env.AGENT_TRANSCRIPT_SCOPE_LIVE !== '1')('live transcrip
     expect(result.findings.every(finding => finding.excerptIds.every(id => id.includes(videoId)))).toBe(true);
   }, 60000);
 
+  it("preserves the speaker's attributed comparison with an earlier video", async () => {
+    const result = await analyzeTranscriptWithModel({
+      model: createAgentModel(env, `scope-attribution:${crypto.randomUUID()}`, 'low', { model_role: 'transcript_analyst' }),
+      videoId: first,
+      researchQuestion: 'What does the speaker say changed from their earlier video Paper Boats for Beginners?',
+      focus: 'Extract the speaker account of the earlier video and the change in this lesson. Do not independently verify the earlier video.',
+      segments: [{ text: 'In my earlier video, Paper Boats for Beginners, I used thin paper and the boats sank quickly. In this lesson I use thick paper, which lasts longer in water. That is the change from my earlier video.',
+        startMs: 0, endMs: 30000, durationMs: 30000 }],
+      signal: AbortSignal.timeout(45000),
+    });
+    const claims = result.findings.map(finding => finding.claim).join(' ');
+    expect(claims).toMatch(/thin paper/i);
+    expect(claims).toMatch(/thick paper/i);
+    expect(claims).toMatch(/speaker|creator|narrator|presenter|author/i);
+    expect(result.warnings).toEqual([]);
+    expect(result.findings.every(finding => finding.excerptIds.every(id => id.includes(first)))).toBe(true);
+  }, 60000);
+
   it('preserves a real source limitation when the assigned transcript contains only music', async () => {
     const result = await analyze(first, '[Music] [Applause] [Music]');
     expect(result.findings).toEqual([]);

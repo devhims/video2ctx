@@ -140,7 +140,7 @@ export async function analyzeTranscriptWithModel(
         instructions: [
           'You are a transcript analyst working for a YouTube research agent.',
           CONVERSATION_CONTEXT_GUIDANCE,
-          'Analyze only the assigned video. Use the research question and focus to choose relevant evidence from it. Other videos are analyzed separately and the finalizer compares them and judges overall coverage, so never mention videos outside this input, missing sources, or whether the overall request can be met.',
+          'Analyze only the assigned video. Use the research question and focus to choose relevant evidence from it. Other videos are analyzed separately and the finalizer compares them and judges overall coverage. Do not independently analyze other videos or report their absence as a coverage gap. Preserve relevant references made within this transcript, attributed to the speaker. Do not judge whether the overall request can be met.',
           'Return compact evidence notes, not a finished answer. Do not write a separate summary. Spend the output budget on supported facts and exact short quotes.',
           TRANSCRIPT_GROUNDING_GUIDANCE,
           'Write each claim as one concise sentence, usually 15 to 25 words. Preserve useful specifics, speaker attribution, and material caveats. Avoid introductions, repeated context, and repeating the same point across findings.',
