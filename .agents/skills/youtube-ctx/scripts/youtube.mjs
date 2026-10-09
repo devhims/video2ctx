@@ -20397,13 +20397,27 @@ function captionUrl(value) {
     return void 0;
   }
 }
+var baseLanguage = (language) => language?.split("-")[0]?.toLowerCase();
+function originalAudioLanguage(player) {
+  const audioTracks = array(object4(player.streamingData).adaptiveFormats).map((format) => object4(object4(format).audioTrack)).filter((track) => string(track.id));
+  const original = audioTracks.find((track) => /\boriginal\b/i.test(string(track.displayName) ?? "")) ?? (audioTracks.some((track) => track.isAutoDubbed === true) ? audioTracks.find((track) => track.isAutoDubbed !== true) : void 0);
+  return string(original?.id)?.split(".")[0];
+}
+function preferredCaptionIndex(internal, originalLanguage, youtubeDefaultIndex) {
+  const inLanguage = (language) => {
+    const matches = internal.map((track, index) => ({ track, index })).filter(({ track }) => baseLanguage(track.languageCode) === language);
+    return (matches.find(({ track }) => track.kind !== "asr" && !track.vssId?.startsWith("a.")) ?? matches[0])?.index;
+  };
+  const original = baseLanguage(originalLanguage);
+  return (original ? inLanguage(original) : void 0) ?? inLanguage("en") ?? (youtubeDefaultIndex !== void 0 && youtubeDefaultIndex >= 0 ? youtubeDefaultIndex : void 0) ?? 0;
+}
 function parseCaptionTracks(player) {
   const renderer = object4(object4(player.captions).playerCaptionsTracklistRenderer);
   const audioTracks = array(renderer.audioTracks).map(object4);
   const defaultAudioTrackIndex = number(renderer.defaultAudioTrackIndex);
   const indexedDefaultAudioTrack = defaultAudioTrackIndex !== void 0 ? audioTracks[defaultAudioTrackIndex] : void 0;
   const defaultAudioTrack = indexedDefaultAudioTrack ?? audioTracks.find((track) => track.hasDefaultTrack === true) ?? audioTracks[0] ?? {};
-  const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex) ?? 0;
+  const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex);
   const parsedTracks = array(renderer.captionTracks).flatMap((item, sourceIndex) => {
     const track = object4(item);
     const baseUrl = string(track.baseUrl) ?? "";
@@ -20420,10 +20434,9 @@ function parseCaptionTracks(player) {
     }];
   });
   const internal = parsedTracks.map(({ track }) => track);
-  const parsedDefaultIndex = parsedTracks.findIndex(
-    ({ sourceIndex }) => sourceIndex === defaultCaptionTrackIndex
-  );
-  const defaultIndex = parsedDefaultIndex >= 0 ? parsedDefaultIndex : 0;
+  const youtubeDefaultIndex = defaultCaptionTrackIndex === void 0 ? void 0 : parsedTracks.findIndex(({ sourceIndex }) => sourceIndex === defaultCaptionTrackIndex);
+  const originalLanguage = originalAudioLanguage(player);
+  const defaultIndex = preferredCaptionIndex(internal, originalLanguage, youtubeDefaultIndex);
   const publicTracks = internal.map(
     (track, index) => captionTrackInfo(track, index, defaultIndex)
   );
@@ -20438,7 +20451,9 @@ function parseCaptionTracks(player) {
     internal,
     public: publicTracks,
     translations,
-    defaultTrackId: publicTracks[defaultIndex]?.id
+    defaultTrackId: publicTracks[defaultIndex]?.id,
+    originalLanguage,
+    youtubeDefaultTrackId: youtubeDefaultIndex !== void 0 && youtubeDefaultIndex >= 0 ? publicTracks[youtubeDefaultIndex]?.id : void 0
   };
 }
 function mergeCaptionCatalog(primary, desktop) {
@@ -20462,15 +20477,19 @@ function mergeCaptionCatalog(primary, desktop) {
     seenLanguages.add(language.languageCode);
     translations.push(language);
   }
-  const defaultTrackId = primary.defaultTrackId ?? desktop.defaultTrackId;
-  const defaultIndex = Math.max(0, internal.findIndex(
-    (track, index) => (track.vssId ?? track.languageCode ?? `track-${index}`) === defaultTrackId
-  ));
+  const originalLanguage = primary.originalLanguage ?? desktop.originalLanguage;
+  const youtubeDefaultTrackId = primary.youtubeDefaultTrackId ?? desktop.youtubeDefaultTrackId;
+  const trackId = (track, index) => track.vssId ?? track.languageCode ?? `track-${index}`;
+  const youtubeDefaultIndex = youtubeDefaultTrackId === void 0 ? void 0 : internal.findIndex((track, index) => trackId(track, index) === youtubeDefaultTrackId);
+  const defaultIndex = preferredCaptionIndex(internal, originalLanguage, youtubeDefaultIndex);
+  const publicTracks = internal.map((track, index) => captionTrackInfo(track, index, defaultIndex));
   return {
     internal,
-    public: internal.map((track, index) => captionTrackInfo(track, index, defaultIndex)),
+    public: publicTracks,
     translations,
-    defaultTrackId
+    defaultTrackId: publicTracks[defaultIndex]?.id,
+    originalLanguage,
+    youtubeDefaultTrackId
   };
 }
 function responseCookies(headers) {
