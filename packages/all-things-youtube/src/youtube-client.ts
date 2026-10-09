@@ -63,6 +63,10 @@ interface CaptionCatalog {
   public: CaptionTrackInfo[];
   translations: TranslationLanguage[];
   defaultTrackId?: string;
+  /** Language of the original, undubbed audio track, when the player identifies it. */
+  originalLanguage?: string;
+  /** YouTube's own default caption, used only after the original language and English. */
+  youtubeDefaultTrackId?: string;
 }
 
 interface DesktopPlayerResult {
@@ -861,6 +865,36 @@ function captionUrl(value: string): URL | undefined {
   } catch { return undefined; }
 }
 
+const baseLanguage = (language?: string) => language?.split('-')[0]?.toLowerCase();
+
+/**
+ * The original audio language. Auto-dubbed videos list one undubbed track among dubbed ones,
+ * and YouTube may make a dubbed language the default for the requesting region.
+ */
+function originalAudioLanguage(player: JsonObject): string | undefined {
+  const audioTracks = array(object(player.streamingData).adaptiveFormats)
+    .map((format) => object(object(format).audioTrack))
+    .filter((track) => string(track.id));
+  const original = audioTracks.find((track) => /\boriginal\b/i.test(string(track.displayName) ?? ''))
+    ?? (audioTracks.some((track) => track.isAutoDubbed === true)
+      ? audioTracks.find((track) => track.isAutoDubbed !== true)
+      : undefined);
+  return string(original?.id)?.split('.')[0];
+}
+
+/** Prefer the original language, then English, then YouTube's default, with manual tracks before ASR. */
+function preferredCaptionIndex(internal: InternalCaptionTrack[], originalLanguage?: string, youtubeDefaultIndex?: number): number {
+  const inLanguage = (language: string) => {
+    const matches = internal
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) => baseLanguage(track.languageCode) === language);
+    return (matches.find(({ track }) => track.kind !== 'asr' && !track.vssId?.startsWith('a.')) ?? matches[0])?.index;
+  };
+  const original = baseLanguage(originalLanguage);
+  return (original ? inLanguage(original) : undefined) ?? inLanguage('en')
+    ?? (youtubeDefaultIndex !== undefined && youtubeDefaultIndex >= 0 ? youtubeDefaultIndex : undefined) ?? 0;
+}
+
 function parseCaptionTracks(player: JsonObject): CaptionCatalog {
   const renderer = object(object(player.captions).playerCaptionsTracklistRenderer);
   const audioTracks = array(renderer.audioTracks).map(object);
@@ -872,7 +906,7 @@ function parseCaptionTracks(player: JsonObject): CaptionCatalog {
     audioTracks.find((track) => track.hasDefaultTrack === true) ??
     audioTracks[0] ??
     {};
-  const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex) ?? 0;
+  const defaultCaptionTrackIndex = number(defaultAudioTrack.defaultCaptionTrackIndex);
   const parsedTracks = array(renderer.captionTracks)
     .flatMap((item, sourceIndex): Array<{
       sourceIndex: number;
@@ -893,10 +927,10 @@ function parseCaptionTracks(player: JsonObject): CaptionCatalog {
       }];
     });
   const internal = parsedTracks.map(({ track }) => track);
-  const parsedDefaultIndex = parsedTracks.findIndex(
-    ({ sourceIndex }) => sourceIndex === defaultCaptionTrackIndex
-  );
-  const defaultIndex = parsedDefaultIndex >= 0 ? parsedDefaultIndex : 0;
+  const youtubeDefaultIndex = defaultCaptionTrackIndex === undefined ? undefined
+    : parsedTracks.findIndex(({ sourceIndex }) => sourceIndex === defaultCaptionTrackIndex);
+  const originalLanguage = originalAudioLanguage(player);
+  const defaultIndex = preferredCaptionIndex(internal, originalLanguage, youtubeDefaultIndex);
   const publicTracks = internal.map((track, index) =>
     captionTrackInfo(track, index, defaultIndex)
   );
@@ -912,6 +946,8 @@ function parseCaptionTracks(player: JsonObject): CaptionCatalog {
     public: publicTracks,
     translations,
     defaultTrackId: publicTracks[defaultIndex]?.id,
+    originalLanguage,
+    youtubeDefaultTrackId: youtubeDefaultIndex !== undefined && youtubeDefaultIndex >= 0 ? publicTracks[youtubeDefaultIndex]?.id : undefined,
   };
 }
 
@@ -936,15 +972,20 @@ function mergeCaptionCatalog(primary: CaptionCatalog, desktop?: CaptionCatalog):
     seenLanguages.add(language.languageCode);
     translations.push(language);
   }
-  const defaultTrackId = primary.defaultTrackId ?? desktop.defaultTrackId;
-  const defaultIndex = Math.max(0, internal.findIndex((track, index) =>
-    (track.vssId ?? track.languageCode ?? `track-${index}`) === defaultTrackId
-  ));
+  const originalLanguage = primary.originalLanguage ?? desktop.originalLanguage;
+  const youtubeDefaultTrackId = primary.youtubeDefaultTrackId ?? desktop.youtubeDefaultTrackId;
+  const trackId = (track: InternalCaptionTrack, index: number) => track.vssId ?? track.languageCode ?? `track-${index}`;
+  const youtubeDefaultIndex = youtubeDefaultTrackId === undefined ? undefined
+    : internal.findIndex((track, index) => trackId(track, index) === youtubeDefaultTrackId);
+  const defaultIndex = preferredCaptionIndex(internal, originalLanguage, youtubeDefaultIndex);
+  const publicTracks = internal.map((track, index) => captionTrackInfo(track, index, defaultIndex));
   return {
     internal,
-    public: internal.map((track, index) => captionTrackInfo(track, index, defaultIndex)),
+    public: publicTracks,
     translations,
-    defaultTrackId,
+    defaultTrackId: publicTracks[defaultIndex]?.id,
+    originalLanguage,
+    youtubeDefaultTrackId,
   };
 }
 
