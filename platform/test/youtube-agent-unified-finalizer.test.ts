@@ -1455,9 +1455,7 @@ it('answers straight from research evidence, without a context-gathering model c
   options.onDraft = draft => drafts.push(draft);
   // Research runs in this process and hands off at once.
   const core = new MockLanguageModelV4({ doGenerate: async () => ({
-    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
-      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
-      blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['frame-observation'] }] }) }],
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
     finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
   const finalizer = new MockLanguageModelV4({ doStream: async () => streamedFinalizerResponse(output) });
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
@@ -1526,9 +1524,7 @@ function freshResearch(configure: (options: ReturnType<typeof setup>['options'])
   options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), searchTools, hasHistoryOutside } as unknown as NonNullable<typeof options.session>;
   configure(options);
   const core = new MockLanguageModelV4({ doGenerate: async () => ({
-    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
-      intent: 'inspect_video', confidence: 'medium', artifacts: [], warnings: [],
-      blocks: [{ text: 'The woman holds the microphone.', evidenceIds: ['frame-observation'] }] }) }],
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
     finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
   const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: call.responseFormat?.type === 'json'
     ? JSON.stringify(output) : 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });

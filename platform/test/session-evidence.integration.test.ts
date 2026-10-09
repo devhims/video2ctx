@@ -686,18 +686,9 @@ test.each([true, false])(
             {
               type: 'tool-call',
               toolCallId: `core-${coreCalls}`,
-              toolName: coreCalls++ === 0 ? 'search_context' : 'finalize_answer',
-              input: JSON.stringify(
-                coreCalls === 1
-                  ? { label: 'evidence', query: 'clear opening' }
-                  : {
-                      intent: 'inspect_video',
-                      confidence: 'high',
-                      warnings: [],
-                      artifacts: [],
-                      blocks: [{ text: 'A clear opening sentence.', evidenceIds: [excerptId] }],
-                    },
-              ),
+              // With a finalizer configured, research ends with complete_research.
+              toolName: coreCalls++ === 0 ? 'search_context' : 'complete_research',
+              input: JSON.stringify(coreCalls === 1 ? { label: 'evidence', query: 'clear opening' } : {}),
             },
           ],
           finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
