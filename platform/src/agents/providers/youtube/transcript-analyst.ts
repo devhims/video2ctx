@@ -23,7 +23,7 @@ const transcriptAnalystOutputSchema = (maximum: number, repair = false) => z.obj
     claim: z.string().trim().min(1).max(280),
     windowIndexes: z.array(z.number().int().nonnegative()).min(1).max(MAX_WINDOWS_PER_FINDING),
   })).max(maximum),
-  warnings: z.array(z.string().trim().min(1).max(240)).max(3).default([]),
+  warnings: z.array(z.string().trim().min(1).max(240)).max(3).default([]).describe('Only limitations demonstrated by this transcript content, such as unintelligible or music-only captions. Otherwise empty. Never infer incomplete coverage from duration, brevity or window count; never warn about other videos or overall requested counts.'),
 });
 
 interface TranscriptCatalogEntry {
@@ -154,6 +154,7 @@ export async function analyzeTranscriptWithModel(
           'Do not invent identifiers, timestamps, or quotations. The application resolves window indexes back to the original text.',
           `Return at most ${attemptMaximum} distinct findings and at most ${MAX_WINDOWS_PER_FINDING} supporting window indexes per finding.`,
           'Return an empty findings array when the transcript does not contain relevant evidence.',
+          'The transcript catalog contains all captions supplied for this video. A short video or a single catalog window is not evidence of truncation. Example: a clear 30-second lesson in one window warrants no completeness warning. Only warn about a limitation directly demonstrated by its content.',
           ...(repairFeedback
             ? [`Your previous response was invalid: ${repairFeedback.slice(0, 4000)}`, 'Return a shorter corrected analysis using available windows and quoted facts. Use at most one identity and three quantities per finding, with the shortest exact quotes that preserve support. Prioritize distinct requested topics. Omit unsupported details; preserve explicit uncertainty.']
             : []),

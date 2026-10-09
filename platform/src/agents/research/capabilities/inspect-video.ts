@@ -1,4 +1,4 @@
-import { ANSWER_SCOPE_GUIDANCE } from '../answer-guidance';
+import { ANSWER_SCOPE_GUIDANCE, RESEARCH_EVIDENCE_GUIDANCE } from '../answer-guidance';
 import type { AgentToolContext } from '../../providers/youtube/tool-context';
 import { createCapabilityToolSet } from '../../providers/youtube/tool-library';
 import { researchCompletionInstruction, type ResearchCompletionTool } from '../../runtime/loop-control';
@@ -35,7 +35,7 @@ Visual retrieval and analysis are separate operations. First use existing analys
 
 When the route requires visual evidence, completing transcript research does not complete the task. Use spoken introductions, topic transitions and on-screen labels to locate relevant moments. For presenter clothing, retrieve frames near each introduction and analyze the saved frames; try nearby timestamps if the camera has not yet cut to the speaker. Establish names from introductions or labels, not appearance alone. If storyboard retrieval fails or its images are too small to answer, use get_video_frames followed by analyze_video_frames while time remains. Do not repeat the failed storyboard request unchanged. Before finalizing, check every requested subject and attribute against analyzed visual evidence. Report specific missing subjects or attributes and actual retrieval, analysis or budget limits; do not stop merely because transcripts omit visual details. Do not claim exhaustive coverage from a few sampled images.
 
-${ANSWER_SCOPE_GUIDANCE}
+${completion === 'complete_research' ? RESEARCH_EVIDENCE_GUIDANCE : ANSWER_SCOPE_GUIDANCE}
 
 ${researchCompletionInstruction(completion, 'Call finalize_answer once the evidence is sufficient. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. Copy excerpt identifiers from tool results. The application renders citations; do not write inline citation markers. Never invent identifiers.')}
 `.trim();
