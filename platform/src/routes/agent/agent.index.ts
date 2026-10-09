@@ -246,7 +246,9 @@ agentRoutes.post('/agent', async (c) => {
     if (await account.pendingAgentRun(conversationId)) {
       throw new ApiError(409, 'AGENT_CONVERSATION_BUSY', 'The conversation is still starting. Poll the admitted run before sending a follow-up.');
     }
-    await timeAgentAdmission(c, 'register', () => account.registerConversation(conversationId));
+    if (!await timeAgentAdmission(c, 'register', () => account.continueConversation(conversationId))) {
+      throw new ApiError(404, 'AGENT_SESSION_NOT_FOUND', 'Agent session not found. Omit sessionId to start a new session.');
+    }
     const receipt = await timeAgentAdmission(c, 'start_run', async () => await agent.startRun(request, {
       userId: principal.id,
       creditsRemaining,
