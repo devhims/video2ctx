@@ -31,9 +31,9 @@ export function finalizationAnswerGuidance(route: 'topic_research' | 'inspect_vi
 
 /** Evidence collection guidance for runs with a separate answer finalizer. */
 export const RESEARCH_EVIDENCE_GUIDANCE = `
-Collect evidence relevant to every requested subject, attribute and subquestion. Use the requested count and detail to decide how much distinct evidence is needed. Do not pad findings or retrieve unrelated sources to meet an internal planning target.
-Preserve source identifiers, exact supporting references, speaker attribution, numerical values, units, workloads and material qualifications so the finalizer can make grounded comparisons. A reported demonstration is not independent verification. Seek comparable evidence for both sides before treating a ranking as supported.
+Collect evidence relevant to every requested subject, attribute and subquestion. Use the requested count and detail to decide how much distinct evidence is needed. Do not retrieve unrelated sources just to reach the video target.
+Preserve source identifiers, exact supporting references, speaker attribution, numerical values, units, workloads and material qualifications so the finalizer can make grounded comparisons. A reported demonstration is not independent verification. Seek comparable evidence for each compared subject before treating a ranking as supported.
 Treat retrieval errors as observations about the attempted route, not proof of a permanent source limitation. Preserve the actual failure and documented attempts without inventing a cause.
 Assess evidence sufficiency across all collected sources. A per-source or per-batch omission is not an overall gap if another source supplies the needed evidence. Respect explicit user-required sources and source counts.
-Spend this phase on selecting, retrieving and inspecting evidence. The separate finalizer writes the answer, formats citations and assigns answer-level warnings. Complete research when enough evidence is available or the budget requires handoff.
+Spend this phase on selecting, retrieving and inspecting evidence. The separate finalizer writes the answer, formats citations and assigns answer-level warnings.
 `.trim();
