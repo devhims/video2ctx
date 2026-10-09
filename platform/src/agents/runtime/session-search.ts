@@ -72,6 +72,12 @@ export class SessionSearch {
   historyCount() {
     return this.sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM session_history_index').one().count;
   }
+  /** Whether any stored message is outside the given IDs. Counts cannot answer this:
+   * deleted answers leave prompt turns without a stored message. */
+  hasHistoryOutside(messageIds: Iterable<string>) {
+    const covered = new Set(messageIds);
+    return this.sql.exec<{ id: string }>('SELECT id FROM session_history_index').toArray().some(({ id }) => !covered.has(id));
+  }
   upsertHistory(entry: HistoryEntry) {
     const message: SessionMessage = {
       id: entry.id,

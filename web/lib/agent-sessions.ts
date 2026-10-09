@@ -32,7 +32,8 @@ export type AgentRun = z.infer<typeof agentRunSchema>;
 export const agentProgressSchema = z.object({
   run: agentRunSchema,
   phase: z.enum(['queued', 'classification', 'research', 'finalization', 'completed', 'failed', 'cancelled']),
-  draft: z.object({ answer: z.string().max(20_000), state: z.enum(['streaming', 'revising']) }).optional(),
+  draft: z.object({ answer: z.string().max(20_000), state: z.enum(['streaming', 'revising']),
+    activity: z.enum(['gathering', 'thinking', 'writing']).optional() }).optional(),
   tools: z.array(z.object({
     toolCallId: z.string(), name: z.string(), operation: z.string(),
     // Keep a future tool status from discarding the entire progress snapshot.

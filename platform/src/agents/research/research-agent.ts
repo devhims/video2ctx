@@ -81,6 +81,12 @@ type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research
 const MAX_CONCURRENT_EVIDENCE_REQUESTS = 4;
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
+// A single inspected video is answered from its whole transcript in one call, without a
+// stored-context pass. Projected transcripts measure 61 to 68 characters per video second,
+// so this holds about an hour, roughly 85,000 tokens; live runs reached first content in
+// about 7 seconds at that size, inside the 10-second failover limit. Longer transcripts
+// exceed it, are reported as cut, and keep the stored-context pass.
+const INSPECTION_FINALIZER_EVIDENCE_CHARACTERS = 250_000;
 export { MAX_TOPIC_RESEARCH_TRANSCRIPT_ANALYSES, researchVideoTarget } from './research-plan';
 
 export interface EvidenceToolFailure {
@@ -112,6 +118,8 @@ export async function executeResearchRun(options: {
   /** Trusted line naming the run's date, from its admission time and the user's time zone. */
   currentDate?: string;
   sessionAffinity: string;
+  /** Stored ID of the request this run answers. */
+  userMessageId?: string;
   signal: AbortSignal;
   conversationHistory: ConversationTurn[];
   recoveredSearchUsed?: boolean;
@@ -231,6 +239,7 @@ export async function executeResearchRun(options: {
     deliverEvidence: options.deliverEvidence,
     deliverSavedAssets: options.deliverSavedAssets,
     runId: options.runId,
+    userMessageId: options.userMessageId,
     currentDate: options.currentDate,
     maxVideoSeconds: agentMaxVideoSeconds(options.env),
     provider,
@@ -715,6 +724,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         onEvidence: packets => { for (const packet of packets) evidence.set(packet.packetId,packet); },
         toolFailures: [...toolFailures.values()],
         researchInterrupted: error !== finalizationHandoff,
+        researchRan: options.finalizationDeadlineAt === undefined,
         modelBudget: options.modelBudget,
         modelCallPrefix: options.modelCallPrefix,
         onDraft: options.onDraft,
@@ -785,12 +795,14 @@ async function runUnifiedFinalizer(options: {
   model: LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
-  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'session' | 'traceToolCall' | 'currentDate' | 'deliverEvidence'>;
+  context: Pick<AgentToolContext, 'runId' | 'userMessageId' | 'signal' | 'finalize' | 'session' | 'traceToolCall' | 'currentDate' | 'deliverEvidence'>;
   evidence: EvidencePacket[];
   /** Earlier-turn evidence referenced but not loaded, with its billed read path. */
   prior?: PriorEvidenceAccess;
   toolFailures: EvidenceToolFailure[];
   researchInterrupted?: boolean;
+  /** Research ran in this process immediately before finalization, rather than before a restart. */
+  researchRan?: boolean;
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
 }): Promise<AgentTurnResult> {
@@ -808,7 +820,8 @@ async function runUnifiedFinalizer(options: {
   const currentDurationNotice = () => options.decision.route === 'inspect_video' || options.decision.route === 'topic_research'
     ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
       ? [options.decision.videoId] : comparisonVideoIds) : '';
-  const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
+  const evidenceBudget = comparisonVideoIds.length ? 160_000
+    : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
   let prepared = prepareEvidence();
   // Gather context once, charged only to the main deadline. Answer retries below
@@ -832,6 +845,17 @@ async function runUnifiedFinalizer(options: {
   const contextMessages: ModelMessage[] = [];
   // History-only answers read messages and memory; saved source content is out of scope.
   const historyOnly = isHistoryOnlyRoute(options.decision);
+  // Research and the answer are separate model calls: the answer sees only the conversation
+  // window and the evidence projection, not research's own tool results. Skipping the
+  // stored-context pass is safe only when that is everything there is. A resumed run keeps
+  // gathering, because its research ran before the restart.
+  const afterResearch = options.researchRan === true
+    && (options.decision.route === 'topic_research' || options.decision.route === 'inspect_video');
+  // Compare stored message IDs with the request and the prompt's turns. Without both,
+  // assume older conversation exists and keep gathering.
+  const promptMessageIds = (options.conversationHistory ?? []).flatMap(turn => [turn.userMessageId, turn.agentMessageId]);
+  const olderConversation = !options.context.userMessageId || !options.context.session?.hasHistoryOutside
+    || options.context.session.hasHistoryOutside([options.context.userMessageId, ...promptMessageIds]);
   if (options.context.session && !conversational && contextExpired && !historyOnly) {
     // Recovery has only response time left. Restore saved comparison packets
     // synchronously from SQLite, without repeating R2 reads or model work.
@@ -855,6 +879,36 @@ async function runUnifiedFinalizer(options: {
   } else if (options.context.session && !conversational) {
     try {
       const gathered = await withRunDeadline(contextDeadlineAt, options.context.signal, async signal => {
+        // Read each comparison subject before model-selected searches can favor one side.
+        // This reuses exact stored versions and never calls the provider.
+        const assets = options.context.session!.brief().assets;
+        const reads = await Promise.allSettled((historyOnly ? [] : comparisonVideoIds).map(async videoId => {
+          const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
+            .sort((a,b) => b.collectedAt - a.collectedAt)[0];
+          if (!asset) return;
+          const result = options.context.session!.readTranscriptEvidence
+            ? await options.context.session!.readTranscriptEvidence(asset.version)
+            : await options.context.session!.readEvidence(asset.version);
+          signal.throwIfAborted();
+          if (result.nextOffset !== undefined) contextIncomplete = true;
+          const delivery = deliver(result.packets, 'comparison_preload');
+          if (delivery.withheld.length) contextIncomplete = true;
+          options.onEvidence?.(delivery.admitted);
+          for (const packet of delivery.admitted) {
+            if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
+          }
+        }));
+        signal.throwIfAborted();
+        if (reads.some(result => result.status === 'rejected')) contextIncomplete = true;
+        prepared = prepareEvidence();
+        // Decide after preloads, which can add evidence to the projection.
+        const plan = !afterResearch ? 'gather' : olderConversation ? 'gather_older_conversation'
+          : !prepared.complete ? 'gather_evidence_cut' : 'skip';
+        console.log(JSON.stringify({ event: 'agent_finalizer_context_plan', runId: options.context.runId, plan }));
+        // Everything research saw is already in the answer prompt; another pass would only
+        // repeat it and delay the answer by several model calls.
+        if (plan === 'skip') return undefined;
+        options.onDraft?.({ answer: '', state: 'streaming', activity: 'gathering' });
         const searchTools = await options.context.session!.searchTools?.(found => {
           options.context.signal.throwIfAborted();
           if (Date.now() >= contextDeadlineAt) throw new Error('Finalization context timeout.');
@@ -905,28 +959,6 @@ async function runUnifiedFinalizer(options: {
             if (Date.now() >= contextDeadlineAt) throw new Error('Finalization context timeout.');
           }) } : {}),
         };
-        // Read each comparison subject before model-selected searches can favor one side.
-        // This reuses exact stored versions and never calls the provider.
-        const assets = options.context.session!.brief().assets;
-        const reads = await Promise.allSettled((historyOnly ? [] : comparisonVideoIds).map(async videoId => {
-          const asset = assets.filter(asset => asset.videoId === videoId && asset.kind === 'transcript' && asset.current)
-            .sort((a,b) => b.collectedAt - a.collectedAt)[0];
-          if (!asset) return;
-          const result = options.context.session!.readTranscriptEvidence
-            ? await options.context.session!.readTranscriptEvidence(asset.version)
-            : await options.context.session!.readEvidence(asset.version);
-          signal.throwIfAborted();
-          if (result.nextOffset !== undefined) contextIncomplete = true;
-          const delivery = deliver(result.packets, 'comparison_preload');
-          if (delivery.withheld.length) contextIncomplete = true;
-          options.onEvidence?.(delivery.admitted);
-          for (const packet of delivery.admitted) {
-            if (!options.evidence.some(existing => existing.packetId === packet.packetId)) options.evidence.push(packet);
-          }
-        }));
-        signal.throwIfAborted();
-        if (reads.some(result => result.status === 'rejected')) contextIncomplete = true;
-        prepared = prepareEvidence();
         return generateText({
           model: options.model,
           system: [
@@ -962,8 +994,10 @@ async function runUnifiedFinalizer(options: {
           timeout:{totalMs:Math.max(1, contextDeadlineAt - Date.now())},
         });
       }, 'Finalization context timeout.');
-      contextMessages.push(...gathered.response.messages);
-      if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
+      if (gathered) {
+        contextMessages.push(...gathered.response.messages);
+        if (gathered.finishReason === 'tool-calls') contextIncomplete = true;
+      }
     } catch (error) {
       if (modelFallbackExhaustion(error)) throw error;
       options.context.signal.throwIfAborted();
@@ -1091,7 +1125,8 @@ async function runUnifiedFinalizer(options: {
         candidateCharacters = 0;
         let streamError: unknown;
         const state: AgentDraft['state'] = feedback ? 'revising' : 'streaming';
-        options.onDraft({ answer: '', state });
+        // Reasoning arrives before any answer text; the reader sees that as thinking.
+        options.onDraft({ answer: '', state, activity: 'thinking' });
         const streamed = streamText({ ...generationOptions, onError: ({ error }) => { streamError = error; }, onChunk: ({ chunk }) => {
           if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;
           progress();
@@ -1113,11 +1148,11 @@ async function runUnifiedFinalizer(options: {
             latestDraft = renderPartialAnswer(partial);
             const now = Date.now();
             if (!latestDraft || latestDraft === publishedDraft || now - lastPublishedAt < 500) continue;
-            options.onDraft({ answer: latestDraft, state });
+            options.onDraft({ answer: latestDraft, state, activity: 'writing' });
             publishedDraft = latestDraft;
             lastPublishedAt = now;
           }
-          if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state });
+          if (latestDraft && latestDraft !== publishedDraft) options.onDraft({ answer: latestDraft, state, activity: 'writing' });
           const text = await streamed.text;
           candidate = text;
           generationCompleted = true;

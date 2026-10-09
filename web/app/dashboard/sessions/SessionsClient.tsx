@@ -1,6 +1,6 @@
 'use client';
 
-import { agentToolLabel } from '../../../lib/agent-tool-labels';
+import { agentProgressLabel, agentToolLabel } from '../../../lib/agent-tool-labels';
 import { platformRequest } from '../../../lib/platform-request';
 import { projectItemPath } from '../dashboard-routes';
 
@@ -230,7 +230,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <><AgentMarkdown>{message.content}</AgentMarkdown><AnswerActions answer={message.content} /></>}
       {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
-      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{progress?.draft?.state === 'revising' ? 'Revising the answer.' : phaseLabel(progress?.phase)}</p>}
+      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{agentProgressLabel(progress)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div role='alert' className='alert error agent-run-error'><p className='agent-answer'><span className='sr-only'>Run failed. </span>{run.error}</p></div>}
@@ -319,15 +319,6 @@ function MessageComposer({ sessionId, disabled = false, processing = false, onAd
     disabled={disabled || processing} sending={sending} processing={processing} uncertain={uncertain} error={error} />
     {uncertain && <Link href='/dashboard/sessions'>Check Sessions for the submitted run</Link>}
   </>;
-}
-
-function phaseLabel(phase?: AgentProgress['phase']) {
-  switch (phase) {
-    case 'classification': return 'Understanding your request.';
-    case 'research': return 'Researching YouTube sources.';
-    case 'finalization': return 'Writing and checking the answer.';
-    default: return 'Waiting for the run to start.';
-  }
 }
 
 // Compact disclosure rows follow Beautiful UI's Tool Chips pattern.

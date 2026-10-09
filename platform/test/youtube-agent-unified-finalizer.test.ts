@@ -110,10 +110,10 @@ it('streams provisional text, clears a rejected draft, and commits the repaired 
     issues: [expect.objectContaining({ path: ['confidence'] })] });
   expect(finalizer.doStreamCalls).toHaveLength(2);
   expect(finalizer.doGenerateCalls).toHaveLength(0);
-  expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
-  expect(drafts).toContainEqual({ answer: 'The', state: 'streaming' });
-  expect(drafts).toContainEqual({ answer: '', state: 'revising' });
-  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'revising' });
+  expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
+  expect(drafts).toContainEqual({ answer: 'The', state: 'streaming', activity: 'writing' });
+  expect(drafts).toContainEqual({ answer: '', state: 'revising', activity: 'thinking' });
+  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'revising', activity: 'writing' });
   expect(options.finalize).toHaveBeenCalledOnce();
 });
 
@@ -914,7 +914,7 @@ it('recovers an exact-first-message request with a synchronous history read insi
     expect(searchTools).not.toHaveBeenCalled();
     expect(finalizer.doGenerateCalls).toHaveLength(0);
     expect(JSON.stringify(finalizer.doStreamCalls[0]!.prompt)).toContain(original);
-    expect(drafts[0]).toEqual({ answer: '', state: 'streaming' });
+    expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
@@ -1247,7 +1247,7 @@ it('restarts a stalled GLM draft on DeepSeek without consuming a schema repair o
     expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: output.blocks[0]!.text }));
     const abandoned = drafts.findIndex(draft => draft.answer.includes('Abandoned'));
     expect(abandoned).toBeGreaterThanOrEqual(0);
-    expect(drafts.slice(abandoned + 1)).toContainEqual({ answer: '', state: 'streaming' });
+    expect(drafts.slice(abandoned + 1)).toContainEqual({ answer: '', state: 'streaming', activity: 'thinking' });
     expect(drafts.at(-1)?.answer).toBe(output.blocks[0]!.text);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
@@ -1439,4 +1439,169 @@ it.each(['supported_inline', 'inline_only_mismatch'] as const)('judges figures b
     expect(result.citations.map(citation => citation.id)).toContain('e1');
     expect(result.answer).toContain('54.2g (unverified)');
   }
+});
+
+it('answers straight from research evidence, without a context-gathering model call', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const searchTools = vi.fn(async () => ({}));
+  const readEvidence = vi.fn();
+  // A new session: the only stored message is the current request.
+  options.conversationHistory = [];
+  const hasHistoryOutside = vi.fn(() => false);
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence, searchTools, hasHistoryOutside } as unknown as NonNullable<typeof options.session>;
+  const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
+  options.onDraft = draft => drafts.push(draft);
+  // Research runs in this process and hands off at once.
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
+  const finalizer = new MockLanguageModelV4({ doStream: async () => streamedFinalizerResponse(output) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  await executeResearchRun(options);
+  // One finalizer call, and it is the answer: no context model call, searches or reads.
+  expect(core.doGenerateCalls).toHaveLength(1);
+  expect(finalizer.doGenerateCalls).toHaveLength(0);
+  expect(finalizer.doStreamCalls).toHaveLength(1);
+  expect(finalizer.doStreamCalls[0]!.responseFormat?.type).toBe('json');
+  // Research builds its own session tools once; the finalizer builds none.
+  expect(searchTools).toHaveBeenCalledTimes(1);
+  expect(readEvidence).not.toHaveBeenCalled();
+  expect(drafts.map(draft => draft.activity)).not.toContain('gathering');
+  expect(drafts[0]).toEqual({ answer: '', state: 'streaming', activity: 'thinking' });
+  expect(drafts.at(-1)).toEqual({ answer: output.blocks[0]!.text, state: 'streaming', activity: 'writing' });
+  expect(hasHistoryOutside).toHaveBeenCalledWith([options.userMessageId]);
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('keeps gathering stored context when a resumed run reaches finalization without research', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.finalizationDeadlineAt = Date.now() + 60_000;
+  options.recoveredEvidence = [evidence];
+  const searchTools = vi.fn(async () => ({}));
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), searchTools } as unknown as NonNullable<typeof options.session>;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: call.responseFormat?.type === 'json'
+    ? JSON.stringify(output) : 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockReturnValue(finalizer);
+  await executeResearchRun(options);
+  expect(searchTools).toHaveBeenCalledOnce();
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+it('still gathers stored context for a question about earlier conversation, and says so', async () => {
+  const { options, classifier, output } = setup('context_answer');
+  options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'mixed', reason: 'Use earlier context.' };
+  const searchTools = vi.fn(async () => ({}));
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), readHistory: () => ({ messages: [] }), searchTools } as unknown as NonNullable<typeof options.session>;
+  const drafts: Array<{ answer: string; state: string; activity?: string }> = [];
+  options.onDraft = draft => drafts.push(draft);
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: async () => ({ content: [{ type: 'text', text: 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }),
+    doStream: async () => streamedFinalizerResponse(output),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(searchTools).toHaveBeenCalledOnce();
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(finalizer.doStreamCalls).toHaveLength(1);
+  expect(drafts.slice(0, 2)).toEqual([
+    { answer: '', state: 'streaming', activity: 'gathering' },
+    { answer: '', state: 'streaming', activity: 'thinking' },
+  ]);
+  expect(options.finalize).toHaveBeenCalledOnce();
+});
+
+/** Fresh inspect_video research that hands off at once, for context-gathering decisions. */
+function freshResearch(configure: (options: ReturnType<typeof setup>['options']) => void) {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const searchTools = vi.fn(async () => ({}));
+  const hasHistoryOutside = vi.fn((_ids: Iterable<string>) => false);
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], readEvidence: vi.fn(), searchTools, hasHistoryOutside } as unknown as NonNullable<typeof options.session>;
+  configure(options);
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: call.responseFormat?.type === 'json'
+    ? JSON.stringify(output) : 'Context is ready.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  const plans: string[] = [];
+  const log = vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+    const event = typeof line === 'string' && line.startsWith('{') ? JSON.parse(line) : undefined;
+    if (event?.event === 'agent_finalizer_context_plan') plans.push(event.plan);
+  });
+  return { options, finalizer, plans, hasHistoryOutside, restore: () => log.mockRestore() };
+}
+
+it('keeps gathering after research when the conversation is older than the prompt window', async () => {
+  // Review example: a budget stated more than eight turns ago is outside the answer prompt.
+  // Research may read it, but its tool results never reach the answer model.
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.message = 'Inspect this new review using my original budget.';
+    (options.session as unknown as { hasHistoryOutside: () => boolean }).hasHistoryOutside = () => true;
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_older_conversation']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+/** A complete saved transcript of the given length, in the shape get_video_transcript returns. */
+function transcriptPacket(count: number, artifactData: Record<string, unknown> = { allReturnedSegmentsIncluded: true }): EvidencePacket {
+  return { packetId: `transcript-${count}`, kind: 'youtube_transcript',
+    sources: [{ id: 'long', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: Array.from({ length: count }, (_, index) => ({ id: `long:${index}`, sourceId: 'long', text: `Passage ${index}. ${'detail '.repeat(30)}`, startMs: index * 1000 })),
+    artifacts: [{ type: 'youtube_complete_transcript', data: artifactData }], warnings: [], usage: [] };
+}
+
+it('answers a single video from its whole transcript in one call, past the ordinary evidence limit', async () => {
+  // About 110,000 characters: over the 40,000 ordinary limit, inside the single-video limit.
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(400)];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['skip']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
+  // Nothing sampled: the first and last passages both reach the answer model.
+  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+  expect(prompt).toContain('Passage 0.');
+  expect(prompt).toContain('Passage 399.');
+  expect(prompt).not.toContain('TRANSCRIPT_CONTEXT_TRUNCATED');
+});
+
+it('keeps gathering after research when a single transcript exceeds the single-video limit', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(1_200)];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_evidence_cut']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+it('keeps gathering after research when the transcript arrived in pages', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(50, { allReturnedSegmentsIncluded: false, nextOffset: 50 })];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_evidence_cut']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+it('skips gathering after research when the window and evidence are complete', async () => {
+  const { options, finalizer, plans, hasHistoryOutside, restore } = freshResearch(() => {});
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['skip']);
+  // Coverage is judged by stored IDs: the current request plus every prompt turn's messages.
+  expect(hasHistoryOutside).toHaveBeenCalledWith([options.userMessageId, 'prior-u', 'prior-a']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
+});
+
+it('keeps gathering after research when the run has no stored request ID', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => { delete (options as { userMessageId?: string }).userMessageId; });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_older_conversation']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
 });
