@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useErrorToast } from '../../../lib/use-error-toast';
+import { useErrorToast, useLoadErrorToast } from '../../../lib/use-error-toast';
 import { useRouter } from 'next/navigation';
 import { platformRequest as api } from '../../../lib/platform-request';
 import { useAccountResource } from '../DashboardDataProvider';
@@ -16,16 +16,8 @@ export function MonitorsClient({ promise }: { promise: Promise<ResourceResult<Mo
   const [notice, setNotice] = useState(''),
     [savingId, setSavingId] = useState<string>();
   const [formVersion, setFormVersion] = useState(0);
-  const { show: showLoadError, clear: clearLoadError } = useErrorToast();
   const { show: showActionError, clear: clearActionError } = useErrorToast();
-  useEffect(() => {
-    if (resource.error) showLoadError(resource.error, {
-      duration: Infinity,
-      action: { label: 'Retry monitors', onClick: () => { void resource.refresh(); } },
-    });
-    else clearLoadError();
-    return clearLoadError;
-  }, [resource.error, resource.refresh, showLoadError, clearLoadError]);
+  useLoadErrorToast(resource.error, 'Retry monitors', () => void resource.refresh());
   const attempted = useRef(new Set<string>());
   useEffect(() => {
     const legacy = monitors.filter(

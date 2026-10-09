@@ -9,12 +9,14 @@ import type { AccountSeeds } from '../../../lib/dashboard-cache';
 import { useStreamedAccountResource } from '../DashboardDataProvider';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
+import { useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['billing']> }) {
   const { user, demoEnabled: isDemo } = useDashboardSession();
   const email = user?.email;
   const resource = useStreamedAccountResource('billing', null, promise);
   const { data: billing, ready: billingReady, error: billingError, setData: onBillingChange } = resource;
+  useLoadErrorToast(billingError, 'Retry billing', () => void resource.refresh());
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
   const [billingMessage, setBillingMessage] = useState('');
   const startCheckout = async () => {
@@ -76,7 +78,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   }, [onBillingChange]);
 
   return <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
-      {!billingReady && billingError ? <p role='alert'>{billingError} <button onClick={() => void resource.refresh()}>Retry billing</button></p> : !billingReady ? <BillingSkeleton contentsOnly /> : <>
+      {!billingReady && billingError ? <p className='settings-card-copy'>Billing details are unavailable.</p> : !billingReady ? <BillingSkeleton contentsOnly /> : <>
 
       <div>
         <span className='panel-label'>Billing</span>
@@ -104,6 +106,7 @@ export function PreferencesCard({ promise, emailConsent }: { promise: NonNullabl
   const email = user?.email;
   const resource = useStreamedAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES, promise);
   const { data: preferences, ready: preferencesReady, error: preferencesError, setData: onPreferencesChange } = resource;
+  useLoadErrorToast(preferencesError, 'Retry notification preferences', () => void resource.refresh());
   const [preferenceSaving, setPreferenceSaving] = useState<'inApp' | 'emailAlerts'>();
   const [preferenceMessage, setPreferenceMessage] = useState('');
   const [confirmationState, setConfirmationState] = useState<'idle' | 'confirming' | 'success' | 'error'>('idle');
@@ -175,7 +178,7 @@ export function PreferencesCard({ promise, emailConsent }: { promise: NonNullabl
         <p className='settings-card-copy'>Updates from your monitors.</p>
       </div>
       <div className='settings-toggle-list'>
-        {!preferencesReady && preferencesError ? <p role='alert'>{preferencesError} <button onClick={() => void resource.refresh()}>Retry notification preferences</button></p> : !preferencesReady ? <PreferencesSkeleton contentsOnly /> : <>
+        {!preferencesReady && preferencesError ? <p className='settings-card-copy'>Notification preferences are unavailable.</p> : !preferencesReady ? <PreferencesSkeleton contentsOnly /> : <>
 
         {confirmationState !== 'idle' && <div className='settings-email-confirmation' data-state={confirmationState} role={confirmationState === 'error' ? 'alert' : 'status'} aria-live='polite'>
           <span><strong>{confirmationState === 'confirming' ? 'Confirming email alerts…' : confirmationState === 'success' ? 'Email alerts enabled' : 'Email confirmation failed'}</strong><small>{confirmationState === 'confirming' ? <>Checking the approval for <b>{email}</b>.</> : confirmationMessage}</small></span>
@@ -252,7 +255,7 @@ export function AccountCards() {
         <button className='settings-delete-button mt-2 min-h-11 cursor-pointer rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-danger)] bg-[var(--color-dashboard-danger)] text-white hover:brightness-90 disabled:cursor-not-allowed disabled:opacity-45' disabled={!confirmed || deleting} onClick={() => void deleteAccount()}>
           {deleting ? 'Deleting account…' : 'Delete account permanently'}
         </button>
-        {deleteError && <p className='settings-danger-message' role='alert'>{deleteError}</p>}
+        {deleteError && <p className='alert error' role='alert'>{deleteError}</p>}
       </div> : <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Account deletion is unavailable for the local demo identity.</p>}
     </article>
   </>;
