@@ -190,6 +190,38 @@ test('keeps research open when the model calls a withheld finalize_answer before
     expect.not.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE' })]) }));
 });
 
+test('withholds complete_research until required visual work, then hands the answer to the finalizer', async () => {
+  const { options, context, analyzed, finalizer } = setup(0);
+  let step = 0;
+  const offered: string[][] = [];
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    offered.push(call.tools?.map(tool => tool.name) ?? []);
+    const calls = [
+      { name: 'complete_research', input: {} },
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [28000] } },
+      { name: 'analyze_video_frames', input: { assetVersions: ['1'.padStart(64, '0')], focus: 'Read names printed on shirts.' } },
+      { name: 'complete_research', input: {} },
+    ];
+    const selected = calls[Math.min(step++, 3)]!;
+    return { content: [{ type: 'tool-call', toolCallId: `complete-${step}`, toolName: selected.name, input: JSON.stringify(selected.input) }],
+      finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
+  } });
+  const run = runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata] });
+  await vi.advanceTimersByTimeAsync(0);
+  const result = await run;
+  expect(model.doGenerateCalls).toHaveLength(4);
+  expect(offered[0]).not.toContain('complete_research');
+  expect(offered[3]).toContain('complete_research');
+  expect(offered.flat()).not.toContain('finalize_answer');
+  const instructions = JSON.stringify(model.doGenerateCalls[0]!.prompt);
+  expect(instructions).toContain('Call complete_research once the evidence is sufficient');
+  expect(instructions).not.toContain('Return blocks of answer text');
+  expect(analyzed).toHaveBeenCalledOnce();
+  expect(finalizer.doGenerateCalls.length).toBeGreaterThan(0);
+  expect(result.finishReason).toBe('finalized');
+  expect(context.finalize).toHaveBeenCalledOnce();
+});
+
 test('does not withhold finalization when visual evidence is only helpful', async () => {
   const { options, context } = setup(0);
   const model = new MockLanguageModelV4({ doGenerate: async call => {

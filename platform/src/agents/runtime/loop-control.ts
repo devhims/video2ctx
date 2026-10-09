@@ -1,6 +1,16 @@
 import { NoSuchToolError } from 'ai';
 
 export const FINALIZE_ANSWER_TOOL_NAME = 'finalize_answer';
+/** Ends research without an answer when a separate finalizer composes it. */
+export const COMPLETE_RESEARCH_TOOL_NAME = 'complete_research';
+export type ResearchCompletionTool = typeof FINALIZE_ANSWER_TOOL_NAME | typeof COMPLETE_RESEARCH_TOOL_NAME;
+
+/** The closing research instruction for the run's completion tool. */
+export function researchCompletionInstruction(tool: ResearchCompletionTool, answerContract: string): string {
+  return tool === COMPLETE_RESEARCH_TOOL_NAME
+    ? 'Call complete_research once the evidence is sufficient, or earlier when the time budget requires it. Do not write the answer. A separate finalizer composes it from the evidence collected here.'
+    : answerContract;
+}
 export const FINALIZATION_RETRY_STEPS = 2;
 export const FINALIZE_REMAINING_BUDGET_MS = 12_000;
 export const NON_TERMINAL_TOOL_CALL_LIMIT = 11;

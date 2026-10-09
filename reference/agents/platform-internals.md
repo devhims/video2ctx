@@ -51,6 +51,10 @@ A canceled attempt reports no usage, because its stream ends before the finish e
 
 Each finished attempt is recorded twice: as a `model.attempt` event in the agent Durable Object, and in D1 `agent_model_attempts` with its role, model, outcome, reason, time to first content, time to completion, token counts and provider request ID. Rows never contain prompts or output. The tool-trace publisher moves them from the Durable Object's `agent_model_attempt_outbox` to D1 with the same 15-second alarm retry. `GET /v1/admin/agent-traces/{runId}` returns them as `modelAttempts`. Query the table directly for patterns across runs, for example time to first content by model and hour.
 
+## Research completion
+
+When a finalizer model is configured, which is always the case in production, research ends with `complete_research`. It takes no input, and the finalizer writes the answer from the collected evidence. Research is never offered `finalize_answer`, so it never composes an answer that would be discarded. A stray `finalize_answer` call, for example one copied from conversation history, hands off the same way unless required visual work still withholds completion. Without a finalizer, research keeps `finalize_answer` and its answer is saved directly. Between September 25 and October 9, 2026, 127 of 250 completed runs paid for a full research-side answer that was then discarded.
+
 ## Agent date context
 
 Models otherwise assume the year from their training data. `POST /v1/agent` accepts an optional IANA `timeZone`, which the dashboard fills from the browser. The run row stores it in `agent_runs.time_zone`, and `currentDateGuidance(created_at, time_zone)` in `platform/src/agents/runtime/current-date.ts` renders one date line from the run's admission time. Every phase and recovery of a run therefore agrees on "today". The line is appended to the end of the classifier, research loop, context-gathering and finalizer instructions, never to the untrusted user payload. It carries the date only, so it changes once a day and leaves the cached prompt prefix intact. Missing or older runs use UTC. The visual and transcript analysts do not receive it.
