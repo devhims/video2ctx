@@ -1,13 +1,13 @@
 import {
   RESEARCH_TOPIC_DESCRIPTION,
-  RESEARCH_TOPIC_INSTRUCTIONS,
+  researchTopicInstructions,
   createResearchTopicTools,
   RESEARCH_TOPIC_TOOL_NAMES,
 } from './capabilities/research-topic';
 import {
   createInspectVideoTools,
   INSPECT_VIDEO_DESCRIPTION,
-  INSPECT_VIDEO_INSTRUCTIONS,
+  inspectVideoInstructions,
   INSPECT_VIDEO_TOOL_NAMES,
 } from './capabilities/inspect-video';
 
@@ -15,14 +15,14 @@ export const capabilityRegistry = {
   topic_research: {
     id: 'topic_research',
     description: RESEARCH_TOPIC_DESCRIPTION,
-    instructions: RESEARCH_TOPIC_INSTRUCTIONS,
+    instructions: researchTopicInstructions,
     toolNames: RESEARCH_TOPIC_TOOL_NAMES,
     createTools: createResearchTopicTools,
   },
   inspect_video: {
     id: 'inspect_video',
     description: INSPECT_VIDEO_DESCRIPTION,
-    instructions: INSPECT_VIDEO_INSTRUCTIONS,
+    instructions: inspectVideoInstructions,
     toolNames: INSPECT_VIDEO_TOOL_NAMES,
     createTools: createInspectVideoTools,
   },

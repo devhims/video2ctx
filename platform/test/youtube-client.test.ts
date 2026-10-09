@@ -642,7 +642,7 @@ describe('normalized YouTube client', () => {
     );
   });
 
-  test('uses the default source track when only a translation target is requested', async () => {
+  test('translates from the preferred source track, English over a regional default, when only a target is requested', async () => {
     const fixture = playerFixture('manual');
     const renderer = (fixture.captions as any).playerCaptionsTracklistRenderer;
     renderer.defaultAudioTrackIndex = 1;
@@ -674,9 +674,9 @@ describe('normalized YouTube client', () => {
       videoId: 'abcdefghijk', translateTo: 'hi', granularity: 'segment',
     });
 
-    expect(transcript.track.languageCode).toBe('es');
+    expect(transcript.track.languageCode).toBe('en');
     expect(transcript.translatedTo).toEqual({ languageCode: 'hi', name: 'Hindi' });
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('/es?');
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('/en?');
   });
 
   test('retries translated captions with a refreshed visitor session after upstream rate limiting', async () => {

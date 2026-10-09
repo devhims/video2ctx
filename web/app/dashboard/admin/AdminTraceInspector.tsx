@@ -98,7 +98,7 @@ export default function AdminTraceInspector() {
             }}>{copied ? 'Copied trace JSON' : 'Copy trace JSON'}</button></div>
             <p className={styles.metadata}>Call {detail.toolCallId} · {detail.status}</p>
             {detail.payloadState==='deleted' ? <p>Trace payloads were removed when session evidence or the account was deleted.</p> : <>
-              {detail.payloadState==='unavailable' && <p role='alert'>Some payloads could not be saved or loaded. {detail.captureError}</p>}
+              {detail.payloadState==='unavailable' && <p role='alert' className='alert error'>Some payloads could not be saved or loaded. {detail.captureError}</p>}
               <h4>Input</h4><pre>{JSON.stringify(detail.input,null,2)}</pre>
               {detail.output!==undefined && <><h4>Output</h4><pre>{JSON.stringify(detail.output,null,2)}</pre></>}
               {detail.error && <><h4>Error</h4><pre>{JSON.stringify(detail.error,null,2)}</pre></>}

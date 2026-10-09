@@ -161,10 +161,11 @@ export const MEMORY_UPDATE_TIMEOUT_MESSAGE = 'Memory update deadline exceeded.';
 /**
  * One generation with at most one model fallback and SDK retries disabled, under an application-owned wall-clock
  * deadline. The deadline rejects even if the provider ignores abort, so callers never
- * wait longer than timeoutMs and never receive a late delta. A provider that responds
- * after the deadline still reports its usage through onUsage; the caller decides
- * whether that late observation can still be recorded. A crash, or a call that never
- * responds, leaves its cost unobserved.
+ * wait longer than timeoutMs and never receive a late delta. Without failover, a provider
+ * that responds after the deadline still reports its usage through onUsage; the caller
+ * decides whether that late observation can still be recorded. Failover attempts stream
+ * and are canceled at their limit, so a canceled attempt, a crash, or a call that never
+ * responds leaves its cost unobserved.
  */
 export async function generateMemoryDelta(options: {
   model: LanguageModel;

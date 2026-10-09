@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Choose the default transcript track from the video's original audio language, then English, then YouTube's default, preferring uploaded tracks over automatically generated ones. YouTube's default follows the requesting region and interface language, and for auto-dubbed videos it could select a dubbed language's captions. `getTracks` reports the same choice as `defaultTrackId` and `isDefault`. An explicit `language` or `trackId` still wins.
+
+The default transcript track can change for videos whose YouTube default caption is not in the original audio language, most often auto-dubbed videos. Pass `language` or `trackId` to keep a specific track.
+
 ## 0.7.0
 
 - Add optional `captionAvailability` to `getVideo` and `getDetails` metadata without downloading transcript bodies. Caption checks can add player and watch-page requests. Desktop discovery overlaps alternate player checks, and metadata retains the first playable profile.

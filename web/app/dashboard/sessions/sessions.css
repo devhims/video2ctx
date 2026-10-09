@@ -70,6 +70,8 @@
 .agent-status.status-failed { color: var(--color-dashboard-danger); background: var(--color-dashboard-accent-soft); }
 .agent-status.status-running, .agent-status.status-pending { color: var(--color-dashboard-warning); background: var(--color-dashboard-warning-soft); }
 .agent-sessions .agent-answer-toggle { display: inline-flex; align-items: center; gap: 6px; background: transparent; padding: 5px 0; border: 0; font-size: 11px; color: var(--muted); }
+.agent-run-details .alert { margin: 0; }
+.agent-run-error::before { margin-top: 4px; }
 .agent-progress-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .agent-result-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 10px; color: var(--muted); margin: 14px 0 20px; }
 .agent-outcome { text-transform: capitalize; }

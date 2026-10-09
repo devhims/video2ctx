@@ -190,7 +190,7 @@ test('missing sessions and access outages do not expose private content', async 
   await expect(page.getByText('Agent session not found.')).toBeVisible();
   await login(context, 'unavailable');
   await page.goto('/dashboard/sessions');
-  await expect(page.getByRole('alert').filter({ hasText: 'Access verification is temporarily unavailable.' })).toBeVisible();
+  await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Access verification is temporarily unavailable.' })).toBeVisible();
   await login(context, 'allowed');
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
@@ -723,7 +723,7 @@ for (const failure of [
   }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const alert = page.locator('.agent-assistant-message').last().getByRole('alert');
-  await expect(alert).toContainText('This run failed');
+  await expect(alert).toContainText('Run failed');
   await expect(alert).toContainText(reason);
   await page.reload();
   await expect(alert).toContainText(reason);

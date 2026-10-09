@@ -1689,7 +1689,7 @@ export const openApiDocument = {
     },
     '/v1/admin/agent-traces/{runId}': {
       get:{tags:['Administration'],operationId:'getAdminAgentTraceRun',summary:'List a run’s diagnostic tool attempts',
-        description:'Returns ordered tool-attempt metadata, sequence numbers and payload availability for one run, plus its terminal error. A run that ended before any tool call returns an empty call list. Admin browser session required. Preserves earlier attempts. Runs with more than 500 attempts require querying the D1 index.',
+        description:'Returns ordered tool-attempt metadata, sequence numbers and payload availability for one run, plus its terminal error. `modelAttempts` lists up to 200 finished model attempts with role, model, outcome, time to first content, time to completion and token counts. A run that ended before any tool call returns an empty call list. Admin browser session required. Preserves earlier attempts. Runs with more than 500 attempts require querying the D1 index.',
         security:browserSessionSecurity,parameters:[pathParameter('runId','Agent run UUID.')],
         responses:{'200':jsonResponse('Run identity and ordered calls.',{type:'object'}),...standardErrors,'404':responseRef('NotFound')},
       },

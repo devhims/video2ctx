@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
+import { useLoadErrorToast } from '../../../lib/use-error-toast';
 import {
   agentSessionListSchema, agentSessionDetailSchema, fetchAgentData,
   mergeAgentMessages, safeSourceUrl, isActiveAgentRun, sendAgentMessage, watchAgentRun, AgentSendError,
@@ -34,7 +35,8 @@ export function AgentShell({ children }: { children: ReactNode }) {
   const usageResource = useAccountResource('usage', null);
   const projects = projectsResource.data;
   const credits = usageResource.data?.creditBalance;
-  const accountError = projectsResource.error || usageResource.error;
+  useLoadErrorToast(projectsResource.error, 'Retry projects', () => void projectsResource.refresh());
+  useLoadErrorToast(usageResource.error, 'Retry credits', () => void usageResource.refresh());
   return <main className='workspace-shell agent-workspace'>
     <DashboardSidebar activeSection='sessions' projects={projects} credits={credits}
       onNavigate={section => router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`)}
@@ -45,7 +47,6 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onSignOut={() => void signOut()} />
     <div className='workspace-main'>
       <DashboardHeader title='Agent'>{agentAccess && <Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link>}</DashboardHeader>
-      {accountError && <p role='alert'>{accountError}</p>}
       {children}
     </div>
   </main>;
@@ -83,6 +84,7 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  useLoadErrorToast(error, 'Retry sessions', () => setRevision(value => value + 1));
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
@@ -106,7 +108,6 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   return <>
     {(page.sessions.length > 0 || search) && searchForm}
     <div className='agent-list-heading'><h3>{search ? 'Search results' : 'Recent sessions'}</h3><button className='agent-icon-button' aria-label='Refresh sessions' title='Refresh sessions' disabled={loading} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
-    {error && <p role='alert' className='alert error'>{error}</p>}
     <div className='agent-session-list' aria-busy={loading}>
       {page.sessions.map(session => <Link key={session.sessionId} href={`/dashboard/sessions/${session.sessionId}`} className='agent-session-row'>
         <span className='agent-session-icon'><ChatCircleTextIcon size={19} aria-hidden='true' /></span><div className='agent-session-copy'><h3>{session.title || 'Untitled session'}</h3><p>{session.latestMessagePreview}</p></div>
@@ -128,6 +129,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  useLoadErrorToast(error, 'Reload session', () => setRevision(value => value + 1));
   const [olderLoading, setOlderLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const onProgress = useCallback((progress: AgentProgress) => {
@@ -185,7 +187,6 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
       <p className='agent-id'>Session ID: {sessionId}</p>
       {session.readOnly && <p role='status'>Admin debugging view. This session is read-only.</p>}</div></header>}
     {session && <SessionAssets sessionId={sessionId} readOnly={session.readOnly} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
-    {error && <p className='alert error' role='alert'>{error}</p>}
     {loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
     <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
@@ -232,12 +233,12 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{agentProgressLabel(progress)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}
-      {run?.error && <div role='alert' className='alert error'><strong>This run failed</strong><p className='agent-answer'>{run.error}</p></div>}
+      {run?.error && <div role='alert' className='alert error agent-run-error'><p className='agent-answer'><span className='sr-only'>Run failed. </span>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
       {result && <>
         <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
         {result.warnings.filter(warning => ['FINAL_SYNTHESIS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'].includes(warning.code)).map(warning =>
-          <div key={warning.code} role='alert' className='alert error'><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable' : 'Answer incomplete'}</strong><p>{warning.message}</p></div>)}
+          <div key={warning.code} role='alert' className='alert error'><p><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable.' : 'Answer incomplete.'}</strong> {warning.message}</p></div>)}
         <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
         {result.answer && <AnswerActions answer={result.answer} />}
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {

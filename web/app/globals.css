@@ -1010,10 +1010,46 @@ html:has(.developer-page) body {
 
 .alert.error,
 .trend-alert,
-.plan-error {
-  border-color: color-mix(in oklch, var(--color-dashboard-accent) 50%, var(--color-dashboard-rule));
+.plan-error,
+.source-data-warning {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding: 12px 15px;
+  border: 1px solid color-mix(in oklch, var(--color-dashboard-accent) 50%, var(--color-dashboard-rule));
+  border-radius: var(--radius-dashboard-sm);
   background: var(--color-dashboard-accent-soft);
   color: var(--color-dashboard-danger);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Every error banner leads with the same warning icon (Phosphor warning-circle, fill). */
+.alert.error::before,
+.trend-alert::before,
+.plan-error::before,
+.source-data-warning::before {
+  content: '';
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Cpath d='M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.alert.error p { margin: 0; }
+.alert.error > button,
+.trend-alert > button {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
 }
 
 .alert.success {
@@ -1281,6 +1317,17 @@ html:has(.developer-page) body {
   flex: none;
   margin-left: var(--space-md);
   padding: .2rem 0;
+}
+
+.source-feedback .alert.error {
+  width: 100%;
+  max-width: none;
+  padding: 12px 15px;
+  line-height: 1.6;
+}
+
+.source-feedback .alert.error button {
+  margin-left: auto;
 }
 
 .source-studio-intro {
@@ -3905,7 +3952,6 @@ html:has(.developer-page) body {
 /* Dashboard page headers scroll with their content. Homepage navigation is separate. */
 .workspace-shell .topbar { position: static; top: auto; z-index: auto; }
 
-.dashboard-signout-error{position:fixed;bottom:1.5rem;right:1.5rem;z-index:100;max-width:calc(100vw - 3rem);padding:1rem 1.25rem;border:1px solid var(--color-dashboard-rule);border-radius:6px;background:var(--color-dashboard-surface);color:var(--color-dashboard-ink);font-size:.85rem}
 
 /* Skeleton controls share the dimensions of the real buttons and switches. */
 .skeleton-control { display: block; width: 112px; height: 40px; border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-rule); animation: dashboardSkeletonPulse 1.8s ease-in-out infinite; }

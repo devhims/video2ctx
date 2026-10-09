@@ -153,12 +153,21 @@ test('runs that ended before any tool call are listed and inspectable with their
   await env.DB.prepare(`INSERT INTO agent_trace_runs
     (run_id,user_id,session_id,status,started_at,updated_at,call_count,failed_calls,capture_failures,index_version,error)
     VALUES (?,?,?,'failed',100,20600,0,0,0,1,'Classification phase timeout.')`).bind(runId,admin.user.id,sessionId).run();
+  // Model attempts explain a run that never reached a tool call.
+  const attemptId=crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO agent_model_attempts
+    (attempt_id,run_id,user_id,session_id,call_id,role,model_id,service_tier,outcome,reason,started_at,elapsed_ms,first_content_timeout_ms,total_timeout_ms)
+    VALUES (?,?,?,?,'call','classifier','glm','priority','failed','first_content_timeout',150,3000,3000,5000)`)
+    .bind(attemptId,runId,admin.user.id,sessionId).run();
   const list=await request(`/v1/admin/agent-traces?q=${runId}&status=failed`,{headers:{cookie:admin.cookie}});
   expect(await list.json()).toMatchObject({runs:[{runId,status:'failed',callCount:0,error:'Classification phase timeout.'}]});
   const detail=await request(`/v1/admin/agent-traces/${runId}`,{headers:{cookie:admin.cookie}});
   expect(detail.status).toBe(200);
   expect(await detail.json()).toEqual({runId,userId:admin.user.id,sessionId,status:'failed',
-    error:'Classification phase timeout.',calls:[]});
+    error:'Classification phase timeout.',calls:[],modelAttempts:[{attemptId,callId:'call',role:'classifier',modelId:'glm',
+      serviceTier:'priority',outcome:'failed',reason:'first_content_timeout',startedAt:150,firstContentMs:null,elapsedMs:3000,
+      inputTokens:null,cachedInputTokens:null,outputTokens:null,reasoningTokens:null,statusCode:null,providerRequestId:null,
+      firstContentTimeoutMs:3000,totalTimeoutMs:5000}]});
   // Legacy summaries written before the error column report null.
   const legacyRunId=crypto.randomUUID();
   await env.DB.prepare(`INSERT INTO agent_trace_runs

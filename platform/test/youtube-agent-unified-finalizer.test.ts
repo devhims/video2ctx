@@ -9,6 +9,7 @@ import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { compactAgentResult } from '../src/agents/response';
 import type { AgentTurnResult, CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import { streamed } from './fixtures/model-streams';
 
 const models = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('../src/agents/research/finalization-failure', { spy: true });
@@ -533,7 +534,32 @@ it('QA 012: marks an invented inline citation unavailable and saves the answer o
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
-it('finalize_answer tool handoff compatibility: only the unified finalizer persists the answer', async () => {
+it('single-video research signals completion without an answer, and only the finalizer writes one', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence,
+    sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(output) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'finalizer' ? finalizer : core);
+
+  await executeResearchRun(options);
+
+  expect(core.doGenerateCalls).toHaveLength(1);
+  const offered = core.doGenerateCalls[0]!.tools?.map(tool => tool.name) ?? [];
+  expect(offered).toContain('complete_research');
+  expect(offered).not.toContain('finalize_answer');
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.stringContaining('timeout-finalizer'), expect.objectContaining({ intent: 'inspect_video' }));
+});
+
+it('a stray finalize_answer call from research hands off without publishing its answer', async () => {
   const { options, output } = setup('context_answer', true);
   options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
   options.recoveredEvidence = [{ ...evidence,
@@ -1231,16 +1257,16 @@ it.each([false, true])('does not save an answer after both finalizer models fail
   const { withModelFailover } = await import('../src/agents/runtime/model-failover');
   const { options, classifier } = setup('context_answer');
   const fail = async () => { throw new Error('connection unavailable'); };
-  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: fail });
-  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: fail });
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doStream: fail });
+  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doStream: fail });
   const model = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'finalizer' });
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
   if (gatherContext) options.session = { brief: () => ({ assets: [], memories: [] }), searchTools: async () => ({}) } as unknown as NonNullable<typeof options.session>;
   const error = await executeResearchRun(options).catch(error => error);
   expect(error).toMatchObject({ code: 'MODEL_FALLBACK_EXHAUSTED', status: 503,
     message: "We're having trouble processing your request right now, even after retrying automatically. Please try again in a few minutes." });
-  expect(primary.doGenerateCalls).toHaveLength(1);
-  expect(fallback.doGenerateCalls).toHaveLength(1);
+  expect(primary.doStreamCalls).toHaveLength(1);
+  expect(fallback.doStreamCalls).toHaveLength(1);
   expect(options.finalize).not.toHaveBeenCalled();
 });
 
@@ -1330,8 +1356,8 @@ it.each([true, false])('saves each unrenderable fallback answer before repair, r
     { text: 'The protein content is 54.2%.', evidenceIds: ['ref_1'] },
   ] };
   let calls = 0;
-  const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => { throw new Error('Provider connection failed'); } });
-  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: async () => {
+  const primary = new MockLanguageModelV4({ modelId: 'glm', doStream: async () => { throw new Error('Provider connection failed'); } });
+  const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doStream: streamed(async () => {
     expect(captures).toHaveLength(calls);
     calls++;
     const value = structuredClone(output);
@@ -1339,7 +1365,7 @@ it.each([true, false])('saves each unrenderable fallback answer before repair, r
     return { content: [{ type: 'text', text: JSON.stringify(value) }],
       response: { id: `response-${calls}`, modelId: 'deepseek-actual', timestamp: new Date() },
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
-  } });
+  }) });
   const finalizer = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'finalizer' });
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
   options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
@@ -1347,8 +1373,8 @@ it.each([true, false])('saves each unrenderable fallback answer before repair, r
   const result = executeResearchRun(options);
   if (repaired) await result;
   else await expect(result).rejects.toThrow();
-  expect(primary.doGenerateCalls).toHaveLength(1);
-  expect(fallback.doGenerateCalls).toHaveLength(2);
+  expect(primary.doStreamCalls).toHaveLength(1);
+  expect(fallback.doStreamCalls).toHaveLength(2);
   expect(captures).toHaveLength(repaired ? 1 : 2);
   expect(new Set(captures.map(capture => capture.id)).size).toBe(captures.length);
   captures.forEach((capture, index) => {

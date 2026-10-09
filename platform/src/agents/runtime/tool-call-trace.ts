@@ -2,6 +2,7 @@ import { withVisualFailureCapture, visualDiagnosticsSchema, type VisualFailureCa
 import type { ToolSet, ToolCallRepairFunction } from 'ai';
 import { z } from 'zod';
 import { storedExtractionDiagnosticSchema } from '../../lib/extraction-diagnostics';
+import type { ModelAttemptDiagnostic } from './model-failover';
 
 export const toolCallDetailSchema = z.object({
   traceId: z.string(), attempt: z.number(), callSequence: z.number(), resultSequence: z.number().optional(),
@@ -101,6 +102,9 @@ export class ToolCallTraceManager {
       run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1, index_pending INTEGER NOT NULL DEFAULT 1, attempted_at INTEGER NOT NULL DEFAULT 0)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS agent_trace_publish_order (
       trace_id TEXT PRIMARY KEY, attempted_at INTEGER NOT NULL)`);
+    // Finished model attempts wait here until D1 accepts them. They are immutable once written.
+    sql.exec(`CREATE TABLE IF NOT EXISTS agent_model_attempt_outbox (
+      attempt_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, payload_json TEXT NOT NULL, attempted_at INTEGER NOT NULL DEFAULT 0)`);
     sql.exec('CREATE INDEX IF NOT EXISTS agent_trace_status_idx ON agent_call_traces(local_run_status,run_id)');
     this.initialized = true;
   }
@@ -146,6 +150,14 @@ export class ToolCallTraceManager {
     }
   }
 
+  /** Queue a finished model attempt for the D1 latency index. Earlier phases are not recorded. */
+  recordModelAttempt(runId: string, attempt: ModelAttemptDiagnostic) {
+    if (attempt.event !== 'attempt_finished') return;
+    this.sql.exec('INSERT OR IGNORE INTO agent_model_attempt_outbox (attempt_id,run_id,payload_json) VALUES (?,?,?)',
+      attempt.attemptId,runId,JSON.stringify(attempt));
+    this.requestPublish();
+  }
+
   private snapshot(traceId: string, field: PayloadField, value: unknown) {
     const row = this.byId(traceId);
     if (!row || row.deleted) return;
@@ -178,7 +190,8 @@ export class ToolCallTraceManager {
   get hasPending() {
     return this.sql.exec(`SELECT trace_id FROM agent_call_traces WHERE index_pending=1 OR EXISTS (
       SELECT 1 FROM agent_trace_payload_chunks p WHERE p.trace_id=agent_call_traces.trace_id)
-      UNION ALL SELECT run_id FROM agent_trace_run_index WHERE index_pending=1 LIMIT 1`).toArray().length > 0;
+      UNION ALL SELECT run_id FROM agent_trace_run_index WHERE index_pending=1
+      UNION ALL SELECT attempt_id FROM agent_model_attempt_outbox LIMIT 1`).toArray().length > 0;
   }
 
   private requestPublish(runId?: string) {
@@ -224,6 +237,7 @@ export class ToolCallTraceManager {
               if (latest?.index_pending && !await this.publishRow(latest)) failed = true;
             }
             if (!await this.publishRunSummaries()) failed = true;
+            if (!await this.publishModelAttempts()) failed = true;
             if (failed) break; // The 15-second retry backs off failures, with fair selection.
             if (rows.length === FLUSH_BATCH_SIZE) this.flushRequested = true;
           }
@@ -398,6 +412,41 @@ export class ToolCallTraceManager {
     }
     if (success && pending.length===32) this.flushRequested=true;
     return success;
+  }
+
+  private async publishModelAttempts(): Promise<boolean> {
+    const pending = this.sql.exec<{attempt_id:string;run_id:string;payload_json:string}>(`SELECT attempt_id,run_id,payload_json
+      FROM agent_model_attempt_outbox ORDER BY attempted_at,attempt_id LIMIT ?`,FLUSH_BATCH_SIZE).toArray();
+    const statements: D1PreparedStatement[] = [];
+    const published: string[] = [];
+    for (const item of pending) {
+      this.sql.exec('UPDATE agent_model_attempt_outbox SET attempted_at=? WHERE attempt_id=?',Date.now(),item.attempt_id);
+      const run = this.metadata(item.run_id);
+      if (!run) {
+        this.sql.exec('DELETE FROM agent_model_attempt_outbox WHERE attempt_id=?',item.attempt_id);
+        continue;
+      }
+      const a = JSON.parse(item.payload_json) as ModelAttemptDiagnostic;
+      statements.push(this.db.prepare(`INSERT INTO agent_model_attempts
+        (attempt_id,run_id,user_id,session_id,call_id,role,model_id,service_tier,outcome,reason,started_at,first_content_ms,elapsed_ms,
+        input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,status_code,provider_request_id,first_content_timeout_ms,total_timeout_ms)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO NOTHING`)
+        .bind(a.attemptId,item.run_id,run.userId,run.sessionId,a.callId,a.role,a.modelId,a.serviceTier ?? null,a.outcome ?? 'failed',
+          a.reason ?? null,a.startedAt ?? Date.now() - (a.elapsedMs ?? 0),a.firstContentMs ?? null,a.elapsedMs ?? 0,
+          a.inputTokens ?? null,a.cachedInputTokens ?? null,a.outputTokens ?? null,a.reasoningTokens ?? null,
+          a.statusCode ?? null,a.providerRequestId ?? null,a.firstContentTimeoutMs ?? null,a.totalTimeoutMs ?? null));
+      published.push(item.attempt_id);
+    }
+    if (!statements.length) return true;
+    try {
+      await this.db.batch(statements);
+    } catch {
+      console.error({event:'agent_model_attempt_index_failed',attempts:published.length});
+      return false;
+    }
+    for (const attemptId of published) this.sql.exec('DELETE FROM agent_model_attempt_outbox WHERE attempt_id=?',attemptId);
+    if (pending.length===FLUSH_BATCH_SIZE) this.flushRequested=true;
+    return true;
   }
 
   revokePayloads() {
