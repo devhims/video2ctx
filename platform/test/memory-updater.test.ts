@@ -11,6 +11,7 @@ import {
 } from '../src/agents/runtime/memory-updater';
 import type { AgentCitation } from '../src/agents/contracts';
 import type { SessionMemory } from '../src/agents/runtime/session-evidence';
+import { streamed } from './fixtures/model-streams';
 
 const usage = { inputTokens: { total: 120, noCache: 120, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 30, text: 30, reasoning: 0 } };
@@ -197,19 +198,19 @@ describe('generateMemoryDelta', () => {
   });
 });
 
-it('reports late primary and accepted backup memory usage separately after the eight-second cutoff', async () => {
+it('reports accepted backup memory usage and leaves the canceled primary request unobserved', async () => {
   const { withModelFailover } = await import('../src/agents/runtime/model-failover');
   vi.useFakeTimers();
   try {
     let respond!: () => void;
     const late = new Promise<void>(resolve => { respond = resolve; });
-    const primary = new MockLanguageModelV4({ modelId: 'glm', doGenerate: async () => {
+    const primary = new MockLanguageModelV4({ modelId: 'glm', doStream: streamed(async () => {
       await late;
       return { content: [{ type: 'text', text: JSON.stringify({ changes: [change({ topic: 'abandoned' })] }) }],
         finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
-    } });
-    const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doGenerate: async () => ({
-      content: [{ type: 'text', text: '{"changes":[]}' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    }) });
+    const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doStream: streamed(async () => ({
+      content: [{ type: 'text', text: '{"changes":[]}' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] })) });
     const model = withModelFailover({ primary, fallback, state: { fallback: false }, role: 'memory_updater' });
     const onUsage = vi.fn(); const onRequestStart = vi.fn();
     const pending = generateMemoryDelta({ model, input: input(), signal: new AbortController().signal, onUsage, onRequestStart });
@@ -219,11 +220,10 @@ it('reports late primary and accepted backup memory usage separately after the e
     expect(onRequestStart).toHaveBeenCalledTimes(2);
     expect(onUsage).toHaveBeenCalledOnce();
     expect(onUsage.mock.calls[0]![0]).toMatchObject({ modelId: 'deepseek', usage: { inputTokens: 120, outputTokens: 30 } });
+    // The primary stream was canceled before its finish event, so its cost stays reserved, not observed.
     respond(); await vi.advanceTimersByTimeAsync(1);
-    expect(onUsage).toHaveBeenCalledTimes(2);
-    expect(onUsage.mock.calls[1]![0]).toMatchObject({ modelId: 'glm', usage: { inputTokens: 120, outputTokens: 30 } });
-    expect(new Set(onUsage.mock.calls.map(([event]) => event.requestId)).size).toBe(2);
-    expect(onRequestStart.mock.calls.map(([id]) => id).sort()).toEqual(onUsage.mock.calls.map(([event]) => event.requestId).sort());
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onRequestStart.mock.calls.map(([id]) => id)).toContain(onUsage.mock.calls[0]![0].requestId);
     expect(await pending).toBe(accepted);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }

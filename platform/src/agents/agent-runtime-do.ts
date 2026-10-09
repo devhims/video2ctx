@@ -1336,7 +1336,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sessionStore.search.clearHistory();
     for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
       'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
-      'agent_trace_run_index', 'agent_trace_publish_order']) {
+      'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox']) {
       this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
     }
     // SDK snapshots contain run identifiers only, but clear those too.
@@ -1642,7 +1642,13 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   private modelFailoverState(runId: string): ModelFailoverState {
     return {
       fallback: this.sql`SELECT id FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback' LIMIT 1`.length > 0,
-      onDiagnostic: event => this.recordEvent(runId, event.event === 'fallback' ? 'model.fallback' : 'model.attempt', { ...event }),
+      onDiagnostic: event => {
+        this.recordEvent(runId, event.event === 'fallback' ? 'model.fallback' : 'model.attempt', { ...event });
+        if (this.#deleted || event.event !== 'attempt_finished') return;
+        // The latency index is diagnostic. Its failure must not interrupt the model call.
+        try { this.traceManager.recordModelAttempt(runId, event); }
+        catch { console.error({ event: 'agent_model_attempt_capture_failed', runId }); }
+      },
     };
   }
 

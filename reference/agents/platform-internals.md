@@ -43,6 +43,14 @@ Reads still go through the owner's current catalog or runtime, so
 stale rows cannot restore deleted data. Session IDs are caller-supplied, so more
 than one indexed owner returns not found.
 
+## Agent model attempts
+
+`withModelFailover` in `platform/src/agents/runtime/model-failover.ts` wraps every Fireworks GLM role with a DeepSeek backup. Every attempt streams, including `generateText` callers: the wrapper's `doGenerate` reads the provider stream and assembles the generate result itself. A silent provider therefore fails at its first-content limit, while a call that keeps producing text, reasoning or tool arguments may continue to its overall limit. Any 5-second gap after first content is a stall. Research roles (`agent_core`, `transcript_analyst`, `finalizer`) allow 10 seconds to first content and 30 seconds overall. The classifier (5 seconds), visual analyst and memory updater (8 seconds each) keep one whole-response limit, because their phases have fixed budgets and Fireworks often takes 2 to 3 seconds to first content even for short prompts. Every limit is clamped to the phase deadline, less a 10-second reserve for the backup. On October 9, 2026, run `e3889923` failed after GLM and then DeepSeek each hit the earlier 10-second whole-response limit while reading a full transcript; the same step took 7.7 seconds in its retry.
+
+A canceled attempt reports no usage, because its stream ends before the finish event. Memory updates keep a cost reservation for each unobserved request.
+
+Each finished attempt is recorded twice: as a `model.attempt` event in the agent Durable Object, and in D1 `agent_model_attempts` with its role, model, outcome, reason, time to first content, time to completion, token counts and provider request ID. Rows never contain prompts or output. The tool-trace publisher moves them from the Durable Object's `agent_model_attempt_outbox` to D1 with the same 15-second alarm retry. `GET /v1/admin/agent-traces/{runId}` returns them as `modelAttempts`. Query the table directly for patterns across runs, for example time to first content by model and hour.
+
 ## Agent date context
 
 Models otherwise assume the year from their training data. `POST /v1/agent` accepts an optional IANA `timeZone`, which the dashboard fills from the browser. The run row stores it in `agent_runs.time_zone`, and `currentDateGuidance(created_at, time_zone)` in `platform/src/agents/runtime/current-date.ts` renders one date line from the run's admission time. Every phase and recovery of a run therefore agrees on "today". The line is appended to the end of the classifier, research loop, context-gathering and finalizer instructions, never to the untrusted user payload. It carries the date only, so it changes once a day and leaves the cached prompt prefix intact. Missing or older runs use UTC. The visual and transcript analysts do not receive it.
