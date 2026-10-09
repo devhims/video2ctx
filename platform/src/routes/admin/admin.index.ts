@@ -119,15 +119,21 @@ adminRoutes.get('/admin/agent-traces/:runId', async c => {
     .bind(runId).all<AdminTraceRow>();
   const summary=await c.env.DB.prepare('SELECT user_id,session_id,status,error FROM agent_trace_runs WHERE run_id=?').bind(runId)
     .first<{user_id:string;session_id:string;status:string;error:string|null}>();
+  const modelAttempts=(await c.env.DB.prepare(`SELECT attempt_id AS attemptId,call_id AS callId,role,model_id AS modelId,
+    service_tier AS serviceTier,outcome,reason,started_at AS startedAt,first_content_ms AS firstContentMs,elapsed_ms AS elapsedMs,
+    input_tokens AS inputTokens,cached_input_tokens AS cachedInputTokens,output_tokens AS outputTokens,reasoning_tokens AS reasoningTokens,
+    status_code AS statusCode,provider_request_id AS providerRequestId,first_content_timeout_ms AS firstContentTimeoutMs,
+    total_timeout_ms AS totalTimeoutMs FROM agent_model_attempts WHERE run_id=? ORDER BY started_at,attempt_id LIMIT 200`)
+    .bind(runId).all()).results;
   // A run that ended before its first tool call has a summary and no call rows.
   if (!rows.results.length && summary) return c.json({runId,userId:summary.user_id,sessionId:summary.session_id,
-    status:summary.status,error:summary.error,calls:[]});
+    status:summary.status,error:summary.error,calls:[],modelAttempts});
   if (!rows.results.length) throw new ApiError(404,'TRACE_RUN_NOT_FOUND','No diagnostic trace was recorded for this run.');
   if (rows.results.length>500) throw new ApiError(422,'TRACE_RUN_TOO_LARGE','This run has more than 500 calls. Query its D1 index for additional records.');
   const first=rows.results[0]!;
   const status=summary?.status ?? first.run_status;
   return c.json({runId,userId:first.user_id,sessionId:first.session_id,status,error:summary?.error ?? null,
-    calls:rows.results.map(row=>adminTraceSummary({...row,run_status:status}))});
+    calls:rows.results.map(row=>adminTraceSummary({...row,run_status:status})),modelAttempts});
 });
 adminRoutes.get('/admin/agent-traces/:runId/calls/:traceId', async c => {
   const runId=traceRunId(c.req.param('runId'));

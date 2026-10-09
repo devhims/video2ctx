@@ -2,6 +2,7 @@ import { generateText, APICallError, Output, tool, isStepCount } from 'ai';
 import { z } from 'zod';
 import { finalizationOutputSchema } from '../src/agents/structured-answer';
 import { fireworksFinalizerProfile, fireworksModelPricing } from '../src/agents/fireworks-finalizer';
+import { chatCompletion } from './fixtures/model-streams';
 const workersAI = vi.hoisted(() => {
   const selectedModel = { specificationVersion: 'v4', provider: 'test', modelId: 'glm', supportedUrls: {}, doGenerate: vi.fn(), doStream: vi.fn() };
   const select = vi.fn(() => selectedModel);
@@ -32,7 +33,7 @@ describe('YouTube agent model', () => {
       expect(body.max_tokens).toBe(1000);
       expect(body.service_tier).toBe('priority');
       expect(body.tools[0].function.name).toBe('classify_request');
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
           tool_calls: [{ id: 'call', type: 'function', function: { name: 'classify_request', arguments: '{"route":"finalize"}' } }] } }],
         usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
@@ -66,7 +67,7 @@ describe('YouTube agent model', () => {
       expect(body).not.toHaveProperty('thinking');
       expect(body.response_format.type).toBe('json_schema');
       expect(body.messages.some((m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'))).toBe(true);
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"visible":true}' } }],
         usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
     });
@@ -102,7 +103,7 @@ describe('YouTube agent model', () => {
         expect(body).not.toHaveProperty('thinking');
         expect(JSON.stringify(body.messages)).not.toContain('image_url');
       }
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"supported":true}' } }],
         usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
     });
@@ -124,7 +125,7 @@ describe('YouTube agent model', () => {
       expect(body.reasoning_effort).toBe('low');
       expect(body.max_tokens).toBe(2624);
       expect(body).not.toHaveProperty('thinking');
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
         usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
     });
@@ -157,7 +158,7 @@ describe('YouTube agent model', () => {
         expect(body.messages.find((m: any) => m.role === 'assistant').reasoning_content).toBe('Inspect a sampled frame.');
         expect(body.messages.some((m: any) => m.role === 'tool')).toBe(true);
       }
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: calls === 1 ? 'tool_calls' : 'stop', message: calls === 1
           ? { role: 'assistant', content: null, reasoning_content: 'Inspect a sampled frame.', tool_calls: [{ id: 'inspect-1', type: 'function', function: { name: 'inspect', arguments: '{"timestampMs":905000}' } }] }
           : { role: 'assistant', content: 'The presenter is on the right.' } }],
@@ -193,7 +194,7 @@ describe('YouTube agent model', () => {
         expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
         expect(body).not.toHaveProperty('reasoning_effort');
       }
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
         usage: { prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 } });
     });
@@ -217,7 +218,7 @@ describe('YouTube agent model', () => {
       expect(body.reasoning_effort).toBe(effort === 'medium' ? 'high' : 'low');
       expect(body.max_tokens).toBe(3524);
       expect(body).not.toHaveProperty('thinking');
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
         usage: { prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 } });
     });
@@ -265,7 +266,7 @@ describe('YouTube agent model', () => {
       expect(body).not.toHaveProperty('reasoning_effort');
       expect(body.model).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
       expect(body.response_format.type).toBe('json_schema');
-      return Response.json({ id: 'test', created: 1, model: body.model,
+      return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
           confidence: 'medium', warnings: [], blocks: [{ text: 'Supported answer.', evidenceIds: ['ref_1'] }],
         }) } }], usage: { prompt_tokens: 10, completion_tokens: 30, total_tokens: 40 } });
@@ -357,7 +358,7 @@ it.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'me
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
     const body = JSON.parse(String(init?.body)); requests.push(body);
     if (body.model === FIREWORKS_GLM_MODEL_ID) return Response.json({ error: { message: 'temporarily unavailable' } }, { status: 503 });
-    return Response.json({ id: 'backup', created: 1, model: body.model,
+    return chatCompletion(body, { id: 'backup', created: 1, model: body.model,
       choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
       usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
   });

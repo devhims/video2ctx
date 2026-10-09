@@ -66,6 +66,40 @@ test.each(['response_timeout', 'phase_budget'])('restores %s fallback for the sa
   });
 });
 
+test('publishes finished model attempts to the D1 latency index and retries when D1 is unavailable', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('model-attempt-index', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState;
+      traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager };
+    const state = internal.modelFailoverState(runId);
+    const base = { callId: 'call', modelId: 'glm', role: 'agent_core', serviceTier: 'priority' as const,
+      firstContentTimeoutMs: 10_000, totalTimeoutMs: 30_000 };
+    state.onDiagnostic?.({ event: 'attempt_started', attemptId: 'started-only', ...base, startedAt: 1_000 });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const batch = vi.spyOn(env.DB, 'batch').mockRejectedValueOnce(new Error('D1 unavailable'));
+    try {
+      state.onDiagnostic?.({ event: 'attempt_finished', attemptId: 'timed-out', ...base, startedAt: 1_000, outcome: 'failed',
+        reason: 'first_content_timeout', elapsedMs: 10_000, idleMs: 10_000, usageAvailable: false });
+      await internal.traceManager.publishPending();
+      expect(instance.sql`SELECT attempt_id FROM agent_model_attempt_outbox`).toEqual([{ attempt_id: 'timed-out' }]);
+    } finally { batch.mockRestore(); log.mockRestore(); }
+    state.onDiagnostic?.({ event: 'attempt_finished', attemptId: 'completed', ...base, modelId: 'deepseek', startedAt: 11_000,
+      outcome: 'succeeded', elapsedMs: 7_700, firstContentMs: 900, idleMs: 0, usageAvailable: true, inputTokens: 8_214,
+      cachedInputTokens: 2_048, outputTokens: 1_332, reasoningTokens: 0, providerRequestId: 'chatcmpl-1' });
+    await internal.traceManager.publishPending();
+    expect(instance.sql`SELECT attempt_id FROM agent_model_attempt_outbox`).toEqual([]);
+  });
+  const rows = await env.DB.prepare('SELECT * FROM agent_model_attempts WHERE run_id=? ORDER BY started_at').bind(runId).all();
+  expect(rows.results).toEqual([
+    expect.objectContaining({ attempt_id: 'timed-out', user_id: userId, session_id: conversationId, call_id: 'call', role: 'agent_core',
+      model_id: 'glm', outcome: 'failed', reason: 'first_content_timeout', started_at: 1_000, first_content_ms: null, elapsed_ms: 10_000,
+      input_tokens: null, first_content_timeout_ms: 10_000, total_timeout_ms: 30_000 }),
+    expect.objectContaining({ attempt_id: 'completed', model_id: 'deepseek', outcome: 'succeeded', reason: null, first_content_ms: 900,
+      elapsed_ms: 7_700, input_tokens: 8_214, cached_input_tokens: 2_048, output_tokens: 1_332, reasoning_tokens: 0,
+      provider_request_id: 'chatcmpl-1' }),
+  ]);
+});
+
 test.each(['storyboard', 'transcript'] as const)('persists %s diagnostics across RPCs, isolates owners, and bounds run storage', async kind => {
   const fixture = { ...extractionFixture, kind };
   const { runtime, runId } = await seed(`extraction-diagnostics-${kind}-owner`);

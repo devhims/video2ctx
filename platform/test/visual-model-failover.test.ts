@@ -3,6 +3,7 @@ import { createAgentModel, FIREWORKS_GLM_MODEL_ID } from '../src/agents/model';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
 import { createVisualAnalyst } from '../src/agents/providers/youtube/visual-analyst';
 import type { ModelFailoverState } from '../src/agents/runtime/model-failover';
+import { sseResponse } from './fixtures/model-streams';
 
 const deepseek = 'accounts/fireworks/models/deepseek-v4p1-flash';
 const env = { AI_GATEWAY_ID: '', FIREWORKS_API_KEY: 'test-key', AGENT_GLM_PROVIDER: 'fireworks',
@@ -14,15 +15,13 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 it.each([['frames', false], ['frames', true], ['storyboard', false], ['storyboard', true]] as const)('takes over %s images with prior research fallback %s', async (kind, priorFallback) => {
   vi.useFakeTimers();
   vi.spyOn(console, 'log').mockImplementation(() => {});
-  const requests: Array<{ model: string; messages: unknown; service_tier: string; reasoning_effort: string; response_format: unknown }> = [];
+  const requests: Array<{ model: string; messages: unknown; service_tier: string; reasoning_effort: string; response_format: unknown; stream: boolean }> = [];
   const output = { findings: [{ observation: 'Two colored boxes are visible.',
     ...(kind === 'frames' ? { timestampsMs: [1000, 5000] } : { frameIndexes: [0, 10] }) }], warnings: [] };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
     const body = JSON.parse(String(init?.body)); requests.push(body);
     if (body.model === FIREWORKS_GLM_MODEL_ID) return new Promise(() => {});
-    return Response.json({ id: 'backup', created: 1, model: body.model,
-      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(output) } }],
-      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
+    return sseResponse(body.model, JSON.stringify(output));
   });
   const state: ModelFailoverState = { fallback: false };
   if (priorFallback) {
@@ -46,7 +45,7 @@ it.each([['frames', false], ['frames', true], ['storyboard', false], ['storyboar
   expect(await task).toEqual(output);
   expect(requests.map(request => request.model)).toEqual(priorFallback ? [FIREWORKS_GLM_MODEL_ID, deepseek, deepseek] : [FIREWORKS_GLM_MODEL_ID, deepseek]);
   if (!priorFallback) expect(requests[1]!.messages).toEqual(requests[0]!.messages);
-  expect(requests.at(-1)).toMatchObject({ service_tier: 'priority', reasoning_effort: 'none', response_format: { type: 'json_schema' } });
+  expect(requests.at(-1)).toMatchObject({ service_tier: 'priority', reasoning_effort: 'none', response_format: { type: 'json_schema' }, stream: true });
   for (const image of images) expect(JSON.stringify(requests.at(-1)!.messages)).toContain(`data:image/jpeg;base64,${image}`);
   expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ modelId: deepseek }));
 
