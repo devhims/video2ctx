@@ -421,8 +421,15 @@ test('an access refresh outage preserves the last confirmed access and shows the
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 503, json: { error: { code: 'AUTH_UNAVAILABLE', message: 'The API cannot verify access right now.' } } }));
   await page.evaluate("window.dispatchEvent(new Event('focus'))");
-  await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'The API cannot verify access right now.' })).toBeVisible();
+  const accessToast = page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'The API cannot verify access right now.' });
+  await expect(accessToast).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  // A retry that fails with the same error keeps the warning and its retry action.
+  const retried = page.waitForResponse('**/api/platform/v1/agent/access');
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await retried;
+  await expect(accessToast).toBeVisible();
+  await expect(accessToast.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
   await page.unroute('**/api/platform/v1/agent/access');
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(page.getByText('The API cannot verify access right now.')).toHaveCount(0);

@@ -27,7 +27,9 @@ export function useLoadErrorToast(error: string | null | undefined, retryLabel: 
   const retryRef = useRef(retry);
   useEffect(() => { retryRef.current = retry; });
   useEffect(() => {
-    if (error) show(error, { duration: Infinity, action: { label: retryLabel, onClick: () => retryRef.current() } });
+    // Keep the toast through a retry. It closes when the error clears, so a retry
+    // that fails with the same message still leaves the warning and its action.
+    if (error) show(error, { duration: Infinity, action: { label: retryLabel, onClick: event => { event.preventDefault(); retryRef.current(); } } });
     else clear();
   }, [error, retryLabel, show, clear]);
 }
