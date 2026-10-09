@@ -34,6 +34,8 @@ export interface AgentCoreDefinition {
   activeTools: readonly string[];
   unavailableTools?: () => readonly string[];
   finalizationToolName: string;
+  /** Retired names that still request finalization, for models that keep emitting them. */
+  finalizationAliases?: readonly string[];
   toolCallLimits?: Readonly<Record<string, number>>;
   isToolBudgetExhausted?: () => boolean;
 }
@@ -109,6 +111,13 @@ export async function runAgentCoreWithModel(options: {
       hasExecutedToolResult(finalizationToolName),
     ],
     prepareStep: ({ stepNumber, steps }) => {
+      // A retired completion name requests finalization like the current one, unless completion is withheld.
+      const aliases = options.definition.finalizationAliases ?? [];
+      if (steps.at(-1)?.toolCalls.some(call => aliases.includes(call.toolName))
+        && !options.definition.unavailableTools?.().includes(finalizationToolName)) {
+        console.warn(`[agent-core] treating a retired completion call as ${finalizationToolName}: runId=${options.context.runId} step=${stepNumber}`);
+        options.onFinalizationRequested?.();
+      }
       if (hasTerminalToolCallWithoutResult(steps, finalizationToolName)) {
         console.warn(
           `[agent-core] retrying ${finalizationToolName} after an unexecuted terminal tool call: runId=${options.context.runId} step=${stepNumber}`,
