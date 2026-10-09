@@ -19,6 +19,7 @@ import { SOURCES_HOME_EVENT } from './dashboard-routes';
 
 import type { ProviderId, EntityType, SourceDataOption, Thumbnail, SearchItem, Segment, Transcript, CommentPage, ChannelInfo, Project, ProjectItem, Inspector, RecentSource, SourceSnapshot } from './research-types';
 import { DashboardSkeleton as SourceSkeleton } from './DashboardSkeleton';
+import { useLoadErrorToast } from '../../lib/use-error-toast';
 const SOURCE_DATA_OPTIONS: Record<SourceDataOption, { shortLabel: string; description: string }> = {
   transcript: { shortLabel: 'Transcript', description: 'Complete timestamped spoken text' },
   comments: { shortLabel: 'Comments', description: 'Paginated public comments and replies' },
@@ -114,6 +115,9 @@ export default function SourcesClient({ active }: {active:boolean}) {
     void loadHistory(controller.signal);
     return () => controller.abort();
   }, [active, authenticated, loadHistory]);
+  // Background loads report through toasts; only the user's own requests show inline errors.
+  useLoadErrorToast(active ? projectsResource.error : '', 'Retry projects', () => void projectsResource.refresh());
+  useLoadErrorToast(active ? historyError : '', 'Retry recent sources', () => void loadHistory());
 
   const persistSource = async <T extends { source?: RecentSource; sourceRevision?: string }>(save: SourceSave): Promise<T | null> => {
     try {
@@ -622,7 +626,6 @@ export default function SourcesClient({ active }: {active:boolean}) {
 
   return (
     <>
-    {projectsResource.error && <div className="alert error" role="alert">{projectsResource.error} <button onClick={()=>void projectsResource.refresh()}>Retry projects</button></div>}
         <div className='workspace-view'>
           <>
             {projectId && <div className='source-project-context' role='status'>Adding sources to <strong>{projectName}</strong><Link href={`/dashboard/projects?project=${encodeURIComponent(projectId)}`}>View project</Link></div>}
@@ -671,7 +674,6 @@ export default function SourcesClient({ active }: {active:boolean}) {
               : <section className='source-results' aria-labelledby='recent-sources-title'>
                 <header><h2 id='recent-sources-title'>Recent sources</h2></header>
                 {historyLoading && !recentSources.length ? <RecentSourcesSkeleton /> : null}
-                {historyError ? <div className='alert error' role='alert'>{historyError} <button onClick={() => void loadHistory()}>Retry recent sources</button></div> : null}
                 {!historyLoading && !historyError && !recentSources.length ? <HistoryEmptyState title='No recent sources yet' description='Search for a topic or paste a YouTube link above. Your recent sources will appear here.' /> : null}
                 <div className='source-result-list recent-source-list' aria-busy={historyLoading}>{recentSources.map(source => <button key={source.id} onClick={() => void openRecentSource(source)}>
                   <span className='recent-source-visual'>{source.kind === 'search' ? <Icon name='search' size={20} /> : <><span aria-hidden='true'>YT</span>{source.thumbnailUrl && <img src={source.thumbnailUrl} alt='' loading='lazy' onError={event => { event.currentTarget.hidden = true; }} />}</>}</span>
@@ -682,7 +684,6 @@ export default function SourcesClient({ active }: {active:boolean}) {
             )}
           </>
         </div>
-        {historyError && (inspector || hasSearched || loading) ? <div className='alert error' role='alert'>{historyError}</div> : null}
     </>
   );
 }

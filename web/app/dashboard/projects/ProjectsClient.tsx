@@ -8,6 +8,7 @@ import type { Project } from '../research-types';
 import { ProjectsView } from './ProjectsView';
 import { NewProjectDialog } from '../NewProjectDialog';
 import { projectItemPath } from '../dashboard-routes';
+import { useLoadErrorToast } from '../../../lib/use-error-toast';
 export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Project[]>> }) {
   const router = useRouter(),
     params = useSearchParams();
@@ -17,6 +18,8 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   const cache = useDashboardCache();
   const detail = useProjectDetail(selected?.id ?? null);
   const [createError, setCreateError] = useState(''), [create, setCreate] = useState(false);
+  useLoadErrorToast(resource.error, 'Retry projects', () => void resource.refresh());
+  useLoadErrorToast(selected ? detail.error : '', 'Retry loading sources', () => void detail.refresh());
   // Keep selection in the URL; generic Projects navigation always shows the list.
   // Native history updates integrate with Next without waiting for another server render.
   const open = (project: Project) => window.history.pushState(null, '', `/dashboard/projects?project=${encodeURIComponent(project.id)}`);
@@ -41,18 +44,12 @@ export function ProjectsClient({ promise }: { promise: Promise<ResourceResult<Pr
   };
   return (
     <>
-      {resource.error && (
-        <div className='alert error' role='alert'>
-          {resource.error} <button onClick={() => void resource.refresh()}>Retry projects</button>
-        </div>
-      )}
       {resource.ready && (
         <ProjectsView
           projects={resource.data}
           selectedProject={selected ? { ...selected, ...detail.data, name: detail.data?.name || resource.data.find(project => project.id === selected.id)?.name || selected.name || 'Project', items: detail.data?.items ?? [] } : null}
           loading={Boolean(selected && !detail.data && !detail.error)}
           error={detail.error}
-          onRetry={() => void detail.refresh()}
           onPrefetch={project => void cache.projectDetails.load(project.id)}
           onCreate={() => { setCreateError(''); setCreate(true); }}
           onOpen={(p) => void open(p)}

@@ -14,6 +14,7 @@ import { useDashboardSession } from '../DashboardSessionProvider';
 
 import type { DashboardApiKey as ManagedApiKey } from '../../../lib/dashboard-data';
 import type { ResourceResult } from '../../../lib/dashboard-cache';
+import { useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export default function DeveloperSettingsClient({promise}:{promise:Promise<ResourceResult<ManagedApiKey[]>>}) {
   const router = useRouter();
@@ -36,6 +37,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
   const [error, setError] = useState('');
 
   const refresh = keysResource.refresh;
+  useLoadErrorToast(keysResource.error, 'Retry API keys', () => void refresh());
 
   const navigateToDashboard = (section: DashboardSection) => {
     router.push(`/dashboard/${section === 'discover' ? 'sources' : section}`);
@@ -120,7 +122,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
             <p>The full value will not be shown again.</p>
             <div><code>{createdSecret}</code><button onClick={() => void copySecret()}>Copy key</button></div>
           </div>}
-          {(error || keysResource.error) && <p className='alert error' role='alert'>{error || keysResource.error}</p>}
+          {error && <p className='alert error' role='alert'>{error}</p>}
         </section>
 
         <section className={styles.keys} aria-labelledby='active-keys-title'>
@@ -134,10 +136,6 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
               <div className={styles.keyIdentity}><strong><i className='ui-bar' data-width='medium' /></strong><code><i className='ui-bar' data-width='short' /></code><dl><div><dt>Created</dt><dd className='skeleton-action'><i className='ui-bar' /></dd></div><div><dt>Last used</dt><dd className='skeleton-action'><i className='ui-bar' /></dd></div></dl></div>
               <span className={styles.revoke}><i className='ui-bar skeleton-key-action' /></span>
             </div>)}</div>}
-            {keysState === 'error' && <button onClick={() => {
-              setError('');
-              void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'Could not load API keys.'));
-            }}>Retry API keys</button>}
             {keysState === 'ready' && keys.map((key) => <article key={key.id} className={styles.keyRow}>
               <span className={styles.keyIcon}><KeyIcon size={19} aria-hidden='true' /></span>
               <div className={styles.keyIdentity}>

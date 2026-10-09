@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { platformRequest, PlatformApiError } from '../../lib/platform-request';
 import { authClient } from '../../lib/auth-client';
 import type { DashboardUser } from '../../lib/server-session';
+import { useErrorToast, useLoadErrorToast } from '../../lib/use-error-toast';
 
 type DashboardSessionContextValue = {
   user: DashboardUser | null;
@@ -99,8 +100,11 @@ export function DashboardSessionProvider({
     }
   }, [isSigningOut]);
 
+  useLoadErrorToast(accessError, 'Retry', () => serverAccessFailed ? window.location.reload() : window.dispatchEvent(new Event('agent-access-changed')));
+  const { show: showSignOutError, clear: clearSignOutError } = useErrorToast();
+  useEffect(() => { if (signOutError) showSignOutError(signOutError); else clearSignOutError(); }, [signOutError, showSignOutError, clearSignOutError]);
   const value = useMemo(() => ({ user, demoEnabled, isSigningOut, accessReady, agentAccess: !!user && agentAccess, adminAccess: !!user && adminAccess, signOut }), [demoEnabled, agentAccess, adminAccess, accessReady, isSigningOut, signOut, user]);
-  return <DashboardSessionContext.Provider value={value}>{children}{accessError && <div className='dashboard-signout-error' role='alert'>{accessError} <button onClick={() => serverAccessFailed ? window.location.reload() : window.dispatchEvent(new Event('agent-access-changed'))}>Retry</button></div>}{signOutError && <div className='dashboard-signout-error' role='alert'>{signOutError}</div>}</DashboardSessionContext.Provider>;
+  return <DashboardSessionContext.Provider value={value}>{children}</DashboardSessionContext.Provider>;
 }
 
 export function useDashboardSession(): DashboardSessionContextValue {

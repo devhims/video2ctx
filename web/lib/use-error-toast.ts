@@ -17,3 +17,17 @@ export function useErrorToast() {
   useEffect(() => clear, [clear]);
   return { show, clear };
 }
+
+/**
+ * Shows a background load failure as a persistent toast with a retry action.
+ * Errors from the user's own action stay inline, next to what they did.
+ */
+export function useLoadErrorToast(error: string | null | undefined, retryLabel: string, retry: () => void) {
+  const { show, clear } = useErrorToast();
+  const retryRef = useRef(retry);
+  useEffect(() => { retryRef.current = retry; });
+  useEffect(() => {
+    if (error) show(error, { duration: Infinity, action: { label: retryLabel, onClick: () => retryRef.current() } });
+    else clear();
+  }, [error, retryLabel, show, clear]);
+}

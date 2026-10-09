@@ -91,7 +91,7 @@ test('recent source load failures expose a retry and preserve the form', async (
     ? route.fulfill({ status: 503, json: { error: { code: 'TEMPORARY', message: 'History is temporarily unavailable.' } } })
     : route.fulfill({ json: { sources: [] } }));
   await page.goto('/dashboard/sources');
-  await expect(page.getByRole('alert').filter({ hasText: 'History is temporarily unavailable.' })).toBeVisible();
+  await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'History is temporarily unavailable.' })).toBeVisible();
   await expect(page.getByText('No recent sources yet')).toHaveCount(0);
   await page.getByRole('button', { name: 'Retry recent sources' }).click();
   await expect(page.getByText('No recent sources yet')).toBeVisible();
@@ -410,7 +410,7 @@ test('account errors do not show fabricated empty project results', async ({ pag
   const scenario = await accountScenario(page, { responses: { '/v1/projects': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Projects are temporarily unavailable.' } } } } });
   try {
     await page.goto('/dashboard?section=projects');
-    await expect(page.getByRole('alert').filter({ hasText: 'Projects are temporarily unavailable.' })).toBeVisible();
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Projects are temporarily unavailable.' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Retry projects' })).toBeVisible();
     await expect(page.getByText('No projects yet', { exact: true })).toHaveCount(0);
   } finally { await scenario.clear(); }
@@ -421,7 +421,7 @@ test('an access refresh outage preserves the last confirmed access and shows the
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 503, json: { error: { code: 'AUTH_UNAVAILABLE', message: 'The API cannot verify access right now.' } } }));
   await page.evaluate("window.dispatchEvent(new Event('focus'))");
-  await expect(page.getByRole('alert').filter({ hasText: 'The API cannot verify access right now.' })).toBeVisible();
+  await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'The API cannot verify access right now.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await page.unroute('**/api/platform/v1/agent/access');
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
@@ -553,7 +553,7 @@ test('API key failures show retry instead of an empty account', async ({ page })
  const scenario=await accountScenario(page,{responses:{'/api/auth/api-key/list':{status:503,body:{error:{message:'Keys unavailable'}}}}});
  try {
  await page.goto('/dashboard/developer');
- await expect(page.getByRole('alert').filter({hasText:'Keys unavailable'})).toBeVisible();
+ await expect(page.locator('[data-sonner-toast][data-type=error]').filter({hasText:'Keys unavailable'})).toBeVisible();
  await expect(page.getByText('No API keys yet',{exact:true})).toHaveCount(0);
  await page.route('**/api/platform/api/auth/api-key/list',route=>route.fulfill({json:{apiKeys:[],total:0}}));
  await page.getByRole('button',{name:'Retry API keys'}).click();
@@ -694,7 +694,7 @@ test('a failed settings card does not keep pulsing or block the other card', asy
   const scenario = await accountScenario(page, { responses: { '/v1/billing': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Billing unavailable' } } } } });
   try {
     await page.goto('/dashboard?section=settings');
-    await expect(page.getByRole('alert').filter({ hasText: 'Billing unavailable' })).toBeVisible();
+    await expect(page.locator('[data-sonner-toast][data-type=error]').filter({ hasText: 'Billing unavailable' })).toBeVisible();
     await expect(page.getByRole('status', { name: 'Loading billing' })).toHaveCount(0);
     await expect(page.getByRole('switch', { name: /In-app alerts/ })).toBeEnabled();
   } finally { await scenario.clear(); }
