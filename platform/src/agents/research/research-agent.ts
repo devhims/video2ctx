@@ -65,7 +65,7 @@ import {
   evidencePacketForModel,
   finalizationEvidenceForModel,
 } from '../runtime/model-evidence';
-import { FINALIZE_ANSWER_TOOL_NAME } from '../runtime/loop-control';
+import { COMPLETE_RESEARCH_TOOL_NAME, FINALIZE_ANSWER_TOOL_NAME } from '../runtime/loop-control';
 import type { AgentDraft } from '../runtime/run-progress';
 import { capabilityRegistry, describeCapabilities } from './capability-registry';
 import { createCapabilityProvider } from './capability-provider';
@@ -380,6 +380,19 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
     .filter(name => !['get_video_storyboard','get_video_frames','analyze_video_frames','analyze_video_storyboard'].includes(name) || options.decision.useStoryboard !== false);
+  // With a configured finalizer, research only signals completion. The finalizer writes
+  // the answer, so research never composes one that would be discarded.
+  const completionTool = options.finalizationModel ? COMPLETE_RESEARCH_TOOL_NAME : FINALIZE_ANSWER_TOOL_NAME;
+  const providerToolNames = completionTool === COMPLETE_RESEARCH_TOOL_NAME
+    ? toolNames.filter(name => name !== FINALIZE_ANSWER_TOOL_NAME) : toolNames;
+  const activeToolNames = toolNames.map(name => name === FINALIZE_ANSWER_TOOL_NAME ? completionTool : name);
+  let researchComplete = false;
+  const completeResearchTools: ToolSet = completionTool === COMPLETE_RESEARCH_TOOL_NAME && toolNames.includes(FINALIZE_ANSWER_TOOL_NAME)
+    ? { [COMPLETE_RESEARCH_TOOL_NAME]: tool({
+      description: 'End research once the collected evidence is sufficient. Takes no answer; a separate finalizer writes it from the evidence.',
+      inputSchema: z.object({}),
+      execute: async () => { researchComplete = true; return { status: 'research_complete' }; },
+    }) } : {};
   const evidence = new Map(
     (options.inheritedResolved ? options.recoveredEvidence ?? []
       : evidenceWithConversationMetadata(options.recoveredEvidence ?? [], options.conversationHistory ?? []))
@@ -606,7 +619,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             describeCapabilities([capability.id]),
             '',
             `Activated capability: ${capability.id}`,
-            capability.instructions,
+            capability.instructions(completionTool),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. The finalizer will also read saved transcripts for every subject.`] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
@@ -614,20 +627,21 @@ async function runResearchAgentWithModelWithinDeadline(options: {
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
             ...(visualRequired
-              ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. finalize_answer stays unavailable until analyzed images provide observations or no visual retrieval path remains.`]
+              ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. ${completionTool} stays unavailable until analyzed images provide observations or no visual retrieval path remains.`]
               : visualEvidenceLevel(options.decision) === 'helpful' ? ['Visual tools are optional for this request. Use them only when images add needed detail.'] : []),
             ...(options.context.currentDate ? ['', options.context.currentDate, 'When a search depends on a relative date, put the absolute year or date in the query.'] : []),
           ].join('\n'),
-          tools: traceToolSet({...createCapabilityToolSet(phaseContext, toolNames),...sessionTools}, phaseContext.traceToolCall),
-          activeTools: [...toolNames,...Object.keys(sessionTools)],
+          tools: traceToolSet({...createCapabilityToolSet(phaseContext, providerToolNames),...completeResearchTools,...sessionTools}, phaseContext.traceToolCall),
+          activeTools: [...activeToolNames,...Object.keys(sessionTools)],
           unavailableTools: () => [
             ...(searchUsed || !!options.decision.comparisonVideoIds?.length || (options.decision.route === 'topic_research' && !!options.decision.channelId) ? ['search_youtube'] : []),
             ...(frameExtractionBudget(options.researchDeadlineAt) < FRAME_EXTRACTION_MIN_MS ? ['get_video_frames'] : []),
             ...(storyboardRetrievalBudget(options.researchDeadlineAt) < STORYBOARD_RETRIEVAL_MIN_MS ? ['get_video_storyboard'] : []),
             ...(!canAnalyzeStoryboard(options.researchDeadlineAt) ? ['analyze_video_storyboard'] : []),
-            ...(needsVisualWork() ? [FINALIZE_ANSWER_TOOL_NAME] : []),
+            ...(needsVisualWork() ? [completionTool] : []),
           ],
-          finalizationToolName: FINALIZE_ANSWER_TOOL_NAME,
+          finalizationToolName: completionTool,
+          finalizationAliases: completionTool === COMPLETE_RESEARCH_TOOL_NAME ? [FINALIZE_ANSWER_TOOL_NAME] : undefined,
           isToolBudgetExhausted: () => transcriptBudget?.isExhausted() === true && !visualRequired,
         },
         messages: conversationModelMessages(
@@ -653,6 +667,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       });
     }, 'Research phase timeout.');
+    if (!finalized && researchComplete) {
+      console.log(JSON.stringify({ event: 'agent_finalization_handoff', runId: options.context.runId, reason: 'research_complete',
+        remainingMs: Math.max(0, options.researchDeadlineAt - Date.now()) }));
+      throw finalizationHandoff;
+    }
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {

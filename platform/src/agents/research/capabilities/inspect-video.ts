@@ -1,6 +1,7 @@
 import { ANSWER_SCOPE_GUIDANCE } from '../answer-guidance';
 import type { AgentToolContext } from '../../providers/youtube/tool-context';
 import { createCapabilityToolSet } from '../../providers/youtube/tool-library';
+import { researchCompletionInstruction, type ResearchCompletionTool } from '../../runtime/loop-control';
 
 export const INSPECT_VIDEO_DESCRIPTION = [
   'Inspect one known YouTube video using its metadata, captions, transcript, comments, and sampled storyboard images.',
@@ -19,7 +20,7 @@ export const INSPECT_VIDEO_TOOL_NAMES = [
   'finalize_answer',
 ] as const;
 
-export const INSPECT_VIDEO_INSTRUCTIONS = `
+export const inspectVideoInstructions = (completion: ResearchCompletionTool) => `
 You are the single-video inspection capability of a YouTube research agent.
 
 Use only the supplied video ID. Read the minimum video-specific resources needed to answer the request. Check get_video captionAvailability before requesting captions. If a recent observation confirms unavailable, skip get_video_transcript and use relevant available evidence or explain the coverage gap. If it is available or unknown, call get_video_transcript for the supplied video and language. A missing or false search CC badge does not confirm absence. It returns timed captions directly, without a separate transcript analyst. For a long transcript, follow its continuation offset with the same video and language to read later pages from the saved transcript. A page warning describes packet coverage, not missing provider captions. Read the whole transcript and handle all requested locations, items, and follow-up questions yourself using its exact evidence identifiers. Rephrasing a question does not require retrieving the same captions again.
@@ -36,7 +37,7 @@ When the route requires visual evidence, completing transcript research does not
 
 ${ANSWER_SCOPE_GUIDANCE}
 
-Call finalize_answer once the evidence is sufficient. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. Copy excerpt identifiers from tool results. The application renders citations; do not write inline citation markers. Never invent identifiers.
+${researchCompletionInstruction(completion, 'Call finalize_answer once the evidence is sufficient. Return blocks of answer text with supporting evidenceIds for every substantive conclusion. Copy excerpt identifiers from tool results. The application renders citations; do not write inline citation markers. Never invent identifiers.')}
 `.trim();
 
 export function createInspectVideoTools(context: AgentToolContext) {

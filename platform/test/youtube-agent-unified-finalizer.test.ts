@@ -534,7 +534,32 @@ it('QA 012: marks an invented inline citation unavailable and saves the answer o
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
 
-it('finalize_answer tool handoff compatibility: only the unified finalizer persists the answer', async () => {
+it('single-video research signals completion without an answer, and only the finalizer writes one', async () => {
+  const { options, output } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence,
+    sources: evidence.sources.map(source => ({ ...source, title: 'Saved video' })) }];
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(output) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) =>
+    metadata.model_role === 'finalizer' ? finalizer : core);
+
+  await executeResearchRun(options);
+
+  expect(core.doGenerateCalls).toHaveLength(1);
+  const offered = core.doGenerateCalls[0]!.tools?.map(tool => tool.name) ?? [];
+  expect(offered).toContain('complete_research');
+  expect(offered).not.toContain('finalize_answer');
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.stringContaining('timeout-finalizer'), expect.objectContaining({ intent: 'inspect_video' }));
+});
+
+it('a stray finalize_answer call from research hands off without publishing its answer', async () => {
   const { options, output } = setup('context_answer', true);
   options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
   options.recoveredEvidence = [{ ...evidence,
