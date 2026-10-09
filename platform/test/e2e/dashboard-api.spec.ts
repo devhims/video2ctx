@@ -1894,3 +1894,434 @@ for (const kind of ['search', 'playlist'] as const) test(`saved ${kind} members 
     expect(counts.writes).toEqual([]);
   } finally { await scenario.clear(); }
 });
+
+// Category 5: source navigation and guidance (QA 009, QA 010, QA 011, QA 018).
+const QA011_PLAYLIST = 'PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr';
+const QA011_URL = `https://www.youtube.com/playlist?list=${QA011_PLAYLIST}`;
+const QA011_MEMBERS = ([['WUvTyaaNkzM', 'The essence of calculus'], ['9vKqVkMQHKk', 'The paradox of the derivative'], ['abcdefghijk', 'Derivative formulas through geometry']] as const)
+  .map(([id, title]) => ({ provider: 'youtube', type: 'video', id, title, thumbnails: [], channel: { id: 'UCYO_jab_esuFRV4b17AJtAw', name: '3Blue1Brown' } }));
+
+/** Live Sources with a resolvable playlist and its members. Recent saves can be held to model a slow receipt. */
+async function qa011LivePlaylist(page: Page, options: { holdPlaylistSave?: boolean; holdChild?: string } = {}) {
+  const reads = { playlist: 0, child: [] as string[], transcripts: [] as string[] };
+  const recentPosts: Array<{ input: string; type: string; id: string }> = [];
+  let releasePlaylistSave = () => {}, releaseChild = () => {};
+  const playlistSaveGate = new Promise<void>(resolve => { releasePlaylistSave = resolve; });
+  const childGate = new Promise<void>(resolve => { releaseChild = resolve; });
+  await page.unroute('**/api/platform/v1/resolve');
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'playlist', provider: 'youtube', id: QA011_PLAYLIST } }));
+  await page.route(`**/api/platform/v1/playlists/${QA011_PLAYLIST}?**`, route => { reads.playlist++; return route.fulfill({ json: {
+    id: QA011_PLAYLIST, title: 'Essence of calculus', thumbnails: [], channel: { id: 'UCYO_jab_esuFRV4b17AJtAw', name: '3Blue1Brown' }, videos: QA011_MEMBERS } }); });
+  for (const member of QA011_MEMBERS) {
+    await page.route(`**/api/platform/v1/videos/${member.id}?**`, async route => {
+      reads.child.push(member.id);
+      if (options.holdChild === member.id) await childGate;
+      await route.fulfill({ json: { id: member.id, title: member.title, thumbnails: [], channel: member.channel } }).catch(() => {});
+    });
+    await page.route(`**/api/platform/v1/videos/${member.id}/transcript?**`, async route => {
+      reads.transcripts.push(member.id);
+      if (options.holdChild === member.id) await childGate;
+      const text = `${member.title} transcript`;
+      await route.fulfill({ json: { ...transcript, videoId: member.id, text, segments: [{ ...transcript.segments[0], text }] } }).catch(() => {});
+    });
+  }
+  await page.route('**/api/platform/v1/sources/recent', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { sources: [] } });
+    const body = route.request().postDataJSON();
+    const inspector = body.snapshot.inspector ?? {};
+    recentPosts.push({ input: body.input, type: inspector.type, id: inspector.id });
+    const playlist = inspector.type === 'playlist';
+    if (playlist && options.holdPlaylistSave) await playlistSaveGate;
+    const id = playlist ? '11111111-1111-4111-8111-111111111111' : `22222222-2222-4222-8222-${String(recentPosts.length).padStart(12, '0')}`;
+    await route.fulfill({ status: 201, json: { source: { id, input: body.input, title: body.input, kind: 'inspection', updatedAt: Date.now() },
+      sourceRevision: (playlist ? 'p' : 'c').repeat(64).replace(/[^a-f0-9]/g, playlist ? 'a' : 'c') } }).catch(() => {});
+  });
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(QA011_URL);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByRole('heading', { name: 'Videos in this playlist' })).toBeVisible();
+  return { reads, recentPosts, releasePlaylistSave, releaseChild };
+}
+
+async function expectQa011Playlist(page: Page) {
+  await expect(page.getByRole('heading', { name: 'Videos in this playlist' })).toBeVisible();
+  const rows = page.locator('.playlist-video-list > button');
+  await expect(rows).toHaveCount(QA011_MEMBERS.length);
+  for (const [index, member] of QA011_MEMBERS.entries()) await expect(rows.nth(index)).toContainText(member.title);
+  await expect(page.getByRole('textbox', { name: /Playlist URL detected|Video search or YouTube URL/ })).toHaveValue(QA011_URL);
+}
+
+for (const [label, input] of [['watch', 'https://www.youtube.com/watch?v=invalid'], ['short link', 'https://youtu.be/invalid'], ['shorts', 'https://www.youtube.com/shorts/invalid'], ['live', 'https://www.youtube.com/live/invalid']] as const) test(`QA 009 a malformed ${label} video ID is rejected without entering Recent sources`, async ({ page }) => {
+  const posts: string[] = [], videoReads: string[] = [];
+  // Model an older resolver that still classifies the malformed ID as a video.
+  await page.unroute('**/api/platform/v1/resolve');
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'video', provider: 'youtube', id: 'invalid' } }));
+  await page.route('**/api/platform/v1/videos/invalid**', route => { videoReads.push(route.request().url()); return route.fulfill({ status: 422, json: { error: { code: 'INVALID_INPUT', message: 'Invalid video ID.' } } }); });
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() === 'POST') { posts.push(route.request().postDataJSON().input); return route.fulfill({ status: 201, json: { source: { id: crypto.randomUUID(), input, title: input, kind: 'inspection', updatedAt: Date.now() } } }); }
+    return route.fulfill({ json: { sources: [] } });
+  });
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(input);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Invalid video ID.' }).first()).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(videoReads).toEqual([]);
+  expect(posts).toEqual([]);
+  // A direct video deep link with the same ID is also rejected before any read or history save.
+  await page.goto('/dashboard/sources?type=video&id=invalid');
+  await expect(page.getByRole('alert').filter({ hasText: 'Invalid video ID.' }).first()).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(videoReads).toEqual([]);
+  expect(posts).toEqual([]);
+});
+
+test('QA 009 a valid video with a failed dataset is still remembered for retry', async ({ page }) => {
+  const posts: unknown[] = [];
+  await page.route(`**/api/platform/v1/videos/${videoId}/transcript?**`, route => route.fulfill({ status: 503, json: { error: { code: 'PROVIDER_UNAVAILABLE', message: 'YouTube is temporarily unavailable.' } } }));
+  await page.route('**/api/platform/v1/sources/recent', route => {
+    if (route.request().method() === 'POST') { posts.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { source: { id: crypto.randomUUID(), input: videoId, title: 'Saved', kind: 'inspection', updatedAt: Date.now() } } }); }
+    return route.fulfill({ json: { sources: [] } });
+  });
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://www.youtube.com/watch?v=${videoId}`);
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByText('YouTube is temporarily unavailable.')).toBeVisible();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({ snapshot: { inspector: { id: videoId, dataErrors: { transcript: 'YouTube is temporarily unavailable.' } } } });
+});
+
+test('QA 010 an empty project describes only sources the dashboard can add', async ({ page }) => {
+  const project = { id: '5d1f8a2b-3c4e-4f6a-8b7c-9d0e1f2a3b4c', name: 'Empty guidance project', item_count: 0 };
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [] } }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await expect(page.getByText('Add searches, videos, or playlists to this project.', { exact: true })).toBeVisible();
+    await expect(page.getByText(/channels, or playlists/)).toHaveCount(0);
+  } finally { await scenario.clear(); }
+});
+
+test('QA 011 Back from a live playlist chapter restores the playlist without another read', async ({ page }) => {
+  const live = await qa011LivePlaylist(page);
+  await expect.poll(() => live.recentPosts.length).toBe(1);
+  for (const member of QA011_MEMBERS.slice(0, 2)) {
+    await page.locator('.playlist-video-list > button').filter({ hasText: member.title }).click();
+    await expect(page.getByRole('heading', { name: member.title, exact: true })).toBeVisible();
+    await expect(page.getByText(`${member.title} transcript`, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '← Back to playlist' }).click();
+    await expectQa011Playlist(page);
+  }
+  expect(live.reads.playlist).toBe(1);
+  expect(live.reads.child).toEqual(QA011_MEMBERS.slice(0, 2).map(member => member.id));
+});
+
+test('QA 011 Back while a chapter is pending restores the playlist and drops the stale chapter', async ({ page }) => {
+  const second = QA011_MEMBERS[1]!;
+  const live = await qa011LivePlaylist(page, { holdChild: second.id });
+  await expect.poll(() => live.recentPosts.length).toBe(1);
+  // Back while the chapter is still loading: its late completion must not repaint or save.
+  await page.locator('.playlist-video-list > button').filter({ hasText: second.title }).click();
+  await expect(page.getByRole('button', { name: '← Back to playlist' })).toBeVisible();
+  await page.getByRole('button', { name: '← Back to playlist' }).click();
+  await expectQa011Playlist(page);
+  live.releaseChild();
+  await page.waitForTimeout(500);
+  await expectQa011Playlist(page);
+  expect(live.recentPosts.filter(post => post.id === second.id)).toEqual([]);
+  expect(live.reads.playlist).toBe(1);
+});
+
+test('QA 011 Back after Cancel and Retry inside a chapter restores the same playlist', async ({ page }) => {
+  const first = QA011_MEMBERS[0]!;
+  const live = await qa011LivePlaylist(page, { holdChild: first.id });
+  await expect.poll(() => live.recentPosts.length).toBe(1);
+  await page.locator('.playlist-video-list > button').filter({ hasText: first.title }).click();
+  await expect.poll(() => live.reads.transcripts.length).toBe(1);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByText('Cancelled. Completed results are still available.')).toBeVisible();
+  live.releaseChild();
+  // Retry asks only for the datasets that the cancellation left unfinished.
+  await page.getByRole('button', { name: /Retry failed requests using credits/ }).click();
+  await expect(page.getByText(`${first.title} transcript`, { exact: true })).toBeVisible();
+  expect(live.reads.child).toEqual([first.id, first.id]);
+  expect(live.reads.transcripts).toEqual([first.id, first.id]);
+  await page.getByRole('button', { name: '← Back to playlist' }).click();
+  await expectQa011Playlist(page);
+  expect(live.reads.playlist).toBe(1);
+});
+
+for (const navigateDuringSave of [false, true]) test(`QA 011 Save playlist after Back pins the delayed playlist receipt, never the chapter receipt${navigateDuringSave ? ' (chapter opened during Save)' : ''}`, async ({ page }) => {
+  const project = { id: '3a4b5c6d-7e8f-4a0b-9c1d-2e3f4a5b6c7d', name: 'Receipt project', item_count: 0 };
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  const items: unknown[] = [], pins: unknown[] = [];
+  await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { items.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { id: '4b5c6d7e-8f9a-4b1c-8d2e-3f4a5b6c7d8e' } }); });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/*/snapshot`, route => { pins.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
+  try {
+    const live = await qa011LivePlaylist(page, { holdPlaylistSave: true });
+    await expect.poll(() => live.recentPosts.length).toBe(1);
+    const chapter = QA011_MEMBERS[0]!;
+    await page.locator('.playlist-video-list > button').filter({ hasText: chapter.title }).click();
+    await expect(page.getByText(`${chapter.title} transcript`, { exact: true })).toBeVisible();
+    await expect.poll(() => live.recentPosts.length).toBe(2);
+    await page.getByRole('button', { name: '← Back to playlist' }).click();
+    await expectQa011Playlist(page);
+    if (!navigateDuringSave) live.releasePlaylistSave();
+    await page.getByRole('button', { name: 'Save playlist' }).click();
+    if (navigateDuringSave) {
+      // Save is waiting on the playlist's own receipt while the user opens a chapter again.
+      await expect.poll(() => items.length).toBe(1);
+      expect(pins).toEqual([]);
+      await page.locator('.playlist-video-list > button').filter({ hasText: chapter.title }).click();
+      await expect(page.getByText(`${chapter.title} transcript`, { exact: true })).toBeVisible();
+      await expect.poll(() => live.recentPosts.length).toBe(3);
+      live.releasePlaylistSave();
+    }
+    await expect.poll(() => pins.length).toBe(1);
+    expect(items).toEqual([expect.objectContaining({ entityType: 'playlist', entityId: QA011_PLAYLIST })]);
+    expect(pins[0]).toEqual({ sourceId: '11111111-1111-4111-8111-111111111111', sourceRevision: 'a'.repeat(64) });
+  } finally { await scenario.clear(); }
+});
+
+test('QA 011 search results remain the Back destination for an opened result', async ({ page }) => {
+  await page.unroute('**/api/platform/v1/resolve');
+  await page.route('**/api/platform/v1/resolve', route => route.fulfill({ json: { kind: 'search', query: 'calculus' } }));
+  await page.route('**/api/platform/v1/search?**', route => route.fulfill({ json: { results: [
+    { type: 'video', id: videoId, title: 'First calculus result', thumbnails: [] }, { type: 'video', id: 'abcdefghijk', title: 'Second calculus result', thumbnails: [] }] } }));
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  await page.goto('/dashboard/sources');
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill('calculus');
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await page.getByRole('button', { name: /First calculus result/ }).click();
+  await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '← Back to results' }).click();
+  await expect(page.locator('.source-result-list > button')).toHaveCount(2);
+  await expect(page.getByRole('textbox', { name: 'Video search or YouTube URL' })).toHaveValue('calculus');
+});
+
+test('QA 011 Recent sources and the Sources sidebar clear the playlist parent', async ({ page }) => {
+  await qa011LivePlaylist(page);
+  await page.locator('.playlist-video-list > button').filter({ hasText: QA011_MEMBERS[0]!.title }).click();
+  await expect(page.getByText(`${QA011_MEMBERS[0]!.title} transcript`, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Recent sources', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+  // A later unrelated video has no parent and says where Back actually goes.
+  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://www.youtube.com/watch?v=${videoId}`);
+  await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
+  await page.getByRole('button', { name: /Inspect/ }).click();
+  await expect(page.getByText(transcript.text, { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '← Back to playlist' })).toHaveCount(0);
+  await page.getByRole('button', { name: '← Back to Sources' }).click();
+  await expect(page.getByRole('heading', { name: 'Recent sources', exact: true })).toBeVisible();
+});
+
+for (const kind of ['search', 'playlist'] as const) test(`QA 011 Back from a saved ${kind} member restores the saved parent from storage`, async ({ page }) => {
+  const project = { id: '60172023-1b06-4317-a62d-8a83be325cf1', name: 'Grouped sources', item_count: 2 };
+  const item = { id: '9dc9c14e-3d66-4c31-93f6-63a232f2f343', provider: 'youtube', entity_type: kind, entity_id: kind === 'playlist' ? 'PLsaved' : 'search', title: 'Saved list' };
+  const video = { id: 'b5fc6c76-8454-4f6d-85c8-5a90e6f96e9b', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'Saved member data' };
+  const results = [{ provider: 'youtube', type: 'video', id: videoId, title: 'Retained member', thumbnails: [] },
+    { provider: 'youtube', type: 'video', id: 'abcdefghijk', title: 'Uninspected member', thumbnails: [] }];
+  const snapshot = kind === 'search' ? { kind: 'search', selectedData: ['transcript', 'channel'], items: results }
+    : { kind: 'inspection', inspector: { provider: 'youtube', type: 'playlist', id: item.entity_id,
+      requestedData: [], dataErrors: {}, data: { id: item.entity_id, title: item.title, thumbnails: [], videos: results } } };
+  const counts = watchQa003(page);
+  let parentOpens = 0;
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [item, video] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${item.id}`, route => { parentOpens++; return route.fulfill({ json: {
+    state: 'restored', origin: 'pin', recovered: false, missingData: [], item, snapshot,
+    source: { id: item.id, input: 'Saved list', title: item.title, kind: snapshot.kind, updatedAt: Date.now() } } }); });
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${video.id}`, route => route.fulfill({ json: qa003Restored(video, video.title) }));
+  try {
+    await page.goto(`/dashboard/sources?openProject=${project.id}&saved=${item.id}`);
+    const rows = page.locator(kind === 'playlist' ? '.playlist-video-list > button' : '.source-result-list > button');
+    await expect(rows).toHaveCount(2);
+    await page.getByRole('button', { name: /Uninspected member/ }).click();
+    await expect(page.getByText('This video has no saved data in this project. Only the result list was saved.')).toBeVisible();
+    await expect(rows).toHaveCount(2);
+    await page.getByRole('button', { name: /Retained member/ }).click();
+    await expect(page.getByRole('heading', { name: video.title, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: kind === 'playlist' ? '← Back to playlist' : '← Back to results' }).click();
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first()).toContainText('Retained member');
+    await expect(page.getByRole('status').filter({ hasText: 'Opened from' })).toContainText(project.name);
+    expect(parentOpens).toBe(2);
+    expect(counts.provider).toBe(0);
+    expect(counts.writes).toEqual([]);
+    if (kind === 'playlist') {
+      // Save on the restored parent targets the parent item, never the child.
+      const itemWrites: unknown[] = [];
+      await page.route(`**/api/platform/v1/projects/${project.id}/items`, route => { itemWrites.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { id: item.id, existing: true } }); });
+      await page.getByRole('button', { name: 'Save playlist' }).click();
+      await expect(page.getByText(`Already saved in ${project.name}`)).toBeVisible();
+      expect(itemWrites).toEqual([expect.objectContaining({ entityType: 'playlist', entityId: item.entity_id })]);
+    }
+  } finally { await scenario.clear(); }
+});
+
+test('QA 011 control: browser Back and Forward still move between a project and its opened source', async ({ page }) => {
+  const project = { id: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d', name: 'History project', item_count: 1 };
+  const video = { id: '8b9c0d1e-2f3a-4b4c-9d5e-6f7a8b9c0d1e', provider: 'youtube', entity_type: 'video', entity_id: videoId, title: 'History video' };
+  const counts = watchQa003(page);
+  const scenario = await accountScenario(page, { responses: { '/v1/projects': { body: { projects: [project] } } } });
+  await page.route(`**/api/platform/v1/projects/${project.id}`, route => route.fulfill({ json: { ...project, items: [video] } }));
+  await page.route(`**/api/platform/v1/projects/${project.id}/sources/items/${video.id}`, route => route.fulfill({ json: qa003Restored(video, video.title) }));
+  try {
+    await page.goto(`/dashboard/projects?project=${project.id}`);
+    await page.locator('.project-detail').getByRole('button', { name: /History video/ }).click();
+    await expect(page.getByRole('heading', { name: video.title, exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: project.name })).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole('heading', { name: video.title, exact: true })).toBeVisible();
+    expect(counts.provider).toBe(0);
+    expect(counts.writes).toEqual([]);
+  } finally { await scenario.clear(); }
+});
+
+function qa018Video(id: string, title: string, trendScore: number, ageHours: number, viewCount: number) {
+  return { id, title, channel: { id: 'UCchannel', name: `${title} channel` }, thumbnails: [], description: '', ageHours, viewCount,
+    signalSource: 'observed', confidenceScore: 60, hashtags: [], keywords: [], effectiveViewsPerHour: 0, velocityRank: 1,
+    percentiles: { velocity: 0, freshness: 0, channelPerformance: 0, engagement: 0, acceleration: 0 }, trendScore, trendBand: 'Steady', url: `https://youtube.com/watch?v=${id}` };
+}
+
+const QA018_VIDEOS = [
+  qa018Video('fl1DSmwQKKY', 'What is Claude Code?', 40, 2000, 0),
+  qa018Video('ntDIxaeo3Wg', 'Claude Code - Full Tutorial for Beginners', 39, 2000, 0),
+  qa018Video('sameAAAAAAA', 'Identical point A', 20, 50, 1000),
+  qa018Video('sameBBBBBBB', 'Identical point B', 20, 50, 1000),
+  qa018Video('mixedLarge1', 'Large mixed point', 60, 10, 1_000_000_000),
+  qa018Video('mixedSmall1', 'Small mixed point', 61, 10, 0),
+  qa018Video('loneVideo01', 'Lone point', 95, 1, 10),
+];
+
+function qa018ReportBody(generatedAt = '2026-10-05T05:48:00Z') {
+  return { provider: 'youtube', query: 'Claude Code', generatedAt, sampleSize: QA018_VIDEOS.length, methodology: 'Fixture.',
+    summary: { totalViews: 0, medianViewsPerHour: 753, publishedLast7Days: 1, breakoutCount: 0 }, window: { days: 7, recentCandidatesSampled: 1, recentVideosEnriched: 1 },
+    videos: QA018_VIDEOS, hashtags: [], titlePatterns: [], durationMix: [], plan: { angle: 'Fixture angle', titleIdeas: [], observedHashtags: [], evidence: [] }, warnings: [] };
+}
+
+async function qa018Report(page: Page) {
+  let trendReads = 0, hold: Promise<void> | null = null;
+  await page.route('**/v1/trends?**', async route => {
+    trendReads++;
+    const gate = hold;
+    if (gate) await gate;
+    await route.fulfill({ json: qa018ReportBody(trendReads === 1 ? '2026-10-05T05:48:00Z' : '2026-10-05T06:48:00Z') }).catch(() => {});
+  });
+  // Opened points render a realistic Sources video instead of empty fixture defaults.
+  for (const video of QA018_VIDEOS) {
+    await page.route(`**/api/platform/v1/videos/${video.id}?**`, route => route.fulfill({ json: { id: video.id, title: video.title, thumbnails: [], channel: { id: 'UCchannel', name: video.channel.name } } }));
+    await page.route(`**/api/platform/v1/videos/${video.id}/transcript?**`, route => route.fulfill({ json: { ...transcript, videoId: video.id, text: `${video.title} transcript`, segments: [{ ...transcript.segments[0], text: `${video.title} transcript` }] } }));
+  }
+  await page.goto('/dashboard/trends');
+  await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('button', { name: /Research topic/ }).click();
+  await expect(page.locator('.scatter-plot .trend-dot')).toHaveCount(QA018_VIDEOS.length);
+  return { reads: () => trendReads, holdNext: () => { let release = () => {}; hold = new Promise<void>(resolve => { release = resolve; }); return () => { hold = null; release(); }; } };
+}
+
+const qa018Pattern = (title: string) => new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+const qa018Dot = (page: Page, title: string) => page.locator('.scatter-plot .trend-dot').filter({ has: page.locator('span', { hasText: new RegExp(`^${qa018Pattern(title).source}$`) }) });
+
+async function qa018ClickCenter(page: Page, title: string) {
+  // Raw mouse coordinates do not scroll; bring the plot on screen first (narrow layouts place it below the fold).
+  await qa018Dot(page, title).evaluate(dot => (dot as unknown as { scrollIntoView(options: object): void }).scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }));
+  const box = (await qa018Dot(page, title).boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  // The raw pointer must land on a scatter point (possibly the overlapping neighbour), never on empty layout.
+  expect(await page.evaluate(([px, py]) => Boolean((globalThis as unknown as { document: { elementFromPoint(x: number, y: number): { closest(s: string): unknown } | null } }).document.elementFromPoint(px!, py!)?.closest('.trend-dot')), [x, y])).toBe(true);
+  await page.mouse.click(x, y);
+}
+
+async function qa018ExpectOpened(page: Page, id: string, title: string) {
+  // Sources replaces the transient ?type=video&id= link at once; wait for the displayed video instead.
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(page.locator('.source-video-facts')).toContainText(id);
+}
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) test(`QA 018 overlapping scatter points offer a chooser instead of opening an adjacent video (${viewport.width}px)`, async ({ page }) => {
+  await page.setViewportSize(viewport);
+  await qa018Report(page);
+  // Rendered bounds, not nominal sizes, decide overlap: record them for the report.
+  const sizes = await page.locator('.scatter-plot .trend-dot').evaluateAll(dots => dots.map(dot => { const r = (dot as unknown as { getBoundingClientRect(): { width: number; height: number } }).getBoundingClientRect(); return [r.width, r.height]; }));
+  expect(sizes.every(([w, h]) => (w ?? 0) > 0 && (h ?? 0) > 0)).toBe(true);
+  console.log(`QA 018 rendered dot sizes at ${viewport.width}px: ${JSON.stringify(sizes)}`);
+  for (const [intended, neighbour, id] of [
+    ['What is Claude Code?', 'Claude Code - Full Tutorial for Beginners', 'fl1DSmwQKKY'],
+    ['Identical point A', 'Identical point B', 'sameAAAAAAA'],
+    ['Small mixed point', 'Large mixed point', 'mixedSmall1'],
+  ] as const) {
+    await qa018ClickCenter(page, intended);
+    const chooser = page.getByRole('dialog', { name: 'Videos at this point' });
+    await expect(chooser).toBeVisible();
+    await expect(chooser.getByRole('button', { name: qa018Pattern(intended) })).toBeVisible();
+    await expect(chooser.getByRole('button', { name: qa018Pattern(neighbour) })).toBeVisible();
+    await expect(chooser.locator('[data-video-id]').first()).toBeFocused();
+    await expect(page).toHaveURL(/\/dashboard\/trends/);
+    const chooserBox = (await chooser.boundingBox())!;
+    expect(chooserBox.x).toBeGreaterThanOrEqual(0);
+    expect(chooserBox.x + chooserBox.width).toBeLessThanOrEqual(viewport.width);
+    if (id === 'fl1DSmwQKKY') {
+      await chooser.getByRole('button', { name: qa018Pattern(intended) }).click();
+      await qa018ExpectOpened(page, id, intended);
+      await page.goBack();
+      await expect(page.locator('.scatter-plot .trend-dot')).toHaveCount(QA018_VIDEOS.length);
+    } else {
+      await page.keyboard.press('Escape');
+      await expect(chooser).toHaveCount(0);
+    }
+  }
+});
+
+test('QA 018 a lone point opens directly, keyboard opens the focused point, and Escape or Close restore focus', async ({ page }) => {
+  const report = await qa018Report(page);
+  const lone = qa018Dot(page, 'Lone point');
+  await lone.scrollIntoViewIfNeeded();
+  const before = (await lone.boundingBox())!;
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  // Read after the 140 ms press transition has settled, not the first frame.
+  await page.waitForTimeout(400);
+  const pressed = (await lone.boundingBox())!;
+  expect(Math.abs((pressed.x + pressed.width / 2) - (before.x + before.width / 2))).toBeLessThan(1);
+  expect(Math.abs((pressed.y + pressed.height / 2) - (before.y + before.height / 2))).toBeLessThan(1);
+  await page.mouse.up();
+  await qa018ExpectOpened(page, 'loneVideo01', 'Lone point');
+  await page.goBack();
+  await expect(page.locator('.scatter-plot .trend-dot')).toHaveCount(QA018_VIDEOS.length);
+  // Keyboard activation opens the focused point even when another point covers it.
+  await qa018Dot(page, 'What is Claude Code?').focus();
+  await page.keyboard.press('Enter');
+  await qa018ExpectOpened(page, 'fl1DSmwQKKY', 'What is Claude Code?');
+  await page.goBack();
+  await expect(page.locator('.scatter-plot .trend-dot')).toHaveCount(QA018_VIDEOS.length);
+  // Repeated openings, Escape and Close return focus to a point at that position.
+  for (const dismiss of ['Escape', 'Close', 'Escape'] as const) {
+    await qa018ClickCenter(page, 'Identical point A');
+    const chooser = page.getByRole('dialog', { name: 'Videos at this point' });
+    await expect(chooser).toBeVisible();
+    await expect(chooser.locator('[data-video-id]').first()).toBeFocused();
+    if (dismiss === 'Escape') await page.keyboard.press('Escape'); else await chooser.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(chooser).toHaveCount(0);
+    await expect(page.locator('.scatter-plot .trend-dot:focus')).toHaveCount(1);
+  }
+  // A refresh that completes while the chooser is open closes the stale chooser.
+  const release = report.holdNext();
+  await page.getByRole('button', { name: /Research topic/ }).click();
+  await expect(page.getByText('Refreshing the topic sample…')).toBeVisible();
+  await qa018ClickCenter(page, 'Identical point A');
+  await expect(page.getByRole('dialog', { name: 'Videos at this point' })).toBeVisible();
+  release();
+  await expect(page.getByText('Refreshing the topic sample…')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Videos at this point' })).toHaveCount(0);
+  // Leaving Trends with a chooser open does not leave it open on return.
+  await qa018ClickCenter(page, 'Identical point A');
+  await expect(page.getByRole('dialog', { name: 'Videos at this point' })).toBeVisible();
+  await page.getByRole('link', { name: 'Projects', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
+  await page.getByRole('link', { name: 'Trends', exact: true }).click();
+  await expect(page.locator('.scatter-plot .trend-dot')).toHaveCount(QA018_VIDEOS.length);
+  await expect(page.getByRole('dialog', { name: 'Videos at this point' })).toHaveCount(0);
+  expect(report.reads()).toBe(2);
+});
