@@ -81,6 +81,12 @@ type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research
 const MAX_CONCURRENT_EVIDENCE_REQUESTS = 4;
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
+// A single inspected video is answered from its whole transcript in one call, without a
+// stored-context pass. Projected transcripts measure 61 to 68 characters per video second,
+// so this holds about an hour, roughly 85,000 tokens; live runs reached first content in
+// about 7 seconds at that size, inside the 10-second failover limit. Longer transcripts
+// exceed it, are reported as cut, and keep the stored-context pass.
+const INSPECTION_FINALIZER_EVIDENCE_CHARACTERS = 250_000;
 export { MAX_TOPIC_RESEARCH_TRANSCRIPT_ANALYSES, researchVideoTarget } from './research-plan';
 
 export interface EvidenceToolFailure {
@@ -814,7 +820,8 @@ async function runUnifiedFinalizer(options: {
   const currentDurationNotice = () => options.decision.route === 'inspect_video' || options.decision.route === 'topic_research'
     ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
       ? [options.decision.videoId] : comparisonVideoIds) : '';
-  const evidenceBudget = comparisonVideoIds.length ? 160_000 : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
+  const evidenceBudget = comparisonVideoIds.length ? 160_000
+    : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepareEvidence = () => finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
   let prepared = prepareEvidence();
   // Gather context once, charged only to the main deadline. Answer retries below

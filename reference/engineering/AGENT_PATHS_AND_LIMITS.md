@@ -169,7 +169,7 @@ Research has ten evidence tool types plus finalization. Inspection has five evid
 | Answer length | Concise by default, expanded for explicit detail requests; native per-generation token ceilings and a schema ceiling of 20 blocks |
 | Model cost | $1 estimated admission budget; $0.10 reserved threshold for finalization. This uses locally configured token prices and completed usage, not a hard vendor billing ceiling |
 | Conversation memory | Up to eight completed ancestor turns, with no history character limit |
-| Recovery evidence prompt | Up to 40,000 characters of compact evidence |
+| Recovery evidence prompt | Up to 40,000 characters of compact evidence; 250,000 for single-video inspection, about an hour of transcript, so the whole transcript is answered in one call |
 
 Transcript analysis receives the selected caption language/provenance and any title/channel already obtained for that video. Captions remain unchanged. Analysts are instructed to treat transcription errors and ambiguous names or measurements as source limitations; metadata can support a spelling correction, but it is not evidence for a lab result.
 

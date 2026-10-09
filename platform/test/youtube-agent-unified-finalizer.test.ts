@@ -1549,13 +1549,41 @@ it('keeps gathering after research when the conversation is older than the promp
   expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
 });
 
-it('keeps gathering after research when the evidence budget would cut a passage', async () => {
+/** A complete saved transcript of the given length, in the shape get_video_transcript returns. */
+function transcriptPacket(count: number, artifactData: Record<string, unknown> = { allReturnedSegmentsIncluded: true }): EvidencePacket {
+  return { packetId: `transcript-${count}`, kind: 'youtube_transcript',
+    sources: [{ id: 'long', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: Array.from({ length: count }, (_, index) => ({ id: `long:${index}`, sourceId: 'long', text: `Passage ${index}. ${'detail '.repeat(30)}`, startMs: index * 1000 })),
+    artifacts: [{ type: 'youtube_complete_transcript', data: artifactData }], warnings: [], usage: [] };
+}
+
+it('answers a single video from its whole transcript in one call, past the ordinary evidence limit', async () => {
+  // About 110,000 characters: over the 40,000 ordinary limit, inside the single-video limit.
   const { options, finalizer, plans, restore } = freshResearch(options => {
-    const long: EvidencePacket = { packetId: 'long-transcript', kind: 'youtube_transcript',
-      sources: [{ id: 'long', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
-      excerpts: Array.from({ length: 400 }, (_, index) => ({ id: `long:${index}`, sourceId: 'long', text: `Passage ${index}. ${'detail '.repeat(30)}`, startMs: index * 1000 })),
-      artifacts: [{ type: 'youtube_complete_transcript', data: { requiresAnalysis: false } }], warnings: [], usage: [] };
-    options.recoveredEvidence = [...options.recoveredEvidence!, long];
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(400)];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['skip']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
+  // Nothing sampled: the first and last passages both reach the answer model.
+  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+  expect(prompt).toContain('Passage 0.');
+  expect(prompt).toContain('Passage 399.');
+  expect(prompt).not.toContain('TRANSCRIPT_CONTEXT_TRUNCATED');
+});
+
+it('keeps gathering after research when a single transcript exceeds the single-video limit', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(1_200)];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['gather_evidence_cut']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
+});
+
+it('keeps gathering after research when the transcript arrived in pages', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.recoveredEvidence = [...options.recoveredEvidence!, transcriptPacket(50, { allReturnedSegmentsIncluded: false, nextOffset: 50 })];
   });
   try { await executeResearchRun(options); } finally { restore(); }
   expect(plans).toEqual(['gather_evidence_cut']);

@@ -160,3 +160,10 @@ it('treats comparison evidence outside every subject as cut', () => {
   expect(finalizationEvidenceForModel([subject], 40_000, ['abcdefghijk']).complete).toBe(true);
   expect(finalizationEvidenceForModel([subject, other], 40_000, ['abcdefghijk']).complete).toBe(false);
 });
+
+it('treats a transcript returned in pages as incomplete even when it fits', () => {
+  const paged = { ...transcriptPacket(), artifacts: [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: false, nextOffset: 1 } }] };
+  expect(finalizationEvidenceForModel([paged], 40_000).complete).toBe(false);
+  expect(finalizationEvidenceForModel([{ ...transcriptPacket(), continuation: 'next-page' }], 40_000).complete).toBe(false);
+});
+

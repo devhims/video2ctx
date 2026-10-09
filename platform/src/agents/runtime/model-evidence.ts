@@ -285,10 +285,13 @@ export function finalizationEvidenceForModel(
   // Complete means the budget cut nothing: every packet passed in its ordinary projection,
   // the same view research tools return. Sampled, shortened or dropped packets are not complete.
   const fits = (group: typeof compact, maxCharacters: number) => serializedLength(group.map(evidencePacketForModel)) <= maxCharacters;
-  const complete = comparisonVideoIds.length
+  // A transcript returned in pages is incomplete even when every page fits.
+  const paged = packets.some(packet => packet.continuation || packet.artifacts.some(artifact =>
+    artifact.type === 'youtube_complete_transcript' && artifact.data.allReturnedSegmentsIncluded === false));
+  const complete = !paged && (comparisonVideoIds.length
     ? compact.every(packet => packet.sources.some(source => source.videoId && comparisonVideoIds.includes(source.videoId)))
       && comparisonVideoIds.every(videoId => fits(compact.filter(packet => packet.sources.some(source => source.videoId === videoId)),
         Math.floor(maxCharacters / comparisonVideoIds.length)))
-    : fits(compact, maxCharacters);
+    : fits(compact, maxCharacters));
   return { evidence, fullIds, complete };
 }
