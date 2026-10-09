@@ -161,7 +161,7 @@ test('analyzes a selected batch without treating the broader question as extract
     const text = user.content.find(part => part.type === 'text');
     if (!text || text.type !== 'text') throw new Error('Missing frame mapping');
     const payload = JSON.parse(text.text);
-    expect(payload.researchQuestion).toContain('1234 and 5678');
+    expect(payload.relevanceContext.researchQuestion).toContain('1234 and 5678');
     expect(payload.analysisScope.suppliedTimestampsMs).toEqual([1234]);
     expect(user.content.filter(part => part.type === 'file')).toHaveLength(1);
     expect(call.prompt.filter(message => message.role === 'system').map(message => message.content).join(' '))

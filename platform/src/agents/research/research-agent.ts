@@ -1045,7 +1045,7 @@ async function runUnifiedFinalizer(options: {
           'You are the finalizer for a YouTube research run.',
           'Prefer current assets over superseded versions unless the user asks for a historical comparison. A failed refresh does not make an old snapshot fresh; retain its collection time and explain the failure.',
           'The current user message can correct earlier memory. Prefer explicit current corrections over old context.',
-          'Session memory is an index, not proof. Use the supplied stored evidence for factual video claims. Inventory counts do not establish visual content. Finalization may search and read stored context, but cannot retrieve new sources or request another inspection. State any remaining evidence gap without inventing facts.',
+          'Session memory is an index, not proof. Use the supplied stored evidence for factual video claims. Inventory counts do not establish visual content. Stored context gathering has already finished. This answer call cannot use tools, retrieve new sources or request another inspection. State any remaining evidence gap without inventing facts.',
           'Return only the answer fields in the schema. Session memory is maintained separately after the answer is accepted.',
           'Ground factual claims about videos in the supplied persisted evidence. Use conversation history to discuss and correct earlier statements.',
           CONVERSATION_CONTEXT_GUIDANCE,

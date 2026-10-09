@@ -5,13 +5,16 @@ import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 // Explicit opt-in: calls the real classifier provider, but starts no agent runs.
 describe.skipIf(process.env.AGENT_CLASSIFIER_LIVE !== '1')('live capability routing', () => {
-  it('routes new visuals for a fixed set of saved videos', async () => {
+  it.each([
+    'Show images of the exercise form from both of those videos. Fetch and inspect images from each video because we only have transcripts.',
+    'Compare the colors of the shirts worn by the presenters in both videos.',
+  ])('routes new visuals for saved videos: %s', async message => {
     const apiKey = process.env.FIREWORKS_API_KEY ?? process.env.FIREWORKS_API_KEY_1;
     if (!apiKey) throw new Error('Set FIREWORKS_API_KEY for the opt-in live classifier evaluation.');
     const videoIds = ['abcdefghijk', 'lmnopqrstuv'];
     const attempts: ClassificationDiagnostic[] = [];
     const decision = await classifyCapabilityWithModel({
-      message: 'Show images of the exercise form from both of those videos. Fetch and inspect images from each video because we only have transcripts.',
+      message,
       conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', resourceIds: videoIds,
         user: 'Compare the exercise techniques in these two videos.', assistant: 'Both transcripts describe exercise techniques. No images have been retrieved.' }],
       sessionBrief: { assets: videoIds.map((videoId, index) => ({ version: String(index + 1).repeat(64), kind: 'transcript' as const,
