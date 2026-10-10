@@ -44,7 +44,7 @@ export function executeGetVideoTranscript(
   contextRequest?: { timestampSeconds: number; before?: number; after?: number },
 ): Promise<EvidencePacket> {
   const parsed = getVideoTranscriptInputSchema.parse(input);
-  if (contextRequest) contextRequest = { timestampSeconds: contextRequest.timestampSeconds, before: contextRequest.before ?? 3, after: contextRequest.after ?? 3 };
+  if (contextRequest) contextRequest = { timestampSeconds: contextRequest.timestampSeconds, before: contextRequest.before ?? 10, after: contextRequest.after ?? 10 };
   const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, contextRequest, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
 
   return context.executeEvidenceTool({

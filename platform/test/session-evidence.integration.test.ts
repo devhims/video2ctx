@@ -852,7 +852,7 @@ test('timestamp reads reuse the exact saved version beyond the full-read page li
     await sessionProvider(p, store).transcript(id);
     const version = store.brief().assets[0]!.version;
     const read = await reopen().readTranscriptContext(version, 5050.2);
-    expect(read.packets[0]!.excerpts).toHaveLength(8);
+    expect(read.packets[0]!.excerpts).toHaveLength(22);
     expect(read.packets[0]!.excerpts.find(excerpt => excerpt.id.endsWith(':segment:5050'))).toMatchObject({ text: value.segments[5050]!.text, startMs: 5050000, endMs: 5051500 });
     expect(read.nextOffset).toBeUndefined();
     expect(p.transcript).toHaveBeenCalledOnce();

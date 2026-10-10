@@ -25,7 +25,7 @@ The opt-in test runs the actual inspection loop and unified finalizer with a sav
 | GLM 5p3 Flash | 17:20 and 1:18:30 | 9,555 | 365 | 9,920 | Correct explanation anchors; no full-transcript read |
 | DeepSeek v4p1 Flash | 17:20 and 1:18:30 | 16,389 | 619 | 17,008 | Correct explanation anchors; no full-transcript read |
 
-Both timestamp flows started with three neighboring captions on each side. The models requested bounded expansions where the explanation continued. GLM used three model calls and DeepSeek four. Their final answers each used two starting citations.
+These recorded timestamp flows used the earlier default of three neighboring captions on each side. The default has since changed to ten on each side; the live token measurements have not been rerun for that change. The models requested bounded expansions where the explanation continued. GLM used three model calls and DeepSeek four. Their final answers each used two starting citations.
 
 Earlier full-flow checks exposed two defects corrected in this branch. Renumbering captions between inspection and finalization allowed valid but unrelated references; single-source numeric IDs now stay stable. Enumerating every short and full ID in the output schema made DeepSeek's finalizer input roughly 47,000 tokens larger; large catalogs now use application-side membership validation instead.
 

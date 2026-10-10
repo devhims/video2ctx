@@ -468,7 +468,7 @@ export class SessionEvidenceStore implements SessionAccess {
     if (asset?.kind !== 'transcript') throw new Error('Saved transcript is unavailable.');
     return this.readEvidence(version, 0, undefined, 5_000);
   }
-  async readTranscriptContext(version: string, timestampSeconds: number, before = 3, after = 3) {
+  async readTranscriptContext(version: string, timestampSeconds: number, before = 10, after = 10) {
     const asset = this.brief().assets.find(asset => asset.version === version);
     if (asset?.kind !== 'transcript') throw new Error('Saved transcript is unavailable.');
     return this.readEvidence(version, 0, undefined, 5_000, { timestampSeconds, before, after });

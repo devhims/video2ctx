@@ -48,13 +48,15 @@ describe('original segment references', () => {
 });
 
 describe('timestamp transcript context', () => {
-  it('returns all overlapping captions plus three neighbors on each side', () => {
-    expect(transcriptContextIndexes(segments, 7.2)).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
+  it('defaults to ten neighbors on each side and supports smaller counts', () => {
+    const long = Array.from({ length: 40 }, (_, i) => ({ startMs: i * 1000, endMs: i * 1000 + 1500 }));
+    expect(transcriptContextIndexes(long, 20.2)).toEqual(Array.from({ length: 22 }, (_, i) => i + 9));
+    expect(transcriptContextIndexes(segments, 7.2, 3, 3)).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
     expect(transcriptContextIndexes(segments, 7.2, 0, 0)).toEqual([6, 7]);
   });
   it('handles boundaries, gaps, invalid input, and requests beyond the transcript', () => {
-    expect(transcriptContextIndexes(segments, 0)).toEqual([0, 1, 2, 3]);
-    expect(transcriptContextIndexes(segments, 14.2)).toEqual([10, 11, 12, 13, 14]);
+    expect(transcriptContextIndexes(segments, 0)).toEqual(Array.from({ length: 11 }, (_, i) => i));
+    expect(transcriptContextIndexes(segments, 14.2)).toEqual(Array.from({ length: 12 }, (_, i) => i + 3));
     expect(transcriptContextIndexes(segments, 100)).toEqual([]);
     expect(transcriptContextIndexes([], 1)).toEqual([]);
     expect(transcriptContextIndexes([{ startMs: 0, endMs: 1000 }, { startMs: 3000, endMs: 4000 }], 2)).toEqual([0, 1]);
@@ -76,10 +78,10 @@ describe('timestamp transcript context', () => {
     } as unknown as AgentToolContext;
     const result = await executeGetVideoTranscript({ videoId }, context, 'time', { timestampSeconds: 7.2 });
     expect(executions).toEqual(['get_transcript_context']);
-    expect(result.excerpts.map(excerpt => excerpt.text)).toEqual(segments.slice(3, 11).map(segment => segment.text));
+    expect(result.excerpts.map(excerpt => excerpt.text)).toEqual(segments.map(segment => segment.text));
     expect(result.artifacts[0]!.data).toMatchObject({ hasSpeechAtTimestamp: true, allReturnedSegmentsIncluded: false });
     const projected = finalizationEvidenceForModel([result], 40000).evidence[0]!;
-    expect(projected.transcript?.timing).toHaveLength(8);
-    expect(projected.transcript?.text).not.toContain('Caption 14');
+    expect(projected.transcript?.timing).toHaveLength(15);
+    expect(projected.transcript?.text).toContain('Caption 14');
   });
 });

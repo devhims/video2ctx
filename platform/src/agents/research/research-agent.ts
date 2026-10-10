@@ -915,8 +915,8 @@ async function runUnifiedFinalizer(options: {
             },
           }),
           get_transcript_context: tool({
-            description: "Read a small timestamp neighborhood from an exact saved transcript version. No provider call. Defaults to three captions before and after; expand up to ten when needed.",
-            inputSchema: z.object({ version: z.string().regex(/^[a-f0-9]{64}$/), timestampSeconds: z.number().finite().nonnegative(), before: z.number().int().min(0).max(10).default(3), after: z.number().int().min(0).max(10).default(3) }),
+            description: "Read a small timestamp neighborhood from an exact saved transcript version. No provider call. Defaults to ten captions before and after; use smaller counts to narrow the context.",
+            inputSchema: z.object({ version: z.string().regex(/^[a-f0-9]{64}$/), timestampSeconds: z.number().finite().nonnegative(), before: z.number().int().min(0).max(10).default(10), after: z.number().int().min(0).max(10).default(10) }),
             execute: async ({ version, timestampSeconds, before, after }) => {
               const read = await options.context.session!.readTranscriptContext?.(version, timestampSeconds, before, after);
               signal.throwIfAborted();

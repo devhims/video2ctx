@@ -19,7 +19,7 @@ export function compactTranscript(excerpts: EvidencePacket['excerpts']) {
 }
 
 /** Return all captions overlapping the instant, plus a small number of neighbours. */
-export function transcriptContextIndexes(segments: readonly Pick<TranscriptSegment, 'startMs' | 'endMs'>[], timestampSeconds: number, before = 3, after = 3): number[] {
+export function transcriptContextIndexes(segments: readonly Pick<TranscriptSegment, 'startMs' | 'endMs'>[], timestampSeconds: number, before = 10, after = 10): number[] {
   if (!Number.isFinite(timestampSeconds) || timestampSeconds < 0) throw new Error('Timestamp must be nonnegative seconds.');
   if (![before, after].every(value => Number.isInteger(value) && value >= 0 && value <= 10)) throw new Error('Neighbour counts must be between 0 and 10.');
   const time = timestampSeconds * 1000;
