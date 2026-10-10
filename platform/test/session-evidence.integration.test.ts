@@ -1530,3 +1530,57 @@ test('search stops when aborted between resolution batches', async () =>
     controller.abort(new Error('cancelled'));
     await expect(store.search.searchEvidence(store, 'alpha beta', controller.signal)).rejects.toThrow('cancelled');
   }));
+
+test('quoted underscore phrase remains in returned evidence', async () =>
+  within('review-phrase-4132261', async store => {
+    const value = transcript();
+    value.segments = ['foo x bar extra', 'foo_bar'].map((text, i) => ({ text, startMs: i * 1000, endMs: (i + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const found = await store.search.searchEvidence(store, 'foo_bar extra');
+    expect(found.packets.flatMap(p => p.excerpts.map(e => e.text))).toEqual(expect.arrayContaining(['foo x bar extra', 'foo_bar']));
+  }));
+
+
+test.each([{ missingCount: 4, healthy: true }, { missingCount: 6, healthy: false }])('search exhausts unavailable sources without rereading them: %j', async ({ missingCount, healthy }) =>
+  within(`search-missing-exhaustion-${missingCount}-${healthy}`, async (store, _reopen, sql) => {
+    for (let i = 0; i < missingCount; i++) {
+      const value = { ...transcript(), videoId: `missingvid${i}` };
+      value.segments = Array.from({ length: 250 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+      const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(value.videoId);
+      const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', saved.assetVersions![0]!).one().blob_key;
+      await env.RESEARCH.delete(key);
+    }
+    if (healthy) {
+      const value = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid3' };
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(value.videoId);
+    }
+    const read = vi.spyOn(store, 'read');
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets.flatMap(p => p.sources.map(s => s.videoId))).toEqual(healthy ? ['healthyvid3'] : []);
+    expect(found.unavailableTranscripts).toBe(missingCount);
+    expect(read).toHaveBeenCalledTimes(missingCount + Number(healthy));
+    expect(new Set(read.mock.calls.map(([version]) => version)).size).toBe(read.mock.calls.length);
+  }));
+
+test('index repair and search resolution share the transcript read cache', async () =>
+  within('search-repair-shared-read', async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
+    sql.exec('DELETE FROM session_search_assets');
+    const read = vi.spyOn(store, 'read');
+    expect((await store.search.searchEvidence(store, 'clear opening')).packets).toHaveLength(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]![1]).toBe(false);
+  }));
+
+test('search advances beyond a full page of stale candidates without an unreadable transcript', async () =>
+  within('search-stale-candidate-page', async (store, _reopen, sql) => {
+    await sessionProvider(provider(vi.fn(async () => ({ value: transcript('needle ' + 'padding '.repeat(100)), cacheStatus: 'miss' as const }))), store).transcript(id);
+    // Old unresolved packet references have no transcript owner to exclude.
+    for (let index = 0; index < 230; index++) sql.exec(
+      'INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?,?,?,?,?)',
+      `stale:${index}`, `packet:stale:${index}`, 'evidence', 'needle', JSON.stringify({ packetId: `stale:${index}` }));
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets).toHaveLength(1);
+    expect(found.packets[0]!.sources[0]!.videoId).toBe(id);
+  }));

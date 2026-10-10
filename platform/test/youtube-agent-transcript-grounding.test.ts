@@ -359,3 +359,37 @@ it('retains a real measurement sharing its number and quote with a version', asy
   expect(result.findings[0]!.literalFacts).toHaveLength(1);
   expect(result.warnings).toEqual([]);
 });
+
+it.each([
+  ['Use Bootstrap 5.2.3.', 'Use Bootstrap 5.2', '5.2'],
+  ['Created in 2011.', 'Created in 201', '201'],
+  ['Use Bootstrap 5.2.3.', '2.3', '2.3'],
+  ['Use 5.2.3. Another package uses 5.2.', 'Use 5.2', '5.2'],
+])('literal validation rejects cropped quote boundaries: %s / %s', (source, quote, value) => {
+  expect(() => assertTranscriptFacts({ claim: quote, entities: [], quantities: [], literalFacts: [{ kind: 'version', value, quote }], uncertainty: null }, [source])).toThrow('Unsupported');
+});
+
+it.each([
+  ['Use Bootstrap 5.2.3.', 'Use Bootstrap 5.2.3', '5.2.3'],
+  ['Created in 2011.', 'Created in 2011', '2011'],
+  ['Use 5.2.3. Use 5.2.', 'Use 5.2', '5.2'],
+  ['Use 5.2.3 and 5.2.', 'Use 5.2.3 and 5.2', '5.2'],
+])('literal validation accepts complete supported occurrences: %s', (source, quote, value) => {
+  expect(() => assertTranscriptFacts({ claim: quote, entities: [], quantities: [], literalFacts: [{ kind: 'version', value, quote }], uncertainty: null }, [source])).not.toThrow();
+});
+
+it('keeps a cropped literal unverified even when duplicated as a unitless quantity', async () => {
+  const text = 'Use Bootstrap 5.2.3.';
+  const quote = 'Use Bootstrap 5.2';
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ findings: [{ claim: quote, segmentId: 0, entities: [], uncertainty: null,
+      literalFacts: [{ kind: 'version', value: '5.2', quote }],
+      quantities: [{ metric: 'Bootstrap version', value: 5.2, unit: null, basis: null, kind: 'reported', quote }],
+    }], warnings: [] }) }], finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+    usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } },
+  }) });
+  const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Which Bootstrap version?', focus: 'Version',
+    segments: [{ text, startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
+  expect(result.findings[0]!.uncertainty).toContain('unverified');
+  expect(result.warnings).toEqual([expect.stringContaining('could not be matched')]);
+});

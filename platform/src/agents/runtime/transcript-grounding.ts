@@ -108,8 +108,19 @@ export function assertTranscriptFacts(finding: TranscriptFacts & { claim: string
     const value = normalized(fact.value);
     // Boundaries prevent accepting version 5.2 as a substring of 5.2.3.
     const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!transcript.some(text => text.includes(quote))
-      || !new RegExp(`(?<![\\p{L}\\p{N}._-])${escaped}(?![\\p{L}\\p{N}_-]|\\.\\d)`, 'u').test(quote)) {
+    const literal = new RegExp(`(?<![\\p{L}\\p{N}._-])${escaped}(?![\\p{L}\\p{N}_-]|\\.\\d)`, 'uy');
+    // A cropped quote must not manufacture a boundary. Match the value at its
+    // actual position inside a source occurrence of that exact quote.
+    const supported = quote.length > 0 && value.length > 0 && transcript.some(text => {
+      for (let start = text.indexOf(quote); start >= 0; start = text.indexOf(quote, start + 1)) {
+        for (let offset = quote.indexOf(value); offset >= 0; offset = quote.indexOf(value, offset + 1)) {
+          literal.lastIndex = start + offset;
+          if (literal.test(text)) return true;
+        }
+      }
+      return false;
+    });
+    if (!supported) {
       fail('LITERAL_NOT_SUPPORTED', `Unsupported ${fact.kind} ${fact.value}: preserve the exact source string and quote.`, fieldIndex);
     }
   }

@@ -171,7 +171,7 @@ export class SessionEvidenceStore implements SessionAccess {
   searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
-  async ensureSearchIndexed(query?: string) {
+  async ensureSearchIndexed(query?: string, reads?: TranscriptReads) {
     const generation = this.generation();
     const legacy = this.search.legacyCandidates(query);
     const failures = this.search.indexFailures();
@@ -190,7 +190,7 @@ export class SessionEvidenceStore implements SessionAccess {
     await Promise.all(batch.map(async ({ version }) => {
       let transcript: Transcript | null;
       try {
-        transcript = (await this.read(version, false)) as Transcript | null;
+        transcript = await this.readTranscript(version, reads);
       } catch {
         // One unavailable blob must not suppress evidence from healthy indexes.
         transcript = null;

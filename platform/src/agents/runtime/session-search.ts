@@ -7,10 +7,8 @@ import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore, TranscriptReads } from './session-evidence';
 
 const SEARCH_RESULT_LIMIT = 20;
-/** Ranked rows considered per query. Overlapping windows rarely exceed three rows per distinct match. */
+/** Ranked candidate page size, not a limit on the whole search. */
 const SEARCH_CANDIDATE_LIMIT = 200;
-/** One initial query plus re-queries after excluding unreadable transcripts. */
-const MAX_SEARCH_QUERIES = 4;
 
 export interface HistoryEntry {
   id: string;
@@ -211,7 +209,7 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT): MatchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT, offset = 0): MatchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = searchTokens(query);
     if (!tokens.length) return [];
@@ -229,11 +227,12 @@ export class SessionSearch {
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
       SELECT id,owner,metadata FROM unique_matches
-      WHERE occurrence=1 ORDER BY score,id LIMIT ?`,
+      WHERE occurrence=1 ORDER BY score,id LIMIT ? OFFSET ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
         limit,
+        offset,
       )
       .toArray();
   }
@@ -246,16 +245,21 @@ export class SessionSearch {
     });
   }
   async searchEvidence(store: SessionEvidenceStore, query: string, signal?: AbortSignal) {
-    const indexing = await store.ensureSearchIndexed(query);
+    signal?.throwIfAborted();
+    const reads: TranscriptReads = new Map();
+    const indexing = await store.ensureSearchIndexed(query, reads);
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
     const excluded = new Set(store.overLimitTranscriptVersions().map((version) => `asset:${version}`));
     const generation = store.generation();
-    const terms = [...foldedTokens(searchTokens(query).join(' '))];
-    // One read per transcript for the whole search; unreadable blobs resolve to null.
-    const reads: TranscriptReads = new Map();
+    const tokens = searchTokens(query);
+    const terms = [...foldedTokens(tokens.join(' '))];
+    // Quoted FTS tokens containing separators carry phrase constraints. Keep
+    // the whole candidate when independent-word trimming cannot preserve them.
+    const canTrim = tokens.every(token => /^[a-z0-9]+$/i.test(token));
+    // Share reads across index repair and every resolution batch, including failures.
     const resolvedIds = new Set<string>();
     const texts = new Map<string, string>();
     const found: EvidencePacket[] = [];
@@ -267,12 +271,14 @@ export class SessionSearch {
       return value;
     };
     let results = 0;
-    // Run one bounded ranked query, then resolve its rows in batches until twenty
-    // distinct matches are returned. Overlapping windows can resolve to the same
-    // captions, so the query fetches more rows than results. If an unreadable
-    // transcript filled the candidate limit, exclude it and query again.
-    for (let attempt = 0; attempt < MAX_SEARCH_QUERIES && results < SEARCH_RESULT_LIMIT; attempt++) {
-      const rows = this.matches('evidence', query, [...excluded], SEARCH_CANDIDATE_LIMIT);
+    // Fetch successive pages until twenty distinct results or index exhaustion.
+    // Removing unreadable owners restarts pagination against the smaller index;
+    // cached reads and resolved IDs prevent repeating source reads on restart.
+    let offset = 0;
+    while (results < SEARCH_RESULT_LIMIT) {
+      signal?.throwIfAborted();
+      const rows = this.matches('evidence', query, [...excluded], SEARCH_CANDIDATE_LIMIT, offset);
+      if (!rows.length) break;
       let unreadableFound = false;
       for (let start = 0; start < rows.length && results < SEARCH_RESULT_LIMIT; start += SEARCH_RESULT_LIMIT) {
         signal?.throwIfAborted();
@@ -283,6 +289,7 @@ export class SessionSearch {
         const missing = [...new Set(candidates.flatMap(candidate => candidate.ids))].filter(id => !resolvedIds.has(id));
         if (missing.length) {
           const resolved = await store.evidenceForCitations(missing, reads);
+          signal?.throwIfAborted();
           // Deletion can change citation availability between batches.
           if (generation !== store.generation()) return { packets: [], ...indexing };
           found.push(...resolved);
@@ -300,7 +307,7 @@ export class SessionSearch {
         for (const { row, metadata, ids: windowIds } of candidates) {
           if (results >= SEARCH_RESULT_LIMIT) break;
           if (metadata.version && !isAvailable(metadata.version)) continue;
-          const ids = new Set(metadata.segmentIds ? coveringSpan(windowIds, texts, terms) : windowIds);
+          const ids = new Set(metadata.segmentIds && canTrim ? coveringSpan(windowIds, texts, terms) : windowIds);
           if ([...ids].every(id => seen.has(id))) continue;
           const before = packets.length;
           for (const packet of found) {
@@ -313,9 +320,8 @@ export class SessionSearch {
           if (packets.length > before) results++;
         }
       }
-      // Rows beyond the limit exist only if the query was full. Re-query only
-      // when excluding an unreadable transcript can surface new candidates.
-      if (rows.length < SEARCH_CANDIDATE_LIMIT || !unreadableFound) break;
+      if (rows.length < SEARCH_CANDIDATE_LIMIT) break;
+      offset = unreadableFound ? 0 : offset + rows.length;
     }
     // Indexed transcripts whose blobs are now unreadable are a coverage gap too.
     // Indexing reports only unindexed versions, so the counts do not overlap.
@@ -402,6 +408,7 @@ function foldedTokens(text: string): Set<string> {
 
 /** The shortest contiguous run of captions containing every query term, or the whole window if any term is unaccounted for. */
 function coveringSpan(ids: string[], texts: ReadonlyMap<string, string>, terms: readonly string[]): string[] {
+  if (ids.some(id => /[^\x00-\x7f]/.test(texts.get(id) ?? ''))) return ids;
   const captionTerms = ids.map(id => foldedTokens(texts.get(id) ?? ''));
   const wanted = terms.filter(term => captionTerms.some(tokens => tokens.has(term)));
   // FTS matched every term in this window. If trimming cannot find one, its
