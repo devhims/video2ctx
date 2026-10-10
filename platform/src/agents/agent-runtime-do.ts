@@ -318,8 +318,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.sql`UPDATE agent_tool_calls SET result_json=null WHERE run_id=${row.run_id} AND tool_call_id=${row.tool_call_id}`;
     }
     // Include citations read directly by the finalizer from session assets.
-    for (const packet of this.sessionStore.evidence()) if (!version || packet.assetVersions?.some(id=>removed.has(id)))
-      packet.excerpts.forEach(excerpt=>deletedIds.add(excerpt.id));
+    for (const id of this.sessionStore.citationIds(version)) deletedIds.add(id);
     for (const row of this.sql<RunRow>`SELECT * FROM agent_runs WHERE result_json IS NOT NULL`) {
       const result = agentTurnResultSchema.parse(JSON.parse(row.result_json!));
       if (version && !affectedRuns.has(row.id) && !result.citations.some(citation=>deletedIds.has(citation.id))
@@ -897,7 +896,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     input: FinalizeAnswerInput,
   ): Promise<AgentTurnResult> {
     const parsedInput = finalizeAnswerInputSchema.parse(input);
-    // Every read, validation and the commit below run synchronously, so cancellation,
+    const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
+    const generation = this.sessionStore.generation();
+    const saved = this.sessionStore.evidenceForCitations(citedIds);
+    const citedSessionEvidence = Array.isArray(saved) ? saved
+      : await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
+        () => saved, 'Citation resolution timeout.');
+    if (generation !== this.sessionStore.generation()) throw new Error('Session evidence changed during citation resolution.');
+    // After optional asset hydration, validation and commit run synchronously. Cancellation,
     // evidence deletion or a concurrent finalize cannot interleave between validating
     // this answer and persisting it.
     if (this.#deleted) throw new Error('Agent run is no longer active.');
@@ -931,8 +937,6 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     });
     const creditsCharged = this.evidenceLedger.committed(runId);
     const history = this.readConversationHistory(run);
-    const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
-    const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
     const result = buildAgentTurnResult({
       runId,
       conversationId: run.conversation_id,

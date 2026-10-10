@@ -131,7 +131,7 @@ export class SessionSearch {
     if (id.startsWith('session:')) return;
     const owner = `packet:${id}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    for (const excerpt of packet.excerpts) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
+    for (const excerpt of packet.excerpts.filter(excerpt => !/^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id))) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
   }
   indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
     const owner = `asset:${version}`;
@@ -193,7 +193,7 @@ export class SessionSearch {
         ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
           ? (await store.readEvidence(metadata.version, metadata.offset, undefined, 1, undefined, true)).packets
           : []
-        : store.evidenceForCitations([row.id]);
+        : await store.evidenceForCitations([row.id]);
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
         const excerpts = metadata.version ? packet.excerpts : packet.excerpts.filter((excerpt) => excerpt.id === row.id);

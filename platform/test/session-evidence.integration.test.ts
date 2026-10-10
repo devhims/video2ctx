@@ -177,16 +177,18 @@ function provider(fetch = vi.fn(async () => ({ value: transcript(), cacheStatus:
   return { transcript: fetch } as unknown as YouTubeAgentProvider;
 }
 function context(store: SessionEvidenceStore, p: YouTubeAgentProvider): AgentToolContext {
+  const packets: EvidencePacket[] = [];
   return {
     runId: crypto.randomUUID(),
     signal: new AbortController().signal,
     provider: p,
     session: store,
-    getEvidence: () => store.evidence(),
+    getEvidence: () => packets,
     transcriptPolicy: { mode: 'complete_transcript' },
     executeEvidenceTool: async (execution) => {
       const packet = await versionEvidencePacket(await execution.execute());
       store.savePacket(packet);
+      packets.push(packet);
       return packet;
     },
     finalize: vi.fn(),
@@ -258,10 +260,10 @@ test('raw transcript survives an analyst failure, and can be read and cited by a
     const retrieved = await executeGetVideoTranscript({ videoId: id }, ctx, 'retrieve');
     expect(ctx.transcriptPolicy.analyze).not.toHaveBeenCalled();
     await expect(executeAnalyzeVideoTranscript({ assetVersion: retrieved.assetVersions![0]!, focus: 'Opening' }, ctx, 'analysis')).rejects.toThrow('analysis failed');
-    expect(store.evidence()).toHaveLength(1);
+    expect(await store.evidence()).toHaveLength(1);
     const result = await store.readEvidence(store.brief().assets[0]!.version);
     expect(result.packets[0]!.excerpts[0]!.text).toBe('A clear opening sentence.');
-    expect(store.evidence()).toHaveLength(2);
+    expect(await store.evidence()).toHaveLength(2);
     await sessionProvider(p, store).transcript(id);
     expect(p.transcript).toHaveBeenCalledTimes(1);
   }));
@@ -326,7 +328,7 @@ test('memory validates evidence, updates a topic, and removes dependent findings
     expect(store.brief().memories.find((memory) => memory.topic === 'intent')!.text).toBe('Compare interviewers');
     await store.delete(packet.assetVersions![0]);
     expect(store.brief().memories.map((memory) => memory.topic)).toEqual(['intent']);
-    expect(store.evidence()).toEqual([]);
+    expect(await store.evidence()).toEqual([]);
     expect(await store.read(packet.assetVersions![0]!)).toBeNull();
     remember(store,
       'late',
@@ -551,12 +553,12 @@ test('indexes full transcripts before analysis and searches terms across assets 
     });
     await sessionProvider(p, store).transcript('zyxwvutsrqp');
     // Neither transcript needs an analyst or a pre-existing evidence packet.
-    expect(store.evidence()).toEqual([]);
+    expect(await store.evidence()).toEqual([]);
     const result = await reopen().search.searchEvidence(reopen(), 'enterprise pricing');
     expect(result.packets).toHaveLength(2);
     for (const packet of result.packets) {
       expect(packet.excerpts).toHaveLength(1);
-      expect(store.evidenceForCitations([packet.excerpts[0]!.id])).toHaveLength(1);
+      expect(await store.evidenceForCitations([packet.excerpts[0]!.id])).toHaveLength(1);
     }
     expect(p.transcript).toHaveBeenCalledTimes(2);
     await store.delete(first.assetVersions![0]);
@@ -746,7 +748,7 @@ test.each([true, false])(
           },
           { userId: 'test', creditsRemaining: 100 },
           input,
-          store.evidenceForCitations([excerptId]),
+          await store.evidenceForCitations([excerptId]),
           0,
         ),
       );
@@ -836,11 +838,11 @@ test('loads full saved comparison transcripts once and preserves citations acros
     const citation=full.packets[0]!.excerpts[69]!.id;
     const result=buildAgentTurnResult({runId:crypto.randomUUID(),conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
       {userId:'user',creditsRemaining:100},{intent:'inspect_video',confidence:'high',answer:`The final passage. [cite:${citation}]`,citations:[],artifacts:[],warnings:[]},
-      reopen().evidenceForCitations([citation]),0);
+      await reopen().evidenceForCitations([citation]),0);
     expect(result.citations[0]!.excerpt).toBe('Complete sentence number 69.');
     await store.delete(version);
     await expect(reopen().readTranscriptEvidence(version)).rejects.toThrow('unavailable');
-    expect(reopen().evidenceForCitations([citation])).toEqual([]);
+    expect(await reopen().evidenceForCitations([citation])).toEqual([]);
   }));
 
 test('timestamp reads reuse the exact saved version beyond the full-read page limit', async () =>
@@ -1097,9 +1099,9 @@ test('retains disjoint transcript packets, findings and backed memory for one as
       } }] });
     }
     const restored = reopen();
-    expect(restored.evidence()).toHaveLength(4);
+    expect(await restored.evidence()).toHaveLength(4);
     for (const [index, packet] of [first, second].entries()) {
-      const saved = restored.evidenceForCitations([packet.excerpts[0]!.id]);
+      const saved = await restored.evidenceForCitations([packet.excerpts[0]!.id]);
       expect(saved).toHaveLength(2);
       expect(saved.flatMap(item => item.artifacts).some(artifact =>
         JSON.stringify(artifact.data).includes(`Finding ${index}`))).toBe(true);
@@ -1111,7 +1113,7 @@ test('retains disjoint transcript packets, findings and backed memory for one as
     expect(reopen().brief().memories).toHaveLength(2);
     // Retrying the same packet remains an upsert, not an additional copy.
     restored.savePacket(first);
-    expect(reopen().evidence()).toHaveLength(4);
+    expect(await reopen().evidence()).toHaveLength(4);
   }));
 
 test('a narrow lookup does not replace a previously saved full transcript packet', async () =>
@@ -1122,8 +1124,50 @@ test('a narrow lookup does not replace a previously saved full transcript packet
     const full = await executeGetVideoTranscript({ videoId: id }, ctx, 'full');
     const narrow = await executeGetVideoTranscript({ videoId: id }, ctx, 'narrow', { timestampSeconds: 5.2, before: 0, after: 0 });
     const restored = reopen();
-    expect(restored.evidence()).toHaveLength(2);
-    expect(restored.evidenceForCitations([full.excerpts[0]!.id])[0]!.excerpts).toHaveLength(6);
+    expect(await restored.evidence()).toHaveLength(2);
+    expect((await restored.evidenceForCitations([full.excerpts[0]!.id]))[0]!.excerpts).toHaveLength(6);
     expect(narrow.excerpts[0]!.id).toBe(full.excerpts[5]!.id);
-    expect(restored.evidenceForCitations([narrow.excerpts[0]!.id])).toHaveLength(2);
+    expect(await restored.evidenceForCitations([narrow.excerpts[0]!.id])).toHaveLength(2);
+  }));
+
+test('resolves original segments and backed memory without lookup packets', async () =>
+  within('canonical-segment-resolution', async (store, reopen, sql) => {
+    const value = transcript('  Original\ncaption text.  ');
+    value.segments.push({ text: '', startMs: 5600, endMs: 6000, durationMs: 400 });
+    const p = sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store);
+    await p.transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const citation = `evidence:${version}:segment:0`;
+    expect(sql.exec('SELECT * FROM session_packets').toArray()).toHaveLength(0);
+    const resolved = await reopen().evidenceForCitations([citation]);
+    expect(resolved[0]!.excerpts).toEqual([{ id: citation, sourceId: `youtube:${id}:transcript`,
+      text: value.segments[0]!.text, startMs: 0, endMs: 5600 }]);
+    expect(await reopen().evidenceForCitations([`evidence:${version}:segment:1`, `evidence:${version}:segment:99`])).toEqual([]);
+    expect(remember(reopen(), 'direct-memory', [{ kind: 'finding', topic: 'original', text: 'Original finding', evidenceIds: [citation] }]).applied).toBe(1);
+    const lookup = await executeGetVideoTranscript({ videoId: id }, context(store, p), 'lookup', { timestampSeconds: 1 });
+    const record = JSON.parse(sql.exec<{ packet_json: string }>('SELECT packet_json FROM session_packets').one().packet_json);
+    expect(record.excerpts).toEqual([{ id: citation, sourceId: lookup.excerpts[0]!.sourceId }]);
+    expect(JSON.stringify(record)).not.toContain('Original\\ncaption');
+    // The transcript remains sufficient after every lookup record is removed.
+    sql.exec('DELETE FROM session_packets');
+    expect((await reopen().evidenceForCitations([citation]))[0]!.excerpts[0]!.text).toBe(value.segments[0]!.text);
+    await store.delete(version);
+    expect(await reopen().evidenceForCitations([citation])).toEqual([]);
+    expect(reopen().brief().memories).toEqual([]);
+  }));
+
+test('direct segment citations stay pinned to their transcript version after refresh', async () =>
+  within('direct-segment-version-isolation', async (store, reopen) => {
+    const fetch = vi.fn().mockResolvedValueOnce({ value: transcript('Original version'), cacheStatus: 'miss' })
+      .mockResolvedValueOnce({ value: transcript('Refreshed version'), cacheStatus: 'miss' });
+    const p = sessionProvider(provider(fetch), store);
+    const first = await p.transcript(id);
+    const second = await p.transcript(id, undefined, { refresh: true });
+    const firstId = `evidence:${first.assetVersions![0]}:segment:0`;
+    const secondId = `evidence:${second.assetVersions![0]}:segment:0`;
+    expect(firstId).not.toBe(secondId);
+    const packets = await reopen().evidenceForCitations([firstId, secondId]);
+    expect(packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text)).toEqual(['Original version', 'Refreshed version']);
+    expect(packets[0]!.warnings.some(warning => warning.code === 'SUPERSEDED_SESSION_EVIDENCE')).toBe(true);
+    expect(await reopen().evidence()).toEqual([]);
   }));

@@ -482,3 +482,24 @@ test.each(['success', 'retry', 'budget', 'backup_budget'] as const)('accounts fo
   expect(ledger.reduce((total, row) => total + row.provider_cost_micros, 0)).toBe(providerCost);
   expect(await creditBalance(env, userId)).toBe(creditsAfterAnswer);
 });
+
+test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('citation hydration revalidates %s before accepting an answer', async race => {
+  const { runtime, userId, conversationId, addRun } = await seed(`citation-hydration-${race}`);
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { version, excerptId } = await evidence(instance, runId);
+    const store = internals(instance).sessionStore;
+    const packets = await store.evidenceForCitations([excerptId]);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(store, 'evidenceForCitations').mockImplementation(async () => { await gate; return packets; });
+    const pending = internals(instance).finalizeRun(runId, 'final', answer(`A caption. [cite:${excerptId}]`));
+    const rejected = expect(pending).rejects.toThrow(race === 'cancel' ? 'no longer active' : 'Session evidence changed');
+    expect(jobs(instance)).toEqual([]);
+    if (race === 'cancel') await instance.cancelRun(runId);
+    else await instance.deleteSessionAssets(conversationId, userId, race === 'single-delete' ? version : undefined);
+    release();
+    await rejected;
+    expect(jobs(instance)).toEqual([]);
+  });
+});

@@ -34,6 +34,10 @@ export interface SessionAsset {
   current: boolean;
   details: Record<string, string | number | boolean | null>;
 }
+type StoredEvidencePacket = Omit<EvidencePacket, 'excerpts'> & {
+  excerpts: Array<Pick<EvidencePacket['excerpts'][number], 'id' | 'sourceId'>
+    & Partial<Pick<EvidencePacket['excerpts'][number], 'text' | 'startMs' | 'endMs'>>>;
+};
 type AssetRow = {
   version: string;
   resource_key: string;
@@ -61,7 +65,7 @@ export interface SessionBrief {
 export interface SessionAccess {
   brief(): SessionBrief;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
-  evidence(version?: string): EvidencePacket[];
+  evidence(version?: string): EvidencePacket[] | Promise<EvidencePacket[]>;
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   readTranscriptContext?(version: string, timestampSeconds: number, before?: number, after?: number): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
@@ -149,6 +153,10 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_writes (id TEXT PRIMARY KEY, source_turn INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_state (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
+    sql.exec('CREATE TABLE IF NOT EXISTS session_segment_refs (version TEXT PRIMARY KEY, indexes_json TEXT NOT NULL)');
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS session_segment_refs_delete AFTER DELETE ON session_assets BEGIN
+      DELETE FROM session_segment_refs WHERE version=OLD.version;
+    END`);
     this.search = new SessionSearch(sql);
   }
   readHistory(offset = 0, role?: 'user' | 'assistant') {
@@ -177,7 +185,12 @@ export class SessionEvidenceStore implements SessionAccess {
       if (transcript) this.indexTranscript(version, transcript);
     }
   }
+  private indexSegmentRefs(version: string, transcript: Transcript) {
+    this.sql.exec('INSERT OR REPLACE INTO session_segment_refs VALUES (?, ?)', version,
+      JSON.stringify(transcript.segments.flatMap((segment, index) => segment.text ? [index] : [])));
+  }
   private indexTranscript(version: string, transcript: Transcript) {
+    this.indexSegmentRefs(version, transcript);
     this.search.indexTranscript(
       version,
       completeTranscriptEvidence(
@@ -222,62 +235,87 @@ export class SessionEvidenceStore implements SessionAccess {
         .map((row) => row.version),
     );
   }
-  evidence(version?: string): EvidencePacket[] {
-    const current = this.currentVersions();
-    const rows = version
-      ? this.sql
-          .exec<{ packet_json: string }>(
-            `SELECT packet_json FROM session_packets WHERE EXISTS (SELECT 1 FROM json_each(versions_json) WHERE value=?) ORDER BY rowid DESC`,
-            version,
-          )
-          .toArray()
-      : this.sql
-          .exec<{ packet_json: string }>('SELECT packet_json FROM session_packets ORDER BY rowid DESC')
-          .toArray();
-    const packets = rows.map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
-    return packets.map((packet) =>
-      packet.assetVersions?.some((version) => !current.has(version))
-        ? {
-            ...packet,
-            warnings: [
-              ...packet.warnings,
-              {
-                code: 'SUPERSEDED_SESSION_EVIDENCE',
-                message:
-                  'This evidence refers to an older stored version. Use the current asset for current facts; retain this version only for historical comparisons.',
-              },
-            ],
-          }
-        : packet,
-    );
+  /** Storage records contain segment references, not copies of original captions. */
+  private packetRecords(version?: string): StoredEvidencePacket[] {
+    const rows = version ? this.sql.exec<{ packet_json: string }>(
+      `SELECT packet_json FROM session_packets WHERE EXISTS (SELECT 1 FROM json_each(versions_json) WHERE value=?) ORDER BY rowid DESC`, version).toArray()
+      : this.sql.exec<{ packet_json: string }>('SELECT packet_json FROM session_packets ORDER BY rowid DESC').toArray();
+    // Reference-only excerpts are hydrated and validated before delivery.
+    return rows.map(row => JSON.parse(row.packet_json));
   }
-  evidenceForCitations(ids: string[]): EvidencePacket[] {
-    if (!ids.length) return [];
+  citationIds(version?: string): string[] {
+    return [...new Set([
+      ...this.packetRecords(version).flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)),
+      ...this.sql.exec<{ version: string; indexes_json: string }>(
+        'SELECT version, indexes_json FROM session_segment_refs').toArray()
+        .filter(row => !version || row.version === version)
+        .flatMap(row => (JSON.parse(row.indexes_json) as number[]).map(index => `evidence:${row.version}:segment:${index}`)),
+    ])];
+  }
+  private async resolveSegments(ids: string[]): Promise<EvidencePacket[]> {
+    const groups = new Map<string, Set<number>>();
+    for (const id of ids) {
+      const match = id.match(/^evidence:([a-f0-9]{64}):segment:(0|[1-9]\d*)$/);
+      if (match) { const indexes = groups.get(match[1]!) ?? new Set<number>(); indexes.add(Number(match[2])); groups.set(match[1]!, indexes); }
+    }
+    const result: EvidencePacket[] = [];
+    for (const [version, indexes] of groups) {
+      const asset = this.brief().assets.find(asset => asset.version === version && asset.kind === 'transcript');
+      if (!asset || this.overLimit(asset)) continue;
+      const transcript = await this.read(version) as Transcript | null;
+      if (!transcript || !this.has(version)) continue;
+      const sourceId = `youtube:${asset.videoId}:transcript`;
+      const excerpts = [...indexes].flatMap(index => {
+        const segment = transcript.segments[index];
+        return segment?.text ? [{ id: `evidence:${version}:segment:${index}`, sourceId,
+          text: segment.text, startMs: segment.startMs, endMs: segment.endMs }] : [];
+      });
+      if (excerpts.length) result.push({ packetId: `resolved:${version}`, kind: 'youtube_transcript', assetVersions: [version],
+        sources: [{ id: sourceId, provider: 'youtube', kind: 'transcript', videoId: asset.videoId, url: `https://www.youtube.com/watch?v=${asset.videoId}` }],
+        excerpts, artifacts: [], warnings: [], usage: [] });
+    }
+    return result;
+  }
+  private async hydrate(records: StoredEvidencePacket[], extraIds: string[] = []): Promise<EvidencePacket[]> {
+    const generation = this.generation();
+    const resolved = await this.resolveSegments([...extraIds, ...records.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id))]);
+    if (generation !== this.generation()) return [];
+    const excerpts = new Map(resolved.flatMap(packet => packet.excerpts.map(excerpt => [excerpt.id, excerpt] as const)));
+    const covered = new Set<string>();
+    const packets = records.filter(packet => packet.assetVersions?.every(version => this.has(version))).map(packet => ({ ...packet,
+      excerpts: packet.excerpts.flatMap(excerpt => {
+        const canonical = /^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id);
+        const value = canonical ? excerpts.get(excerpt.id) : excerpt;
+        if (!value) return [];
+        covered.add(excerpt.id);
+        return [{ ...value, sourceId: excerpt.sourceId }];
+      }),
+    }));
+    for (const packet of resolved) {
+      const missing = packet.excerpts.filter(excerpt => extraIds.includes(excerpt.id) && !covered.has(excerpt.id));
+      if (missing.length) packets.push({ ...packet, excerpts: missing });
+    }
     const current = this.currentVersions();
-    return this.sql
-      .exec<{ packet_json: string }>(
-        `SELECT packet_json FROM session_packets WHERE EXISTS (
-      SELECT 1 FROM json_each(packet_json,'$.excerpts') excerpt
-      WHERE json_extract(excerpt.value,'$.id') IN (SELECT value FROM json_each(?)))`,
-        JSON.stringify(ids),
-      )
-      .toArray()
-      .map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)))
-      .map((packet) =>
-        packet.assetVersions?.some((version) => !current.has(version))
-          ? {
-              ...packet,
-              warnings: [
-                ...packet.warnings,
-                {
-                  code: 'SUPERSEDED_SESSION_EVIDENCE',
-                  message:
-                    'This evidence refers to an older stored version. Use current assets for current facts.',
-                },
-              ],
-            }
-          : packet,
-      );
+    return packets.map(packet => evidencePacketSchema.parse({ ...packet,
+      warnings: packet.assetVersions?.some(version => !current.has(version))
+        ? [...packet.warnings, { code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'This evidence refers to an older stored version. Use current assets for current facts.' }] : packet.warnings,
+    }));
+  }
+  async evidence(version?: string): Promise<EvidencePacket[]> {
+    return this.hydrate(this.packetRecords(version));
+  }
+  evidenceForCitations(ids: string[]): EvidencePacket[] | Promise<EvidencePacket[]> {
+    if (!ids.length) return [];
+    const records = this.packetRecords().filter(packet => packet.excerpts.some(excerpt => ids.includes(excerpt.id)));
+    if (ids.some(id => /^evidence:[a-f0-9]{64}:segment:/.test(id))
+      || records.some(packet => packet.excerpts.some(excerpt => /^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id)))) {
+      return this.hydrate(records, ids);
+    }
+    const current = this.currentVersions();
+    return records.map(packet => evidencePacketSchema.parse({ ...packet,
+      warnings: packet.assetVersions?.some(version => !current.has(version))
+        ? [...packet.warnings, { code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'This evidence refers to an older stored version. Use current assets for current facts.' }] : packet.warnings,
+    }));
   }
   savePacket(packet: EvidencePacket) {
     const versions = packet.assetVersions ?? [];
@@ -289,7 +327,10 @@ export class SessionEvidenceStore implements SessionAccess {
     this.sql.exec(
       'INSERT OR REPLACE INTO session_packets VALUES (?, ?, ?)',
       id,
-      JSON.stringify({ ...packet, usage: [] }),
+      JSON.stringify({ ...packet, usage: [], excerpts: packet.excerpts.map(excerpt =>
+        /^evidence:[a-f0-9]{64}:segment:(0|[1-9]\d*)$/.test(excerpt.id)
+          && versions.includes(excerpt.id.split(':')[1]!)
+          ? { id: excerpt.id, sourceId: excerpt.sourceId } : excerpt) }),
       JSON.stringify(versions),
     );
     this.search.indexPacket(id, packet);
@@ -383,6 +424,7 @@ export class SessionEvidenceStore implements SessionAccess {
       }
     }
     if (generation !== this.generation()) return null;
+    if (value !== null && this.has(version) && row.kind === 'transcript') this.indexSegmentRefs(version, value as Transcript);
     if (value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
     return this.has(version) && generation === this.generation() ? value : null;
   }
@@ -530,7 +572,7 @@ export class SessionEvidenceStore implements SessionAccess {
         nextOffset: offset + page.length < matching.length ? offset + page.length : undefined,
       };
     }
-    const packets = this.evidence(version);
+    const packets = await this.evidence(version);
     const selected = packets
       .flatMap((packet) => {
         const matching = query
@@ -730,11 +772,7 @@ export class SessionEvidenceStore implements SessionAccess {
   }): { status: 'applied' | 'fenced' | 'stale_snapshot'; applied: number } {
     if (input.generation !== this.generation()) return { status: 'fenced', applied: 0 };
     if (input.memoryVersion !== this.memoryVersion()) return { status: 'stale_snapshot', applied: 0 };
-    const available = new Set(
-      this.evidenceForCitations(input.changes.flatMap((change) => change.evidenceIds)).flatMap((packet) =>
-        packet.excerpts.map((excerpt) => excerpt.id),
-      ),
-    );
+    const available = new Set(this.citationIds());
     let applied = 0;
     for (const change of input.changes.slice(0, 12)) {
       const id = memoryId(change.kind, change.topic);
@@ -780,12 +818,12 @@ export class SessionEvidenceStore implements SessionAccess {
       ? this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).toArray()
       : this.sql.exec<AssetRow>('SELECT * FROM session_assets').toArray();
     const removed = new Set(rows.map((row) => row.version));
-    const deletedIds = new Set<string>();
+    const deletedIds = new Set<string>(this.citationIds(version));
     for (const row of this.sql
       .exec<{ packet_id: string; packet_json: string; versions_json: string }>('SELECT * FROM session_packets')
       .toArray()) {
       if (!version || (JSON.parse(row.versions_json) as string[]).some((id) => removed.has(id))) {
-        const packet = evidencePacketSchema.parse(JSON.parse(row.packet_json));
+        const packet = JSON.parse(row.packet_json) as StoredEvidencePacket;
         packet.excerpts.forEach((excerpt) => deletedIds.add(excerpt.id));
         this.sql.exec('DELETE FROM session_packets WHERE packet_id=?', row.packet_id);
       }

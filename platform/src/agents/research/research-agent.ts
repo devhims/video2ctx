@@ -848,7 +848,7 @@ async function runUnifiedFinalizer(options: {
   const historyOnly = isHistoryOnlyRoute(options.decision);
   if (options.context.session && !conversational && contextExpired && !historyOnly) {
     // Recovery has only response time left. Restore saved comparison packets
-    // synchronously from SQLite, without repeating R2 reads or model work.
+    // from session references, hydrating captions from their original assets.
     contextIncomplete = true;
     const assets = options.context.session.brief().assets;
     for (const videoId of comparisonVideoIds) {
@@ -857,8 +857,9 @@ async function runUnifiedFinalizer(options: {
       if (!asset || options.context.session.transcriptOverLimit?.(asset.version)) continue;
       // Session packets are newest first. Pages and query reads overlap the
       // full transcript and must not consume the comparison budget again.
-      const saved = options.context.session.evidence(asset.version)
-        .find(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript'));
+      const restored = await withRunDeadline(finalizationHardDeadline(options.deadlineAt), options.context.signal,
+        () => Promise.resolve(options.context.session!.evidence(asset.version)), 'Saved citation restoration timeout.');
+      const saved = restored.find(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript'));
       const packet = saved && deliver([saved], 'recovery_restore').admitted[0];
       if (!packet) continue;
       options.onEvidence?.([packet]);

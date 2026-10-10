@@ -124,7 +124,7 @@ test('two sessions reuse one source object while deletion removes only the first
     await store.delete(version);
     expect(await store.read(version)).toBeNull();
     expect(await store.lookup(`transcript:${id}:default`)).toBeUndefined();
-    expect(store.evidence()).toEqual([]);
+    expect(await store.evidence()).toEqual([]);
     expect(store.brief().memories).toEqual([]);
     expect(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
   });
