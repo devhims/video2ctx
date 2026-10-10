@@ -322,6 +322,7 @@ Pull requests also run the `Platform`, `Web`, and `Documentation` GitHub Actions
 
 ## Documentation
 
+- [Experimental transcript overview](./reference/engineering/EXPERIMENTAL_TRANSCRIPT_OVERVIEW.md): opt-in local index building and full-transcript comparisons
 - [Mintlify documentation source](./docs) — dashboard guides, API quickstarts, and the generated API reference
 - [`reference/engineering/IMPLEMENTATION.md`](./reference/engineering/IMPLEMENTATION.md) — backend architecture, storage, reliability, privacy, and Cloudflare setup
 - [`reference/engineering/UI_API_REFERENCE.md`](./reference/engineering/UI_API_REFERENCE.md) — current UI request flows and platform route contracts
