@@ -4,9 +4,13 @@ import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
-import type { SessionEvidenceStore } from './session-evidence';
+import type { SessionEvidenceStore, TranscriptReads } from './session-evidence';
 
 const SEARCH_RESULT_LIMIT = 20;
+/** Ranked rows considered per query. Overlapping windows rarely exceed three rows per distinct match. */
+const SEARCH_CANDIDATE_LIMIT = 200;
+/** One initial query plus re-queries after excluding unreadable transcripts. */
+const MAX_SEARCH_QUERIES = 4;
 
 export interface HistoryEntry {
   id: string;
@@ -18,6 +22,7 @@ export interface HistoryEntry {
 }
 
 type SearchRow = { id: string; owner: string; content: string; metadata: string };
+type MatchRow = Omit<SearchRow, 'content'>;
 
 /** The only dependency on the experimental SDK. agents is pinned in package.json. */
 export class SessionSearch {
@@ -206,7 +211,7 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT, offset = 0): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT): MatchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = searchTokens(query);
     if (!tokens.length) return [];
@@ -214,22 +219,21 @@ export class SessionSearch {
     // Materialize FTS scores before windowing, since rank must run in the FTS query.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
     return this.sql
-      .exec<SearchRow>(
+      .exec<MatchRow>(
         `WITH matches AS MATERIALIZED (
-        SELECT id,owner,content,metadata,rank AS score FROM session_context_fts
+        SELECT id,owner,metadata,rank AS score FROM session_context_fts
         WHERE session_context_fts MATCH ? AND scope=?${excluded}
           AND json_extract(metadata,'$.offset') IS NULL
           ${tokens.length === 1 ? "AND json_extract(metadata,'$.segmentIds') IS NULL" : ''}
       ), unique_matches AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
-      SELECT id,owner,content,metadata FROM unique_matches
-      WHERE occurrence=1 ORDER BY score,id LIMIT ? OFFSET ?`,
+      SELECT id,owner,metadata FROM unique_matches
+      WHERE occurrence=1 ORDER BY score,id LIMIT ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
         limit,
-        offset,
       )
       .toArray();
   }
@@ -241,56 +245,83 @@ export class SessionSearch {
       return record ? [JSON.parse(record.memory_json)] : [];
     });
   }
-  async searchEvidence(store: SessionEvidenceStore, query: string) {
+  async searchEvidence(store: SessionEvidenceStore, query: string, signal?: AbortSignal) {
     const indexing = await store.ensureSearchIndexed(query);
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
-    const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
+    const excluded = new Set(store.overLimitTranscriptVersions().map((version) => `asset:${version}`));
     const generation = store.generation();
     const terms = [...foldedTokens(searchTokens(query).join(' '))];
+    // One read per transcript for the whole search; unreadable blobs resolve to null.
+    const reads: TranscriptReads = new Map();
     const resolvedIds = new Set<string>();
     const texts = new Map<string, string>();
     const found: EvidencePacket[] = [];
+    const available = new Map<string, boolean>();
+    const unreadable = new Set<string>();
+    const isAvailable = (version: string) => {
+      let value = available.get(version);
+      if (value === undefined) available.set(version, value = store.has(version) && !excluded.has(`asset:${version}`));
+      return value;
+    };
     let results = 0;
-    // Page through ranked candidates until twenty distinct resolved matches are
-    // returned or the index is exhausted. Overlap has no fixed multiplier.
-    for (let offset = 0; results < SEARCH_RESULT_LIMIT; offset += SEARCH_RESULT_LIMIT) {
-      const rows = this.matches('evidence', query, excluded, SEARCH_RESULT_LIMIT, offset);
-      if (!rows.length) break;
-      const candidates = rows.map(row => {
-        const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
-        return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
-      }).filter(({ metadata }) => !metadata.version || (store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)));
-      // Cache resolved IDs across pages, including unavailable IDs. Each page
-      // batches its new references rather than reading once per FTS candidate.
-      const missing = [...new Set(candidates.flatMap(candidate => candidate.ids))].filter(id => !resolvedIds.has(id));
-      if (missing.length) {
-        const resolved = await store.evidenceForCitations(missing);
-        // Deletion can change both citation availability and pagination offsets.
-        if (generation !== store.generation()) return { packets: [], ...indexing };
-        found.push(...resolved);
-        for (const id of missing) resolvedIds.add(id);
-        for (const packet of resolved) for (const excerpt of packet.excerpts) texts.set(excerpt.id, excerpt.text);
-      }
-      for (const { row, metadata, ids: windowIds } of candidates) {
-        if (results >= SEARCH_RESULT_LIMIT) break;
-        const ids = metadata.segmentIds ? coveringSpan(windowIds, texts, terms) : windowIds;
-        if (ids.every(id => seen.has(id))) continue;
-        const before = packets.length;
-        for (const packet of found) {
-          if (packet.assetVersions?.some(version => !store.has(version))) continue;
-          const excerpts = packet.excerpts.filter(excerpt => ids.includes(excerpt.id) && !seen.has(excerpt.id));
-          if (!excerpts.length) continue;
-          packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
-          for (const excerpt of excerpts) seen.add(excerpt.id);
+    // Run one bounded ranked query, then resolve its rows in batches until twenty
+    // distinct matches are returned. Overlapping windows can resolve to the same
+    // captions, so the query fetches more rows than results. If an unreadable
+    // transcript filled the candidate limit, exclude it and query again.
+    for (let attempt = 0; attempt < MAX_SEARCH_QUERIES && results < SEARCH_RESULT_LIMIT; attempt++) {
+      const rows = this.matches('evidence', query, [...excluded], SEARCH_CANDIDATE_LIMIT);
+      let unreadableFound = false;
+      for (let start = 0; start < rows.length && results < SEARCH_RESULT_LIMIT; start += SEARCH_RESULT_LIMIT) {
+        signal?.throwIfAborted();
+        const candidates = rows.slice(start, start + SEARCH_RESULT_LIMIT).map(row => {
+          const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
+          return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
+        }).filter(({ metadata }) => !metadata.version || isAvailable(metadata.version));
+        const missing = [...new Set(candidates.flatMap(candidate => candidate.ids))].filter(id => !resolvedIds.has(id));
+        if (missing.length) {
+          const resolved = await store.evidenceForCitations(missing, reads);
+          // Deletion can change citation availability between batches.
+          if (generation !== store.generation()) return { packets: [], ...indexing };
+          found.push(...resolved);
+          for (const id of missing) resolvedIds.add(id);
+          for (const packet of resolved) for (const excerpt of packet.excerpts) texts.set(excerpt.id, excerpt.text);
         }
-        if (packets.length > before) results++;
+        for (const version of new Set(candidates.flatMap(({ metadata }) => metadata.version ? [metadata.version] : []))) {
+          if (reads.has(version) && await reads.get(version) === null) {
+            excluded.add(`asset:${version}`);
+            available.set(version, false);
+            unreadable.add(version);
+            unreadableFound = true;
+          }
+        }
+        for (const { row, metadata, ids: windowIds } of candidates) {
+          if (results >= SEARCH_RESULT_LIMIT) break;
+          if (metadata.version && !isAvailable(metadata.version)) continue;
+          const ids = new Set(metadata.segmentIds ? coveringSpan(windowIds, texts, terms) : windowIds);
+          if ([...ids].every(id => seen.has(id))) continue;
+          const before = packets.length;
+          for (const packet of found) {
+            if (packet.assetVersions?.some(version => !store.has(version))) continue;
+            const excerpts = packet.excerpts.filter(excerpt => ids.has(excerpt.id) && !seen.has(excerpt.id));
+            if (!excerpts.length) continue;
+            packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
+            for (const excerpt of excerpts) seen.add(excerpt.id);
+          }
+          if (packets.length > before) results++;
+        }
       }
-      if (rows.length < SEARCH_RESULT_LIMIT) break;
+      // Rows beyond the limit exist only if the query was full. Re-query only
+      // when excluding an unreadable transcript can surface new candidates.
+      if (rows.length < SEARCH_CANDIDATE_LIMIT || !unreadableFound) break;
     }
-    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))), ...indexing };
+    // Indexed transcripts whose blobs are now unreadable are a coverage gap too.
+    // Indexing reports only unindexed versions, so the counts do not overlap.
+    const unavailableTranscripts = (indexing.unavailableTranscripts ?? 0) + unreadable.size;
+    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))),
+      pendingTranscripts: indexing.pendingTranscripts, ...(unavailableTranscripts ? { unavailableTranscripts } : {}) };
   }
   async tools(
     store: SessionEvidenceStore,
@@ -330,12 +361,12 @@ export class SessionSearch {
             'Search transcript passages and saved visual/comment analysis across session assets. Queries match all words. Results contain version-specific citation IDs; older versions are labelled.',
           search: async (query) => {
             check();
-            const found = await this.searchEvidence(store, query);
+            const found = await this.searchEvidence(store, query, signal);
             check();
             // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
             const packets = onEvidence(found.packets) ?? found.packets;
             const withheld = found.packets.length - packets.length;
-            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(found.pendingTranscripts ? { pendingTranscripts: found.pendingTranscripts, indexingNote: 'Some saved transcript indexes are pending upgrade or unavailable. Search again to include another batch.' } : {}), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
+            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(found.pendingTranscripts ? { pendingTranscripts: found.pendingTranscripts, indexingNote: 'Some saved transcript indexes are still being prepared. Search again to include another batch.' } : {}), ...(found.unavailableTranscripts ? { unavailableTranscripts: found.unavailableTranscripts, unavailableNote: 'Some saved transcripts could not be read and are not searchable. Treat them as a coverage gap; searching again will not help.' } : {}), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
         },
       });

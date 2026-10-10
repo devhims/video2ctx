@@ -6,6 +6,7 @@ import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
 import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
+import { ConcurrencyLimiter } from '../providers/youtube/tool-context';
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
@@ -38,6 +39,8 @@ type StoredEvidencePacket = Omit<EvidencePacket, 'excerpts'> & {
   excerpts: Array<Pick<EvidencePacket['excerpts'][number], 'id' | 'sourceId'>
     & Partial<Pick<EvidencePacket['excerpts'][number], 'text' | 'startMs' | 'endMs'>>>;
 };
+/** Per-operation transcript reads, keyed by asset version. */
+export type TranscriptReads = Map<string, Promise<Transcript | null>>;
 type AssetRow = {
   version: string;
   resource_key: string;
@@ -183,8 +186,8 @@ export class SessionEvidenceStore implements SessionAccess {
         || Number(legacy.has(b.version)) - Number(legacy.has(a.version)));
     // Never make a foreground search scan a session's whole R2 library. Retain
     // old indexes until their replacement is ready, and report remaining work.
-    let completed = 0;
-    await Promise.all(rows.slice(0, 4).map(async ({ version }) => {
+    const batch = rows.slice(0, 4);
+    await Promise.all(batch.map(async ({ version }) => {
       let transcript: Transcript | null;
       try {
         transcript = (await this.read(version, false)) as Transcript | null;
@@ -198,10 +201,18 @@ export class SessionEvidenceStore implements SessionAccess {
         return;
       }
       this.indexTranscript(version, transcript);
-      completed++;
     }));
     if (generation !== this.generation()) throw new Error('Session evidence changed during indexing. Retry the search.');
-    return { pendingTranscripts: rows.length - completed };
+    // Pending work can succeed on a later search. A version whose read failed is
+    // an unavailable source until a later retry succeeds; searching again for it
+    // alone is not useful.
+    const failed = this.search.indexFailures();
+    const indexed = new Set(this.sql.exec<{ version: string }>('SELECT version FROM session_search_assets').toArray().map(row => row.version));
+    // A successful upgrade deletes its legacy rows, so recompute legacy candidates.
+    const stillLegacy = this.search.legacyCandidates(query);
+    const remaining = rows.filter(row => !indexed.has(row.version) || stillLegacy.has(row.version));
+    const unavailable = remaining.filter(row => failed.has(row.version)).length;
+    return { pendingTranscripts: remaining.length - unavailable, ...(unavailable ? { unavailableTranscripts: unavailable } : {}) };
   }
   private indexSegmentRefs(version: string, transcript: Transcript) {
     this.sql.exec('INSERT OR IGNORE INTO session_segment_refs VALUES (?, ?)', version,
@@ -280,34 +291,50 @@ export class SessionEvidenceStore implements SessionAccess {
       WHERE EXISTS (SELECT 1 FROM json_each(r.indexes_json) WHERE value=json_extract(request.value,'$.index'))`, JSON.stringify(canonical)).toArray();
     return new Set([...legacy.filter(row => !parseSegmentCitation(row.id)), ...segments].map(row => row.id));
   }
-  private async resolveSegments(ids: string[]): Promise<EvidencePacket[]> {
+  private async resolveSegments(ids: string[], reads?: TranscriptReads): Promise<EvidencePacket[]> {
     const groups = new Map<string, Set<number>>();
     for (const id of ids) {
       const ref = parseSegmentCitation(id);
       if (ref) { const indexes = groups.get(ref.version) ?? new Set<number>(); indexes.add(ref.index); groups.set(ref.version, indexes); }
     }
-    const result: EvidencePacket[] = [];
-    for (const [version, indexes] of groups) {
+    // Independent transcripts are read concurrently, but a bounded number of
+    // parsed transcripts is held in Durable Object memory at once.
+    const limiter = new ConcurrencyLimiter(4);
+    const resolved = await Promise.all([...groups].map(([version, indexes]) => limiter.run(async (): Promise<EvidencePacket | undefined> => {
       const asset = this.assetInfo(version);
-      if (asset?.kind !== 'transcript') continue;
-      if (this.overLimit(asset)) continue;
-      const transcript = await this.read(version, false) as Transcript | null;
-      if (!transcript || !this.has(version)) continue;
+      if (asset?.kind !== 'transcript') return;
+      if (this.overLimit(asset)) return;
+      const transcript = await this.readTranscript(version, reads);
+      if (!transcript || !this.has(version)) return;
       const sourceId = `youtube:${asset.videoId}:transcript`;
       const excerpts = [...indexes].flatMap(index => {
         const segment = transcript.segments[index];
         return segment && usableTranscriptSegment(segment.text) ? [{ id: segmentCitationId(version, index), sourceId,
           text: segment.text, startMs: segment.startMs, endMs: segment.endMs }] : [];
       });
-      if (excerpts.length) result.push({ packetId: `resolved:${version}`, kind: 'youtube_transcript', assetVersions: [version],
+      if (excerpts.length) return { packetId: `resolved:${version}`, kind: 'youtube_transcript', assetVersions: [version],
         sources: [{ id: sourceId, provider: 'youtube', kind: 'transcript', videoId: asset.videoId, url: `https://www.youtube.com/watch?v=${asset.videoId}` }],
-        excerpts, artifacts: [], warnings: [], usage: [] });
-    }
-    return result;
+        excerpts, artifacts: [], warnings: [], usage: [] };
+    })));
+    return resolved.filter(packet => packet !== undefined);
   }
-  private async hydrate(records: StoredEvidencePacket[], extraIds: string[] = []): Promise<EvidencePacket[]> {
+  /**
+   * With a caller-owned cache, each transcript is read at most once across
+   * several resolutions, and an unreadable blob resolves to null instead of
+   * failing the caller. Without one, read errors propagate as before.
+   */
+  private readTranscript(version: string, reads?: TranscriptReads): Promise<Transcript | null> {
+    if (!reads) return this.read(version, false) as Promise<Transcript | null>;
+    let pending = reads.get(version);
+    if (!pending) {
+      pending = (this.read(version, false) as Promise<Transcript | null>).catch(() => null);
+      reads.set(version, pending);
+    }
+    return pending;
+  }
+  private async hydrate(records: StoredEvidencePacket[], extraIds: string[] = [], reads?: TranscriptReads): Promise<EvidencePacket[]> {
     const generation = this.generation();
-    const resolved = await this.resolveSegments([...extraIds, ...records.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id))]);
+    const resolved = await this.resolveSegments([...extraIds, ...records.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id))], reads);
     if (generation !== this.generation()) return [];
     const excerpts = new Map(resolved.flatMap(packet => packet.excerpts.map(excerpt => [excerpt.id, excerpt] as const)));
     const covered = new Set<string>();
@@ -320,8 +347,9 @@ export class SessionEvidenceStore implements SessionAccess {
         return [{ ...value, sourceId: excerpt.sourceId }];
       }),
     }));
+    const requested = new Set(extraIds);
     for (const packet of resolved) {
-      const missing = packet.excerpts.filter(excerpt => extraIds.includes(excerpt.id) && !covered.has(excerpt.id));
+      const missing = packet.excerpts.filter(excerpt => requested.has(excerpt.id) && !covered.has(excerpt.id));
       if (missing.length) packets.push({ ...packet, excerpts: missing });
     }
     const current = this.currentVersions();
@@ -333,7 +361,7 @@ export class SessionEvidenceStore implements SessionAccess {
   async evidence(version?: string): Promise<EvidencePacket[]> {
     return this.hydrate(this.packetRecords(version));
   }
-  async evidenceForCitations(ids: string[]): Promise<EvidencePacket[]> {
+  async evidenceForCitations(ids: string[], reads?: TranscriptReads): Promise<EvidencePacket[]> {
     if (!ids.length) return [];
     const rows = this.sql.exec<{ packet_json: string }>(`SELECT packet_json FROM session_packets
       WHERE EXISTS (SELECT 1 FROM json_each(packet_json,'$.excerpts') e
@@ -341,7 +369,7 @@ export class SessionEvidenceStore implements SessionAccess {
     const requested = new Set(ids);
     const records: StoredEvidencePacket[] = rows.map(row => JSON.parse(row.packet_json));
     // Hydrate only the requested captions, not every segment in matching full-read records.
-    return this.hydrate(records.map(packet => ({ ...packet, excerpts: packet.excerpts.filter(excerpt => requested.has(excerpt.id)) })), ids);
+    return this.hydrate(records.map(packet => ({ ...packet, excerpts: packet.excerpts.filter(excerpt => requested.has(excerpt.id)) })), ids, reads);
   }
   savePacket(packet: EvidencePacket) {
     const versions = packet.assetVersions ?? [];

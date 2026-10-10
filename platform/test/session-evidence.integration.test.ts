@@ -1359,7 +1359,11 @@ test('overlapping windows cannot crowd distinct matches out of the result limit'
     await add('crowdvidA01', Array.from({ length: 130 }, (_, index) => index % 10 === 2 ? 'alpha' : index % 10 === 3 ? 'beta' : `filler ${index}`));
     // One lower-ranked match in another video.
     await add('crowdvidB01', Array.from({ length: 10 }, (_, index) => index === 0 ? 'alpha' : index === 9 ? 'beta' : `padding words ${index}`));
+    const read = vi.spyOn(store, 'read');
     const found = await store.search.searchEvidence(store, 'alpha beta');
+    // Candidates span several resolution batches; each transcript is still read once.
+    const reads = read.mock.calls.map(([version]) => version);
+    expect(reads.length).toBe(new Set(reads).size);
     expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(['crowdvidA01', 'crowdvidB01']));
     const excerpts = found.packets.flatMap(packet => packet.excerpts);
     expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
@@ -1381,13 +1385,14 @@ test('unreadable transcripts rotate behind healthy index work', async () =>
     const original = current.read.bind(current);
     const read = vi.spyOn(current, 'read').mockImplementation(async (version, markRequested) =>
       version === versions[0] ? Promise.reject(new Error('R2 unavailable')) : broken.has(version) ? null : original(version, markRequested));
-    // The four unreadable versions fill the first batch.
-    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 6 });
+    // The four unreadable versions fill the first batch. They are reported as
+    // unavailable, separately from work a later search can still complete.
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 2, unavailableTranscripts: 4 });
     expect(new Set(read.mock.calls.map(([version]) => version))).toEqual(broken);
     expect(sql.exec('SELECT version FROM session_search_index_failures').toArray()).toHaveLength(4);
     // Recorded failures move behind untried versions, so healthy work still completes.
     read.mockClear();
-    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 4 });
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 0, unavailableTranscripts: 4 });
     expect(read.mock.calls.map(([version]) => version).slice(0, 2).sort()).toEqual(versions.slice(4).sort());
     const indexed = new Set(sql.exec<{ version: string }>('SELECT version FROM session_search_assets').toArray().map(row => row.version));
     for (const version of versions.slice(4)) expect(indexed.has(version)).toBe(true);
@@ -1492,4 +1497,36 @@ test('deletion during a later search page discards earlier results', async () =>
     const found = await store.search.searchEvidence(store, 'alpha beta');
     expect(calls).toBe(2);
     expect(found.packets).toEqual([]);
+  }));
+
+test('an unreadable transcript filling the candidate limit cannot hide healthy matches', async () =>
+  within('search-unreadable-candidate-limit', async (store, _reopen, sql) => {
+    const value = transcript();
+    // 250 short top-ranked caption matches, more than one bounded query returns.
+    value.segments = Array.from({ length: 250 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const broken = saved.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key;
+    await env.RESEARCH.delete(key);
+    const later = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid2' };
+    await sessionProvider(provider(vi.fn(async () => ({ value: later, cacheStatus: 'miss' as const }))), store).transcript(later.videoId);
+    const read = vi.spyOn(store, 'read');
+    const query = vi.spyOn(store.search as unknown as { matches: (...args: unknown[]) => unknown }, 'matches');
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets.map(packet => packet.sources[0]!.videoId)).toEqual(['healthyvid2']);
+    // The missing blob is reported as a coverage gap, not silently omitted.
+    expect(found.unavailableTranscripts).toBe(1);
+    // The missing blob is read once, then excluded; one re-query reaches the healthy match.
+    expect(read.mock.calls.filter(([version]) => version === broken)).toHaveLength(1);
+    expect(query).toHaveBeenCalledTimes(2);
+  }));
+
+test('search stops when aborted between resolution batches', async () =>
+  within('search-abort', async store => {
+    const value = transcript();
+    value.segments = Array.from({ length: 100 }, (_, index) => ({ text: index % 10 === 8 ? 'alpha beta' : 'filler', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(store.search.searchEvidence(store, 'alpha beta', controller.signal)).rejects.toThrow('cancelled');
   }));
