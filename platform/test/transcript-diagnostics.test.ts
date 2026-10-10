@@ -4,8 +4,8 @@ import type { TranscriptDiagnostic } from '../src/agents/runtime/transcript-diag
 import { analyzeTranscriptWithModel } from '../src/agents/providers/youtube/transcript-analyst';
 
 const usage = { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } };
-const output = (name: string) => ({ findings: [{ claim: 'OpenAI provides an API.', windowIndexes: [0], entities: [{ name, quote: 'OpenAI API tutorial', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] });
-const unsupportedMeasurement = () => ({ findings: [{ claim: 'The reported accuracy is unclear.', windowIndexes: [0],
+const output = (name: string) => ({ findings: [{ claim: 'OpenAI provides an API.', segmentId: 0, entities: [{ name, quote: 'OpenAI API tutorial', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] });
+const unsupportedMeasurement = () => ({ findings: [{ claim: 'The reported accuracy is unclear.', segmentId: 0,
   entities: [], quantities: [{ metric: 'accuracy', value: 99, unit: '%', basis: null, kind: 'reported', quote: 'Accuracy is 24 percent.' }],
   uncertainty: null }], warnings: [] });
 const response = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
@@ -20,7 +20,7 @@ describe('transcript analysis diagnostics', () => {
     expect(events.map(e => e.outcome)).toEqual(['started', 'accepted']);
     expect(events[1]).toMatchObject({ attempt: 1, finishReason: 'stop', inputTokens: 100, outputTokens: 100,
       issues: [expect.objectContaining({ code: 'QUANTITY_NOT_SUPPORTED', findingIndex: 0, fieldIndex: 0 })],
-      sourceContext: { title: 'OpenAI API tutorial' }, sourceWindows: [expect.objectContaining({ index: 0, text: 'Open eye provides an API. Accuracy is 24 percent.' })] });
+      sourceContext: { title: 'OpenAI API tutorial' }, sourceSegments: [expect.objectContaining({ index: 0, text: 'Open eye provides an API. Accuracy is 24 percent.' })] });
     expect(events[1]!.rejectedOutput).toContain('99');
     expect(result.findings).toEqual([expect.objectContaining({ claim: 'The reported accuracy is unclear.', quantities: [],
       uncertainty: expect.stringContaining('unverified') })]);
@@ -53,11 +53,11 @@ describe('transcript analysis diagnostics', () => {
 
 it('records an unknown window and both rejected attempts without claiming a schema failure', async () => {
   const events: TranscriptDiagnostic[] = [];
-  const bad = output('OpenAI'); bad.findings[0]!.windowIndexes = [999];
+  const bad = output('OpenAI'); bad.findings[0]!.segmentId = 999;
   const model = new MockLanguageModelV4({ doGenerate: async () => response(bad) });
-  await expect(analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) })).rejects.toThrow('unknown window');
+  await expect(analyzeTranscriptWithModel({ ...input(), model, onDiagnostic: e => events.push(e) })).rejects.toThrow('unknown segment');
   expect(events.map(e => e.outcome)).toEqual(['started', 'rejected', 'started', 'rejected']);
-  expect(events[1]).toMatchObject({ code: 'INVALID_REFERENCE', issues: [{ code: 'UNKNOWN_WINDOW', findingIndex: 0, windowIndex: 999 }] });
+  expect(events[1]).toMatchObject({ code: 'INVALID_REFERENCE', issues: [{ code: 'UNKNOWN_SEGMENT', findingIndex: 0, segmentId: 999 }] });
 });
 
 it('captures the exact schema field that was invalid without attempting a grounding repair', async () => {

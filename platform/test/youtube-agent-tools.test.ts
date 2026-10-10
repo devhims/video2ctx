@@ -183,10 +183,10 @@ describe('YouTube agent evidence tools', () => {
       summary: 'The video recommends TypeScript.',
       findings: [{
         claim: 'TypeScript improves frontend feedback loops.',
-        excerptIds: ['transcript:abcdefghijk:window:0:0'],
+        excerptIds: ['transcript:abcdefghijk:segment:0'],
       }],
       excerpts: [{
-        id: 'transcript:abcdefghijk:window:0:0',
+        id: 'transcript:abcdefghijk:segment:0',
         text: 'FULL TRANSCRIPT TEXT retained for exact citation validation.',
         startMs: 0,
         endMs: 60_000,
@@ -219,7 +219,7 @@ describe('YouTube agent evidence tools', () => {
         summary: 'The video recommends TypeScript.',
         findings: [{
           claim: 'TypeScript improves frontend feedback loops.',
-          excerptIds: ['transcript:abcdefghijk:window:0:0'],
+          excerptIds: ['transcript:abcdefghijk:segment:0'],
         }],
       },
     });
@@ -233,13 +233,13 @@ describe('TranscriptAnalyst', () => {
   it('accepts compact findings without a generated summary and preserves attributed caveats and exact citations', async () => {
     const claim = 'The speaker reports faster prototypes with reusable skills; cross-agent equivalence was not demonstrated.';
     const result = await analyzeTranscriptWithModel({
-      model: transcriptAnalysisModel({ findings: [{ claim, windowIndexes: [0] }],
+      model: transcriptAnalysisModel({ findings: [{ claim, segmentId: 0 }],
         warnings: ['The demonstration does not independently establish cross-agent equivalence.'] }),
       videoId: 'abcdefghijk', researchQuestion: 'Which design skills work across agents?', focus: 'Demonstrated benefits and caveats',
       segments: [{ startMs: 0, durationMs: 1000, endMs: 1000, text: 'We made prototypes faster, but only tested this agent.' }],
       signal: new AbortController().signal,
     });
-    expect(result.findings).toEqual([{ claim, excerptIds: ['transcript:abcdefghijk:window:0:0'], entities: [], quantities: [], uncertainty: null }]);
+    expect(result.findings).toEqual([{ claim, excerptIds: ['transcript:abcdefghijk:segment:0'], entities: [], quantities: [], uncertainty: null }]);
     expect(result.excerpts[0]?.text).toBe('We made prototypes faster, but only tested this agent.');
     expect(result.warnings).toEqual(['The demonstration does not independently establish cross-agent equivalence.']);
     expect(result.summary).toBe('Selected 1 relevant transcript finding.');
@@ -250,7 +250,7 @@ describe('TranscriptAnalyst', () => {
       summary: 'The final segment contains the evidence relevant to the research question.',
       findings: [{
         claim: 'The implementation should follow the prototype.',
-        windowIndexes: [1],
+        segmentId: 2,
       }],
       warnings: [],
     });
@@ -276,7 +276,7 @@ describe('TranscriptAnalyst', () => {
     expect(prompt).toContain('This middle segment adds context.');
     expect(prompt).toContain('Prototype interaction states before implementation.');
     expect(result.excerpts).toEqual([{
-      id: 'transcript:abcdefghijk:window:1:65000',
+      id: 'transcript:abcdefghijk:segment:2',
       text: 'Prototype interaction states before implementation.',
       startMs: 65_000,
       endMs: 73_000,
@@ -290,7 +290,7 @@ describe('TranscriptAnalyst', () => {
   });
 
   it('retains up to five supported findings per video', async () => {
-    const findings = Array.from({ length: 5 }, (_, i) => ({ claim: `Finding ${i + 1}`, windowIndexes: [i] }));
+    const findings = Array.from({ length: 5 }, (_, i) => ({ claim: `Finding ${i + 1}`, segmentId: i }));
     const result = await analyzeTranscriptWithModel({
       model: transcriptAnalysisModel({ summary: 'Five relevant points.', findings, warnings: [] }),
       videoId: 'abcdefghijk', researchQuestion: 'List ten lessons from this video', focus: 'Ten distinct lessons',
@@ -302,7 +302,7 @@ describe('TranscriptAnalyst', () => {
   });
 
   it('retains ten findings when classification requests ten items', async () => {
-    const findings = Array.from({ length: 10 }, (_, i) => ({ claim: `Finding ${i + 1}`, windowIndexes: [i] }));
+    const findings = Array.from({ length: 10 }, (_, i) => ({ claim: `Finding ${i + 1}`, segmentId: i }));
     const result = await analyzeTranscriptWithModel({
       model: transcriptAnalysisModel({ findings, warnings: [] }), maxFindings: 10,
       videoId: 'abcdefghijk', researchQuestion: 'List ten lessons', focus: 'Ten distinct lessons',
@@ -316,7 +316,7 @@ describe('TranscriptAnalyst', () => {
   it('rejects analyst output exceeding the five-finding budget', async () => {
     await expect(analyzeTranscriptWithModel({
       model: transcriptAnalysisModel({ summary: 'Too many findings.',
-        findings: Array.from({ length: 6 }, (_, i) => ({ claim: `Finding ${i}`, windowIndexes: [0] })), warnings: [] }),
+        findings: Array.from({ length: 6 }, (_, i) => ({ claim: `Finding ${i}`, segmentId: 0 })), warnings: [] }),
       videoId: 'abcdefghijk', researchQuestion: 'List useful lessons', focus: 'Relevant findings',
       segments: [{ startMs: 0, endMs: 1000, durationMs: 1000, text: 'Transcript evidence.' }],
       signal: new AbortController().signal,
@@ -326,11 +326,11 @@ describe('TranscriptAnalyst', () => {
   it('repairs an out-of-range window reference once before resolving evidence', async () => {
     const model = transcriptAnalysisModel([{
       summary: 'The first attempt referenced an unavailable window.',
-      findings: [{ claim: 'Use exact transcript evidence.', windowIndexes: [31] }],
+      findings: [{ claim: 'Use exact transcript evidence.', segmentId: 31 }],
       warnings: [],
     }, {
       summary: 'The transcript recommends exact evidence.',
-      findings: [{ claim: 'Use exact transcript evidence.', windowIndexes: [0] }],
+      findings: [{ claim: 'Use exact transcript evidence.', segmentId: 0 }],
       warnings: [],
     }]);
     const controller = new AbortController();
@@ -347,7 +347,7 @@ describe('TranscriptAnalyst', () => {
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain('31');
     expect(result.excerpts).toEqual([{
-      id: 'transcript:abcdefghijk:window:0:0',
+      id: 'transcript:abcdefghijk:segment:0',
       text: 'Use exact transcript evidence.',
       startMs: 0,
       endMs: 10_000,
@@ -568,7 +568,7 @@ function toolContext(overrides: Partial<AgentToolContext['provider']> & {
 
 type TranscriptAnalysisOutput = {
   summary?: string;
-  findings: Array<{ claim: string; windowIndexes: number[] }>;
+  findings: Array<{ claim: string; segmentId: number }>;
   warnings: string[];
 };
 

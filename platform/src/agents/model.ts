@@ -54,7 +54,7 @@ function configuredAgentModel(
   backup = false,
 ): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
-  const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
+  const isTextRole = ['classifier', 'agent_core', 'transcript_analyst', 'memory_updater'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
@@ -72,11 +72,11 @@ function configuredAgentModel(
     throw new Error('Unsupported finalizer reasoning effort.');
   }
   if (finalizerEffort && profile?.modelId !== FIREWORKS_GLM_MODEL_ID) {
-    throw new Error('Finalizer reasoning effort requires GLM Flash.');
+    throw new Error('Finalizer reasoning effort requires GLM Flash. Clear AGENT_FINALIZER_REASONING_EFFORT when using DeepSeek; reasoning stays disabled.');
   }
   const glmFinalizerOptions = finalizerEffort
     ? { reasoningEffort: finalizerEffort === 'medium' ? 'high' : 'low' } : undefined;
-  const disableTextReasoning = !isFinalizer && profile?.modelId.startsWith('accounts/fireworks/models/deepseek-');
+  const disableTextReasoning = profile?.modelId.startsWith('accounts/fireworks/models/deepseek-');
   const gatewayId = env.AI_GATEWAY_ID.trim();
   const model = useFireworks
     ? createFireworks({ apiKey: env.FIREWORKS_API_KEY })(profile?.modelId ?? FIREWORKS_GLM_MODEL_ID)
@@ -97,8 +97,8 @@ function configuredAgentModel(
     transformParams: async ({ params }) => profile ? {
       ...params,
       // Fireworks counts reasoning inside max_tokens. Reserve headroom only
-      // for profiles that reason. DeepSeek extraction and planning disable
-      // reasoning to preserve the research deadline and output allowance.
+      // for profiles that reason. All DeepSeek roles, including final answers,
+      // disable reasoning and retain the caller's output allowance.
       maxOutputTokens: (params.maxOutputTokens ?? 1_500) + (disableTextReasoning ? 0 : FINALIZER_THINKING_TOKENS),
       providerOptions: { ...params.providerOptions, ...profile.providerOptions,
         fireworks: { ...(glmFinalizerOptions ?? (disableTextReasoning ? { reasoningEffort: 'none' } : profile.providerOptions.fireworks)),

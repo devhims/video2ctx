@@ -19,7 +19,7 @@ export function attachTestAssetStore(context: AgentToolContext) {
   context.session = {
     brief: () => ({ assets: [...saved.values()].map(({ asset }) => asset), memories: [] }),
     readAsset: async (version) => saved.get(version) ?? null,
-    evidence: () => [],
+    evidence: async () => [],
     readEvidence: async () => ({ packets: [] }),
   };
   const provider = context.provider;

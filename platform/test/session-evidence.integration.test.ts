@@ -177,16 +177,18 @@ function provider(fetch = vi.fn(async () => ({ value: transcript(), cacheStatus:
   return { transcript: fetch } as unknown as YouTubeAgentProvider;
 }
 function context(store: SessionEvidenceStore, p: YouTubeAgentProvider): AgentToolContext {
+  const packets: EvidencePacket[] = [];
   return {
     runId: crypto.randomUUID(),
     signal: new AbortController().signal,
     provider: p,
     session: store,
-    getEvidence: () => store.evidence(),
+    getEvidence: () => packets,
     transcriptPolicy: { mode: 'complete_transcript' },
     executeEvidenceTool: async (execution) => {
       const packet = await versionEvidencePacket(await execution.execute());
       store.savePacket(packet);
+      packets.push(packet);
       return packet;
     },
     finalize: vi.fn(),
@@ -258,10 +260,10 @@ test('raw transcript survives an analyst failure, and can be read and cited by a
     const retrieved = await executeGetVideoTranscript({ videoId: id }, ctx, 'retrieve');
     expect(ctx.transcriptPolicy.analyze).not.toHaveBeenCalled();
     await expect(executeAnalyzeVideoTranscript({ assetVersion: retrieved.assetVersions![0]!, focus: 'Opening' }, ctx, 'analysis')).rejects.toThrow('analysis failed');
-    expect(store.evidence()).toHaveLength(1);
+    expect(await store.evidence()).toHaveLength(1);
     const result = await store.readEvidence(store.brief().assets[0]!.version);
     expect(result.packets[0]!.excerpts[0]!.text).toBe('A clear opening sentence.');
-    expect(store.evidence()).toHaveLength(2);
+    expect(await store.evidence()).toHaveLength(2);
     await sessionProvider(p, store).transcript(id);
     expect(p.transcript).toHaveBeenCalledTimes(1);
   }));
@@ -326,7 +328,7 @@ test('memory validates evidence, updates a topic, and removes dependent findings
     expect(store.brief().memories.find((memory) => memory.topic === 'intent')!.text).toBe('Compare interviewers');
     await store.delete(packet.assetVersions![0]);
     expect(store.brief().memories.map((memory) => memory.topic)).toEqual(['intent']);
-    expect(store.evidence()).toEqual([]);
+    expect(await store.evidence()).toEqual([]);
     expect(await store.read(packet.assetVersions![0]!)).toBeNull();
     remember(store,
       'late',
@@ -551,12 +553,12 @@ test('indexes full transcripts before analysis and searches terms across assets 
     });
     await sessionProvider(p, store).transcript('zyxwvutsrqp');
     // Neither transcript needs an analyst or a pre-existing evidence packet.
-    expect(store.evidence()).toEqual([]);
+    expect(await store.evidence()).toEqual([]);
     const result = await reopen().search.searchEvidence(reopen(), 'enterprise pricing');
     expect(result.packets).toHaveLength(2);
     for (const packet of result.packets) {
       expect(packet.excerpts).toHaveLength(1);
-      expect(store.evidenceForCitations([packet.excerpts[0]!.id])).toHaveLength(1);
+      expect(await store.evidenceForCitations([packet.excerpts[0]!.id])).toHaveLength(1);
     }
     expect(p.transcript).toHaveBeenCalledTimes(2);
     await store.delete(first.assetVersions![0]);
@@ -673,7 +675,7 @@ test.each([true, false])(
       const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
       const p = provider();
       const raw = await sessionProvider(p, store).transcript(id);
-      const excerptId = `evidence:${raw.assetVersions![0]}:0`;
+      const excerptId = `evidence:${raw.assetVersions![0]}:segment:0`;
       const usage = {
         inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
         outputTokens: { total: 10, text: 10, reasoning: 0 },
@@ -746,7 +748,7 @@ test.each([true, false])(
           },
           { userId: 'test', creditsRemaining: 100 },
           input,
-          store.evidenceForCitations([excerptId]),
+          await store.evidenceForCitations([excerptId]),
           0,
         ),
       );
@@ -836,11 +838,31 @@ test('loads full saved comparison transcripts once and preserves citations acros
     const citation=full.packets[0]!.excerpts[69]!.id;
     const result=buildAgentTurnResult({runId:crypto.randomUUID(),conversationId:crypto.randomUUID(),userMessageId:crypto.randomUUID(),agentMessageId:crypto.randomUUID()},
       {userId:'user',creditsRemaining:100},{intent:'inspect_video',confidence:'high',answer:`The final passage. [cite:${citation}]`,citations:[],artifacts:[],warnings:[]},
-      reopen().evidenceForCitations([citation]),0);
+      await reopen().evidenceForCitations([citation]),0);
     expect(result.citations[0]!.excerpt).toBe('Complete sentence number 69.');
     await store.delete(version);
     await expect(reopen().readTranscriptEvidence(version)).rejects.toThrow('unavailable');
-    expect(reopen().evidenceForCitations([citation])).toEqual([]);
+    expect(await reopen().evidenceForCitations([citation])).toEqual([]);
+  }));
+
+test('timestamp reads reuse the exact saved version beyond the full-read page limit', async () =>
+  within('transcript-time-context', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 5100 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: index * 1000 + 1500, durationMs: 1500 }));
+    value.segments[5050]!.text = '  Exact caption\n' + 'x'.repeat(2100);
+    const p = provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const })));
+    await sessionProvider(p, store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const read = await reopen().readTranscriptContext(version, 5050.2);
+    expect(read.packets[0]!.excerpts).toHaveLength(22);
+    expect(read.packets[0]!.excerpts.find(excerpt => excerpt.id.endsWith(':segment:5050'))).toMatchObject({ text: value.segments[5050]!.text, startMs: 5050000, endMs: 5051500 });
+    expect(read.nextOffset).toBeUndefined();
+    expect(p.transcript).toHaveBeenCalledOnce();
+    const restored = reopen();
+    const search = await restored.search.searchEvidence(restored, 'Exact caption');
+    expect(search.packets.some(packet => packet.excerpts.some(excerpt => excerpt.id.endsWith(':segment:5050') && excerpt.text === value.segments[5050]!.text))).toBe(true);
+    await store.delete(version);
+    await expect(reopen().readTranscriptContext(version, 5050.2)).rejects.toThrow('unavailable');
   }));
 
 
@@ -1028,7 +1050,7 @@ test('long transcript matches cannot crowd short-video matches out of the top 20
 
     // Precondition: without the limit, the long transcript fills every one of the 20 slots.
     const crowded = await unlimited.search.searchEvidence(unlimited, 'gold medal');
-    expect(crowded.packets).toHaveLength(20);
+    expect(crowded.packets.flatMap(packet => packet.excerpts).length).toBeGreaterThanOrEqual(20);
     expect(videos(crowded.packets)).not.toContain(shortId);
 
     const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
@@ -1061,4 +1083,568 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
         if (parent) expect(parent.stage).not.toBe(span.stage);
       }
     }
+  }));
+
+test('retains disjoint transcript packets, findings and backed memory for one asset', async () =>
+  within('distinct-transcript-packets', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const p = sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store);
+    const ctx = context(store, p);
+    const first = await executeGetVideoTranscript({ videoId: id }, ctx, 'first-time', { timestampSeconds: 0.2, before: 0, after: 0 });
+    const second = await executeGetVideoTranscript({ videoId: id }, ctx, 'second-time', { timestampSeconds: 5.2, before: 0, after: 0 });
+    for (const [index, packet] of [first, second].entries()) {
+      store.savePacket({ ...packet, packetId: `analysis:${index}`, artifacts: [{ type: 'youtube_transcript_analysis', data: {
+        findings: [{ claim: `Finding ${index}`, excerptIds: [packet.excerpts[0]!.id] }],
+      } }] });
+    }
+    const restored = reopen();
+    expect(await restored.evidence()).toHaveLength(4);
+    for (const [index, packet] of [first, second].entries()) {
+      const saved = await restored.evidenceForCitations([packet.excerpts[0]!.id]);
+      expect(saved).toHaveLength(2);
+      expect(saved.flatMap(item => item.artifacts).some(artifact =>
+        JSON.stringify(artifact.data).includes(`Finding ${index}`))).toBe(true);
+    }
+    const result = remember(restored, 'memory-run', [first, second].map((packet, index) => ({
+      kind: 'finding', topic: `topic-${index}`, text: `Finding ${index}`, evidenceIds: [packet.excerpts[0]!.id],
+    })));
+    expect(result.applied).toBe(2);
+    expect(reopen().brief().memories).toHaveLength(2);
+    // Retrying the same packet remains an upsert, not an additional copy.
+    restored.savePacket(first);
+    expect(await reopen().evidence()).toHaveLength(4);
+  }));
+
+test('a narrow lookup does not replace a previously saved full transcript packet', async () =>
+  within('full-then-narrow-transcript', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const ctx = context(store, sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store));
+    const full = await executeGetVideoTranscript({ videoId: id }, ctx, 'full');
+    const narrow = await executeGetVideoTranscript({ videoId: id }, ctx, 'narrow', { timestampSeconds: 5.2, before: 0, after: 0 });
+    const restored = reopen();
+    expect(await restored.evidence()).toHaveLength(2);
+    expect((await restored.evidenceForCitations([full.excerpts[0]!.id]))[0]!.excerpts).toHaveLength(1);
+    expect((await restored.evidence()).find(packet => packet.packetId === full.packetId)!.excerpts).toHaveLength(6);
+    expect(narrow.excerpts[0]!.id).toBe(full.excerpts[5]!.id);
+    expect(await restored.evidenceForCitations([narrow.excerpts[0]!.id])).toHaveLength(2);
+  }));
+
+test('resolves original segments and backed memory without lookup packets', async () =>
+  within('canonical-segment-resolution', async (store, reopen, sql) => {
+    const value = transcript('  Original\ncaption text.  ');
+    value.segments.push({ text: '', startMs: 5600, endMs: 6000, durationMs: 400 });
+    const p = sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store);
+    await p.transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const citation = `evidence:${version}:segment:0`;
+    expect(sql.exec('SELECT * FROM session_packets').toArray()).toHaveLength(0);
+    const resolved = await reopen().evidenceForCitations([citation]);
+    expect(resolved[0]!.excerpts).toEqual([{ id: citation, sourceId: `youtube:${id}:transcript`,
+      text: value.segments[0]!.text, startMs: 0, endMs: 5600 }]);
+    expect(await reopen().evidenceForCitations([`evidence:${version}:segment:1`, `evidence:${version}:segment:99`])).toEqual([]);
+    expect(remember(reopen(), 'direct-memory', [{ kind: 'finding', topic: 'original', text: 'Original finding', evidenceIds: [citation] }]).applied).toBe(1);
+    const lookup = await executeGetVideoTranscript({ videoId: id }, context(store, p), 'lookup', { timestampSeconds: 1 });
+    const record = JSON.parse(sql.exec<{ packet_json: string }>('SELECT packet_json FROM session_packets').one().packet_json);
+    expect(record.excerpts).toEqual([{ id: citation, sourceId: lookup.excerpts[0]!.sourceId }]);
+    expect(JSON.stringify(record)).not.toContain('Original\\ncaption');
+    // The transcript remains sufficient after every lookup record is removed.
+    sql.exec('DELETE FROM session_packets');
+    expect((await reopen().evidenceForCitations([citation]))[0]!.excerpts[0]!.text).toBe(value.segments[0]!.text);
+    await store.delete(version);
+    expect(await reopen().evidenceForCitations([citation])).toEqual([]);
+    expect(reopen().brief().memories).toEqual([]);
+  }));
+
+test('direct segment citations stay pinned to their transcript version after refresh', async () =>
+  within('direct-segment-version-isolation', async (store, reopen) => {
+    const fetch = vi.fn().mockResolvedValueOnce({ value: transcript('Original version'), cacheStatus: 'miss' })
+      .mockResolvedValueOnce({ value: transcript('Refreshed version'), cacheStatus: 'miss' });
+    const p = sessionProvider(provider(fetch), store);
+    const first = await p.transcript(id);
+    const second = await p.transcript(id, undefined, { refresh: true });
+    const firstId = `evidence:${first.assetVersions![0]}:segment:0`;
+    const secondId = `evidence:${second.assetVersions![0]}:segment:0`;
+    expect(firstId).not.toBe(secondId);
+    const packets = await reopen().evidenceForCitations([firstId, secondId]);
+    expect(packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text)).toEqual(['Original version', 'Refreshed version']);
+    expect(packets[0]!.warnings.some(warning => warning.code === 'SUPERSEDED_SESSION_EVIDENCE')).toBe(true);
+    expect(await reopen().evidence()).toEqual([]);
+  }));
+
+test.each([false, true])('repeated cross-run reads preserve lower-ranked search matches (legacy rows: %s)', async legacyRows =>
+  within(`search-distinct-captions-${legacyRows}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({
+      text: index === 0 ? 'needle' : index === 5 ? 'needle appears later in this longer explanation about components and state' : `Unrelated caption ${index}`,
+      startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    const p = provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const })));
+    for (let run = 0; run < 25; run++) {
+      const current = reopen();
+      const packet = await executeGetVideoTranscript({ videoId: id }, context(current, sessionProvider(p, current)), 'lookup',
+        { timestampSeconds: 0.2, before: 0, after: 0 });
+      if (legacyRows) {
+        // Rows written by the earlier packet-per-call indexing implementation.
+        sql.exec('INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?, ?, ?, ?, ?)',
+          packet.excerpts[0]!.id, `packet:${packet.packetId}`, 'evidence', packet.excerpts[0]!.text, JSON.stringify({ packetId: packet.packetId }));
+      }
+    }
+    const current = reopen();
+    await executeGetVideoTranscript({ videoId: id }, context(current, sessionProvider(p, current)), 'later',
+      { timestampSeconds: 5.2, before: 0, after: 0 });
+    const restored = reopen();
+    const found = await restored.search.searchEvidence(restored, 'needle');
+    expect(found.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.startMs).sort((a, b) => a! - b!)).toEqual([0, 5000]);
+    expect(sql.exec("SELECT * FROM session_packets WHERE packet_id LIKE 'packet:%'").toArray()).toHaveLength(26);
+    expect(p.transcript).toHaveBeenCalledOnce();
+    if (!legacyRows) expect(sql.exec("SELECT * FROM session_context_fts WHERE owner LIKE 'packet:%'").toArray()).toEqual([]);
+  }));
+
+test('citation resolution is a passive read and does not rewrite segment references', async () =>
+  within('passive-citation-read', async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    sql.exec('CREATE TABLE reference_writes (value INTEGER)');
+    sql.exec('CREATE TRIGGER watch_reference_insert AFTER INSERT ON session_segment_refs BEGIN INSERT INTO reference_writes VALUES (1); END');
+    sql.exec('CREATE TRIGGER watch_reference_update AFTER UPDATE ON session_segment_refs BEGIN INSERT INTO reference_writes VALUES (1); END');
+    const requested = vi.fn(async () => {});
+    const passive = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/passive-citation-read/', requested);
+    const citation = `evidence:${version}:segment:0`;
+    expect((await passive.evidenceForCitations([citation]))[0]!.excerpts[0]!.text).toBe('A clear opening sentence.');
+    await passive.evidenceForCitations([citation]);
+    expect(requested).not.toHaveBeenCalled();
+    expect(sql.exec('SELECT * FROM reference_writes').toArray()).toEqual([]);
+    await passive.read(version);
+    expect(requested).toHaveBeenCalledOnce();
+    expect(sql.exec('SELECT * FROM reference_writes').toArray()).toEqual([]);
+  }));
+
+test('targeted citation lookup and memory validation ignore unrelated packet payloads', async () =>
+  within('targeted-citation-query', async (store, reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const citation = `evidence:${version}:segment:0`;
+    // A legacy record with no excerpts must not be loaded into the requested packet set.
+    sql.exec('INSERT INTO session_packets VALUES (?, ?, ?)', 'unrelated', JSON.stringify({ packetId: 'unrelated', excerpts: [] }), JSON.stringify([version]));
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, 'parse').mockImplementation((text, reviver) => {
+      if (text.includes('unrelated')) throw new Error('Unrelated packet was deserialized');
+      return parse(text, reviver);
+    });
+    try {
+      const result = await reopen().evidenceForCitations([citation]);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([citation]);
+      expect(remember(reopen(), 'memory', [{ kind: 'finding', topic: 'caption', text: 'A finding', evidenceIds: [citation] }]).applied).toBe(1);
+      expect(remember(reopen(), 'invalid-memory', [{ kind: 'finding', topic: 'invalid', text: 'Invalid', evidenceIds: [`evidence:${version}:segment:999999`] }]).applied).toBe(0);
+    } finally { spy.mockRestore(); }
+  }));
+
+
+test.each([false, true])('concurrent passive and requested reads share one storage fetch (active first: %s)', async activeFirst =>
+  within(`shared-caption-read-${activeFirst}`, async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const get = vi.fn(async (...args: Parameters<R2Bucket['get']>) => { await gate; return env.RESEARCH.get(...args); });
+    const requested = vi.fn(async () => {});
+    const reader = new SessionEvidenceStore(sql, { get } as unknown as R2Bucket, `test-session/shared-caption-read-${activeFirst}/`, requested);
+    const first = reader.read(version, activeFirst);
+    const second = reader.read(version, !activeFirst);
+    expect(get).toHaveBeenCalledOnce();
+    expect(requested).not.toHaveBeenCalled();
+    release();
+    const values = await Promise.all([first, second]);
+    expect(values[0]).toEqual(values[1]);
+    expect(values[0]).not.toBeNull();
+    expect(requested).toHaveBeenCalledExactlyOnceWith(id);
+    expect(get).toHaveBeenCalledOnce();
+  }));
+
+test.each([false, true])('oversized caption chunks cannot crowd searchable captions (legacy: %s)', async legacy =>
+  within(`oversized-search-${legacy}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = [
+      { text: 'needle '.repeat(10000), startMs: 0, endMs: 1000, durationMs: 1000 },
+      { text: 'A later needle passage with useful context.', startMs: 1000, endMs: 2000, durationMs: 1000 },
+    ];
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    if (legacy) {
+      sql.exec('DELETE FROM session_context_fts');
+      for (let index = 0; index < 35; index++) sql.exec('INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?, ?, ?, ?, ?)',
+        `evidence:${version}:${index}`, `asset:${version}`, 'evidence', 'needle', JSON.stringify({ version, offset: index }));
+      // Simulate a session created before the canonical-segment index format.
+      sql.exec('DELETE FROM session_search_format');
+    }
+    const current = reopen();
+    const found = await current.search.searchEvidence(current, 'needle');
+    expect(found.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text)).toEqual([value.segments[1]!.text]);
+    expect(found.packets[0]!.excerpts[0]!.id).toBe(`evidence:${version}:segment:1`);
+    expect(sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM session_context_fts WHERE owner=?', `asset:${version}`).one().count).toBe(1);
+    expect((await reopen().search.searchEvidence(reopen(), 'needle')).packets).toHaveLength(1);
+  }));
+
+test('empty timestamp lookups provide persisted citable status, not invented speech or duration', async () =>
+  within('empty-time-status', async (store, reopen) => {
+    const value = transcript('Last spoken words.');
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    const packet = (await store.readTranscriptContext(version, 2700)).packets[0]!;
+    expect(packet.excerpts).toHaveLength(1);
+    expect(packet.excerpts[0]!.startMs).toBeUndefined();
+    expect(packet.excerpts[0]!.text).toContain('Transcript lookup status');
+    const restored = await reopen().evidenceForCitations([packet.excerpts[0]!.id]);
+    const answer = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'user', creditsRemaining: 1 }, { intent: 'inspect_video', confidence: 'high', warnings: [], artifacts: [], citations: [],
+        answer: `The transcript has no captions near 45:00. [cite:${packet.excerpts[0]!.id}]` }, restored, 0);
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.citations[0]!.startMs).toBeUndefined();
+  }));
+
+test.each([false, true])('multi-word search spans captions and window boundaries (format 2 upgrade: %s)', async upgrade =>
+  within(`multi-caption-search-${upgrade}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 15 }, (_, index) => ({
+      text: index === 9 ? 'useEffect' : index === 10 ? 'returns a cleanup' : index === 11 ? 'function on unmount' : `Caption ${index}`,
+      startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    // Window support can be spread over independently saved lookup packets.
+    await store.readTranscriptContext(version, 9.2, 0, 0);
+    await store.readTranscriptContext(version, 10.2, 0, 0);
+    if (upgrade) {
+      sql.exec("DELETE FROM session_context_fts WHERE json_extract(metadata,'$.segmentIds') IS NOT NULL");
+      sql.exec('DELETE FROM session_search_format');
+      sql.exec('INSERT INTO session_search_format VALUES (2)');
+    }
+    const current = reopen();
+    const read = vi.spyOn(current, 'read');
+    await current.ensureSearchIndexed('useEffect cleanup function');
+    expect(read).not.toHaveBeenCalled();
+    const found = await current.search.searchEvidence(current, 'useEffect cleanup function');
+    expect(read).toHaveBeenCalledTimes(1);
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    for (const index of [9, 10, 11]) expect(excerpts).toContainEqual(expect.objectContaining({
+      id: `evidence:${version}:segment:${index}`, text: value.segments[index]!.text, startMs: index * 1000,
+    }));
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+    // The matching window spans ten captions; only the run covering the terms is returned.
+    expect(excerpts).toHaveLength(3);
+    expect(found.pendingTranscripts).toBe(0);
+  }));
+
+test('window trimming keeps captions the index tokenizes differently', async () =>
+  within('search-trim-underscore', async (store) => {
+    const value = transcript();
+    value.segments = ['foo_bar', 'foo'].map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    // SQLite treats `_` as a separator, so foo_bar alone matches both terms.
+    const texts = (await store.search.searchEvidence(store, 'foo bar')).packets.flatMap(packet => packet.excerpts.map(excerpt => excerpt.text));
+    expect(texts).toContain('foo_bar');
+  }));
+
+test('overlapping windows cannot crowd distinct matches out of the result limit', async () =>
+  within('search-window-crowding', async (store) => {
+    const add = async (videoId: string, texts: string[]) => {
+      const value = { ...transcript(), videoId };
+      value.segments = texts.map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+    };
+    // Thirteen cross-caption matches, each inside two overlapping windows: 26 FTS rows, 13 distinct results.
+    await add('crowdvidA01', Array.from({ length: 130 }, (_, index) => index % 10 === 2 ? 'alpha' : index % 10 === 3 ? 'beta' : `filler ${index}`));
+    // One lower-ranked match in another video.
+    await add('crowdvidB01', Array.from({ length: 10 }, (_, index) => index === 0 ? 'alpha' : index === 9 ? 'beta' : `padding words ${index}`));
+    const read = vi.spyOn(store, 'read');
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    // Candidates span several resolution batches. Two transcripts fit within the
+    // bounded read cache, so neither is read twice.
+    const reads = read.mock.calls.map(([version]) => version);
+    expect(reads.length).toBe(new Set(reads).size);
+    expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(['crowdvidA01', 'crowdvidB01']));
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+  }));
+
+test('unreadable transcripts rotate behind healthy index work', async () =>
+  within('search-index-failure-rotation', async (store, _reopen, sql) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 6; index++) {
+      const videoId = `rotatevid${String(index).padStart(2, '0')}`;
+      const value = { ...transcript('needle cleanup function'), videoId };
+      const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+      versions.push(result.assetVersions![0]!);
+    }
+    sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
+    sql.exec('DELETE FROM session_search_assets');
+    const current = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/search-index-failure-rotation/');
+    const broken = new Set(versions.slice(0, 4));
+    const original = current.read.bind(current);
+    const read = vi.spyOn(current, 'read').mockImplementation(async (version, markRequested) =>
+      version === versions[0] ? Promise.reject(new Error('R2 unavailable')) : broken.has(version) ? null : original(version, markRequested));
+    // The four unreadable versions fill the first batch. They are reported as
+    // unavailable, separately from work a later search can still complete.
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 2, unavailableTranscripts: 4 });
+    expect(new Set(read.mock.calls.map(([version]) => version))).toEqual(broken);
+    expect(sql.exec('SELECT version FROM session_search_index_failures').toArray()).toHaveLength(4);
+    // Recorded failures move behind untried versions, so healthy work still completes.
+    read.mockClear();
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 0, unavailableTranscripts: 4 });
+    expect(read.mock.calls.map(([version]) => version).slice(0, 2).sort()).toEqual(versions.slice(4).sort());
+    const indexed = new Set(sql.exec<{ version: string }>('SELECT version FROM session_search_assets').toArray().map(row => row.version));
+    for (const version of versions.slice(4)) expect(indexed.has(version)).toBe(true);
+    expect((await current.search.searchEvidence(current, 'needle cleanup')).packets.length).toBeGreaterThan(0);
+    // A later successful read clears the failure record.
+    read.mockRestore();
+    await current.ensureSearchIndexed('needle');
+    expect(sql.exec('SELECT version FROM session_search_index_failures').toArray()).toHaveLength(0);
+  }));
+
+test('legacy search upgrades only matching assets in bounded passive batches', async () =>
+  within('bounded-search-upgrade', async (store, _reopen, sql) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 10; index++) {
+      const videoId = `searchvid${String(index).padStart(2, '0')}`;
+      const value = { ...transcript(index < 9 ? 'needle cleanup function' : 'unrelated lecture'), videoId };
+      const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+      versions.push(result.assetVersions![0]!);
+    }
+    sql.exec('DELETE FROM session_context_fts');
+    sql.exec('DELETE FROM session_search_format');
+    for (const [index, version] of versions.entries()) sql.exec(
+      'INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?,?,?,?,?)',
+      `evidence:${version}:0`, `asset:${version}`, 'evidence', index < 9 ? 'needle cleanup function' : 'unrelated lecture', JSON.stringify({ version, offset: 0 }));
+    const requested = vi.fn(async () => {});
+    const current = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/bounded-search-upgrade/', requested);
+    // Construction must retain existing indexes and their markers.
+    expect(sql.exec('SELECT * FROM session_context_fts').toArray()).toHaveLength(10);
+    const read = vi.spyOn(current, 'read');
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 5 });
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(read.mock.calls.every(([, requested]) => requested === false)).toBe(true);
+    expect(read.mock.calls.some(([version]) => version === versions[9])).toBe(false);
+    expect(requested).not.toHaveBeenCalled();
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 1 });
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 0 });
+    const found = await current.search.searchEvidence(current, 'needle cleanup function');
+    expect(found.packets).toHaveLength(9);
+    expect(requested).not.toHaveBeenCalled();
+    expect(current.search.legacyCandidates('unrelated')).toEqual(new Set([versions[9]]));
+  }));
+
+test('search windows do not bridge omitted oversized captions', async () =>
+  within('search-window-omission', async (store) => {
+    const value = transcript();
+    value.segments = ['useEffect', 'x'.repeat(16001), 'cleanup function'].map((text, index) => ({
+      text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    expect((await store.search.searchEvidence(store, 'useEffect cleanup function')).packets).toEqual([]);
+    expect((await store.search.searchEvidence(store, 'cleanup function')).packets[0]!.excerpts[0]!.text).toBe('cleanup function');
+  }));
+
+test.each([18, 20, 25])('search refills through tail overlap and stops at twenty matches (%s videos)', async count =>
+  within(`search-tail-crowding-${count}`, async store => {
+    const expected: string[] = [];
+    for (let index = 0; index < count; index++) {
+      const videoId = `tailvid${String(index).padStart(4, '0')}`;
+      expected.push(videoId);
+      const value = { ...transcript(), videoId };
+      value.segments = (index < count - 1 ? Array.from({ length: 10 }, (_, i) => i === 8 ? 'alpha beta' : 'filler') : ['alpha beta ' + 'filler '.repeat(300)])
+        .map((text, i) => ({ text, startMs: i * 1000, endMs: (i + 1) * 1000, durationMs: 1000 }));
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+    }
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    const videos = [...new Set(found.packets.flatMap(p => p.sources.map(s => s.videoId)))];
+    expect(videos).toHaveLength(Math.min(count, 20));
+    if (count <= 20) expect(videos.sort()).toEqual(expected.sort());
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+    expect(found.pendingTranscripts).toBe(0);
+  }));
+
+test.each([false, true])('search continues past unavailable candidates until exhaustion (healthy match: %s)', async healthy =>
+  within(`search-unavailable-pages-${healthy}`, async (store, _reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 45 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', saved.assetVersions![0]!).one().blob_key;
+    await env.RESEARCH.delete(key);
+    if (healthy) {
+      const later = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid1' };
+      await sessionProvider(provider(vi.fn(async () => ({ value: later, cacheStatus: 'miss' as const }))), store).transcript(later.videoId);
+    }
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets).toHaveLength(healthy ? 1 : 0);
+    if (healthy) expect(found.packets[0]!.sources[0]!.videoId).toBe('healthyvid1');
+  }));
+
+test('deletion during a later search page discards earlier results', async () =>
+  within('search-page-deletion', async store => {
+    const value = transcript();
+    value.segments = Array.from({ length: 100 }, (_, index) => ({ text: index % 10 === 8 ? 'alpha beta' : 'filler', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const resolve = store.evidenceForCitations.bind(store);
+    let calls = 0;
+    vi.spyOn(store, 'evidenceForCitations').mockImplementation(async ids => {
+      const packets = await resolve(ids);
+      if (++calls === 2) await store.delete();
+      return packets;
+    });
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    expect(calls).toBe(2);
+    expect(found.packets).toEqual([]);
+  }));
+
+test('an unreadable transcript filling the candidate limit cannot hide healthy matches', async () =>
+  within('search-unreadable-candidate-limit', async (store, _reopen, sql) => {
+    const value = transcript();
+    // 250 short top-ranked caption matches, more than one bounded query returns.
+    value.segments = Array.from({ length: 250 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const broken = saved.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key;
+    await env.RESEARCH.delete(key);
+    const later = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid2' };
+    await sessionProvider(provider(vi.fn(async () => ({ value: later, cacheStatus: 'miss' as const }))), store).transcript(later.videoId);
+    const read = vi.spyOn(store, 'read');
+    const query = vi.spyOn(store.search as unknown as { matches: (...args: unknown[]) => unknown }, 'matches');
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets.map(packet => packet.sources[0]!.videoId)).toEqual(['healthyvid2']);
+    // The missing blob is reported as a coverage gap, not silently omitted.
+    expect(found.unavailableTranscripts).toBe(1);
+    // The missing blob is read once, then excluded; one re-query reaches the healthy match.
+    expect(read.mock.calls.filter(([version]) => version === broken)).toHaveLength(1);
+    expect(query).toHaveBeenCalledTimes(2);
+  }));
+
+test('search stops when aborted between resolution batches', async () =>
+  within('search-abort', async store => {
+    const value = transcript();
+    value.segments = Array.from({ length: 100 }, (_, index) => ({ text: index % 10 === 8 ? 'alpha beta' : 'filler', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(store.search.searchEvidence(store, 'alpha beta', controller.signal)).rejects.toThrow('cancelled');
+  }));
+
+test('quoted underscore phrase remains in returned evidence', async () =>
+  within('review-phrase-4132261', async store => {
+    const value = transcript();
+    value.segments = ['foo x bar extra', 'foo_bar'].map((text, i) => ({ text, startMs: i * 1000, endMs: (i + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const found = await store.search.searchEvidence(store, 'foo_bar extra');
+    expect(found.packets.flatMap(p => p.excerpts.map(e => e.text))).toEqual(expect.arrayContaining(['foo x bar extra', 'foo_bar']));
+  }));
+
+
+test.each([{ missingCount: 4, healthy: true }, { missingCount: 6, healthy: false }])('search exhausts unavailable sources without rereading them: %j', async ({ missingCount, healthy }) =>
+  within(`search-missing-exhaustion-${missingCount}-${healthy}`, async (store, _reopen, sql) => {
+    for (let i = 0; i < missingCount; i++) {
+      const value = { ...transcript(), videoId: `missingvid${i}` };
+      value.segments = Array.from({ length: 250 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+      const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(value.videoId);
+      const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', saved.assetVersions![0]!).one().blob_key;
+      await env.RESEARCH.delete(key);
+    }
+    if (healthy) {
+      const value = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid3' };
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(value.videoId);
+    }
+    const read = vi.spyOn(store, 'read');
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets.flatMap(p => p.sources.map(s => s.videoId))).toEqual(healthy ? ['healthyvid3'] : []);
+    expect(found.unavailableTranscripts).toBe(missingCount);
+    expect(read).toHaveBeenCalledTimes(missingCount + Number(healthy));
+    expect(new Set(read.mock.calls.map(([version]) => version)).size).toBe(read.mock.calls.length);
+  }));
+
+test('index repair and search resolution share the transcript read cache', async () =>
+  within('search-repair-shared-read', async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
+    sql.exec('DELETE FROM session_search_assets');
+    const read = vi.spyOn(store, 'read');
+    expect((await store.search.searchEvidence(store, 'clear opening')).packets).toHaveLength(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]![1]).toBe(false);
+  }));
+
+test('search advances beyond a full page of stale candidates without an unreadable transcript', async () =>
+  within('search-stale-candidate-page', async (store, _reopen, sql) => {
+    await sessionProvider(provider(vi.fn(async () => ({ value: transcript('needle ' + 'padding '.repeat(100)), cacheStatus: 'miss' as const }))), store).transcript(id);
+    // Old unresolved packet references have no transcript owner to exclude.
+    for (let index = 0; index < 230; index++) sql.exec(
+      'INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?,?,?,?,?)',
+      `stale:${index}`, `packet:stale:${index}`, 'evidence', 'needle', JSON.stringify({ packetId: `stale:${index}` }));
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets).toHaveLength(1);
+    expect(found.packets[0]!.sources[0]!.videoId).toBe(id);
+  }));
+
+async function saveCaptions(store: SessionEvidenceStore, videoId: string, texts: string[]) {
+  const value = { ...transcript(), videoId };
+  value.segments = texts.map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+  return sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+}
+const returnedTexts = (found: { packets: EvidencePacket[] }) => found.packets.flatMap(packet => packet.excerpts.map(excerpt => excerpt.text));
+
+test('window trimming follows the index tokenizer for Unicode punctuation', async () =>
+  within('search-trim-unicode-punctuation', async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `it’s filler number ${index} — “quoted”`);
+    texts[5] = 'don’t forget useEffect';
+    texts[6] = 'its cleanup — function runs';
+    await saveCaptions(store, id, texts);
+    // Curly quotes and dashes appear in every caption; trimming must still apply.
+    expect(returnedTexts(await store.search.searchEvidence(store, 'useEffect cleanup'))).toEqual([texts[5], texts[6]]);
+  }));
+
+test('Hindi words match whole and windows trim to the matching captions', async () =>
+  within('search-trim-hindi', async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `यह भराव वाक्य ${index} है`);
+    texts[5] = 'आज हम रिएक्ट';
+    texts[6] = 'सीखेंगे दोस्तों';
+    await saveCaptions(store, id, texts);
+    // Vowel signs are part of the word, so a single Hindi word is searchable.
+    expect(returnedTexts(await store.search.searchEvidence(store, 'रिएक्ट'))).toEqual([texts[5]]);
+    expect(returnedTexts(await store.search.searchEvidence(store, 'रिएक्ट सीखेंगे'))).toEqual([texts[5], texts[6]]);
+  }));
+
+test.each([
+  ['phrase alone', 'foo_bar'],
+  ['phrase with another term', 'call foo_bar'],
+])('a phrase crossing a caption boundary keeps both captions (%s)', async (_name, query) =>
+  within(`search-trim-cross-phrase-${query.length}`, async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `filler ${index}`);
+    texts[2] = 'foo alone';
+    texts[4] = 'bar alone';
+    texts[6] = 'we call foo';
+    texts[7] = 'bar here';
+    await saveCaptions(store, id, texts);
+    // Only the adjacent pair contains the phrase "foo bar"; the separate words do not.
+    expect(returnedTexts(await store.search.searchEvidence(store, query))).toEqual([texts[6], texts[7]]);
+  }));
+
+test('a failed transcript read is remembered across cache evictions', async () =>
+  within('search-failure-across-evictions', async (store, _reopen, sql) => {
+    const saved = await saveCaptions(store, 'brokenvid01', Array.from({ length: 250 }, () => 'needle'));
+    const broken = saved.assetVersions![0]!;
+    await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key);
+    const healthy: string[] = [];
+    for (let index = 0; index < 6; index++) {
+      const videoId = `healthyev${String(index).padStart(2, '0')}`;
+      healthy.push(videoId);
+      await saveCaptions(store, videoId, ['needle ' + 'padding '.repeat(20 + index)]);
+    }
+    const read = vi.spyOn(store, 'read');
+    const found = await store.search.searchEvidence(store, 'needle');
+    // Six healthy transcripts exceed the four-transcript cache, yet the broken
+    // blob is requested once for the whole search.
+    expect(read.mock.calls.filter(([version]) => version === broken)).toHaveLength(1);
+    expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(healthy));
+    expect(found.unavailableTranscripts).toBe(1);
   }));

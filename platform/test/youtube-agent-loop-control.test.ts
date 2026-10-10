@@ -238,13 +238,13 @@ describe('YouTube AgentCore loop control', () => {
         input: JSON.stringify({ videoId: 'video000001', focus: step === 1 ? 'All locations' : 'Last four locations' }) });
       expect(JSON.stringify(call.prompt)).toContain('Location 12: complete details.');
       return modelResult({ toolCallId: 'done', toolName: 'finalize_answer', input: JSON.stringify({
-        blocks: [{ text: 'Twelve locations.', evidenceIds: ['transcript:video000001:11:11000:0'] }],
+        blocks: [{ text: 'Twelve locations.', evidenceIds: ['transcript:video000001:segment:11'] }],
         intent: 'inspect_video', confidence: 'high', artifacts: [], warnings: [],
       }) });
     } });
     const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
       expect(JSON.stringify(call.prompt)).toContain('Location 12: complete details.');
-      return finalizerModelResult({ blocks: [{ text: 'Twelve locations.', evidenceIds: ['ref_12'] }], confidence: 'high', warnings: [] });
+      return finalizerModelResult({ blocks: [{ text: 'Twelve locations.', evidenceIds: ['ref_11'] }], confidence: 'high', warnings: [] });
     } });
     await runResearchAgentWithModel({ model, finalizationModel: finalizer, message: 'List all locations',
       decision: { route: 'inspect_video', videoId: 'video000001' }, toolNames: ['get_video_transcript', 'finalize_answer'], context });

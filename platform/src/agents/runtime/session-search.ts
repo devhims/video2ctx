@@ -1,8 +1,15 @@
+import { parseSegmentCitation, usableTranscriptSegment } from './transcript-segments';
 import { AgentSessionProvider, Session, type SessionMessage } from 'agents/experimental/memory/session';
+import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore } from './session-evidence';
+import { TranscriptReadCache } from './transcript-read-cache';
+
+const SEARCH_RESULT_LIMIT = 20;
+/** Ranked candidate page size, not a limit on the whole search. */
+const SEARCH_CANDIDATE_LIMIT = 200;
 
 export interface HistoryEntry {
   id: string;
@@ -14,6 +21,7 @@ export interface HistoryEntry {
 }
 
 type SearchRow = { id: string; owner: string; content: string; metadata: string };
+type MatchRow = Omit<SearchRow, 'content'> & { rowid: number };
 
 /** The only dependency on the experimental SDK. agents is pinned in package.json. */
 export class SessionSearch {
@@ -37,6 +45,25 @@ export class SessionSearch {
       'CREATE VIRTUAL TABLE IF NOT EXISTS session_context_fts USING fts5(id UNINDEXED, owner UNINDEXED, scope UNINDEXED, content, metadata UNINDEXED)',
     );
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_assets (version TEXT PRIMARY KEY)');
+    sql.exec('CREATE TABLE IF NOT EXISTS session_search_format (version INTEGER PRIMARY KEY)');
+    sql.exec('CREATE TABLE IF NOT EXISTS session_search_index_failures (version TEXT PRIMARY KEY, failed_at INTEGER NOT NULL)');
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_index_failure_delete AFTER DELETE ON session_assets BEGIN
+      DELETE FROM session_search_index_failures WHERE version=OLD.version;
+    END`);
+    if (!sql.exec('SELECT 1 FROM session_search_format WHERE version=3').toArray().length) {
+      // Format 2 already contains exact captions. Add search windows from SQLite,
+      // without invalidating any index or reading transcript blobs on upgrade.
+      const versions = sql.exec<{ owner: string }>(`SELECT DISTINCT owner FROM session_context_fts
+        WHERE owner LIKE 'asset:%' AND id GLOB 'evidence:*:segment:*'`).toArray();
+      for (const { owner } of versions) {
+        const captions = sql.exec<SearchRow>('SELECT id,owner,content,metadata FROM session_context_fts WHERE owner=?', owner)
+          .toArray().filter(row => parseSegmentCitation(row.id))
+          .sort((a, b) => parseSegmentCitation(a.id)!.index - parseSegmentCitation(b.id)!.index);
+        this.indexTranscript(owner.slice(6), captions.map(row => ({ id: row.id, text: row.content, sourceId: 'migration' })));
+      }
+      // Retain older chunks as a candidate index for query-relevant upgrades.
+      sql.exec('INSERT INTO session_search_format VALUES (3)');
+    }
     // Source-table triggers make deletion and memory corrections atomic with index maintenance.
     sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_asset_delete AFTER DELETE ON session_assets BEGIN
       DELETE FROM session_context_fts WHERE owner='asset:' || OLD.version;
@@ -61,7 +88,10 @@ export class SessionSearch {
       packet_id: string;
       packet_json: string;
     }>(`SELECT packet_id,packet_json FROM session_packets p
-      WHERE packet_id NOT LIKE 'session:%' AND NOT EXISTS (SELECT 1 FROM session_context_fts WHERE owner='packet:' || p.packet_id)`)) {
+      WHERE packet_id NOT LIKE 'session:%'
+      AND EXISTS (SELECT 1 FROM json_each(p.packet_json,'$.excerpts') e
+        WHERE json_extract(e.value,'$.text') IS NOT NULL AND json_extract(e.value,'$.id') NOT GLOB 'evidence:*:segment:*')
+      AND NOT EXISTS (SELECT 1 FROM session_context_fts WHERE owner='packet:' || p.packet_id)`)) {
       this.indexPacket(row.packet_id, JSON.parse(row.packet_json));
     }
   }
@@ -130,15 +160,45 @@ export class SessionSearch {
     if (id.startsWith('session:')) return;
     const owner = `packet:${id}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    for (const excerpt of packet.excerpts) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
+    for (const excerpt of packet.excerpts.filter(excerpt => !parseSegmentCitation(excerpt.id))) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
   }
   indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
     const owner = `asset:${version}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    excerpts.forEach((excerpt, index) =>
-      this.insert(`evidence:${version}:${index}`, owner, 'evidence', excerpt.text, { version, offset: index }),
-    );
+    const usable = excerpts.filter(excerpt => parseSegmentCitation(excerpt.id)?.version === version && usableTranscriptSegment(excerpt.text));
+    for (const excerpt of usable) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { version });
+    // Search-only windows contain up to ten captions and overlap by half. Models still receive flat,
+    // original segments; the window carries all IDs needed to resolve its evidence.
+    for (let start = 0; start < usable.length;) {
+      const window: typeof usable = [];
+      let characters = 0;
+      for (const excerpt of usable.slice(start, start + 10)) {
+        if (window.length && (characters + excerpt.text.length > 2_000 ||
+          parseSegmentCitation(excerpt.id)!.index !== parseSegmentCitation(window.at(-1)!.id)!.index + 1)) break;
+        window.push(excerpt);
+        characters += excerpt.text.length + 1;
+      }
+      if (window.length > 1) this.insert(window[0]!.id, owner, 'evidence', window.map(excerpt => excerpt.text).join(' '),
+        { version, segmentIds: window.map(excerpt => excerpt.id) });
+      start += Math.max(1, Math.floor(window.length / 2));
+    }
     this.sql.exec('INSERT OR IGNORE INTO session_search_assets VALUES (?)', version);
+    this.sql.exec('DELETE FROM session_search_index_failures WHERE version=?', version);
+  }
+  indexFailures(): Map<string, number> {
+    return new Map(this.sql.exec<{ version: string; failed_at: number }>('SELECT version, failed_at FROM session_search_index_failures')
+      .toArray().map(row => [row.version, row.failed_at]));
+  }
+  recordIndexFailure(version: string) {
+    this.sql.exec('INSERT OR REPLACE INTO session_search_index_failures VALUES (?, ?)', version, Date.now());
+  }
+  legacyCandidates(query?: string): Set<string> {
+    const tokens = query === undefined ? undefined : searchTokens(query);
+    const match = tokens?.length ? ' AND session_context_fts MATCH ?' : '';
+    return new Set(this.sql.exec<{ owner: string }>(`SELECT DISTINCT owner FROM session_context_fts
+      WHERE owner LIKE 'asset:%' AND json_extract(metadata,'$.offset') IS NOT NULL${match}`,
+      ...(tokens?.length ? [tokens.map(token => `"${token}"`).join(' OR ')] : []))
+      .toArray().map(row => row.owner.slice(6)));
   }
   private insert(id: string, owner: string, scope: string, content: string, metadata: unknown) {
     this.sql.exec(
@@ -150,24 +210,60 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT, offset = 0): MatchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
-    const tokens = query
-      .slice(0, 200)
-      .match(/[\p{L}\p{N}_]+/gu)
-      ?.slice(0, 20);
-    if (!tokens?.length) return [];
-    // Exclusions apply before the limit, so excluded rows can never fill the top 20.
+    const tokens = searchTokens(query);
+    if (!tokens.length) return [];
+    // Exclude owners and deduplicate stable IDs before the result limit.
+    // Materialize FTS scores before windowing, since rank must run in the FTS query.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
+    // A single word always matches inside one caption row, so windows only add
+    // duplicates. `_` is an index separator: foo_bar is a phrase that can cross
+    // a caption boundary and needs window rows.
+    const singleWord = tokens.length === 1 && !tokens[0]!.includes('_');
     return this.sql
-      .exec<SearchRow>(
-        `SELECT id,owner,content,metadata FROM session_context_fts
-      WHERE session_context_fts MATCH ? AND scope=?${excluded} ORDER BY rank LIMIT 20`,
+      .exec<MatchRow>(
+        `WITH matches AS MATERIALIZED (
+        SELECT rowid,id,owner,metadata,rank AS score FROM session_context_fts
+        WHERE session_context_fts MATCH ? AND scope=?${excluded}
+          AND json_extract(metadata,'$.offset') IS NULL
+          ${singleWord ? "AND json_extract(metadata,'$.segmentIds') IS NULL" : ''}
+      ), unique_matches AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
+      )
+      SELECT rowid,id,owner,metadata FROM unique_matches
+      WHERE occurrence=1 ORDER BY score,id LIMIT ? OFFSET ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
+        limit,
+        offset,
       )
       .toArray();
+  }
+  /**
+   * Trims window rows using SQLite's own matching. For each query term, FTS5
+   * highlight() marks every phrase instance in the window text, including one
+   * that crosses a caption boundary; those positions map back to captions.
+   * Unicode folding, punctuation and underscores therefore follow the index
+   * tokenizer exactly. A window whose marks cannot be mapped is kept whole.
+   */
+  private matchingSpans(windows: readonly { rowid: number; ids: string[] }[], texts: ReadonlyMap<string, string>, tokens: readonly string[]) {
+    const spans = new Map<number, string[]>();
+    if (!windows.length || !tokens.length) return spans;
+    const rowids = windows.map(window => window.rowid);
+    const ranges = new Map(windows.map(window => [window.rowid, [] as Array<Array<[number, number]>>]));
+    for (const token of tokens) {
+      const marked = new Map(this.sql.exec<{ rowid: number; marked: string }>(
+        `SELECT rowid, highlight(session_context_fts, 3, char(1), char(2)) AS marked FROM session_context_fts
+        WHERE session_context_fts MATCH ? AND rowid IN (${rowids.map(() => '?').join(',')})`,
+        `"${token}"`, ...rowids).toArray().map(row => [row.rowid, row.marked]));
+      for (const window of windows) {
+        ranges.get(window.rowid)!.push(captionRanges(marked.get(window.rowid), window.ids.map(id => texts.get(id))));
+      }
+    }
+    for (const window of windows) spans.set(window.rowid, coveringSpan(window.ids, ranges.get(window.rowid)!));
+    return spans;
   }
   searchMemory(query: string) {
     return this.matches('memory', query).flatMap((row) => {
@@ -177,32 +273,91 @@ export class SessionSearch {
       return record ? [JSON.parse(record.memory_json)] : [];
     });
   }
-  async searchEvidence(store: SessionEvidenceStore, query: string) {
-    await store.ensureSearchIndexed();
+  async searchEvidence(store: SessionEvidenceStore, query: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const reads = new TranscriptReadCache();
+    const indexing = await store.ensureSearchIndexed(query, reads);
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
-    const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
-    for (const row of this.matches('evidence', query, excluded)) {
-      if (seen.has(row.id)) continue;
-      const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string };
-      const found = metadata.version
-        // Backstop for a version that crossed the limit between the query and this read.
-        ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
-          ? (await store.readEvidence(metadata.version, metadata.offset)).packets
-          : []
-        : store.evidenceForCitations([row.id]);
-      for (const packet of found) {
-        if (packet.assetVersions?.some((version) => !store.has(version))) continue;
-        const excerpts = packet.excerpts.filter((excerpt) => excerpt.id === row.id);
-        if (!excerpts.length) continue;
-        packets.push({ ...packet, packetId: `search:${row.id}`, excerpts, artifacts: [] });
-        seen.add(row.id);
-        break;
+    const excluded = new Set(store.overLimitTranscriptVersions().map((version) => `asset:${version}`));
+    const generation = store.generation();
+    const tokens = searchTokens(query);
+    // Share reads across index repair and every resolution batch. Failures are
+    // remembered for the whole search; successful transcripts are bounded.
+    const resolvedIds = new Set<string>();
+    const texts = new Map<string, string>();
+    const found: EvidencePacket[] = [];
+    const available = new Map<string, boolean>();
+    const unreadable = new Set<string>();
+    const isAvailable = (version: string) => {
+      let value = available.get(version);
+      if (value === undefined) available.set(version, value = store.has(version) && !excluded.has(`asset:${version}`));
+      return value;
+    };
+    let results = 0;
+    // Fetch successive pages until twenty distinct results or index exhaustion.
+    // Removing unreadable owners restarts pagination against the smaller index;
+    // cached reads and resolved IDs prevent repeating source reads on restart.
+    let offset = 0;
+    while (results < SEARCH_RESULT_LIMIT) {
+      signal?.throwIfAborted();
+      const rows = this.matches('evidence', query, [...excluded], SEARCH_CANDIDATE_LIMIT, offset);
+      if (!rows.length) break;
+      let unreadableFound = false;
+      for (let start = 0; start < rows.length && results < SEARCH_RESULT_LIMIT; start += SEARCH_RESULT_LIMIT) {
+        signal?.throwIfAborted();
+        const candidates = rows.slice(start, start + SEARCH_RESULT_LIMIT).map(row => {
+          const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
+          return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
+        }).filter(({ metadata }) => !metadata.version || isAvailable(metadata.version));
+        const missing = [...new Set(candidates.flatMap(candidate => candidate.ids))].filter(id => !resolvedIds.has(id));
+        if (missing.length) {
+          const resolved = await store.evidenceForCitations(missing, reads);
+          signal?.throwIfAborted();
+          // Deletion can change citation availability between batches.
+          if (generation !== store.generation()) return { packets: [], ...indexing };
+          found.push(...resolved);
+          for (const id of missing) resolvedIds.add(id);
+          for (const packet of resolved) for (const excerpt of packet.excerpts) texts.set(excerpt.id, excerpt.text);
+        }
+        for (const version of new Set(candidates.flatMap(({ metadata }) => metadata.version ? [metadata.version] : []))) {
+          if (reads.failed(version)) {
+            excluded.add(`asset:${version}`);
+            available.set(version, false);
+            unreadable.add(version);
+            unreadableFound = true;
+          }
+        }
+        // A window only locates a match. Return the shortest caption run that
+        // still contains a complete FTS match of every query term.
+        const spans = this.matchingSpans(candidates.flatMap(({ row, metadata, ids }) =>
+          metadata.segmentIds && (!metadata.version || isAvailable(metadata.version)) ? [{ rowid: row.rowid, ids }] : []), texts, tokens);
+        for (const { row, metadata, ids: windowIds } of candidates) {
+          if (results >= SEARCH_RESULT_LIMIT) break;
+          if (metadata.version && !isAvailable(metadata.version)) continue;
+          const ids = new Set(spans.get(row.rowid) ?? windowIds);
+          if ([...ids].every(id => seen.has(id))) continue;
+          const before = packets.length;
+          for (const packet of found) {
+            if (packet.assetVersions?.some(version => !store.has(version))) continue;
+            const excerpts = packet.excerpts.filter(excerpt => ids.has(excerpt.id) && !seen.has(excerpt.id));
+            if (!excerpts.length) continue;
+            packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
+            for (const excerpt of excerpts) seen.add(excerpt.id);
+          }
+          if (packets.length > before) results++;
+        }
       }
+      if (rows.length < SEARCH_CANDIDATE_LIMIT) break;
+      offset = unreadableFound ? 0 : offset + rows.length;
     }
-    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))) };
+    // Indexed transcripts whose blobs are now unreadable are a coverage gap too.
+    // Indexing reports only unindexed versions, so the counts do not overlap.
+    const unavailableTranscripts = (indexing.unavailableTranscripts ?? 0) + unreadable.size;
+    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))),
+      pendingTranscripts: indexing.pendingTranscripts, ...(unavailableTranscripts ? { unavailableTranscripts } : {}) };
   }
   async tools(
     store: SessionEvidenceStore,
@@ -242,12 +397,12 @@ export class SessionSearch {
             'Search transcript passages and saved visual/comment analysis across session assets. Queries match all words. Results contain version-specific citation IDs; older versions are labelled.',
           search: async (query) => {
             check();
-            const found = await this.searchEvidence(store, query);
+            const found = await this.searchEvidence(store, query, signal);
             check();
             // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
             const packets = onEvidence(found.packets) ?? found.packets;
             const withheld = found.packets.length - packets.length;
-            return JSON.stringify({ packets, ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
+            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(found.pendingTranscripts ? { pendingTranscripts: found.pendingTranscripts, indexingNote: 'Some saved transcript indexes are still being prepared. Search again to include another batch.' } : {}), ...(found.unavailableTranscripts ? { unavailableTranscripts: found.unavailableTranscripts, unavailableNote: 'Some saved transcripts could not be read and are not searchable. Treat them as a coverage gap; searching again will not help.' } : {}), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
         },
       });
@@ -267,4 +422,53 @@ export class SessionSearch {
       }),
     };
   }
+}
+
+function searchTokens(query: string): string[] {
+  // Combining marks belong to the word, as in the unicode61 index tokenizer;
+  // without \p{M}, Devanagari words split at every vowel sign.
+  return query.slice(0, 200).match(/[\p{L}\p{M}\p{N}_]+/gu)?.slice(0, 20) ?? [];
+}
+
+const MARK_OPEN = '\u0001';
+const MARK_CLOSE = '\u0002';
+
+/**
+ * Maps highlight() output for one term back to inclusive caption index ranges,
+ * one per marked phrase instance. Window text is its captions joined by single
+ * spaces. Returns no ranges if the marked text does not reproduce that text.
+ */
+function captionRanges(marked: string | undefined, captions: readonly (string | undefined)[]): Array<[number, number]> {
+  if (marked === undefined || captions.some(text => text === undefined || text.includes(MARK_OPEN) || text.includes(MARK_CLOSE))) return [];
+  const instances: Array<[number, number]> = [];
+  let plain = '';
+  let open: number | undefined;
+  for (const char of marked) {
+    if (char === MARK_OPEN) open = plain.length;
+    else if (char === MARK_CLOSE) {
+      if (open !== undefined && plain.length > open) instances.push([open, plain.length]);
+      open = undefined;
+    } else plain += char;
+  }
+  if (plain !== captions.join(' ')) return [];
+  const ends: number[] = [];
+  let position = 0;
+  for (const text of captions) { position += text!.length; ends.push(position); position += 1; }
+  const captionAt = (offset: number) => ends.findIndex(end => offset < end);
+  return instances.map(([start, end]) => [captionAt(start), captionAt(end - 1)]);
+}
+
+/**
+ * The shortest contiguous caption run that contains a complete instance of
+ * every term, earliest first. Keeps the whole window if any term is unplaced.
+ */
+function coveringSpan(ids: string[], termRanges: readonly (readonly [number, number])[][]): string[] {
+  if (!termRanges.length || termRanges.some(ranges => !ranges.length || ranges.some(([start, end]) => start < 0 || end < 0))) return ids;
+  for (let width = 0; width < ids.length; width++) {
+    for (let start = 0; start + width < ids.length; start++) {
+      const end = start + width;
+      if (termRanges.every(ranges => ranges.some(([first, last]) => first >= start && last <= end))) return ids.slice(start, end + 1);
+    }
+  }
+  return ids;
 }

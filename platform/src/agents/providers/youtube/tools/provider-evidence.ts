@@ -171,6 +171,6 @@ export function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
 }
 
-export function youtubeVideoUrl(videoId: string): string {
-  return `https://www.youtube.com/watch?v=${videoId}`;
+export function youtubeVideoUrl(videoId: string, startMs?: number): string {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}${startMs !== undefined ? `&t=${Math.floor(startMs / 1000)}` : ''}`;
 }

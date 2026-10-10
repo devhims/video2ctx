@@ -482,3 +482,88 @@ test.each(['success', 'retry', 'budget', 'backup_budget'] as const)('accounts fo
   expect(ledger.reduce((total, row) => total + row.provider_cost_micros, 0)).toBe(providerCost);
   expect(await creditBalance(env, userId)).toBe(creditsAfterAnswer);
 });
+
+test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('citation hydration revalidates %s before accepting an answer', async race => {
+  const { runtime, userId, conversationId, addRun } = await seed(`citation-hydration-${race}`);
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { version } = await evidence(instance, runId);
+    const excerptId = `evidence:${version}:segment:0`;
+    const store = internals(instance).sessionStore;
+    const packets = await store.evidenceForCitations([excerptId]);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(store, 'evidenceForCitations').mockImplementation(async () => { await gate; return packets; });
+    const pending = internals(instance).finalizeRun(runId, 'final', answer(`A caption. [cite:${excerptId}]`));
+    const rejected = expect(pending).rejects.toThrow(race === 'cancel' ? 'no longer active' : 'Session evidence changed');
+    expect(jobs(instance)).toEqual([]);
+    if (race === 'cancel') await instance.cancelRun(runId);
+    else await instance.deleteSessionAssets(conversationId, userId, race === 'single-delete' ? version : undefined);
+    release();
+    await rejected;
+    expect(jobs(instance)).toEqual([]);
+  });
+});
+
+test.each([0, 50])('caption storage failure preserves the answer with %s input warnings', async warningCount => {
+  const { runtime, addRun } = await seed(`citation-storage-unavailable-${warningCount}`);
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { version } = await evidence(instance, runId);
+    const store = internals(instance).sessionStore;
+    vi.spyOn(store, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
+    const input = answer(`An explanation. [cite:evidence:${version}:segment:0]`);
+    input.intent = 'inspect_video';
+    input.warnings = Array.from({ length: warningCount }, (_, i) => ({ code: `TEST_${i}`, message: `Warning ${i}` }));
+    instance.sql`UPDATE agent_routes SET decision_json = ${JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false })} WHERE run_id = ${runId}`;
+    const saved = await internals(instance).finalizeRun(runId, 'final', input);
+    expect(saved.warnings.filter(warning => warning.code.startsWith('TEST_'))).toHaveLength(warningCount);
+    expect(input.warnings).toHaveLength(warningCount);
+    expect(saved.answer).toBe('An explanation. [source unavailable]');
+    expect(saved.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')).toBe(true);
+    expect(jobs(instance)).toHaveLength(1);
+    expect((await instance.getRun(runId))?.status).toBe('completed');
+  });
+});
+
+test('available run evidence avoids another caption-storage read', async () => {
+  const { runtime, addRun } = await seed('citation-audit-fallback');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { excerptId } = await evidence(instance, runId);
+    const read = vi.spyOn(internals(instance).sessionStore, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
+    const saved = await internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:${excerptId}]`));
+    expect(saved.citations).toHaveLength(1);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
+test('cancellation interrupts a stalled caption read without waiting for storage', async () => {
+  const { runtime, addRun } = await seed('citation-stalled-cancel');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const read = vi.spyOn(internals(instance).sessionStore, 'evidenceForCitations').mockImplementation(() => { started(); return new Promise(() => {}); });
+    const pending = internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:evidence:${'a'.repeat(64)}:segment:0]`));
+    const rejected = expect(pending).rejects.toThrow('no longer active');
+    await began;
+    await instance.cancelRun(runId);
+    await rejected;
+    expect(read).toHaveBeenCalledOnce();
+    expect(jobs(instance)).toEqual([]);
+  });
+});
+
+
+test('unknown citations do not bypass the research citation requirement', async () => {
+  const { runtime, addRun } = await seed('citation-invalid-only');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    instance.sql`UPDATE agent_routes SET decision_json = ${JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false })} WHERE run_id = ${runId}`;
+    const input = { ...answer('An invented claim. [cite:made-up]'), intent: 'inspect_video' as const };
+    await expect(internals(instance).finalizeRun(runId, 'final', input)).rejects.toMatchObject({ status: 422, code: 'AGENT_CITATION_REQUIRED' });
+    expect(jobs(instance)).toEqual([]);
+    expect(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId}`[0]).toEqual({ result_json: null });
+  });
+});

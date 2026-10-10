@@ -1,3 +1,4 @@
+import { youtubeVideoUrl } from './providers/youtube/tools/provider-evidence';
 import { isDurationLimitFallback, type DurationLimitAnswerContext } from './research/duration-limit-answer';
 import { ApiError } from '../lib/http';
 import {
@@ -25,6 +26,7 @@ export function buildAgentTurnResult(
   packets: EvidencePacket[],
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
+  allowUnavailableCitations = false,
 ): AgentTurnResult {
   const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
   const citations: AgentCitation[] = [];
@@ -49,11 +51,12 @@ export function buildAgentTurnResult(
     citations.push({
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
-      title: source.title, url: source.url, excerpt: excerpt.text,
+      title: source.title, url: source.videoId && excerpt.startMs !== undefined ? youtubeVideoUrl(source.videoId, excerpt.startMs) : source.url, excerpt: excerpt.text,
       startMs: excerpt.startMs, endMs: excerpt.endMs,
     });
   }
   if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && citations.length === 0
+    && !(allowUnavailableCitations && unresolved.size > 0)
     && !isDurationLimitFallback(input, packets, durationLimitContext)) {
     throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
   }

@@ -82,9 +82,10 @@ describe('YouTube agent model', () => {
     } finally { fetchMock.mockRestore(); }
   });
 
-  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes production %s to its text or visual model', async role => {
+  test.each(['classifier', 'agent_core', 'transcript_analyst', 'memory_updater', 'finalizer', 'visual_analyst'])('routes production %s to its text or visual model', async role => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
-      AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+      AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash',
+      AGENT_FINALIZER_REASONING_EFFORT: '', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     const visual = role === 'visual_analyst';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
@@ -92,7 +93,7 @@ describe('YouTube agent model', () => {
       expect(body.max_tokens).toBe(1600);
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
-      expect(body.reasoning_history).toBe('interleaved');
+      if (role !== 'finalizer') expect(body.reasoning_history).toBe('interleaved');
       expect(body.response_format.type).toBe('json_schema');
       if (visual) {
         expect(body.reasoning_effort).toBe('low');
@@ -184,15 +185,15 @@ describe('YouTube agent model', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe(`accounts/fireworks/models/${name}`);
-      expect(body.max_tokens).toBe(3524);
+      expect(body.max_tokens).toBe(name.startsWith('deepseek') ? 2500 : 3524);
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
       if (name === 'gpt-oss-120b') {
         expect(body.reasoning_effort).toBe('low');
         expect(body).not.toHaveProperty('thinking');
       } else {
-        expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
-        expect(body).not.toHaveProperty('reasoning_effort');
+        expect(body.reasoning_effort).toBe('none');
+        expect(body).not.toHaveProperty('thinking');
       }
       return chatCompletion(body, { id: 'test', created: 1, model: body.model,
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
@@ -254,16 +255,16 @@ describe('YouTube agent model', () => {
     expect(fireworksModelPricing('unknown')).toBeUndefined();
   });
 
-  test('sends native bounded thinking and a combined budget only for the Fireworks finalizer', async () => {
+  test('disables DeepSeek finalizer reasoning without changing the caller token ceiling or Workers research', async () => {
     const env = { AI_GATEWAY_ID: 'all-things-youtube', AGENT_GLM_PROVIDER: 'workers-ai', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     Object.assign(env, { AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash' });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
-      expect(body.max_tokens).toBe(3524);
-      expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+      expect(body.max_tokens).toBe(2500);
+      expect(body).not.toHaveProperty('thinking');
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
-      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body.reasoning_effort).toBe('none');
       expect(body.model).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
       expect(body.response_format.type).toBe('json_schema');
       return chatCompletion(body, { id: 'test', created: 1, model: body.model,
@@ -368,9 +369,8 @@ it.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'me
     expect(result.response.modelId).toBe('accounts/fireworks/models/deepseek-v4p1-flash');
     expect(requests).toHaveLength(2);
     expect(requests[1]).toMatchObject({ model: 'accounts/fireworks/models/deepseek-v4p1-flash', service_tier: 'priority', prompt_cache_key: 'session' });
-    if (role === 'finalizer') {
-      expect(requests[1]).not.toHaveProperty('reasoning_effort');
-      expect(requests[1]?.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
-    } else expect(requests[1]?.reasoning_effort).toBe('none');
+    expect(requests[1]?.reasoning_effort).toBe('none');
+    expect(requests[1]).not.toHaveProperty('thinking');
+    expect(requests[1]?.max_tokens).toBe(100);
   } finally { fetchMock.mockRestore(); }
 });

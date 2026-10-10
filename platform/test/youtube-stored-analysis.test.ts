@@ -167,7 +167,7 @@ describe('retrieval and saved-asset analysis boundary', () => {
     const packet = await executeGetVideoTranscriptForModel({ videoId }, context, 'partial');
     expect(packet.assetVersions).toEqual([]);
     expect(store.saved.size).toBe(0);
-    expect(evidencePacketForModel(packet).excerpts?.[0]?.text).toBe('A blue chart.');
+    expect(evidencePacketForModel(packet).transcript?.text).toBe('0 A blue chart.');
     expect(packet.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_TRANSCRIPT' })]),
     );
@@ -318,4 +318,13 @@ describe('saved-analysis input billing', () => {
     expect(deliverSavedAssets).not.toHaveBeenCalled();
     expect(analyst(context, 'transcript')).not.toHaveBeenCalled();
   });
+});
+
+it('passes overview scope through saved transcript analysis', async () => {
+  const { context, versions } = setup();
+  await executeAnalyzeVideoTranscript({ assetVersion: versions.transcript, focus: 'All topics', scope: 'overview' }, context, 'overview');
+  await executeAnalyzeVideoTranscript({ assetVersion: versions.transcript, focus: 'All topics' }, context, 'focused');
+  const analyze = analyst(context, 'transcript');
+  expect(analyze).toHaveBeenNthCalledWith(1, expect.objectContaining({ scope: 'overview' }));
+  expect(analyze).toHaveBeenNthCalledWith(2, expect.objectContaining({ scope: 'focused' }));
 });

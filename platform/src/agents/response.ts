@@ -1,3 +1,4 @@
+import { youtubeVideoUrl } from './providers/youtube/tools/provider-evidence';
 import { storedExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research/research-plan';
@@ -75,7 +76,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   const sources: z.infer<typeof compactAgentSourceSchema>[] = [];
   const sourceIds = new Map<string, string>();
   const evidenceIds = new Map<string, string>();
-  // Replace a contiguous group together so several excerpts from one video become one reference.
+  // Replace a contiguous group together while preserving distinct playback anchors.
   // Earlier formatters escaped model-written table citations into visible IDs.
   // Restore only citations already validated for this stored answer.
   const displayAnswer = result.answer.replace(/\(source marker:([^\]]+)\]/g,
@@ -85,7 +86,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
     for (const match of group.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)) {
       const citation = citations.get(match[1]!);
       if (!citation) throw new ApiError(500, 'INVALID_AGENT_RESULT', 'A stored answer references missing evidence.');
-      const key = citation.videoId ? `video:${citation.videoId}` : citation.channelId ? `channel:${citation.channelId}`
+      const key = citation.videoId ? `video:${citation.videoId}:${citation.startMs ?? "untimed"}` : citation.channelId ? `channel:${citation.channelId}`
         : citation.playlistId ? `playlist:${citation.playlistId}` : citation.url ?? citation.sourceId;
       let id = sourceIds.get(key);
       if (!id) {
@@ -94,7 +95,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
         sources.push({
           id, videoId: citation.videoId, channelId: citation.channelId, playlistId: citation.playlistId,
           title: citation.title || (citation.videoId ? videoTitles.get(citation.videoId) ?? `YouTube video ${citation.videoId}` : 'YouTube source'),
-          url: citation.videoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(citation.videoId)}` : citation.url,
+          url: citation.videoId ? youtubeVideoUrl(citation.videoId, citation.startMs) : citation.url,
         });
       }
       evidenceIds.set(citation.id, id);
