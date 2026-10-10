@@ -206,7 +206,7 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT, offset = 0): SearchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = searchTokens(query);
     if (!tokens.length) return [];
@@ -224,11 +224,12 @@ export class SessionSearch {
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
       SELECT id,owner,content,metadata FROM unique_matches
-      WHERE occurrence=1 ORDER BY score,id LIMIT ?`,
+      WHERE occurrence=1 ORDER BY score,id LIMIT ? OFFSET ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
         limit,
+        offset,
       )
       .toArray();
   }
@@ -247,37 +248,47 @@ export class SessionSearch {
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
     const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
-    // Overlapping windows can resolve to the same captions. Over-fetch, then keep
-    // the first SEARCH_RESULT_LIMIT distinct results after trimming.
-    const candidates = this.matches('evidence', query, excluded, SEARCH_RESULT_LIMIT * 3).map(row => {
-      const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
-      return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
-    }).filter(({ metadata }) => !metadata.version || (store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)));
-    // Resolve every selected caption in one batch, so overlapping hits read each
-    // transcript once rather than fetching its R2 object for every FTS row.
-    const found = await store.evidenceForCitations([...new Set(candidates.flatMap(candidate => candidate.ids))]);
-    // A window only locates a match. Return the shortest caption run inside it
-    // that contains the query terms, not all ten captions.
-    const texts = new Map(found.flatMap(packet => packet.excerpts.map(excerpt => [excerpt.id, excerpt.text] as const)));
+    const generation = store.generation();
     const terms = [...foldedTokens(searchTokens(query).join(' '))];
-    for (const candidate of candidates) {
-      if (candidate.metadata.segmentIds) candidate.ids = coveringSpan(candidate.ids, texts, terms);
-    }
+    const resolvedIds = new Set<string>();
+    const texts = new Map<string, string>();
+    const found: EvidencePacket[] = [];
     let results = 0;
-    for (const { row, metadata, ids } of candidates) {
-      if (results >= SEARCH_RESULT_LIMIT) break;
-      if (ids.every(id => seen.has(id))) continue;
-      const before = packets.length;
-      for (const packet of found) {
-        if (packet.assetVersions?.some((version) => !store.has(version))) continue;
-        // Legacy asset index IDs and stable packet IDs can resolve to the same caption.
-        const excerpts = packet.excerpts.filter((excerpt) => ids.includes(excerpt.id))
-          .filter(excerpt => !seen.has(excerpt.id));
-        if (!excerpts.length) continue;
-        packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
-        for (const excerpt of excerpts) seen.add(excerpt.id);
+    // Page through ranked candidates until twenty distinct resolved matches are
+    // returned or the index is exhausted. Overlap has no fixed multiplier.
+    for (let offset = 0; results < SEARCH_RESULT_LIMIT; offset += SEARCH_RESULT_LIMIT) {
+      const rows = this.matches('evidence', query, excluded, SEARCH_RESULT_LIMIT, offset);
+      if (!rows.length) break;
+      const candidates = rows.map(row => {
+        const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
+        return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
+      }).filter(({ metadata }) => !metadata.version || (store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)));
+      // Cache resolved IDs across pages, including unavailable IDs. Each page
+      // batches its new references rather than reading once per FTS candidate.
+      const missing = [...new Set(candidates.flatMap(candidate => candidate.ids))].filter(id => !resolvedIds.has(id));
+      if (missing.length) {
+        const resolved = await store.evidenceForCitations(missing);
+        // Deletion can change both citation availability and pagination offsets.
+        if (generation !== store.generation()) return { packets: [], ...indexing };
+        found.push(...resolved);
+        for (const id of missing) resolvedIds.add(id);
+        for (const packet of resolved) for (const excerpt of packet.excerpts) texts.set(excerpt.id, excerpt.text);
       }
-      if (packets.length > before) results++;
+      for (const { row, metadata, ids: windowIds } of candidates) {
+        if (results >= SEARCH_RESULT_LIMIT) break;
+        const ids = metadata.segmentIds ? coveringSpan(windowIds, texts, terms) : windowIds;
+        if (ids.every(id => seen.has(id))) continue;
+        const before = packets.length;
+        for (const packet of found) {
+          if (packet.assetVersions?.some(version => !store.has(version))) continue;
+          const excerpts = packet.excerpts.filter(excerpt => ids.includes(excerpt.id) && !seen.has(excerpt.id));
+          if (!excerpts.length) continue;
+          packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
+          for (const excerpt of excerpts) seen.add(excerpt.id);
+        }
+        if (packets.length > before) results++;
+      }
+      if (rows.length < SEARCH_RESULT_LIMIT) break;
     }
     return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))), ...indexing };
   }

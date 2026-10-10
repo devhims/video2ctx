@@ -1440,3 +1440,56 @@ test('search windows do not bridge omitted oversized captions', async () =>
     expect((await store.search.searchEvidence(store, 'useEffect cleanup function')).packets).toEqual([]);
     expect((await store.search.searchEvidence(store, 'cleanup function')).packets[0]!.excerpts[0]!.text).toBe('cleanup function');
   }));
+
+test.each([18, 20, 25])('search refills through tail overlap and stops at twenty matches (%s videos)', async count =>
+  within(`search-tail-crowding-${count}`, async store => {
+    const expected: string[] = [];
+    for (let index = 0; index < count; index++) {
+      const videoId = `tailvid${String(index).padStart(4, '0')}`;
+      expected.push(videoId);
+      const value = { ...transcript(), videoId };
+      value.segments = (index < count - 1 ? Array.from({ length: 10 }, (_, i) => i === 8 ? 'alpha beta' : 'filler') : ['alpha beta ' + 'filler '.repeat(300)])
+        .map((text, i) => ({ text, startMs: i * 1000, endMs: (i + 1) * 1000, durationMs: 1000 }));
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+    }
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    const videos = [...new Set(found.packets.flatMap(p => p.sources.map(s => s.videoId)))];
+    expect(videos).toHaveLength(Math.min(count, 20));
+    if (count <= 20) expect(videos.sort()).toEqual(expected.sort());
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+    expect(found.pendingTranscripts).toBe(0);
+  }));
+
+test.each([false, true])('search continues past unavailable candidates until exhaustion (healthy match: %s)', async healthy =>
+  within(`search-unavailable-pages-${healthy}`, async (store, _reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 45 }, (_, index) => ({ text: 'needle', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const saved = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', saved.assetVersions![0]!).one().blob_key;
+    await env.RESEARCH.delete(key);
+    if (healthy) {
+      const later = { ...transcript('needle ' + 'padding '.repeat(100)), videoId: 'healthyvid1' };
+      await sessionProvider(provider(vi.fn(async () => ({ value: later, cacheStatus: 'miss' as const }))), store).transcript(later.videoId);
+    }
+    const found = await store.search.searchEvidence(store, 'needle');
+    expect(found.packets).toHaveLength(healthy ? 1 : 0);
+    if (healthy) expect(found.packets[0]!.sources[0]!.videoId).toBe('healthyvid1');
+  }));
+
+test('deletion during a later search page discards earlier results', async () =>
+  within('search-page-deletion', async store => {
+    const value = transcript();
+    value.segments = Array.from({ length: 100 }, (_, index) => ({ text: index % 10 === 8 ? 'alpha beta' : 'filler', startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const resolve = store.evidenceForCitations.bind(store);
+    let calls = 0;
+    vi.spyOn(store, 'evidenceForCitations').mockImplementation(async ids => {
+      const packets = await resolve(ids);
+      if (++calls === 2) await store.delete();
+      return packets;
+    });
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    expect(calls).toBe(2);
+    expect(found.packets).toEqual([]);
+  }));
