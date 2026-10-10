@@ -1338,6 +1338,33 @@ test.each([false, true])('multi-word search spans captions and window boundaries
     expect(found.pendingTranscripts).toBe(0);
   }));
 
+test('window trimming keeps captions the index tokenizes differently', async () =>
+  within('search-trim-underscore', async (store) => {
+    const value = transcript();
+    value.segments = ['foo_bar', 'foo'].map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    // SQLite treats `_` as a separator, so foo_bar alone matches both terms.
+    const texts = (await store.search.searchEvidence(store, 'foo bar')).packets.flatMap(packet => packet.excerpts.map(excerpt => excerpt.text));
+    expect(texts).toContain('foo_bar');
+  }));
+
+test('overlapping windows cannot crowd distinct matches out of the result limit', async () =>
+  within('search-window-crowding', async (store) => {
+    const add = async (videoId: string, texts: string[]) => {
+      const value = { ...transcript(), videoId };
+      value.segments = texts.map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+      await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+    };
+    // Thirteen cross-caption matches, each inside two overlapping windows: 26 FTS rows, 13 distinct results.
+    await add('crowdvidA01', Array.from({ length: 130 }, (_, index) => index % 10 === 2 ? 'alpha' : index % 10 === 3 ? 'beta' : `filler ${index}`));
+    // One lower-ranked match in another video.
+    await add('crowdvidB01', Array.from({ length: 10 }, (_, index) => index === 0 ? 'alpha' : index === 9 ? 'beta' : `padding words ${index}`));
+    const found = await store.search.searchEvidence(store, 'alpha beta');
+    expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(['crowdvidA01', 'crowdvidB01']));
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+  }));
+
 test('unreadable transcripts rotate behind healthy index work', async () =>
   within('search-index-failure-rotation', async (store, _reopen, sql) => {
     const versions: string[] = [];

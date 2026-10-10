@@ -6,6 +6,8 @@ import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore } from './session-evidence';
 
+const SEARCH_RESULT_LIMIT = 20;
+
 export interface HistoryEntry {
   id: string;
   role: 'user' | 'assistant';
@@ -204,7 +206,7 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = [], limit = SEARCH_RESULT_LIMIT): SearchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = searchTokens(query);
     if (!tokens.length) return [];
@@ -222,10 +224,11 @@ export class SessionSearch {
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
       SELECT id,owner,content,metadata FROM unique_matches
-      WHERE occurrence=1 ORDER BY score,id LIMIT 20`,
+      WHERE occurrence=1 ORDER BY score,id LIMIT ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
+        limit,
       )
       .toArray();
   }
@@ -244,7 +247,9 @@ export class SessionSearch {
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
     const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
-    const candidates = this.matches('evidence', query, excluded).map(row => {
+    // Overlapping windows can resolve to the same captions. Over-fetch, then keep
+    // the first SEARCH_RESULT_LIMIT distinct results after trimming.
+    const candidates = this.matches('evidence', query, excluded, SEARCH_RESULT_LIMIT * 3).map(row => {
       const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
       return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
     }).filter(({ metadata }) => !metadata.version || (store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)));
@@ -258,8 +263,11 @@ export class SessionSearch {
     for (const candidate of candidates) {
       if (candidate.metadata.segmentIds) candidate.ids = coveringSpan(candidate.ids, texts, terms);
     }
+    let results = 0;
     for (const { row, metadata, ids } of candidates) {
+      if (results >= SEARCH_RESULT_LIMIT) break;
       if (ids.every(id => seen.has(id))) continue;
+      const before = packets.length;
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
         // Legacy asset index IDs and stable packet IDs can resolve to the same caption.
@@ -269,6 +277,7 @@ export class SessionSearch {
         packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
         for (const excerpt of excerpts) seen.add(excerpt.id);
       }
+      if (packets.length > before) results++;
     }
     return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))), ...indexing };
   }
@@ -341,16 +350,21 @@ function searchTokens(query: string): string[] {
   return query.slice(0, 200).match(/[\p{L}\p{N}_]+/gu)?.slice(0, 20) ?? [];
 }
 
-/** Approximates the FTS5 unicode61 tokenizer: case-folded, diacritics removed. */
+/**
+ * Approximates the FTS5 unicode61 tokenizer: letters and digits only (so `_`
+ * separates words, as in the index), case-folded, diacritics removed.
+ */
 function foldedTokens(text: string): Set<string> {
-  return new Set(text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []);
+  return new Set(text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
 }
 
-/** The shortest contiguous run of captions containing every query term found in the window. */
+/** The shortest contiguous run of captions containing every query term, or the whole window if any term is unaccounted for. */
 function coveringSpan(ids: string[], texts: ReadonlyMap<string, string>, terms: readonly string[]): string[] {
   const captionTerms = ids.map(id => foldedTokens(texts.get(id) ?? ''));
   const wanted = terms.filter(term => captionTerms.some(tokens => tokens.has(term)));
-  if (!wanted.length) return ids;
+  // FTS matched every term in this window. If trimming cannot find one, its
+  // tokenization disagrees with the index; never discard the actual match.
+  if (wanted.length < terms.length) return ids;
   let best = { start: 0, end: ids.length - 1 };
   for (let start = 0; start < ids.length; start++) {
     const covered = new Set<string>();
