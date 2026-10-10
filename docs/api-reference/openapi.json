@@ -8025,7 +8025,8 @@
                         },
                         "excerpt": {
                           "type": "string",
-                          "minLength": 1
+                          "minLength": 1,
+                          "maxLength": 16000
                         },
                         "startMs": {
                           "type": "integer",
@@ -9633,7 +9634,8 @@
                     },
                     "excerpt": {
                       "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "maxLength": 16000
                     },
                     "startMs": {
                       "type": "integer",

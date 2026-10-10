@@ -39,7 +39,7 @@ const transcriptAnalysisDataSchema = z.object({
     excerptIds: z.array(z.string().min(1).max(300)).max(3),
   })),
   coverage: z.object({
-    completeTranscriptRead: z.literal(true),
+    completeTranscriptRead: z.boolean(),
     segmentCount: z.number().int().nonnegative(),
     startMs: z.number().int().nonnegative().nullable(),
     endMs: z.number().int().nonnegative().nullable(),

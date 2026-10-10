@@ -1,5 +1,5 @@
 import { evidencePacketForModel } from '../../../runtime/model-evidence';
-import { transcriptContextIndexes } from '../../../runtime/transcript-segments';
+import { transcriptContextIndexes, hasSpeechAtTimestamp, usableTranscriptSegment } from '../../../runtime/transcript-segments';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
@@ -131,13 +131,13 @@ export function executeGetVideoTranscript(
           type: contextRequest ? 'youtube_transcript_context' : evidence.artifactType,
           title: evidence.artifactTitle,
           data: {
-            ...(contextRequest ? { timestampSeconds: contextRequest.timestampSeconds, hasSpeechAtTimestamp: response.value.segments.some(segment => segment.startMs <= contextRequest.timestampSeconds * 1000 && segment.endMs > contextRequest.timestampSeconds * 1000) } : {}),
+            ...(contextRequest ? { timestampSeconds: contextRequest.timestampSeconds, hasSpeechAtTimestamp: hasSpeechAtTimestamp(response.value.segments, contextRequest.timestampSeconds) } : {}),
             requiresAnalysis: !contextRequest && context.transcriptPolicy.mode === 'contextual_analysis' && !!response.assetVersions?.length,
             videoId: parsed.videoId,
             track: response.value.track,
             translatedTo: response.value.translatedTo,
             ...evidence.artifactData,
-            allReturnedSegmentsIncluded: !contextRequest && !paged,
+            allReturnedSegmentsIncluded: !contextRequest && !paged && evidence.warnings.length === 0,
             returnedExcerptCount: excerpts.length,
             offset,
             ...(nextOffset !== undefined ? { nextOffset } : {}),
@@ -171,7 +171,7 @@ export function completeTranscriptEvidence(
   exactSegments = true,
 ) {
   const excerpts = segments.flatMap((segment, segmentIndex) => {
-    const chunks = exactSegments ? (segment.text ? [segment.text] : []) : segment.text.trim().match(/[\s\S]{1,2000}/g) ?? [];
+    const chunks = exactSegments ? (usableTranscriptSegment(segment.text) ? [segment.text] : []) : segment.text.trim().match(/[\s\S]{1,2000}/g) ?? [];
     return chunks.map((text, chunkIndex) => ({
       id: exactSegments ? `transcript:${safeIdPart(videoId)}:segment:${segmentIndex}` : `transcript:${safeIdPart(videoId)}:${segmentIndex}:${segment.startMs}:${chunkIndex}`,
       sourceId,
@@ -192,7 +192,8 @@ export function completeTranscriptEvidence(
       endMs: segments.reduce<number | null>((latest, segment) =>
         latest === null ? segment.endMs : Math.max(latest, segment.endMs), null),
     },
-    warnings: [],
+    warnings: exactSegments && segments.some(segment => segment.text && !usableTranscriptSegment(segment.text))
+      ? [{ code: 'TRANSCRIPT_SEGMENT_TOO_LARGE', message: 'One or more captions exceed the source-text size limit and were omitted without truncation.' }] : [],
   };
 }
 

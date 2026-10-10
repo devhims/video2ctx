@@ -26,6 +26,7 @@ export function buildAgentTurnResult(
   packets: EvidencePacket[],
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
+  allowUnavailableCitations = false,
 ): AgentTurnResult {
   const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
   const citations: AgentCitation[] = [];
@@ -55,6 +56,7 @@ export function buildAgentTurnResult(
     });
   }
   if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && citations.length === 0
+    && !(allowUnavailableCitations && unresolved.size > 0)
     && !isDurationLimitFallback(input, packets, durationLimitContext)) {
     throw new ApiError(422, 'AGENT_CITATION_REQUIRED', 'A research answer must include persisted inline citation markers.');
   }

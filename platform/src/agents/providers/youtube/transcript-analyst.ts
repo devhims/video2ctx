@@ -1,4 +1,4 @@
-import { flatTranscript } from '../../runtime/transcript-segments';
+import { flatTranscript, usableTranscriptSegment } from '../../runtime/transcript-segments';
 import { conversationHistoryForModel, CONVERSATION_CONTEXT_GUIDANCE, type ConversationTurn } from '../../runtime/conversation-memory';
 import type { TranscriptSegment } from 'all-things-youtube';
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from 'ai';
@@ -62,7 +62,7 @@ export interface TranscriptAnalystResult {
   excerpts: TranscriptAnalystExcerpt[];
   warnings: string[];
   coverage: {
-    completeTranscriptRead: true;
+    completeTranscriptRead: boolean;
     segmentCount: number;
     startMs: number | null;
     endMs: number | null;
@@ -248,7 +248,7 @@ export async function analyzeTranscriptWithModel(
 }
 
 function transcriptCatalog(segments: TranscriptSegment[]): TranscriptCatalogEntry[] {
-  return segments.flatMap((segment, index) => segment.text ? [{ index, startMs: segment.startMs, endMs: segment.endMs, text: segment.text }] : []);
+  return segments.flatMap((segment, index) => usableTranscriptSegment(segment.text) ? [{ index, startMs: segment.startMs, endMs: segment.endMs, text: segment.text }] : []);
 }
 
 function resolveAnalysis(
@@ -266,7 +266,7 @@ function resolveAnalysis(
     const segmentIndexes = [finding.segmentId];
     const excerptIds = segmentIndexes.map((segmentIndex) => {
       const segment = segmentByIndex.get(segmentIndex);
-      if (!segment) {
+      if (!segment || !usableTranscriptSegment(segment.text)) {
         onIssue?.({ code: 'UNKNOWN_SEGMENT', findingIndex, segmentId: segmentIndex, message: `Unknown segment ${segmentIndex}; available indexes are 0 through ${Math.max(0, segments.length - 1)}.` });
         throw new TranscriptAnalysisInvalidReferenceError(
           `Transcript analyst referenced unknown segment ID ${segmentIndex}; available indexes are 0 through ${Math.max(0, segments.length - 1)}.`,
@@ -330,14 +330,14 @@ function resolveAnalysis(
     sourceContext,
     findings,
     excerpts,
-    warnings: [...output.warnings, ...(unverifiedFindings ? [`Some figures in ${unverifiedFindings} transcript finding${unverifiedFindings === 1 ? '' : 's'} could not be matched to the transcript and are marked unverified.`] : [])],
+    warnings: [...output.warnings, ...(segments.some(segment => segment.text && !usableTranscriptSegment(segment.text)) ? ['Oversized transcript captions were omitted without truncation.'] : []), ...(unverifiedFindings ? [`Some figures in ${unverifiedFindings} transcript finding${unverifiedFindings === 1 ? '' : 's'} could not be matched to the transcript and are marked unverified.`] : [])],
     coverage: completeCoverage(segments),
   };
 }
 
 function completeCoverage(segments: TranscriptSegment[]): TranscriptAnalystResult['coverage'] {
   return {
-    completeTranscriptRead: true,
+    completeTranscriptRead: !segments.some(segment => segment.text && !usableTranscriptSegment(segment.text)),
     segmentCount: segments.length,
     startMs: segments[0]?.startMs ?? null,
     endMs: segments.length ? segments.reduce((end, segment) => Math.max(end, segment.endMs), 0) : null,

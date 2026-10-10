@@ -487,7 +487,8 @@ test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('citation hydrati
   const { runtime, userId, conversationId, addRun } = await seed(`citation-hydration-${race}`);
   await runInDurableObject(runtime, async instance => {
     const runId = await addRun(instance, 1);
-    const { version, excerptId } = await evidence(instance, runId);
+    const { version } = await evidence(instance, runId);
+    const excerptId = `evidence:${version}:segment:0`;
     const store = internals(instance).sessionStore;
     const packets = await store.evidenceForCitations([excerptId]);
     let release!: () => void;
@@ -500,6 +501,50 @@ test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('citation hydrati
     else await instance.deleteSessionAssets(conversationId, userId, race === 'single-delete' ? version : undefined);
     release();
     await rejected;
+    expect(jobs(instance)).toEqual([]);
+  });
+});
+
+test('caption storage failure preserves the answer with unavailable citations', async () => {
+  const { runtime, addRun } = await seed('citation-storage-unavailable');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { version } = await evidence(instance, runId);
+    const store = internals(instance).sessionStore;
+    vi.spyOn(store, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
+    const saved = await internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:evidence:${version}:segment:0]`));
+    expect(saved.answer).toBe('An explanation. [source unavailable]');
+    expect(saved.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')).toBe(true);
+    expect(jobs(instance)).toHaveLength(1);
+    expect((await instance.getRun(runId))?.status).toBe('completed');
+  });
+});
+
+test('available run evidence avoids another caption-storage read', async () => {
+  const { runtime, addRun } = await seed('citation-audit-fallback');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    const { excerptId } = await evidence(instance, runId);
+    const read = vi.spyOn(internals(instance).sessionStore, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
+    const saved = await internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:${excerptId}]`));
+    expect(saved.citations).toHaveLength(1);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
+test('cancellation interrupts a stalled caption read without waiting for storage', async () => {
+  const { runtime, addRun } = await seed('citation-stalled-cancel');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const read = vi.spyOn(internals(instance).sessionStore, 'evidenceForCitations').mockImplementation(() => { started(); return new Promise(() => {}); });
+    const pending = internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:evidence:${'a'.repeat(64)}:segment:0]`));
+    const rejected = expect(pending).rejects.toThrow('no longer active');
+    await began;
+    await instance.cancelRun(runId);
+    await rejected;
+    expect(read).toHaveBeenCalledOnce();
     expect(jobs(instance)).toEqual([]);
   });
 });

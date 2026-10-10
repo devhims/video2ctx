@@ -1,3 +1,4 @@
+import { parseSegmentCitation } from './transcript-segments';
 import { AgentSessionProvider, Session, type SessionMessage } from 'agents/experimental/memory/session';
 import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
@@ -62,7 +63,10 @@ export class SessionSearch {
       packet_id: string;
       packet_json: string;
     }>(`SELECT packet_id,packet_json FROM session_packets p
-      WHERE packet_id NOT LIKE 'session:%' AND NOT EXISTS (SELECT 1 FROM session_context_fts WHERE owner='packet:' || p.packet_id)`)) {
+      WHERE packet_id NOT LIKE 'session:%'
+      AND EXISTS (SELECT 1 FROM json_each(p.packet_json,'$.excerpts') e
+        WHERE json_extract(e.value,'$.text') IS NOT NULL AND json_extract(e.value,'$.id') NOT GLOB 'evidence:*:segment:*')
+      AND NOT EXISTS (SELECT 1 FROM session_context_fts WHERE owner='packet:' || p.packet_id)`)) {
       this.indexPacket(row.packet_id, JSON.parse(row.packet_json));
     }
   }
@@ -131,7 +135,7 @@ export class SessionSearch {
     if (id.startsWith('session:')) return;
     const owner = `packet:${id}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    for (const excerpt of packet.excerpts.filter(excerpt => !/^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id))) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
+    for (const excerpt of packet.excerpts.filter(excerpt => !parseSegmentCitation(excerpt.id))) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
   }
   indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
     const owner = `asset:${version}`;

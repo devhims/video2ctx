@@ -1125,7 +1125,8 @@ test('a narrow lookup does not replace a previously saved full transcript packet
     const narrow = await executeGetVideoTranscript({ videoId: id }, ctx, 'narrow', { timestampSeconds: 5.2, before: 0, after: 0 });
     const restored = reopen();
     expect(await restored.evidence()).toHaveLength(2);
-    expect((await restored.evidenceForCitations([full.excerpts[0]!.id]))[0]!.excerpts).toHaveLength(6);
+    expect((await restored.evidenceForCitations([full.excerpts[0]!.id]))[0]!.excerpts).toHaveLength(1);
+    expect((await restored.evidence()).find(packet => packet.packetId === full.packetId)!.excerpts).toHaveLength(6);
     expect(narrow.excerpts[0]!.id).toBe(full.excerpts[5]!.id);
     expect(await restored.evidenceForCitations([narrow.excerpts[0]!.id])).toHaveLength(2);
   }));
@@ -1199,4 +1200,44 @@ test.each([false, true])('repeated cross-run reads preserve lower-ranked search 
     expect(sql.exec("SELECT * FROM session_packets WHERE packet_id LIKE 'packet:%'").toArray()).toHaveLength(26);
     expect(p.transcript).toHaveBeenCalledOnce();
     if (!legacyRows) expect(sql.exec("SELECT * FROM session_context_fts WHERE owner LIKE 'packet:%'").toArray()).toEqual([]);
+  }));
+
+test('citation resolution is a passive read and does not rewrite segment references', async () =>
+  within('passive-citation-read', async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    sql.exec('CREATE TABLE reference_writes (value INTEGER)');
+    sql.exec('CREATE TRIGGER watch_reference_insert AFTER INSERT ON session_segment_refs BEGIN INSERT INTO reference_writes VALUES (1); END');
+    sql.exec('CREATE TRIGGER watch_reference_update AFTER UPDATE ON session_segment_refs BEGIN INSERT INTO reference_writes VALUES (1); END');
+    const requested = vi.fn(async () => {});
+    const passive = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/passive-citation-read/', requested);
+    const citation = `evidence:${version}:segment:0`;
+    expect((await passive.evidenceForCitations([citation]))[0]!.excerpts[0]!.text).toBe('A clear opening sentence.');
+    await passive.evidenceForCitations([citation]);
+    expect(requested).not.toHaveBeenCalled();
+    expect(sql.exec('SELECT * FROM reference_writes').toArray()).toEqual([]);
+    await passive.read(version);
+    expect(requested).toHaveBeenCalledOnce();
+    expect(sql.exec('SELECT * FROM reference_writes').toArray()).toEqual([]);
+  }));
+
+test('targeted citation lookup and memory validation ignore unrelated packet payloads', async () =>
+  within('targeted-citation-query', async (store, reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const citation = `evidence:${version}:segment:0`;
+    // A legacy record with no excerpts must not be loaded into the requested packet set.
+    sql.exec('INSERT INTO session_packets VALUES (?, ?, ?)', 'unrelated', JSON.stringify({ packetId: 'unrelated', excerpts: [] }), JSON.stringify([version]));
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, 'parse').mockImplementation((text, reviver) => {
+      if (text.includes('unrelated')) throw new Error('Unrelated packet was deserialized');
+      return parse(text, reviver);
+    });
+    try {
+      const result = await reopen().evidenceForCitations([citation]);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([citation]);
+      expect(remember(reopen(), 'memory', [{ kind: 'finding', topic: 'caption', text: 'A finding', evidenceIds: [citation] }]).applied).toBe(1);
+      expect(remember(reopen(), 'invalid-memory', [{ kind: 'finding', topic: 'invalid', text: 'Invalid', evidenceIds: [`evidence:${version}:segment:999999`] }]).applied).toBe(0);
+    } finally { spy.mockRestore(); }
   }));

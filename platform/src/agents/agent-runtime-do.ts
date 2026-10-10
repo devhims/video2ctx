@@ -339,6 +339,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
   initialState: AgentRuntimeState = { version: 1 };
   #deleted = false;
+  #citationReads = new Map<string, Set<AbortController>>();
   readonly #activeRunFibers = new Map<string, string>();
   readonly #activeRuns = new Set<Promise<void>>();
   readonly #inFlightEvidence = new Map<string, Promise<EvidencePacket>>();
@@ -608,6 +609,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private cancelRunFiber(runId: string, reason: string) {
+    for (const controller of this.#citationReads.get(runId) ?? []) controller.abort(new Error('Agent run is no longer active.'));
     return this.cancelFiber(this.#activeRunFibers.get(runId) ?? runId, reason);
   }
 
@@ -896,13 +898,34 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     input: FinalizeAnswerInput,
   ): Promise<AgentTurnResult> {
     const parsedInput = finalizeAnswerInputSchema.parse(input);
+    const initial = this.requireRun(runId);
+    if (initial.result_json) return agentTurnResultSchema.parse(JSON.parse(initial.result_json));
+    if (this.#deleted || initial.status === 'failed' || initial.status === 'cancelled') throw new Error('Agent run is no longer active.');
     const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
     const generation = this.sessionStore.generation();
-    const saved = this.sessionStore.evidenceForCitations(citedIds);
-    const citedSessionEvidence = Array.isArray(saved) ? saved
-      : await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, new AbortController().signal,
-        () => saved, 'Citation resolution timeout.');
+    const runEvidence = this.readEvidencePackets(runId);
+    const available = new Set(runEvidence.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)));
+    const missing = citedIds.filter(id => !available.has(id));
+    let citedSessionEvidence: EvidencePacket[] = [];
+    let resolutionFailed = false;
+    if (missing.length) {
+      const controller = new AbortController();
+      const active = this.#citationReads.get(runId) ?? new Set<AbortController>();
+      active.add(controller); this.#citationReads.set(runId, active);
+      try {
+        citedSessionEvidence = await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, controller.signal,
+          () => this.sessionStore.evidenceForCitations(missing), 'Citation resolution timeout.');
+        resolutionFailed = missing.some(id => !citedSessionEvidence.some(packet => packet.excerpts.some(excerpt => excerpt.id === id)));
+      } catch {
+        controller.signal.throwIfAborted();
+        resolutionFailed = true;
+      } finally {
+        active.delete(controller);
+        if (!active.size) this.#citationReads.delete(runId);
+      }
+    }
     if (generation !== this.sessionStore.generation()) throw new Error('Session evidence changed during citation resolution.');
+    if (resolutionFailed) parsedInput.warnings.push({ code: 'PARTIAL_EVIDENCE', message: 'Some citation sources could not be loaded. Their claims remain marked as source unavailable.' });
     // After optional asset hydration, validation and commit run synchronously. Cancellation,
     // evidence deletion or a concurrent finalize cannot interleave between validating
     // this answer and persisting it.
@@ -947,7 +970,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     decision.route === 'inspect_video' || decision.route === 'topic_research' ? {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
-    } : undefined);
+    } : undefined, resolutionFailed);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);
@@ -1314,6 +1337,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   async deleteAccountData(): Promise<void> {
     this.#deleted = true;
+    for (const controllers of this.#citationReads.values()) for (const controller of controllers) controller.abort(new Error('Agent account was deleted.'));
     await this.ctx.storage.put('account-deleted', true);
     const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;
     this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${Date.now()}

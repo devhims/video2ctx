@@ -650,32 +650,18 @@ it('allows stored-context search during gathering and exposes no retrieval or in
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('[cite:frame-observation]')}));
 });
 
-it('preloads a saved timestamp neighborhood before finalizer inference and admits it once', async () => {
-  const { options } = setup('context_answer');
-  const version = 'a'.repeat(64);
-  const sourceId = 'youtube:abcdefghijk:transcript';
-  const packet: EvidencePacket = { packetId: 'at-time', kind: 'youtube_transcript', assetVersions: [version],
-    sources: [{ id: sourceId, kind: 'transcript', provider: 'youtube', videoId: 'abcdefghijk' }],
-    excerpts: [{ id: `evidence:${version}:segment:7`, sourceId, text: 'React updates the virtual DOM.', startMs: 1040000, endMs: 1045000 }],
-    artifacts: [{ type: 'youtube_transcript_context', data: { timestampSeconds: 1040, hasSpeechAtTimestamp: true } }], usage: [], warnings: [] };
-  const readTranscriptContext = vi.fn(async () => ({ packets: [packet] }));
-  options.message = 'What happens at 17:20?';
+it.each(['What happens at 17:20?', 'At 10:30 tonight', 'The odds were 1:20'])('does not preload transcript context from clock-like text: %s', async message => {
+  const { options, finalizer } = setup('context_answer');
+  const readTranscriptContext = vi.fn(async () => { throw new Error('Missing or oversized transcript'); });
+  const searchTools = vi.fn(async () => ({}));
+  options.message = message;
   options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'video', reason: 'Saved transcript.' };
-  options.session = { brief: () => ({ assets: [{ version, kind: 'transcript', videoId: 'abcdefghijk', current: true, collectedAt: 1 }], memories: [] }),
-    readTranscriptContext, searchTools: async () => ({}) } as unknown as NonNullable<typeof options.session>;
-  options.deliverEvidence = vi.fn(packets => ({ admitted: packets, withheld: [], unavailable: [], receipts: [] }));
-  const model = new MockLanguageModelV4({ doGenerate: async call => {
-    expect(readTranscriptContext).toHaveBeenCalledExactlyOnceWith(version, 1040);
-    expect(JSON.stringify(call.prompt)).toContain('7 React updates the virtual DOM.');
-    return { content: [{ type: 'text', text: call.responseFormat?.type === 'json'
-      ? JSON.stringify({ confidence: 'high', warnings: [], blocks: [{ text: 'React updates the virtual DOM.', evidenceIds: ['ref_7'] }] }) : 'Context is sufficient.' }],
-    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
-  } });
-  models.select.mockReturnValue(model);
+  options.session = { brief: () => ({ assets: [{ version: 'a'.repeat(64), kind: 'transcript', videoId: 'abcdefghijk', current: true, collectedAt: 1 }], memories: [] }),
+    readTranscriptContext, searchTools } as unknown as NonNullable<typeof options.session>;
   await executeResearchRun(options);
-  expect(options.deliverEvidence).toHaveBeenCalledExactlyOnceWith([packet], 'read_session_evidence');
-  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
-  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: expect.stringContaining(`[cite:evidence:${version}:segment:7]`) }));
+  expect(readTranscriptContext).not.toHaveBeenCalled();
+  expect(searchTools).toHaveBeenCalled();
+  expect(finalizer.doGenerateCalls.length).toBeGreaterThan(0);
 });
 
 it('rejects invented citations, repairs once, and keeps the system prompt stable', async () => {
@@ -795,7 +781,7 @@ it('reads stored evidence on demand before finalizing and hands only the answer 
   const stored={...evidence,packetId:'stored',assetVersions:[version],excerpts:[{...evidence.excerpts[0]!,id:`evidence:${version}:0`}]};
   let reads=0;
   const session={brief:()=>({assets:[{version,kind:'frame',videoId:'abcdefghijk',collectedAt:1,details:{timestampMs:30000}}],memories:[]}),
-    evidence:()=>[],readEvidence:vi.fn(async()=>{reads++;return {packets:[stored]};})};
+    evidence:async()=>[],readEvidence:vi.fn(async()=>{reads++;return {packets:[stored]};})};
   options.session=session as unknown as NonNullable<typeof options.session>;
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
     content: reads===0 ? [{type:'tool-call',toolCallId:'read',toolName:'read_session_evidence',input:JSON.stringify({version})}]
@@ -860,7 +846,7 @@ it('direct finalization reads older user messages through paginated session tool
     inputSchema:z.object({offset:z.number(),role:z.literal('user')}),
     execute:async({offset})=>{reads.push(offset);return offset===0?{messages:[{role:'user',text:older}],nextOffset:20}:{messages:[{role:'user',text:options.message}]};},
   })}));
-  options.session={brief:()=>({assets:[],memories:[],historyMessages:30}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),searchTools} as unknown as NonNullable<typeof options.session>;
+  options.session={brief:()=>({assets:[],memories:[],historyMessages:30}),evidence:async()=>[],readEvidence:vi.fn(),remember:vi.fn(),searchTools} as unknown as NonNullable<typeof options.session>;
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
     content:reads.length<2?[{type:'tool-call',toolCallId:`page-${reads.length}`,toolName:'read_session_history',input:JSON.stringify({offset:reads.length*20,role:'user'})}]
       :[{type:'text',text:JSON.stringify({confidence:'high',warnings:[],blocks:[{text:`1. ${older}\n2. ${options.message}`,evidenceIds:[]}]})}],
@@ -880,7 +866,7 @@ it('direct finalization reads older user messages through paginated session tool
 
 it('reserves the final model step for an answer when history pagination exceeds the tool budget',async()=>{
   const {options,classifier}=setup('context_answer');
-  options.session={brief:()=>({assets:[],memories:[]}),evidence:()=>[],readEvidence:vi.fn(),remember:vi.fn(),
+  options.session={brief:()=>({assets:[],memories:[]}),evidence:async()=>[],readEvidence:vi.fn(),remember:vi.fn(),
     searchTools:async()=>({read_session_history:tool({inputSchema:z.object({}),execute:async()=>({messages:[],nextOffset:20})})})} as unknown as NonNullable<typeof options.session>;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
     const finish=call.toolChoice?.type==='none';
@@ -953,7 +939,7 @@ it('reads the exact first user message before generation and blocks video escala
   options.persistedRoute={route:'finalize',responseIntent:'context_answer',contextScope:'history',historySelection:'first_user_message',reason:'Read stored messages.'};
   const original='summarise this video: https://youtu.be/abcdefghijk?si=original';
   const readHistory=vi.fn(()=>({messages:[{id:'first',role:'user',text:original,createdAt:new Date()}]}));
-  options.session={brief:()=>({historyMessages:24,assets:[],memories:[]}),evidence:()=>[],readHistory,searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
+  options.session={brief:()=>({historyMessages:24,assets:[],memories:[]}),evidence:async()=>[],readHistory,searchTools:async()=>({})} as unknown as NonNullable<typeof options.session>;
   let answers=0;
   const finalizer=new MockLanguageModelV4({doGenerate:async call=>{
     expect(readHistory).toHaveBeenCalledWith(0,'user');
@@ -1057,7 +1043,7 @@ it.each(['finalize', 'inspect_video', 'recovered'] as const)('uses both saved co
     : {route,videoId:ids[1]!,useStoryboard:false,comparisonVideoIds:ids};
   options.finalizationDeadlineAt=Date.now()+(recovered ? -5_000 : 60_000);
   options.session={brief:()=>({assets:ids.map((videoId,index)=>({version:versions[index],kind:'transcript',videoId,current:true,collectedAt:1,details:{}})),memories:[]}),
-    evidence:(version: string)=>packets.filter(packet=>packet.assetVersions?.includes(version)).flatMap(packet => [
+    evidence:async(version: string)=>packets.filter(packet=>packet.assetVersions?.includes(version)).flatMap(packet => [
       { ...packet, packetId: `paged:${packet.packetId}`, artifacts: [] },
       packet,
       { ...packet, packetId: `older-full:${packet.packetId}` },
@@ -1163,7 +1149,7 @@ describe('earlier-turn source content and history-only routes', () => {
     const search = vi.fn(async () => JSON.stringify({ packets: [] }));
     const assets = ['abcdefghijk', SECOND].map((videoId, index) => ({ version: String(index + 1).padStart(64, '0'),
       kind: 'transcript', videoId, collectedAt: 1, current: true, details: {} }));
-    base.options.session = { brief: () => ({ assets, memories: [] }), evidence: () => [], readEvidence, readTranscriptEvidence,
+    base.options.session = { brief: () => ({ assets, memories: [] }), evidence: async () => [], readEvidence, readTranscriptEvidence,
       searchTools: async (_onEvidence: unknown, _signal: unknown, options: unknown) => {
         searchOptions.push(options);
         return { search_context: tool({ inputSchema: z.object({ query: z.string() }), execute: search }) };
@@ -1467,4 +1453,39 @@ it.each(['supported_inline', 'inline_only_mismatch'] as const)('judges figures b
     expect(result.citations.map(citation => citation.id)).toContain('e1');
     expect(result.answer).toContain('54.2g (unverified)');
   }
+});
+
+it.each(['table', 'prose repair'])('single transcript citations support table rows and separate prose explanations: %s', async mode => {
+  const { options } = setup('context_answer');
+  const sourceId = 'youtube:abcdefghijk:transcript';
+  const version = 'a'.repeat(64);
+  const packet: EvidencePacket = { packetId: 'table-transcript', kind: 'youtube_transcript', assetVersions: [version],
+    sources: [{ id: sourceId, provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk', title: 'Exercises' }],
+    excerpts: Array.from({ length: 5 }, (_, i) => ({ id: `evidence:${version}:segment:${i}`, sourceId, text: `Exercise ${i + 1}`, startMs: i * 10000, endMs: i * 10000 + 1000 })),
+    artifacts: [{ type: 'youtube_complete_transcript', data: {} }], usage: [], warnings: [] };
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.conversationHistory = [];
+  options.recoveredEvidence = [packet];
+  options.message = 'At 10:30 tonight we will discuss odds of 1:20. Show the five exercises in a table with a source for each row.';
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const table = '| Exercise | Source |\n| --- | --- |\n' + Array.from({ length: 5 }, (_, i) => `| Exercise ${i + 1} | [cite:ref_${i}] |`).join('\n');
+  let attempts = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [], blocks: mode === 'table' ? [{ text: table, evidenceIds: Array.from({ length: 5 }, (_, i) => `ref_${i}`) }]
+      : attempts++ === 0 ? [{ text: 'Several separate exercises.', evidenceIds: ['ref_0', 'ref_1'] }]
+        : Array.from({ length: 5 }, (_, i) => ({ text: `Exercise ${i + 1}`, evidenceIds: [`ref_${i}`] })) }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
+  }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(mode === 'table' ? 1 : 2);
+  const result = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations).toHaveLength(5);
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(result.answer).not.toContain('[source unavailable]');
 });

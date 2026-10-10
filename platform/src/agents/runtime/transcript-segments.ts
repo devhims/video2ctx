@@ -3,7 +3,7 @@ import type { EvidencePacket } from '../contracts';
 
 /** IDs are original array positions, including positions occupied by empty captions. */
 export function flatTranscript(segments: readonly TranscriptSegment[]): string {
-  return segments.flatMap((segment, id) => segment.text ? [`${id} ${segment.text.replace(/[\r\n]+/g, ' ')}`] : []).join('\n');
+  return segments.flatMap((segment, id) => usableTranscriptSegment(segment.text) ? [`${id} ${segment.text.replace(/[\r\n]+/g, ' ')}`] : []).join('\n');
 }
 
 /** Keep timing and full identifiers in application storage, once per source in model input. */
@@ -33,9 +33,19 @@ export function transcriptContextIndexes(segments: readonly Pick<TranscriptSegme
   return Array.from({ length: Math.min(segments.length - 1, last + after) - Math.max(0, first - before) + 1 }, (_, index) => Math.max(0, first - before) + index);
 }
 
-/** Explicit clock notation can be routed before sending a transcript to a model. */
-export function requestedTranscriptTimes(message: string): number[] {
-  const withoutUrls = message.replace(/https?:\/\/\S+/g, '');
-  return [...new Set([...withoutUrls.matchAll(/\b(?:(\d{1,2}):)?(\d{1,3}):([0-5]\d)\b/g)].map(match =>
-    Number(match[1] ?? 0) * 3600 + Number(match[2]) * 60 + Number(match[3])))].slice(0, 4);
+/** Exact captions are never truncated; pathological captions are omitted with a warning. */
+export const MAX_TRANSCRIPT_SEGMENT_CHARACTERS = 16_000;
+export function usableTranscriptSegment(text: string): boolean {
+  return text.length > 0 && text.length <= MAX_TRANSCRIPT_SEGMENT_CHARACTERS;
+}
+export function hasSpeechAtTimestamp(segments: readonly Pick<TranscriptSegment, 'startMs' | 'endMs'>[], seconds: number): boolean {
+  return segments.some(segment => segment.startMs <= seconds * 1000 && segment.endMs > seconds * 1000);
+}
+export function parseSegmentCitation(id: string): { version: string; index: number } | undefined {
+  const match = id.match(/^evidence:([a-f0-9]{64}):segment:(0|[1-9]\d*)$/);
+  if (!match || !Number.isSafeInteger(Number(match[2]))) return undefined;
+  return { version: match[1]!, index: Number(match[2]) };
+}
+export function segmentCitationId(version: string, index: number): string {
+  return `evidence:${version}:segment:${index}`;
 }

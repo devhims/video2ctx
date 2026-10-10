@@ -1,4 +1,4 @@
-import { transcriptContextIndexes } from './transcript-segments';
+import { transcriptContextIndexes, hasSpeechAtTimestamp, parseSegmentCitation, segmentCitationId, usableTranscriptSegment } from './transcript-segments';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -65,7 +65,7 @@ export interface SessionBrief {
 export interface SessionAccess {
   brief(): SessionBrief;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
-  evidence(version?: string): EvidencePacket[] | Promise<EvidencePacket[]>;
+  evidence(version?: string): Promise<EvidencePacket[]>;
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   readTranscriptContext?(version: string, timestampSeconds: number, before?: number, after?: number): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
@@ -186,8 +186,8 @@ export class SessionEvidenceStore implements SessionAccess {
     }
   }
   private indexSegmentRefs(version: string, transcript: Transcript) {
-    this.sql.exec('INSERT OR REPLACE INTO session_segment_refs VALUES (?, ?)', version,
-      JSON.stringify(transcript.segments.flatMap((segment, index) => segment.text ? [index] : [])));
+    this.sql.exec('INSERT OR IGNORE INTO session_segment_refs VALUES (?, ?)', version,
+      JSON.stringify(transcript.segments.flatMap((segment, index) => usableTranscriptSegment(segment.text) ? [index] : [])));
   }
   private indexTranscript(version: string, transcript: Transcript) {
     this.indexSegmentRefs(version, transcript);
@@ -244,30 +244,42 @@ export class SessionEvidenceStore implements SessionAccess {
     return rows.map(row => JSON.parse(row.packet_json));
   }
   citationIds(version?: string): string[] {
-    return [...new Set([
-      ...this.packetRecords(version).flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)),
-      ...this.sql.exec<{ version: string; indexes_json: string }>(
-        'SELECT version, indexes_json FROM session_segment_refs').toArray()
-        .filter(row => !version || row.version === version)
-        .flatMap(row => (JSON.parse(row.indexes_json) as number[]).map(index => `evidence:${row.version}:segment:${index}`)),
-    ])];
+    const rows = this.sql.exec<{ id: string }>(`SELECT DISTINCT json_extract(e.value,'$.id') AS id
+      FROM session_packets p, json_each(p.packet_json,'$.excerpts') e
+      WHERE ? IS NULL OR EXISTS (SELECT 1 FROM json_each(p.versions_json) WHERE value=?)`, version ?? null, version ?? null).toArray();
+    const segments = this.sql.exec<{ version: string; index: number }>(`SELECT r.version, j.value AS 'index'
+      FROM session_segment_refs r, json_each(r.indexes_json) j WHERE ? IS NULL OR r.version=?`, version ?? null, version ?? null).toArray();
+    return [...new Set([...rows.map(row => row.id), ...segments.map(row => segmentCitationId(row.version, row.index))])];
+  }
+  private availableCitationIds(ids: string[]): Set<string> {
+    if (!ids.length) return new Set();
+    const legacy = this.sql.exec<{ id: string }>(`SELECT DISTINCT json_extract(e.value,'$.id') AS id
+      FROM session_packets p, json_each(p.packet_json,'$.excerpts') e
+      WHERE json_extract(e.value,'$.id') IN (SELECT value FROM json_each(?))`, JSON.stringify(ids)).toArray();
+    const canonical = ids.flatMap(id => { const ref = parseSegmentCitation(id); return ref ? [{ id, ...ref }] : []; });
+    const segments = this.sql.exec<{ id: string }>(`SELECT json_extract(request.value,'$.id') AS id
+      FROM json_each(?) request JOIN session_segment_refs r ON r.version=json_extract(request.value,'$.version')
+      JOIN session_assets a ON a.version=r.version
+      WHERE EXISTS (SELECT 1 FROM json_each(r.indexes_json) WHERE value=json_extract(request.value,'$.index'))`, JSON.stringify(canonical)).toArray();
+    return new Set([...legacy.filter(row => !parseSegmentCitation(row.id)), ...segments].map(row => row.id));
   }
   private async resolveSegments(ids: string[]): Promise<EvidencePacket[]> {
     const groups = new Map<string, Set<number>>();
     for (const id of ids) {
-      const match = id.match(/^evidence:([a-f0-9]{64}):segment:(0|[1-9]\d*)$/);
-      if (match) { const indexes = groups.get(match[1]!) ?? new Set<number>(); indexes.add(Number(match[2])); groups.set(match[1]!, indexes); }
+      const ref = parseSegmentCitation(id);
+      if (ref) { const indexes = groups.get(ref.version) ?? new Set<number>(); indexes.add(ref.index); groups.set(ref.version, indexes); }
     }
     const result: EvidencePacket[] = [];
     for (const [version, indexes] of groups) {
-      const asset = this.brief().assets.find(asset => asset.version === version && asset.kind === 'transcript');
-      if (!asset || this.overLimit(asset)) continue;
-      const transcript = await this.read(version) as Transcript | null;
+      const asset = this.assetInfo(version);
+      if (asset?.kind !== 'transcript') continue;
+      if (this.overLimit(asset)) continue;
+      const transcript = await this.read(version, false) as Transcript | null;
       if (!transcript || !this.has(version)) continue;
       const sourceId = `youtube:${asset.videoId}:transcript`;
       const excerpts = [...indexes].flatMap(index => {
         const segment = transcript.segments[index];
-        return segment?.text ? [{ id: `evidence:${version}:segment:${index}`, sourceId,
+        return segment && usableTranscriptSegment(segment.text) ? [{ id: segmentCitationId(version, index), sourceId,
           text: segment.text, startMs: segment.startMs, endMs: segment.endMs }] : [];
       });
       if (excerpts.length) result.push({ packetId: `resolved:${version}`, kind: 'youtube_transcript', assetVersions: [version],
@@ -284,7 +296,7 @@ export class SessionEvidenceStore implements SessionAccess {
     const covered = new Set<string>();
     const packets = records.filter(packet => packet.assetVersions?.every(version => this.has(version))).map(packet => ({ ...packet,
       excerpts: packet.excerpts.flatMap(excerpt => {
-        const canonical = /^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id);
+        const canonical = parseSegmentCitation(excerpt.id);
         const value = canonical ? excerpts.get(excerpt.id) : excerpt;
         if (!value) return [];
         covered.add(excerpt.id);
@@ -304,18 +316,15 @@ export class SessionEvidenceStore implements SessionAccess {
   async evidence(version?: string): Promise<EvidencePacket[]> {
     return this.hydrate(this.packetRecords(version));
   }
-  evidenceForCitations(ids: string[]): EvidencePacket[] | Promise<EvidencePacket[]> {
+  async evidenceForCitations(ids: string[]): Promise<EvidencePacket[]> {
     if (!ids.length) return [];
-    const records = this.packetRecords().filter(packet => packet.excerpts.some(excerpt => ids.includes(excerpt.id)));
-    if (ids.some(id => /^evidence:[a-f0-9]{64}:segment:/.test(id))
-      || records.some(packet => packet.excerpts.some(excerpt => /^evidence:[a-f0-9]{64}:segment:/.test(excerpt.id)))) {
-      return this.hydrate(records, ids);
-    }
-    const current = this.currentVersions();
-    return records.map(packet => evidencePacketSchema.parse({ ...packet,
-      warnings: packet.assetVersions?.some(version => !current.has(version))
-        ? [...packet.warnings, { code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'This evidence refers to an older stored version. Use current assets for current facts.' }] : packet.warnings,
-    }));
+    const rows = this.sql.exec<{ packet_json: string }>(`SELECT packet_json FROM session_packets
+      WHERE EXISTS (SELECT 1 FROM json_each(packet_json,'$.excerpts') e
+        WHERE json_extract(e.value,'$.id') IN (SELECT value FROM json_each(?)))`, JSON.stringify(ids)).toArray();
+    const requested = new Set(ids);
+    const records: StoredEvidencePacket[] = rows.map(row => JSON.parse(row.packet_json));
+    // Hydrate only the requested captions, not every segment in matching full-read records.
+    return this.hydrate(records.map(packet => ({ ...packet, excerpts: packet.excerpts.filter(excerpt => requested.has(excerpt.id)) })), ids);
   }
   savePacket(packet: EvidencePacket) {
     const versions = packet.assetVersions ?? [];
@@ -328,7 +337,7 @@ export class SessionEvidenceStore implements SessionAccess {
       'INSERT OR REPLACE INTO session_packets VALUES (?, ?, ?)',
       id,
       JSON.stringify({ ...packet, usage: [], excerpts: packet.excerpts.map(excerpt =>
-        /^evidence:[a-f0-9]{64}:segment:(0|[1-9]\d*)$/.test(excerpt.id)
+        parseSegmentCitation(excerpt.id)
           && versions.includes(excerpt.id.split(':')[1]!)
           ? { id: excerpt.id, sourceId: excerpt.sourceId } : excerpt) }),
       JSON.stringify(versions),
@@ -345,7 +354,7 @@ export class SessionEvidenceStore implements SessionAccess {
     return this.sql.exec('SELECT version FROM session_assets WHERE version=?', version).toArray().length > 0;
   }
   /** The over-limit error for a saved transcript, judged from its stored end time. */
-  private overLimit(asset: Pick<SessionAsset, 'kind' | 'videoId' | 'details'>): VideoTooLongError | undefined {
+  private overLimit(asset: { kind: SessionAssetKind; videoId: string; details: Record<string, unknown> }): VideoTooLongError | undefined {
     if (asset.kind !== 'transcript' || this.maxVideoSeconds === undefined) return undefined;
     const endMs = (asset.details as { endMs?: unknown } | undefined)?.endMs;
     return typeof endMs === 'number' && endMs > this.maxVideoSeconds * 1_000
@@ -378,11 +387,11 @@ export class SessionEvidenceStore implements SessionAccess {
     const value = await this.read(version);
     return value === null ? null : { asset, value };
   }
-  async read(version: string): Promise<unknown | null> {
-    const key = `${this.generation()}:${version}`;
+  async read(version: string, markRequested = true): Promise<unknown | null> {
+    const key = `${this.generation()}:${version}:${markRequested}`;
     const pending = this.reads.get(key);
     if (pending) return pending;
-    const work = this.readStored(version);
+    const work = this.readStored(version, markRequested);
     this.reads.set(key, work);
     try {
       return await work;
@@ -390,7 +399,7 @@ export class SessionEvidenceStore implements SessionAccess {
       this.reads.delete(key);
     }
   }
-  private async readStored(version: string): Promise<unknown | null> {
+  private async readStored(version: string, markRequested: boolean): Promise<unknown | null> {
     const generation = this.generation();
     const row = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).toArray()[0];
     if (!row) return null;
@@ -424,8 +433,9 @@ export class SessionEvidenceStore implements SessionAccess {
       }
     }
     if (generation !== this.generation()) return null;
-    if (value !== null && this.has(version) && row.kind === 'transcript') this.indexSegmentRefs(version, value as Transcript);
-    if (value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
+    if (value !== null && this.has(version) && row.kind === 'transcript'
+      && !this.sql.exec('SELECT 1 FROM session_segment_refs WHERE version=?', version).toArray().length) this.indexSegmentRefs(version, value as Transcript);
+    if (markRequested && value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
     return this.has(version) && generation === this.generation() ? value : null;
   }
   private linkCatalog(version: string, reference: SessionCatalogReference) {
@@ -551,11 +561,11 @@ export class SessionEvidenceStore implements SessionAccess {
         ],
         excerpts: page,
         artifacts: limit > 30 ? [{type: context ? 'youtube_transcript_context' : 'youtube_complete_transcript', data: {
-          ...(context ? { ...context, hasSpeechAtTimestamp: transcript.segments.some(segment => segment.startMs <= context.timestampSeconds * 1000 && segment.endMs > context.timestampSeconds * 1000) } : {}),
+          ...(context ? { ...context, hasSpeechAtTimestamp: hasSpeechAtTimestamp(transcript.segments, context.timestampSeconds) } : {}),
           ...evidence.artifactData, requiresAnalysis: false,
-          allReturnedSegmentsIncluded: !context && page.length === matching.length,
+          allReturnedSegmentsIncluded: !context && page.length === matching.length && evidence.warnings.length === 0,
         }}] : [],
-        warnings: this.currentVersions().has(version)
+        warnings: [...evidence.warnings, ...(this.currentVersions().has(version)
           ? (limit > 30 && page.length < matching.length ? [{code:'TRANSCRIPT_CONTEXT_TRUNCATED',message:'The saved transcript exceeds the full-read limit. Additional passages remain available through paged reads.'}] : [])
           : [
               {
@@ -563,7 +573,7 @@ export class SessionEvidenceStore implements SessionAccess {
                 message:
                   'This evidence refers to an older stored transcript. Use the current version for current facts.',
               },
-            ],
+            ])],
         usage: [],
       });
       this.savePacket(packet);
@@ -772,7 +782,7 @@ export class SessionEvidenceStore implements SessionAccess {
   }): { status: 'applied' | 'fenced' | 'stale_snapshot'; applied: number } {
     if (input.generation !== this.generation()) return { status: 'fenced', applied: 0 };
     if (input.memoryVersion !== this.memoryVersion()) return { status: 'stale_snapshot', applied: 0 };
-    const available = new Set(this.citationIds());
+    const available = this.availableCitationIds(input.changes.flatMap(change => change.evidenceIds));
     let applied = 0;
     for (const change of input.changes.slice(0, 12)) {
       const id = memoryId(change.kind, change.topic);

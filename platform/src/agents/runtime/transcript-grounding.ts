@@ -21,7 +21,7 @@ export const transcriptFactsSchema = z.object({
     metric: z.string().min(1).max(80),
     value: z.number(),
     unit: z.string().min(1).max(30).nullable().describe('Explicit source unit. Use %, g, mg or kg when applicable. Null if unclear.'),
-    basis: z.string().min(1).max(100).nullable().describe('Exact denominator phrase from the the explanation beginning at the cited segment, such as per serving or per 100g. Null if absent. Claimed versus measured belongs in kind, not basis.'),
+    basis: z.string().min(1).max(100).nullable().describe('Exact denominator phrase from the explanation beginning at the cited segment, such as per serving or per 100g. Null if absent. Claimed versus measured belongs in kind, not basis.'),
     kind: z.enum(['claimed', 'measured', 'reported']),
     quote: z.string().min(1).max(350).describe('Exact contiguous transcript substring containing this value and its unit. No ellipses, paraphrases or decimal repairs.'),
   })).max(10).default([]),

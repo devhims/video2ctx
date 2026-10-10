@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flatTranscript, requestedTranscriptTimes, transcriptContextIndexes } from '../src/agents/runtime/transcript-segments';
+import { flatTranscript, hasSpeechAtTimestamp, MAX_TRANSCRIPT_SEGMENT_CHARACTERS, transcriptContextIndexes } from '../src/agents/runtime/transcript-segments';
 import { completeTranscriptEvidence, executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
 import { versionEvidencePacket } from '../src/agents/runtime/session-evidence';
@@ -63,9 +63,14 @@ describe('timestamp transcript context', () => {
     expect(() => transcriptContextIndexes(segments, NaN)).toThrow();
     expect(() => transcriptContextIndexes(segments, 1, 11)).toThrow();
   });
-  it('recognizes playback clocks without interpreting video URLs or numeric IDs as time', () => {
-    expect(requestedTranscriptTimes('Explain 17:20 and 1:18:30.')).toEqual([1040, 4710]);
-    expect(requestedTranscriptTimes('Explain segment 201 https://example.com/12:30')).toEqual([]);
+  it('shares speech overlap rules and omits oversized captions without changing IDs', () => {
+    expect(hasSpeechAtTimestamp(segments, 7.2)).toBe(true);
+    expect(hasSpeechAtTimestamp(segments, 20)).toBe(false);
+    const original = [{ ...segments[0]!, text: 'x'.repeat(MAX_TRANSCRIPT_SEGMENT_CHARACTERS + 1) }, segments[1]!];
+    const evidence = completeTranscriptEvidence(videoId, original, sourceId);
+    expect(evidence.excerpts.map(excerpt => excerpt.id)).toEqual([`transcript:${videoId}:segment:1`]);
+    expect(evidence.warnings[0]?.code).toBe('TRANSCRIPT_SEGMENT_TOO_LARGE');
+    expect(flatTranscript(original)).toBe('1 Caption 1');
   });
   it('persists only the selected neighborhood and exposes timing only for that selection', async () => {
     const executions: string[] = [];

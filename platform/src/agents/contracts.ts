@@ -1,3 +1,4 @@
+import { MAX_TRANSCRIPT_SEGMENT_CHARACTERS } from './runtime/transcript-segments';
 import { z } from 'zod';
 import { isValidTimeZone } from './runtime/current-date';
 
@@ -133,7 +134,7 @@ export const evidenceSourceSchema = z.object({
 export const evidenceExcerptSchema = z.object({
   id: z.string().min(1).max(300),
   sourceId: z.string().min(1).max(300),
-  text: z.string().min(1),
+  text: z.string().min(1).max(MAX_TRANSCRIPT_SEGMENT_CHARACTERS),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
 });
@@ -186,7 +187,7 @@ export const agentCitationSchema = z.object({
   playlistId: z.string().max(200).optional(),
   title: z.string().max(1_000).optional(),
   url: z.url().optional(),
-  excerpt: z.string().min(1),
+  excerpt: z.string().min(1).max(MAX_TRANSCRIPT_SEGMENT_CHARACTERS),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
 });
