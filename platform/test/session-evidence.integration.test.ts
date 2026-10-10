@@ -1361,7 +1361,8 @@ test('overlapping windows cannot crowd distinct matches out of the result limit'
     await add('crowdvidB01', Array.from({ length: 10 }, (_, index) => index === 0 ? 'alpha' : index === 9 ? 'beta' : `padding words ${index}`));
     const read = vi.spyOn(store, 'read');
     const found = await store.search.searchEvidence(store, 'alpha beta');
-    // Candidates span several resolution batches; each transcript is still read once.
+    // Candidates span several resolution batches. Two transcripts fit within the
+    // bounded read cache, so neither is read twice.
     const reads = read.mock.calls.map(([version]) => version);
     expect(reads.length).toBe(new Set(reads).size);
     expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(['crowdvidA01', 'crowdvidB01']));
@@ -1583,4 +1584,67 @@ test('search advances beyond a full page of stale candidates without an unreadab
     const found = await store.search.searchEvidence(store, 'needle');
     expect(found.packets).toHaveLength(1);
     expect(found.packets[0]!.sources[0]!.videoId).toBe(id);
+  }));
+
+async function saveCaptions(store: SessionEvidenceStore, videoId: string, texts: string[]) {
+  const value = { ...transcript(), videoId };
+  value.segments = texts.map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+  return sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+}
+const returnedTexts = (found: { packets: EvidencePacket[] }) => found.packets.flatMap(packet => packet.excerpts.map(excerpt => excerpt.text));
+
+test('window trimming follows the index tokenizer for Unicode punctuation', async () =>
+  within('search-trim-unicode-punctuation', async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `it’s filler number ${index} — “quoted”`);
+    texts[5] = 'don’t forget useEffect';
+    texts[6] = 'its cleanup — function runs';
+    await saveCaptions(store, id, texts);
+    // Curly quotes and dashes appear in every caption; trimming must still apply.
+    expect(returnedTexts(await store.search.searchEvidence(store, 'useEffect cleanup'))).toEqual([texts[5], texts[6]]);
+  }));
+
+test('Hindi words match whole and windows trim to the matching captions', async () =>
+  within('search-trim-hindi', async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `यह भराव वाक्य ${index} है`);
+    texts[5] = 'आज हम रिएक्ट';
+    texts[6] = 'सीखेंगे दोस्तों';
+    await saveCaptions(store, id, texts);
+    // Vowel signs are part of the word, so a single Hindi word is searchable.
+    expect(returnedTexts(await store.search.searchEvidence(store, 'रिएक्ट'))).toEqual([texts[5]]);
+    expect(returnedTexts(await store.search.searchEvidence(store, 'रिएक्ट सीखेंगे'))).toEqual([texts[5], texts[6]]);
+  }));
+
+test.each([
+  ['phrase alone', 'foo_bar'],
+  ['phrase with another term', 'call foo_bar'],
+])('a phrase crossing a caption boundary keeps both captions (%s)', async (_name, query) =>
+  within(`search-trim-cross-phrase-${query.length}`, async store => {
+    const texts = Array.from({ length: 12 }, (_, index) => `filler ${index}`);
+    texts[2] = 'foo alone';
+    texts[4] = 'bar alone';
+    texts[6] = 'we call foo';
+    texts[7] = 'bar here';
+    await saveCaptions(store, id, texts);
+    // Only the adjacent pair contains the phrase "foo bar"; the separate words do not.
+    expect(returnedTexts(await store.search.searchEvidence(store, query))).toEqual([texts[6], texts[7]]);
+  }));
+
+test('a failed transcript read is remembered across cache evictions', async () =>
+  within('search-failure-across-evictions', async (store, _reopen, sql) => {
+    const saved = await saveCaptions(store, 'brokenvid01', Array.from({ length: 250 }, () => 'needle'));
+    const broken = saved.assetVersions![0]!;
+    await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key);
+    const healthy: string[] = [];
+    for (let index = 0; index < 6; index++) {
+      const videoId = `healthyev${String(index).padStart(2, '0')}`;
+      healthy.push(videoId);
+      await saveCaptions(store, videoId, ['needle ' + 'padding '.repeat(20 + index)]);
+    }
+    const read = vi.spyOn(store, 'read');
+    const found = await store.search.searchEvidence(store, 'needle');
+    // Six healthy transcripts exceed the four-transcript cache, yet the broken
+    // blob is requested once for the whole search.
+    expect(read.mock.calls.filter(([version]) => version === broken)).toHaveLength(1);
+    expect(new Set(found.packets.flatMap(packet => packet.sources.map(source => source.videoId)))).toEqual(new Set(healthy));
+    expect(found.unavailableTranscripts).toBe(1);
   }));

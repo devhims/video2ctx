@@ -4,7 +4,8 @@ import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
-import type { SessionEvidenceStore, TranscriptReads } from './session-evidence';
+import type { SessionEvidenceStore } from './session-evidence';
+import { TranscriptReadCache } from './transcript-read-cache';
 
 const SEARCH_RESULT_LIMIT = 20;
 /** Ranked candidate page size, not a limit on the whole search. */
@@ -20,7 +21,7 @@ export interface HistoryEntry {
 }
 
 type SearchRow = { id: string; owner: string; content: string; metadata: string };
-type MatchRow = Omit<SearchRow, 'content'>;
+type MatchRow = Omit<SearchRow, 'content'> & { rowid: number };
 
 /** The only dependency on the experimental SDK. agents is pinned in package.json. */
 export class SessionSearch {
@@ -216,17 +217,21 @@ export class SessionSearch {
     // Exclude owners and deduplicate stable IDs before the result limit.
     // Materialize FTS scores before windowing, since rank must run in the FTS query.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
+    // A single word always matches inside one caption row, so windows only add
+    // duplicates. `_` is an index separator: foo_bar is a phrase that can cross
+    // a caption boundary and needs window rows.
+    const singleWord = tokens.length === 1 && !tokens[0]!.includes('_');
     return this.sql
       .exec<MatchRow>(
         `WITH matches AS MATERIALIZED (
-        SELECT id,owner,metadata,rank AS score FROM session_context_fts
+        SELECT rowid,id,owner,metadata,rank AS score FROM session_context_fts
         WHERE session_context_fts MATCH ? AND scope=?${excluded}
           AND json_extract(metadata,'$.offset') IS NULL
-          ${tokens.length === 1 ? "AND json_extract(metadata,'$.segmentIds') IS NULL" : ''}
+          ${singleWord ? "AND json_extract(metadata,'$.segmentIds') IS NULL" : ''}
       ), unique_matches AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
-      SELECT id,owner,metadata FROM unique_matches
+      SELECT rowid,id,owner,metadata FROM unique_matches
       WHERE occurrence=1 ORDER BY score,id LIMIT ? OFFSET ?`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
@@ -235,6 +240,30 @@ export class SessionSearch {
         offset,
       )
       .toArray();
+  }
+  /**
+   * Trims window rows using SQLite's own matching. For each query term, FTS5
+   * highlight() marks every phrase instance in the window text, including one
+   * that crosses a caption boundary; those positions map back to captions.
+   * Unicode folding, punctuation and underscores therefore follow the index
+   * tokenizer exactly. A window whose marks cannot be mapped is kept whole.
+   */
+  private matchingSpans(windows: readonly { rowid: number; ids: string[] }[], texts: ReadonlyMap<string, string>, tokens: readonly string[]) {
+    const spans = new Map<number, string[]>();
+    if (!windows.length || !tokens.length) return spans;
+    const rowids = windows.map(window => window.rowid);
+    const ranges = new Map(windows.map(window => [window.rowid, [] as Array<Array<[number, number]>>]));
+    for (const token of tokens) {
+      const marked = new Map(this.sql.exec<{ rowid: number; marked: string }>(
+        `SELECT rowid, highlight(session_context_fts, 3, char(1), char(2)) AS marked FROM session_context_fts
+        WHERE session_context_fts MATCH ? AND rowid IN (${rowids.map(() => '?').join(',')})`,
+        `"${token}"`, ...rowids).toArray().map(row => [row.rowid, row.marked]));
+      for (const window of windows) {
+        ranges.get(window.rowid)!.push(captionRanges(marked.get(window.rowid), window.ids.map(id => texts.get(id))));
+      }
+    }
+    for (const window of windows) spans.set(window.rowid, coveringSpan(window.ids, ranges.get(window.rowid)!));
+    return spans;
   }
   searchMemory(query: string) {
     return this.matches('memory', query).flatMap((row) => {
@@ -246,7 +275,7 @@ export class SessionSearch {
   }
   async searchEvidence(store: SessionEvidenceStore, query: string, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const reads: TranscriptReads = new Map();
+    const reads = new TranscriptReadCache();
     const indexing = await store.ensureSearchIndexed(query, reads);
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
@@ -255,11 +284,8 @@ export class SessionSearch {
     const excluded = new Set(store.overLimitTranscriptVersions().map((version) => `asset:${version}`));
     const generation = store.generation();
     const tokens = searchTokens(query);
-    const terms = [...foldedTokens(tokens.join(' '))];
-    // Quoted FTS tokens containing separators carry phrase constraints. Keep
-    // the whole candidate when independent-word trimming cannot preserve them.
-    const canTrim = tokens.every(token => /^[a-z0-9]+$/i.test(token));
-    // Share reads across index repair and every resolution batch, including failures.
+    // Share reads across index repair and every resolution batch. Failures are
+    // remembered for the whole search; successful transcripts are bounded.
     const resolvedIds = new Set<string>();
     const texts = new Map<string, string>();
     const found: EvidencePacket[] = [];
@@ -297,17 +323,21 @@ export class SessionSearch {
           for (const packet of resolved) for (const excerpt of packet.excerpts) texts.set(excerpt.id, excerpt.text);
         }
         for (const version of new Set(candidates.flatMap(({ metadata }) => metadata.version ? [metadata.version] : []))) {
-          if (reads.has(version) && await reads.get(version) === null) {
+          if (reads.failed(version)) {
             excluded.add(`asset:${version}`);
             available.set(version, false);
             unreadable.add(version);
             unreadableFound = true;
           }
         }
+        // A window only locates a match. Return the shortest caption run that
+        // still contains a complete FTS match of every query term.
+        const spans = this.matchingSpans(candidates.flatMap(({ row, metadata, ids }) =>
+          metadata.segmentIds && (!metadata.version || isAvailable(metadata.version)) ? [{ rowid: row.rowid, ids }] : []), texts, tokens);
         for (const { row, metadata, ids: windowIds } of candidates) {
           if (results >= SEARCH_RESULT_LIMIT) break;
           if (metadata.version && !isAvailable(metadata.version)) continue;
-          const ids = new Set(metadata.segmentIds && canTrim ? coveringSpan(windowIds, texts, terms) : windowIds);
+          const ids = new Set(spans.get(row.rowid) ?? windowIds);
           if ([...ids].every(id => seen.has(id))) continue;
           const before = packets.length;
           for (const packet of found) {
@@ -395,32 +425,50 @@ export class SessionSearch {
 }
 
 function searchTokens(query: string): string[] {
-  return query.slice(0, 200).match(/[\p{L}\p{N}_]+/gu)?.slice(0, 20) ?? [];
+  // Combining marks belong to the word, as in the unicode61 index tokenizer;
+  // without \p{M}, Devanagari words split at every vowel sign.
+  return query.slice(0, 200).match(/[\p{L}\p{M}\p{N}_]+/gu)?.slice(0, 20) ?? [];
+}
+
+const MARK_OPEN = '\u0001';
+const MARK_CLOSE = '\u0002';
+
+/**
+ * Maps highlight() output for one term back to inclusive caption index ranges,
+ * one per marked phrase instance. Window text is its captions joined by single
+ * spaces. Returns no ranges if the marked text does not reproduce that text.
+ */
+function captionRanges(marked: string | undefined, captions: readonly (string | undefined)[]): Array<[number, number]> {
+  if (marked === undefined || captions.some(text => text === undefined || text.includes(MARK_OPEN) || text.includes(MARK_CLOSE))) return [];
+  const instances: Array<[number, number]> = [];
+  let plain = '';
+  let open: number | undefined;
+  for (const char of marked) {
+    if (char === MARK_OPEN) open = plain.length;
+    else if (char === MARK_CLOSE) {
+      if (open !== undefined && plain.length > open) instances.push([open, plain.length]);
+      open = undefined;
+    } else plain += char;
+  }
+  if (plain !== captions.join(' ')) return [];
+  const ends: number[] = [];
+  let position = 0;
+  for (const text of captions) { position += text!.length; ends.push(position); position += 1; }
+  const captionAt = (offset: number) => ends.findIndex(end => offset < end);
+  return instances.map(([start, end]) => [captionAt(start), captionAt(end - 1)]);
 }
 
 /**
- * Approximates the FTS5 unicode61 tokenizer: letters and digits only (so `_`
- * separates words, as in the index), case-folded, diacritics removed.
+ * The shortest contiguous caption run that contains a complete instance of
+ * every term, earliest first. Keeps the whole window if any term is unplaced.
  */
-function foldedTokens(text: string): Set<string> {
-  return new Set(text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
-}
-
-/** The shortest contiguous run of captions containing every query term, or the whole window if any term is unaccounted for. */
-function coveringSpan(ids: string[], texts: ReadonlyMap<string, string>, terms: readonly string[]): string[] {
-  if (ids.some(id => /[^\x00-\x7f]/.test(texts.get(id) ?? ''))) return ids;
-  const captionTerms = ids.map(id => foldedTokens(texts.get(id) ?? ''));
-  const wanted = terms.filter(term => captionTerms.some(tokens => tokens.has(term)));
-  // FTS matched every term in this window. If trimming cannot find one, its
-  // tokenization disagrees with the index; never discard the actual match.
-  if (wanted.length < terms.length) return ids;
-  let best = { start: 0, end: ids.length - 1 };
-  for (let start = 0; start < ids.length; start++) {
-    const covered = new Set<string>();
-    for (let end = start; end < ids.length && end - start < best.end - best.start; end++) {
-      for (const term of wanted) if (captionTerms[end]!.has(term)) covered.add(term);
-      if (covered.size === wanted.length) { best = { start, end }; break; }
+function coveringSpan(ids: string[], termRanges: readonly (readonly [number, number])[][]): string[] {
+  if (!termRanges.length || termRanges.some(ranges => !ranges.length || ranges.some(([start, end]) => start < 0 || end < 0))) return ids;
+  for (let width = 0; width < ids.length; width++) {
+    for (let start = 0; start + width < ids.length; start++) {
+      const end = start + width;
+      if (termRanges.every(ranges => ranges.some(([first, last]) => first >= start && last <= end))) return ids.slice(start, end + 1);
     }
   }
-  return ids.slice(best.start, best.end + 1);
+  return ids;
 }

@@ -7,6 +7,7 @@ import type { ToolSet } from 'ai';
 import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
 import { ConcurrencyLimiter } from '../providers/youtube/tool-context';
+import type { TranscriptReadCache } from './transcript-read-cache';
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
@@ -39,8 +40,6 @@ type StoredEvidencePacket = Omit<EvidencePacket, 'excerpts'> & {
   excerpts: Array<Pick<EvidencePacket['excerpts'][number], 'id' | 'sourceId'>
     & Partial<Pick<EvidencePacket['excerpts'][number], 'text' | 'startMs' | 'endMs'>>>;
 };
-/** Per-operation transcript reads, keyed by asset version. */
-export type TranscriptReads = Map<string, Promise<Transcript | null>>;
 type AssetRow = {
   version: string;
   resource_key: string;
@@ -171,7 +170,7 @@ export class SessionEvidenceStore implements SessionAccess {
   searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
-  async ensureSearchIndexed(query?: string, reads?: TranscriptReads) {
+  async ensureSearchIndexed(query?: string, reads?: TranscriptReadCache) {
     const generation = this.generation();
     const legacy = this.search.legacyCandidates(query);
     const failures = this.search.indexFailures();
@@ -291,7 +290,7 @@ export class SessionEvidenceStore implements SessionAccess {
       WHERE EXISTS (SELECT 1 FROM json_each(r.indexes_json) WHERE value=json_extract(request.value,'$.index'))`, JSON.stringify(canonical)).toArray();
     return new Set([...legacy.filter(row => !parseSegmentCitation(row.id)), ...segments].map(row => row.id));
   }
-  private async resolveSegments(ids: string[], reads?: TranscriptReads): Promise<EvidencePacket[]> {
+  private async resolveSegments(ids: string[], reads?: TranscriptReadCache): Promise<EvidencePacket[]> {
     const groups = new Map<string, Set<number>>();
     for (const id of ids) {
       const ref = parseSegmentCitation(id);
@@ -319,20 +318,15 @@ export class SessionEvidenceStore implements SessionAccess {
     return resolved.filter(packet => packet !== undefined);
   }
   /**
-   * With a caller-owned cache, each transcript is read at most once across
-   * several resolutions, and an unreadable blob resolves to null instead of
-   * failing the caller. Without one, read errors propagate as before.
+   * With a caller-owned cache, an unreadable blob resolves to null instead of
+   * failing the caller and is not requested again during that operation.
+   * Without one, read errors propagate as before.
    */
-  private readTranscript(version: string, reads?: TranscriptReads): Promise<Transcript | null> {
-    if (!reads) return this.read(version, false) as Promise<Transcript | null>;
-    let pending = reads.get(version);
-    if (!pending) {
-      pending = (this.read(version, false) as Promise<Transcript | null>).catch(() => null);
-      reads.set(version, pending);
-    }
-    return pending;
+  private readTranscript(version: string, reads?: TranscriptReadCache): Promise<Transcript | null> {
+    const load = () => this.read(version, false) as Promise<Transcript | null>;
+    return reads ? reads.get(version, load) : load();
   }
-  private async hydrate(records: StoredEvidencePacket[], extraIds: string[] = [], reads?: TranscriptReads): Promise<EvidencePacket[]> {
+  private async hydrate(records: StoredEvidencePacket[], extraIds: string[] = [], reads?: TranscriptReadCache): Promise<EvidencePacket[]> {
     const generation = this.generation();
     const resolved = await this.resolveSegments([...extraIds, ...records.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id))], reads);
     if (generation !== this.generation()) return [];
@@ -361,7 +355,7 @@ export class SessionEvidenceStore implements SessionAccess {
   async evidence(version?: string): Promise<EvidencePacket[]> {
     return this.hydrate(this.packetRecords(version));
   }
-  async evidenceForCitations(ids: string[], reads?: TranscriptReads): Promise<EvidencePacket[]> {
+  async evidenceForCitations(ids: string[], reads?: TranscriptReadCache): Promise<EvidencePacket[]> {
     if (!ids.length) return [];
     const rows = this.sql.exec<{ packet_json: string }>(`SELECT packet_json FROM session_packets
       WHERE EXISTS (SELECT 1 FROM json_each(packet_json,'$.excerpts') e
