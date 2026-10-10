@@ -1,21 +1,33 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { EvidencePacket } from '../src/agents/contracts';
 import {
   evidencePacketForModel,
   finalizationEvidenceForModel,
   evidencePacketsForModel,
+  modelCitationReference,
 } from '../src/agents/runtime/model-evidence';
 
 describe('agent model evidence', () => {
+  it('validates a large citation catalog without repeating it in the decoding schema', () => {
+    const ids = Array.from({ length: 2151 }, (_, index) => `ref_${index}`);
+    const schema = modelCitationReference(ids);
+    expect(JSON.stringify(z.toJSONSchema(schema)).length).toBeLessThan(300);
+    expect(schema.safeParse('ref_2150').success).toBe(true);
+    expect(schema.safeParse('ref_2151').success).toBe(false);
+    expect(schema.safeParse('invented').success).toBe(false);
+    expect(z.toJSONSchema(modelCitationReference(['ref_1', 'ref_4']))).toMatchObject({ enum: ['ref_1', 'ref_4'] });
+  });
   it('preserves every direct transcript excerpt through recovery and finalization', () => {
     const packet = transcriptPacket();
     packet.artifacts = [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: true } }];
     packet.excerpts = Array.from({ length: 12 }, (_, index) => ({ ...packet.excerpts[0]!, id: `caption:${index}`, text: `Location ${index}: ` + 'x'.repeat(1000) }));
     const projected = evidencePacketForModel(packet);
-    expect(projected.excerpts).toEqual(packet.excerpts);
+    expect(projected.excerpts).toEqual([]);
+    expect(projected.transcript?.text.split('\n')).toHaveLength(12);
     const finalization = finalizationEvidenceForModel([packet], 40_000);
-    expect(finalization.evidence[0]!.excerpts).toHaveLength(12);
-    expect(finalization.evidence[0]!.excerpts![11]!.text).toBe(packet.excerpts[11]!.text);
+    expect(finalization.evidence[0]!.transcript!.text.split('\n')).toHaveLength(12);
+    expect(finalization.evidence[0]!.transcript!.text.split('\n')[11]).toBe(`12 ${packet.excerpts[11]!.text}`);
     expect(finalization.fullIds.get('ref_12')).toBe('caption:11');
   });
   it('reports partial context when a complete transcript exceeds the finalization budget', () => {
@@ -24,8 +36,8 @@ describe('agent model evidence', () => {
     packet.excerpts = Array.from({ length: 100 }, (_, index) => ({ ...packet.excerpts[0]!, id: `caption:${index}`, text: 'x'.repeat(2000) }));
     const projected = evidencePacketsForModel([packet], { maxCharacters: 40_000 });
     expect(projected[0]!.warnings).toContainEqual(expect.objectContaining({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED' }));
-    expect(projected[0]!.excerpts!.length).toBeGreaterThan(10);
-    expect(projected[0]!.excerpts!.at(-1)!.id).toBe('caption:99');
+    expect(projected[0]!.transcript!.text.split('\n').length).toBeGreaterThan(10);
+    expect(projected[0]!.transcript!.text.split('\n').at(-1)).toMatch(/^99 /);
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(40_000);
   });
 
@@ -137,7 +149,7 @@ it('keeps both comparison subjects and budgets short references before truncatin
     artifacts:[{type:'youtube_complete_transcript',data:{requiresAnalysis:false}}],warnings:[],usage:[]}));
   const prepared=finalizationEvidenceForModel(packets,36_000,ids);
   expect(prepared.evidence).toHaveLength(2);
-  expect(prepared.evidence.map(packet=>packet.excerpts?.length)).toEqual([100,100]);
+  expect(prepared.evidence.map(packet=>packet.transcript?.text.split('\n').length)).toEqual([100,100]);
   expect(prepared.fullIds.size).toBe(200);
-  expect(prepared.evidence.every(packet=>packet.excerpts?.every(excerpt=>excerpt.id.startsWith('ref_')))).toBe(true);
+  expect(prepared.evidence.every(packet=>packet.transcript?.citationPrefix === 'ref_')).toBe(true);
 });

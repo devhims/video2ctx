@@ -4,6 +4,7 @@ export const YOUTUBE_PROVIDER_TOOL_NAMES = [
   'get_video',
   'get_video_tracks',
   'get_video_transcript',
+  'get_transcript_context',
   'get_video_storyboard',
   'get_video_frames',
   'get_video_comments',

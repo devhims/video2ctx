@@ -133,7 +133,7 @@ export const evidenceSourceSchema = z.object({
 export const evidenceExcerptSchema = z.object({
   id: z.string().min(1).max(300),
   sourceId: z.string().min(1).max(300),
-  text: z.string().min(1).max(2_000),
+  text: z.string().min(1),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
 });
@@ -186,7 +186,7 @@ export const agentCitationSchema = z.object({
   playlistId: z.string().max(200).optional(),
   title: z.string().max(1_000).optional(),
   url: z.url().optional(),
-  excerpt: z.string().min(1).max(2_000),
+  excerpt: z.string().min(1),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
 });

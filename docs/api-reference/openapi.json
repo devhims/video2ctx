@@ -8025,8 +8025,7 @@
                         },
                         "excerpt": {
                           "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2000
+                          "minLength": 1
                         },
                         "startMs": {
                           "type": "integer",
@@ -8544,6 +8543,7 @@
                                   "UNCERTAINTY_MISSING",
                                   "CLAIM_QUANTITY_NOT_SUPPORTED",
                                   "UNKNOWN_WINDOW",
+                                  "UNKNOWN_SEGMENT",
                                   "OUTPUT_LIMIT",
                                   "SCHEMA_INVALID"
                                 ]
@@ -8555,6 +8555,11 @@
                                 "maximum": 9007199254740991
                               },
                               "fieldIndex": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "segmentId": {
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
@@ -8602,6 +8607,37 @@
                             }
                           },
                           "additionalProperties": false
+                        },
+                        "sourceSegments": {
+                          "maxItems": 15,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "index": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "endMs": {
+                                "type": "number"
+                              },
+                              "text": {
+                                "type": "string",
+                                "maxLength": 2000
+                              }
+                            },
+                            "required": [
+                              "index",
+                              "startMs",
+                              "endMs",
+                              "text"
+                            ],
+                            "additionalProperties": false
+                          }
                         },
                         "sourceWindows": {
                           "maxItems": 15,
@@ -9597,8 +9633,7 @@
                     },
                     "excerpt": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 2000
+                      "minLength": 1
                     },
                     "startMs": {
                       "type": "integer",
@@ -10116,6 +10151,7 @@
                               "UNCERTAINTY_MISSING",
                               "CLAIM_QUANTITY_NOT_SUPPORTED",
                               "UNKNOWN_WINDOW",
+                              "UNKNOWN_SEGMENT",
                               "OUTPUT_LIMIT",
                               "SCHEMA_INVALID"
                             ]
@@ -10127,6 +10163,11 @@
                             "maximum": 9007199254740991
                           },
                           "fieldIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "segmentId": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
@@ -10174,6 +10215,37 @@
                         }
                       },
                       "additionalProperties": false
+                    },
+                    "sourceSegments": {
+                      "maxItems": 15,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 2000
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "startMs",
+                          "endMs",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
                     },
                     "sourceWindows": {
                       "maxItems": 15,
@@ -11677,6 +11749,7 @@
                               "UNCERTAINTY_MISSING",
                               "CLAIM_QUANTITY_NOT_SUPPORTED",
                               "UNKNOWN_WINDOW",
+                              "UNKNOWN_SEGMENT",
                               "OUTPUT_LIMIT",
                               "SCHEMA_INVALID"
                             ]
@@ -11688,6 +11761,11 @@
                             "maximum": 9007199254740991
                           },
                           "fieldIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "segmentId": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
@@ -11735,6 +11813,37 @@
                         }
                       },
                       "additionalProperties": false
+                    },
+                    "sourceSegments": {
+                      "maxItems": 15,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 2000
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "startMs",
+                          "endMs",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
                     },
                     "sourceWindows": {
                       "maxItems": 15,

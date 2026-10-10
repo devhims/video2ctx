@@ -1,3 +1,4 @@
+import { transcriptContextIndexes } from './transcript-segments';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -62,6 +63,7 @@ export interface SessionAccess {
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(version?: string): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
+  readTranscriptContext?(version: string, timestampSeconds: number, before?: number, after?: number): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
   transcriptOverLimit?(version: string): VideoTooLongError | undefined;
   readEvidence(
@@ -182,6 +184,7 @@ export class SessionEvidenceStore implements SessionAccess {
         transcript.videoId,
         transcript.segments,
         `youtube:transcript:${transcript.videoId}`,
+        false, // Preserve offsets in the existing search index.
       ).excerpts,
     );
   }
@@ -465,7 +468,12 @@ export class SessionEvidenceStore implements SessionAccess {
     if (asset?.kind !== 'transcript') throw new Error('Saved transcript is unavailable.');
     return this.readEvidence(version, 0, undefined, 5_000);
   }
-  async readEvidence(version: string, offset = 0, query?: string, limit = 30) {
+  async readTranscriptContext(version: string, timestampSeconds: number, before = 3, after = 3) {
+    const asset = this.brief().assets.find(asset => asset.version === version);
+    if (asset?.kind !== 'transcript') throw new Error('Saved transcript is unavailable.');
+    return this.readEvidence(version, 0, undefined, 5_000, { timestampSeconds, before, after });
+  }
+  async readEvidence(version: string, offset = 0, query?: string, limit = 30, context?: { timestampSeconds: number; before: number; after: number }, legacyOffset = false) {
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) throw new Error('Session asset is unavailable or deleted.');
     const tooLong = this.overLimit(asset);
@@ -473,13 +481,20 @@ export class SessionEvidenceStore implements SessionAccess {
     if (asset.kind === 'transcript') {
       const transcript = (await this.read(version)) as Transcript | null;
       if (!transcript) throw new Error('Session asset is unavailable or deleted.');
-      const sourceId = `youtube:transcript:${asset.videoId}`;
+      const sourceId = `youtube:${asset.videoId}:transcript`;
       const evidence = completeTranscriptEvidence(asset.videoId, transcript.segments, sourceId);
-      const excerpts = evidence.excerpts.map((excerpt, index) => ({ ...excerpt, id: `evidence:${version}:${index}` }));
-      const matching = query ? excerpts.filter((e) => e.text.toLowerCase().includes(query.toLowerCase())) : excerpts;
-      const page = matching.slice(offset, offset + limit);
+      const excerpts = evidence.excerpts.map((excerpt) => ({ ...excerpt, id: `evidence:${version}:segment:${excerpt.id.split(':').at(-1)}` }));
+      const contextIds = context ? new Set(transcriptContextIndexes(transcript.segments, context.timestampSeconds, context.before, context.after)) : undefined;
+      // Search indexes created by earlier versions address 2,000-character
+      // chunks. Translate that offset to its original caption without rewriting
+      // historical citation packets or requiring an eager index migration.
+      const legacyIds = legacyOffset ? new Set(completeTranscriptEvidence(asset.videoId, transcript.segments, sourceId, false)
+        .excerpts.slice(offset, offset + limit).map(excerpt => Number(excerpt.id.split(':')[2]))) : undefined;
+      const matching = legacyIds ? excerpts.filter(excerpt => legacyIds.has(Number(excerpt.id.split(':').at(-1)))) : contextIds ? excerpts.filter(excerpt => contextIds.has(Number(excerpt.id.split(':').at(-1))))
+        : query ? excerpts.filter((e) => e.text.toLowerCase().includes(query.toLowerCase())) : excerpts;
+      const page = legacyOffset ? matching : matching.slice(offset, offset + limit);
       const packet = evidencePacketSchema.parse({
-        packetId: `session:${version}:${offset}:${limit}:${await sha256(query ?? '')}`,
+        packetId: `session:${version}:${offset}:${limit}:${await sha256(context ? JSON.stringify(context) : query ?? '')}${legacyOffset ? ':segment-search' : ':segments'}`,
         kind: 'youtube_transcript',
         assetVersions: [version],
         sources: [
@@ -492,9 +507,10 @@ export class SessionEvidenceStore implements SessionAccess {
           },
         ],
         excerpts: page,
-        artifacts: limit > 30 ? [{type: 'youtube_complete_transcript', data: {
+        artifacts: limit > 30 ? [{type: context ? 'youtube_transcript_context' : 'youtube_complete_transcript', data: {
+          ...(context ? { ...context, hasSpeechAtTimestamp: transcript.segments.some(segment => segment.startMs <= context.timestampSeconds * 1000 && segment.endMs > context.timestampSeconds * 1000) } : {}),
           ...evidence.artifactData, requiresAnalysis: false,
-          allReturnedSegmentsIncluded: page.length === matching.length,
+          allReturnedSegmentsIncluded: !context && page.length === matching.length,
         }}] : [],
         warnings: this.currentVersions().has(version)
           ? (limit > 30 && page.length < matching.length ? [{code:'TRANSCRIPT_CONTEXT_TRUNCATED',message:'The saved transcript exceeds the full-read limit. Additional passages remain available through paged reads.'}] : [])
@@ -818,7 +834,13 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
   const hash = await sha256(
     JSON.stringify({ sources: packet.sources, excerpts: packet.excerpts, versions: packet.assetVersions }),
   );
-  const ids = new Map(packet.excerpts.map((excerpt, index) => [excerpt.id, `evidence:${hash}:${index}`]));
+  const ids = new Map(packet.excerpts.map((excerpt, index) => {
+    const segment = excerpt.id.match(/^transcript:[A-Za-z0-9_-]+:segment:(\d+)$/)?.[1];
+    // Exact source versions keep an anchor stable across full reads and timestamp lookups.
+    const id = segment !== undefined && packet.assetVersions?.length === 1
+      ? `evidence:${packet.assetVersions[0]}:segment:${segment}` : `evidence:${hash}:${index}`;
+    return [excerpt.id, id];
+  }));
   const result = structuredClone(packet);
   result.excerpts = result.excerpts.map((excerpt) => ({ ...excerpt, id: ids.get(excerpt.id)! }));
   for (const artifact of result.artifacts) {

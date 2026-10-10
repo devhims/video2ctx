@@ -1,3 +1,4 @@
+import { compactTranscript } from './transcript-segments';
 import { storyboardManifestSchema } from '../providers/youtube/storyboard';
 import { framesSchema } from '../../lib/youtube-frames-contract';
 import { transcriptFactsSchema, transcriptSourceContextSchema } from './transcript-grounding';
@@ -13,7 +14,6 @@ const MODEL_EXCERPTS_PER_PACKET = 8;
 const MODEL_EXCERPT_CHARACTERS = 800;
 const MODEL_ANALYSIS_SUMMARY_CHARACTERS = 2_000;
 const MODEL_ANALYSIS_FINDINGS = 20;
-const MODEL_ANALYSIS_FINDING_CHARACTERS = 600;
 const frameCoverageSchema = z.object({
   requestedTimestampsMs: z.array(z.number().int().nonnegative()).max(6),
   frames: z.array(framesSchema.shape.frames.element.omit({ imageBase64: true })).max(6),
@@ -57,11 +57,18 @@ export const modelEvidencePacketSchema = z.object({
     sourceContext: transcriptSourceContextSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_ANALYSIS_SUMMARY_CHARACTERS),
     findings: z.array(transcriptFactsSchema.extend({
-      claim: z.string().trim().min(1).max(MODEL_ANALYSIS_FINDING_CHARACTERS),
+      claim: z.string().trim().min(1),
       excerptIds: z.array(z.string().min(1).max(300)).max(3),
     })).max(MODEL_ANALYSIS_FINDINGS),
     coverage: transcriptAnalysisDataSchema.shape.coverage,
     selectedExcerptCount: z.number().int().nonnegative(),
+  }).optional(),
+  transcript: z.object({
+    citationPrefix: z.string(),
+    text: z.string(),
+    timestampSeconds: z.number().optional(),
+    hasSpeechAtTimestamp: z.boolean().optional(),
+    timing: z.array(z.tuple([z.string(), z.number(), z.number()])).optional(),
   }).optional(),
   excerpts: z.array(evidenceExcerptSchema).max(5_000).optional(),
   visualCoverage: visualCoverageSchema.optional(),
@@ -76,17 +83,30 @@ export const modelEvidencePacketSchema = z.object({
 
 export type ModelEvidencePacket = z.infer<typeof modelEvidencePacketSchema>;
 
+/** Keep large reference catalogs out of provider schemas while checking every returned ID. */
+export function modelCitationReference(ids: readonly string[]) {
+  const allowed = new Set(ids);
+  return ids.length > 100
+    ? z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300).refine(id => allowed.has(id), 'Unknown evidence reference.')
+    : ids.length ? z.enum([...ids]) : z.string();
+}
+
 /**
  * Produces the evidence representation that a model may read. The full packet
  * remains the source of truth for billing, recovery, and citation validation.
  */
 export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePacket {
   // Single-video inspection is read directly by the main model, including on recovery/finalization.
-  if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
+  if (packet.kind === 'youtube_transcript' && !packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')) {
+    const context = packet.artifacts.find(artifact => artifact.type === 'youtube_transcript_context');
+    const hidden = packet.artifacts.some(artifact => artifact.data.requiresAnalysis);
+    const compact = compactTranscript(packet.excerpts);
     return modelEvidencePacketSchema.parse({
       packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
       continuation: packet.continuation,
-      excerpts: packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript' && artifact.data.requiresAnalysis) ? [] : packet.excerpts,
+      excerpts: [],
+      transcript: hidden ? undefined : { ...compact, ...(context ? { timestampSeconds: context.data.timestampSeconds, hasSpeechAtTimestamp: context.data.hasSpeechAtTimestamp,
+        timing: packet.excerpts.map(excerpt => [excerpt.id.slice(compact.citationPrefix.length), excerpt.startMs, excerpt.endMs]) } : {}) },
       artifacts: packet.artifacts.map(({ type, title }) => ({ type, title })), warnings: packet.warnings,
     });
   }
@@ -103,7 +123,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
         summary: boundedText(transcriptAnalysis.summary, MODEL_ANALYSIS_SUMMARY_CHARACTERS),
         findings: transcriptAnalysis.findings.slice(0, MODEL_ANALYSIS_FINDINGS).map((finding) => ({
           ...finding,
-          claim: boundedText(finding.claim, MODEL_ANALYSIS_FINDING_CHARACTERS),
+          claim: finding.claim,
           excerptIds: finding.excerptIds,
         })),
         coverage: transcriptAnalysis.coverage,
@@ -174,17 +194,17 @@ export function evidencePacketsForModel(
       selected.push(packet);
       continue;
     }
-    if (packet.artifacts?.some(artifact => artifact.type === 'youtube_complete_transcript') && packet.excerpts?.length) {
+    if (packet.transcript?.text) {
       // Keep as much of a long transcript as fits, spread across its timeline.
       // Dropping straight to the opening sentence loses almost all comparison context.
-      const excerpts = packet.excerpts;
+      const lines = packet.transcript.text.split('\n');
       const candidate = (count: number): ModelEvidencePacket => ({ ...packet,
-        excerpts: Array.from({length: count}, (_, index) => excerpts[count === 1 ? 0
-          : Math.floor(index * (excerpts.length - 1) / (count - 1))]!),
+        transcript: { ...packet.transcript!, text: Array.from({length: count}, (_, index) => lines[count === 1 ? 0
+          : Math.floor(index * (lines.length - 1) / (count - 1))]!).join('\n') },
         warnings: [...packet.warnings, {code:'TRANSCRIPT_CONTEXT_TRUNCATED',
           message:'Only sampled passages fit the finalization context. Additional passages remain available through saved evidence reads; do not claim exhaustive coverage.'}],
       });
-      let low = 1, high = excerpts.length - 1;
+      let low = 1, high = lines.length - 1;
       let fitted: ModelEvidencePacket | undefined;
       while (low <= high) {
         const count = Math.floor((low + high) / 2);
@@ -218,7 +238,7 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
         summary: boundedText(packet.transcriptAnalysis.summary, 500),
         findings: packet.transcriptAnalysis.findings.slice(0, 2).map((finding) => ({
           ...finding,
-          claim: boundedText(finding.claim, 300),
+          claim: finding.claim,
         })),
       },
     });
@@ -234,6 +254,7 @@ function reduceModelEvidencePacket(packet: ModelEvidencePacket): ModelEvidencePa
     ...packet,
     sources: sourceId ? packet.sources.filter((source) => source.id === sourceId) : packet.sources.slice(0, 1),
     excerpts,
+    transcript: packet.transcript ? { ...packet.transcript, text: packet.transcript.text.split('\n')[0] ?? '', timing: undefined } : undefined,
     artifacts: packet.artifacts?.slice(0, 1),
     continuation: undefined,
     warnings: completeTranscript ? [...packet.warnings, { code: 'TRANSCRIPT_CONTEXT_TRUNCATED',
@@ -255,9 +276,20 @@ export function finalizationEvidenceForModel(
 ) {
   const aliases = new Map<string, string>();
   const fullIds = new Map<string, string>();
+  // For a single exact transcript, keep the displayed original segment numbers
+  // stable when moving from inspection to finalization or expanding a time lookup.
+  const segmentIds = packets.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id))
+    .filter(id => /:segment:\d+$/.test(id));
+  const prefixes = new Set(segmentIds.map(id => id.replace(/\d+$/, '')));
+  if (prefixes.size === 1) for (const id of segmentIds) aliases.set(id, `ref_${id.split(':').at(-1)}`);
+  const used = new Set(aliases.values());
+  let nextAlias = 1;
   const alias = (id: string) => {
     let value = aliases.get(id);
-    if (!value) { value = `ref_${aliases.size + 1}`; aliases.set(id, value); }
+    if (!value) {
+      while (used.has(`ref_${nextAlias}`)) nextAlias += 1;
+      value = `ref_${nextAlias++}`; aliases.set(id, value); used.add(value);
+    }
     return value;
   };
   // Shorten IDs before measuring the input budget, not only after truncation.
@@ -279,6 +311,7 @@ export function finalizationEvidenceForModel(
     : evidencePacketsForModel(compact, { maxCharacters });
   const included = new Set(evidence.flatMap(packet => [
     ...(packet.excerpts?.map(excerpt => excerpt.id) ?? []),
+    ...(packet.transcript?.text.split('\n').filter(Boolean).map(line => packet.transcript!.citationPrefix + line.split(' ')[0]) ?? []),
     ...(packet.transcriptAnalysis?.findings.flatMap(finding => finding.excerptIds) ?? []),
   ]));
   for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);

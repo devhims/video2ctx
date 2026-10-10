@@ -167,7 +167,7 @@ describe('retrieval and saved-asset analysis boundary', () => {
     const packet = await executeGetVideoTranscriptForModel({ videoId }, context, 'partial');
     expect(packet.assetVersions).toEqual([]);
     expect(store.saved.size).toBe(0);
-    expect(evidencePacketForModel(packet).excerpts?.[0]?.text).toBe('A blue chart.');
+    expect(evidencePacketForModel(packet).transcript?.text).toBe('0 A blue chart.');
     expect(packet.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_TRANSCRIPT' })]),
     );

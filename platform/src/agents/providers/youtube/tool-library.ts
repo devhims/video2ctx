@@ -1,3 +1,4 @@
+import { createGetTranscriptContextTool } from './tools/get-transcript-context';
 import { createAnalyzeVideoFramesTool } from './tools/analyze-video-frames';
 import { createAnalyzeVideoStoryboardTool } from './tools/analyze-video-storyboard';
 import { createGetVideoFramesTool } from './tools/get-video-frames';
@@ -29,6 +30,7 @@ const providerToolFactories = {
   get_video_storyboard: createGetVideoStoryboardTool,
   get_video_tracks: createGetVideoTracksTool,
   get_video_transcript: createGetVideoTranscriptTool,
+  get_transcript_context: createGetTranscriptContextTool,
   get_video_comments: createGetVideoCommentsTool,
   get_channel: createGetChannelTool,
   get_channel_videos: createGetChannelVideosTool,

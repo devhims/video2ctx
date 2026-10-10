@@ -1,3 +1,5 @@
+import { evidencePacketForModel } from '../../../runtime/model-evidence';
+import { transcriptContextIndexes } from '../../../runtime/transcript-segments';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
@@ -21,8 +23,9 @@ export type GetVideoTranscriptInput = z.infer<typeof getVideoTranscriptInputSche
 
 export function createGetVideoTranscriptTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns timed captions, with paging instructions for long transcripts. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
+    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns compact numeric-ID captions, with paging instructions for long transcripts. For time-specific questions, use get_transcript_context first; numeric IDs are not timestamps. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
     inputSchema: getVideoTranscriptInputSchema.omit({ focus: true }),
+    toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify(evidencePacketForModel(evidencePacketSchema.parse(output))) }),
     execute: (input, { toolCallId }) => executeGetVideoTranscriptForModel(input, context, toolCallId),
   });
 }
@@ -38,14 +41,16 @@ export function executeGetVideoTranscript(
   input: GetVideoTranscriptInput,
   context: AgentToolContext,
   toolCallId: string,
+  contextRequest?: { timestampSeconds: number; before?: number; after?: number },
 ): Promise<EvidencePacket> {
   const parsed = getVideoTranscriptInputSchema.parse(input);
-  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
+  if (contextRequest) contextRequest = { timestampSeconds: contextRequest.timestampSeconds, before: contextRequest.before ?? 3, after: contextRequest.after ?? 3 };
+  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, contextRequest, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
 
   return context.executeEvidenceTool({
-    input: parsed,
+    input: { ...parsed, ...contextRequest },
     toolCallId,
-    toolName: 'get_video_transcript',
+    toolName: contextRequest ? 'get_transcript_context' : 'get_video_transcript',
     semanticKey,
     operation: 'transcript',
     execute: async () => {
@@ -105,8 +110,9 @@ export function executeGetVideoTranscript(
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       const offset = parsed.offset ?? 0;
-      const excerpts = evidence.excerpts.slice(offset, offset + 5_000);
-      const nextOffset = offset + excerpts.length < evidence.excerpts.length ? offset + excerpts.length : undefined;
+      const selected = contextRequest ? new Set(transcriptContextIndexes(response.value.segments, contextRequest.timestampSeconds, contextRequest.before, contextRequest.after)) : undefined;
+      const excerpts = selected ? evidence.excerpts.filter(excerpt => selected.has(Number(excerpt.id.split(':').at(-1)))) : evidence.excerpts.slice(offset, offset + 5_000);
+      const nextOffset = !contextRequest && offset + excerpts.length < evidence.excerpts.length ? offset + excerpts.length : undefined;
       const paged = offset > 0 || nextOffset !== undefined;
       context.signal.throwIfAborted();
 
@@ -122,15 +128,16 @@ export function executeGetVideoTranscript(
         }],
         excerpts,
         artifacts: [{
-          type: evidence.artifactType,
+          type: contextRequest ? 'youtube_transcript_context' : evidence.artifactType,
           title: evidence.artifactTitle,
           data: {
-            requiresAnalysis: context.transcriptPolicy.mode === 'contextual_analysis' && !!response.assetVersions?.length,
+            ...(contextRequest ? { timestampSeconds: contextRequest.timestampSeconds, hasSpeechAtTimestamp: response.value.segments.some(segment => segment.startMs <= contextRequest.timestampSeconds * 1000 && segment.endMs > contextRequest.timestampSeconds * 1000) } : {}),
+            requiresAnalysis: !contextRequest && context.transcriptPolicy.mode === 'contextual_analysis' && !!response.assetVersions?.length,
             videoId: parsed.videoId,
             track: response.value.track,
             translatedTo: response.value.translatedTo,
             ...evidence.artifactData,
-            allReturnedSegmentsIncluded: !paged,
+            allReturnedSegmentsIncluded: !contextRequest && !paged,
             returnedExcerptCount: excerpts.length,
             offset,
             ...(nextOffset !== undefined ? { nextOffset } : {}),
@@ -145,8 +152,8 @@ export function executeGetVideoTranscript(
           ...(response.value.meta.partial
             ? [{ code: 'PARTIAL_TRANSCRIPT', message: 'YouTube returned a partial transcript.' }]
             : []),
-          ...(evidence.excerpts.length === 0
-            ? [{ code: 'NO_TRANSCRIPT_EVIDENCE', message: 'The transcript contained no usable evidence.' }]
+          ...(excerpts.length === 0
+            ? [{ code: 'NO_TRANSCRIPT_EVIDENCE', message: contextRequest ? 'No captions were returned near the requested playback timestamp.' : 'The transcript contained no usable evidence.' }]
             : []),
         ].map(warning => ({ ...warning, videoId: parsed.videoId })),
         assetVersions: response.assetVersions,
@@ -161,11 +168,12 @@ export function completeTranscriptEvidence(
   videoId: string,
   segments: TranscriptSegment[],
   sourceId: string,
+  exactSegments = true,
 ) {
   const excerpts = segments.flatMap((segment, segmentIndex) => {
-    const chunks = chunkText(segment.text, 2_000);
+    const chunks = exactSegments ? (segment.text ? [segment.text] : []) : segment.text.trim().match(/[\s\S]{1,2000}/g) ?? [];
     return chunks.map((text, chunkIndex) => ({
-      id: `transcript:${safeIdPart(videoId)}:${segmentIndex}:${segment.startMs}:${chunkIndex}`,
+      id: exactSegments ? `transcript:${safeIdPart(videoId)}:segment:${segmentIndex}` : `transcript:${safeIdPart(videoId)}:${segmentIndex}:${segment.startMs}:${chunkIndex}`,
       sourceId,
       text,
       startMs: segment.startMs,
@@ -186,16 +194,6 @@ export function completeTranscriptEvidence(
     },
     warnings: [],
   };
-}
-
-function chunkText(value: string, maximum: number): string[] {
-  const normalized = value.trim();
-  if (!normalized) return [];
-  const chunks: string[] = [];
-  for (let offset = 0; offset < normalized.length; offset += maximum) {
-    chunks.push(normalized.slice(offset, offset + maximum));
-  }
-  return chunks;
 }
 
 function safeIdPart(value: string): string {

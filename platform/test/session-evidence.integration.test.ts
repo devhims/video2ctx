@@ -673,7 +673,7 @@ test.each([true, false])(
       const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
       const p = provider();
       const raw = await sessionProvider(p, store).transcript(id);
-      const excerptId = `evidence:${raw.assetVersions![0]}:0`;
+      const excerptId = `evidence:${raw.assetVersions![0]}:segment:0`;
       const usage = {
         inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
         outputTokens: { total: 10, text: 10, reasoning: 0 },
@@ -841,6 +841,26 @@ test('loads full saved comparison transcripts once and preserves citations acros
     await store.delete(version);
     await expect(reopen().readTranscriptEvidence(version)).rejects.toThrow('unavailable');
     expect(reopen().evidenceForCitations([citation])).toEqual([]);
+  }));
+
+test('timestamp reads reuse the exact saved version beyond the full-read page limit', async () =>
+  within('transcript-time-context', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 5100 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: index * 1000 + 1500, durationMs: 1500 }));
+    value.segments[5050]!.text = '  Exact caption\n' + 'x'.repeat(2100);
+    const p = provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const })));
+    await sessionProvider(p, store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    const read = await reopen().readTranscriptContext(version, 5050.2);
+    expect(read.packets[0]!.excerpts).toHaveLength(8);
+    expect(read.packets[0]!.excerpts.find(excerpt => excerpt.id.endsWith(':segment:5050'))).toMatchObject({ text: value.segments[5050]!.text, startMs: 5050000, endMs: 5051500 });
+    expect(read.nextOffset).toBeUndefined();
+    expect(p.transcript).toHaveBeenCalledOnce();
+    const restored = reopen();
+    const search = await restored.search.searchEvidence(restored, 'Exact caption');
+    expect(search.packets.some(packet => packet.excerpts.some(excerpt => excerpt.id.endsWith(':segment:5050') && excerpt.text === value.segments[5050]!.text))).toBe(true);
+    await store.delete(version);
+    await expect(reopen().readTranscriptContext(version, 5050.2)).rejects.toThrow('unavailable');
   }));
 
 

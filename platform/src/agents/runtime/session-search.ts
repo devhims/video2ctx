@@ -1,4 +1,5 @@
 import { AgentSessionProvider, Session, type SessionMessage } from 'agents/experimental/memory/session';
+import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
@@ -190,14 +191,14 @@ export class SessionSearch {
       const found = metadata.version
         // Backstop for a version that crossed the limit between the query and this read.
         ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
-          ? (await store.readEvidence(metadata.version, metadata.offset)).packets
+          ? (await store.readEvidence(metadata.version, metadata.offset, undefined, 1, undefined, true)).packets
           : []
         : store.evidenceForCitations([row.id]);
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
-        const excerpts = packet.excerpts.filter((excerpt) => excerpt.id === row.id);
+        const excerpts = metadata.version ? packet.excerpts : packet.excerpts.filter((excerpt) => excerpt.id === row.id);
         if (!excerpts.length) continue;
-        packets.push({ ...packet, packetId: `search:${row.id}`, excerpts, artifacts: [] });
+        packets.push({ ...packet, packetId: `search:${row.id}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
         seen.add(row.id);
         break;
       }
@@ -247,7 +248,7 @@ export class SessionSearch {
             // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
             const packets = onEvidence(found.packets) ?? found.packets;
             const withheld = found.packets.length - packets.length;
-            return JSON.stringify({ packets, ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
+            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
         },
       });

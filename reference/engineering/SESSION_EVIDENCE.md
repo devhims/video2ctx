@@ -103,6 +103,32 @@ Vectorize could later implement semantic lookup behind the same context-provider
 
 Stable system instructions and tool schemas precede changing request context. Memory updates do not mutate prompts mid-call. Finalizer tool reads append results to the model conversation. Cache hits and latency remain inference-provider behavior and are not guaranteed by this storage design.
 
+## Compact transcript inputs
+
+Analysis and single-video inspection send one caption per line as `446 caption text`. The application retains original text, timestamps and versions. New excerpts preserve whole API segments, including whitespace and captions longer than 2,000 characters. Historical chunks and search offsets remain readable. New versioned anchors stay stable across full, paged and timestamp reads.
+
+The analyst returns one `segmentId` per finding. Individual claims have no character cap; the generation budget remains. Numerical quotes are checked against the explanation beginning at that segment, up to 60 seconds forward. Only the original starting caption becomes the navigation citation. Verified quantities remain available to finalization. Transcript-only single-video finalization uses one starting citation per explanation block. Comparisons and mixed evidence can still use multiple sources.
+
+`get_transcript_context` accepts playback seconds and optional `before`/`after` caption counts, defaulting to three and capped at ten. It returns overlapping captions and neighbors, with timing for that selection. Gaps are identified separately from speech at the requested instant. Inspection uses normal session retrieval; finalization only reads exact saved versions through evidence admission. Explicit `mm:ss` or `hh:mm:ss` requests are looked up before inference when the video is unambiguous. Other time expressions can use model-selected tool calls.
+
+Single-video finalization uses the existing comparison ceiling of 160,000 characters. Findings-only research retains 40,000. Exceeding either ceiling produces a sampling warning. Flat input can therefore expose more text than the previous sampled finalizer input. Schemas do not enumerate catalogs larger than 100 references, avoiding duplicated identifier tokens. Application validation still rejects IDs absent from the supplied evidence.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "signalColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant App
+    participant Store as Transcript API / saved version
+    participant Model
+    App->>Store: Retrieve or reuse original segments
+    Store-->>App: Exact text and timing
+    App->>Model: Flat IDs and text, or timestamp context
+    Model-->>App: Starting citation per explanation
+    App->>App: Validate ID and resolve original segment
+```
+
+The API supplies captions. The application owns selection, identifiers and citation resolution.
+
 ## Validation
 
 Synthetic provider/model tests exercise retrieval reuse, language aliases, explicit refresh, partial transcripts, analyst failure recovery, overlapping frame and storyboard selections, citation collisions, deletion races, ownership, atomic memory persistence, and model-driven evidence reads. Local Workerd tests use actual SQLite and R2 emulation. Dashboard tests exercise viewing and deletion. Additional tests run the real SDK Session search tools against SQLite, verify history beyond eight turns, role-filtered pagination, correction/deletion, isolation, lazy-index races, and model-driven search through both resumed finalization and inspection. These tests do not measure live Fireworks reliability or claim an exactly-once remote fetch after a process crash before persistence.
@@ -142,3 +168,5 @@ sequenceDiagram
 The classifier records `visualEvidence` as `none`, `helpful` or `required`, and derives the persisted `useStoryboard` tool flag from it. `required` lists `visualRequirements`, the requested facts that need images, such as presenter clothing. When a request contains visual words but the first decision is not `required`, the classifier gets one advisory reconsideration. It may keep its choice. The reconsideration is best effort: it has its own deadline inside the classification phase, and a provider error, budget limit, timeout or malformed response keeps the valid first decision. It is skipped when too little classification time remains. User cancellation still propagates.
 
 For `required` routes, transcript-analysis quota exhaustion no longer forces finalization. The planner receives the requirements, must check visual coverage for each one, and tries targeted frames when storyboards fail or lack detail. Ordinary finalization is withheld while no visual observations exist and a usable visual path remains. A model call to the withheld `finalize_answer` is returned to the model as an unavailable tool and does not end research. Stored frames can still be analyzed after the deadline filter disables new frame extraction. Existing global step, call, time, and model-cost ceilings still force completion when necessary. If finalization has no analyzed visual observations, the result carries `VISUAL_EVIDENCE_INCOMPLETE` naming the requirements; the finalizer is instructed to check each requirement, name unanswered parts and report `ANSWER_SCOPE_SHORTFALL`. The guard detects absent observations, not semantic completeness for every requirement, which remains a planner and finalizer check. `helpful` routes keep visual tools without the gate. Legacy routes without a level are treated as `helpful` or `none` from their stored flag.
+
+Compact answer sources retain separate playback anchors for citations from different parts of the same video. Both legacy citation URLs and compact source URLs use the original segment start time, floored to whole seconds for YouTube playback. Stored excerpt text and millisecond timestamps remain exact.

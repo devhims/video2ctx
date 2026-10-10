@@ -9,8 +9,8 @@ function completedRun(): AgentRunView {
     route: { route: 'topic_research', researchBreadth: 'comparative' },
     result: { ...identity, answer: 'First [cite:b] [cite:a][cite:c]. Again [cite:b].', intent: 'topic_research', confidence: 'high',
       citations: [
-        { id: 'a', sourceId: 'transcript:A', provider: 'youtube', videoId: 'video000001', title: 'First video', excerpt: 'A', startMs: 100 },
-        { id: 'b', sourceId: 'storyboard:A', provider: 'youtube', videoId: 'video000001', title: 'First video', excerpt: 'B', startMs: 200 },
+        { id: 'a', sourceId: 'transcript:A', provider: 'youtube', videoId: 'video000001', title: 'First video', excerpt: 'A', startMs: 750120 },
+        { id: 'b', sourceId: 'storyboard:A', provider: 'youtube', videoId: 'video000001', title: 'First video', excerpt: 'B', startMs: 1026280 },
         { id: 'c', sourceId: 'transcript:B', provider: 'youtube', videoId: 'video000002', title: 'Second video', excerpt: 'C' },
       ], artifacts: [{ type: 'analysis', data: { findings: ['A', 'B'] } }], warnings: [], billing: { creditsCharged: 6, creditsRemaining: 100 } },
   };
@@ -21,8 +21,8 @@ describe('compact agent response', () => {
     const run=completedRun();
     run.result!.answer='| Test | Source |\n| --- | --- |\n| Coding | (source marker:a](source marker:b] |\n| Unknown | (source marker:evidence:unknown:ref_9] |';
     const before=structuredClone(run);
-    expect(compactAgentRun(run).result?.answer).toBe('| Test | Source |\n| --- | --- |\n| Coding | [1] |\n| Unknown | [source unavailable] |');
-    expect(compactAgentRun(run).result?.sources).toHaveLength(1);
+    expect(compactAgentRun(run).result?.answer).toBe('| Test | Source |\n| --- | --- |\n| Coding | [1][2] |\n| Unknown | [source unavailable] |');
+    expect(compactAgentRun(run).result?.sources).toHaveLength(2);
     expect(run).toEqual(before);
   });
   it('exposes stored extractions only on explicit diagnostics reads, including failed runs', () => {
@@ -46,13 +46,13 @@ describe('compact agent response', () => {
     }
   });
 
-  it('deduplicates videos across tools and numbers sources by first use without mutating storage', () => {
+  it('preserves distinct playback anchors across tools and numbers sources by first use without mutating storage', () => {
     const run = completedRun();
     const before = structuredClone(run);
     const response = compactAgentRun(run);
-    expect(response.result?.answer).toBe('First [1][2]. Again [1].');
-    expect(response.result?.sources.map(s => s.videoId)).toEqual(['video000001', 'video000002']);
-    expect(response.result?.sources[0]?.url).toBe('https://www.youtube.com/watch?v=video000001');
+    expect(response.result?.answer).toBe('First [1][2][3]. Again [1].');
+    expect(response.result?.sources.map(s => s.videoId)).toEqual(['video000001', 'video000001', 'video000002']);
+    expect(response.result?.sources[0]?.url).toBe('https://www.youtube.com/watch?v=video000001&t=1026');
     expect(response.billing).toEqual(run.result?.billing);
     expect(response.result).not.toHaveProperty('billing');
     expect(response.result).not.toHaveProperty('artifacts');
@@ -96,16 +96,16 @@ describe('compact agent response', () => {
     ] } }];
     const sources = compactAgentRun(run).result!.sources;
     expect(sources[0]?.title).toBe('Design tutorial');
-    expect(sources[1]?.title).toBe('YouTube video video000002');
-    expect(sources).toHaveLength(2);
+    expect(sources[2]?.title).toBe('YouTube video video000002');
+    expect(sources).toHaveLength(3);
   });
 
   it('includes requested details with evidence pointing to compact source ids', () => {
     const run = completedRun();
     const response = compactAgentRun(run, ['artifacts', 'evidence', 'diagnostics']);
     expect(response.result?.artifacts).toEqual(run.result?.artifacts);
-    expect(response.result?.evidence?.map(c => c.sourceId)).toEqual(['1', '1', '2']);
-    expect(response.result?.evidence?.[0]).toMatchObject({ id: 'a', excerpt: 'A', startMs: 100 });
+    expect(response.result?.evidence?.map(c => c.sourceId)).toEqual(['2', '1', '3']);
+    expect(response.result?.evidence?.[0]).toMatchObject({ id: 'a', excerpt: 'A', startMs: 750120 });
     expect(response.diagnostics).toMatchObject({ modelStepCount: 2, toolCallCount: 5, route: run.route });
   });
 

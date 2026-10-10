@@ -450,7 +450,7 @@ it('gives the router and finalizer earlier source evidence and validates its cit
   expect(JSON.stringify(classifier.doGenerateCalls[0]!.prompt)).toContain('excerptCount');
   expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('The woman holds the microphone toward the man.');
   const result = await vi.mocked(options.finalize).mock.results[0]!.value;
-  expect(result.citations).toMatchObject([{ id: 'frame-observation', startMs: 30000 }]);
+  expect(result.citations).toMatchObject([{ id: 'frame-observation', startMs: 30000, url: 'https://www.youtube.com/watch?v=abcdefghijk&t=30' }]);
   expect(result.billing.creditsCharged).toBe(0);
 });
 
@@ -626,7 +626,7 @@ it('allows stored-context search during gathering and exposes no retrieval or in
       expect(call.toolChoice).toEqual({type:'none'});
       return {content:[{type:'text',text:JSON.stringify(output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]};
     }
-    expect(call.tools?.map(value=>value.name).sort()).toEqual(['list_session_assets','read_prior_evidence','read_session_evidence','search_context']);
+    expect(call.tools?.map(value=>value.name).sort()).toEqual(['get_transcript_context','list_session_assets','read_prior_evidence','read_session_evidence','search_context']);
     if (steps===0) {
       // The earlier answer's source is referenced, not loaded, until the model asks for it.
       const prompt=JSON.stringify(call.prompt);
@@ -648,6 +648,34 @@ it('allows stored-context search during gathering and exposes no retrieval or in
   // The vague follow-up loaded and paid for the cited source within one context step.
   expect(deliverEvidence.mock.calls.map(([packets,source])=>[source,packets.map(packet=>packet.packetId)])).toEqual([['read_prior_evidence',['prior-frames']]]);
   expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('[cite:frame-observation]')}));
+});
+
+it('preloads a saved timestamp neighborhood before finalizer inference and admits it once', async () => {
+  const { options } = setup('context_answer');
+  const version = 'a'.repeat(64);
+  const sourceId = 'youtube:abcdefghijk:transcript';
+  const packet: EvidencePacket = { packetId: 'at-time', kind: 'youtube_transcript', assetVersions: [version],
+    sources: [{ id: sourceId, kind: 'transcript', provider: 'youtube', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: `evidence:${version}:segment:7`, sourceId, text: 'React updates the virtual DOM.', startMs: 1040000, endMs: 1045000 }],
+    artifacts: [{ type: 'youtube_transcript_context', data: { timestampSeconds: 1040, hasSpeechAtTimestamp: true } }], usage: [], warnings: [] };
+  const readTranscriptContext = vi.fn(async () => ({ packets: [packet] }));
+  options.message = 'What happens at 17:20?';
+  options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'video', reason: 'Saved transcript.' };
+  options.session = { brief: () => ({ assets: [{ version, kind: 'transcript', videoId: 'abcdefghijk', current: true, collectedAt: 1 }], memories: [] }),
+    readTranscriptContext, searchTools: async () => ({}) } as unknown as NonNullable<typeof options.session>;
+  options.deliverEvidence = vi.fn(packets => ({ admitted: packets, withheld: [], unavailable: [], receipts: [] }));
+  const model = new MockLanguageModelV4({ doGenerate: async call => {
+    expect(readTranscriptContext).toHaveBeenCalledExactlyOnceWith(version, 1040);
+    expect(JSON.stringify(call.prompt)).toContain('7 React updates the virtual DOM.');
+    return { content: [{ type: 'text', text: call.responseFormat?.type === 'json'
+      ? JSON.stringify({ confidence: 'high', warnings: [], blocks: [{ text: 'React updates the virtual DOM.', evidenceIds: ['ref_7'] }] }) : 'Context is sufficient.' }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  models.select.mockReturnValue(model);
+  await executeResearchRun(options);
+  expect(options.deliverEvidence).toHaveBeenCalledExactlyOnceWith([packet], 'read_session_evidence');
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: expect.stringContaining(`[cite:evidence:${version}:segment:7]`) }));
 });
 
 it('rejects invented citations, repairs once, and keeps the system prompt stable', async () => {

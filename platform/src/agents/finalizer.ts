@@ -1,3 +1,4 @@
+import { youtubeVideoUrl } from './providers/youtube/tools/provider-evidence';
 import { isDurationLimitFallback, type DurationLimitAnswerContext } from './research/duration-limit-answer';
 import { ApiError } from '../lib/http';
 import {
@@ -49,7 +50,7 @@ export function buildAgentTurnResult(
     citations.push({
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
-      title: source.title, url: source.url, excerpt: excerpt.text,
+      title: source.title, url: source.videoId && excerpt.startMs !== undefined ? youtubeVideoUrl(source.videoId, excerpt.startMs) : source.url, excerpt: excerpt.text,
       startMs: excerpt.startMs, endMs: excerpt.endMs,
     });
   }

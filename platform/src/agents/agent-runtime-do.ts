@@ -763,12 +763,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // The provider already exhausted its bounded route retries. Repeating the
     // same retrieval in this run must not start another full extraction sequence.
     // Keep this in SQLite so recovery cannot silently restart failed retrievals.
-    if (execution.toolName === 'get_video_transcript') {
+    if (['get_video_transcript', 'get_transcript_context'].includes(execution.toolName)) {
       const retrievalKey = transcriptRetrievalKey(execution.semanticKey);
       const failures = this.sql<ToolCallRow>`
         SELECT * FROM agent_tool_calls
         WHERE run_id = ${runId}
-          AND tool_name = 'get_video_transcript' AND status = 'failed'
+          AND tool_name IN ('get_video_transcript', 'get_transcript_context') AND status = 'failed'
           AND error LIKE 'YOUTUBE_UNAVAILABLE: %'
         ORDER BY updated_at DESC
       `;

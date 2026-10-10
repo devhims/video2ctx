@@ -287,7 +287,7 @@ test('direct finalization restores cited frame evidence from ancestors and marks
         answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
       const result = await methods.finalizeRun(receipt.runId, 'final', input);
       expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable]');
-      expect(result.citations).toEqual([citation]);
+      expect(result.citations).toEqual([{ ...citation, url: 'https://www.youtube.com/watch?v=abcdefghijk&t=30' }]);
       expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
       expect(result.billing.creditsCharged).toBe(0);
       expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)

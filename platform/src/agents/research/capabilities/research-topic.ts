@@ -13,6 +13,7 @@ export const RESEARCH_TOPIC_TOOL_NAMES = [
   'browse_youtube',
   'get_video',
   'get_video_transcript',
+  'get_transcript_context',
   'analyze_video_transcripts',
   'research_video_transcripts',
   'get_video_storyboard',

@@ -22,6 +22,35 @@ const packet = (finding = facts): EvidencePacket => ({
 });
 
 describe('transcript grounding', () => {
+  it('checks the following explanation for single-start numerical citations, without using distant topics', () => {
+    const evidence = packet();
+    evidence.artifacts = [{ type: 'youtube_complete_transcript', data: {} }];
+    evidence.excerpts = [
+      { id: 'start', sourceId: 's1', text: 'The test result follows.', startMs: 1000, endMs: 2000 },
+      { id: 'value', sourceId: 's1', text: 'Protein is 54.2%.', startMs: 2000, endMs: 3000 },
+      { id: 'later', sourceId: 's1', text: 'A different test is 90%.', startMs: 120000, endMs: 121000 },
+    ];
+    expect(unverifiedAnswerFigures([{ text: 'Protein is 54.2%.', evidenceIds: ['start'] }], [evidence])).toEqual([]);
+    expect(unverifiedAnswerFigures([{ text: 'Protein is 90%.', evidenceIds: ['start'] }], [evidence])).toHaveLength(1);
+  });
+  it('retains a long claim and grounds a number after its single starting caption', async () => {
+    const claim = 'The speaker describes the preparation and measurement process in detail. '.repeat(12) + 'The reported protein content is 54.2%.';
+    const output = { findings: [{ ...facts, claim, segmentId: 0 }], warnings: [] };
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: JSON.stringify(output) }], finishReason: { unified: 'stop', raw: 'stop' },
+      usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 200, text: 200, reasoning: undefined } }, warnings: [],
+    }) });
+    const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Explain the result', focus: 'Measurement',
+      segments: [{ text: '  The measurement begins here.\n', startMs: 1000, endMs: 2000, durationMs: 1000 },
+        { text: raw, startMs: 2000, endMs: 3000, durationMs: 1000 }], signal: new AbortController().signal });
+    expect(result.findings[0]!.claim).toBe(claim);
+    expect(result.findings[0]!.quantities).toEqual(facts.quantities);
+    expect(result.findings[0]!.excerptIds).toEqual(['transcript:abcdefghijk:segment:0']);
+    expect(result.excerpts).toEqual([{ id: 'transcript:abcdefghijk:segment:0', text: '  The measurement begins here.\n', startMs: 1000, endMs: 2000 }]);
+    const evidence = packet({ ...facts, claim });
+    expect(evidencePacketForModel(evidence).transcriptAnalysis!.findings[0]!.claim).toBe(claim);
+    expect(finalizationEvidenceForModel([evidence], 40000).evidence[0]!.transcriptAnalysis!.findings[0]!.claim).toBe(claim);
+  });
   it.each([
     ['two more microphones', 2, 'microphones'],
     ['eight microphones', 8, 'microphones'],
@@ -125,7 +154,7 @@ describe('transcript grounding', () => {
     expect(() => assertTranscriptFacts({ ...facts, quantities: [{ ...facts.quantities[0]!, value: 54.2, unit: 'g', quote: '54.2% protein in a 45g serving' }] }, ['54.2% protein in a 45g serving'])).toThrow('different unit');
   });
   it('accepts paraphrased identity metadata without an extra analyst generation', async () => {
-    const output = { findings: [{ claim: 'OpenAI offers API access.', windowIndexes: [0], entities: [{ name: 'OpenAI', quote: 'An introduction to the OpenAI API', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] };
+    const output = { findings: [{ claim: 'OpenAI offers API access.', segmentId: 0, entities: [{ name: 'OpenAI', quote: 'An introduction to the OpenAI API', source: 'title' }], quantities: [], uncertainty: null }], warnings: [] };
     let calls = 0;
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify((calls++, output)) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Explain the API', focus: 'Company name', sourceContext: { title: 'OpenAI API tutorial', provenance: 'asr' }, segments: [{ text: 'Open eye provides an API.', startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
@@ -136,8 +165,8 @@ describe('transcript grounding', () => {
   });
   it('keeps an ungrounded finding marked unverified instead of discarding it', async () => {
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({ findings: [
-      { ...facts, windowIndexes: [0] },
-      { ...facts, claim: 'Contains 54.2g protein.', quantities: [{ ...facts.quantities[0]!, unit: 'g' }], windowIndexes: [1] },
+      { ...facts, segmentId: 0 },
+      { ...facts, claim: 'Contains 54.2g protein.', quantities: [{ ...facts.quantities[0]!, unit: 'g' }], segmentId: 1 },
     ], warnings: [] }) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', sourceContext: context, researchQuestion: 'Protein content', focus: 'Reported measurements', segments: [{ text: raw, startMs: 0, endMs: 1000, durationMs: 1000 }, { text: raw, startMs: 70000, endMs: 71000, durationMs: 1000 }], signal: new AbortController().signal });
     expect(model.doGenerateCalls).toHaveLength(1);
@@ -163,7 +192,7 @@ describe('transcript grounding', () => {
       { metric: 'Astra accuracy', value: 56.7, unit: '%', basis: null, kind: 'reported' as const, quote },
     ];
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({ findings: [{
-      claim: 'Astra gets 99% accuracy.', windowIndexes: [0], quantities, entities: [], uncertainty: null,
+      claim: 'Astra gets 99% accuracy.', segmentId: 0, quantities, entities: [], uncertainty: null,
     }], warnings: [] }) }], finishReason: { unified: 'stop', raw: undefined },
       usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Compare models',
@@ -177,7 +206,7 @@ describe('transcript grounding', () => {
 
   it('retains an independently quoted percentage from a corrupted comparison without retaining its prose', async () => {
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({ findings: [{
-      ...facts, claim: 'Both labs measured 54.2g and 62.35g per serving.', windowIndexes: [0],
+      ...facts, claim: 'Both labs measured 54.2g and 62.35g per serving.', segmentId: 0,
       quantities: [...facts.quantities, { ...facts.quantities[0]!, value: 62.35, unit: 'g', quote: '62.3 5 पर' }],
     }], warnings: [] }) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } }, warnings: [] }) });
     const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', sourceContext: context, researchQuestion: 'Lab comparisons', focus: 'Measured protein', segments: [{ text: raw + ' 62.3 5 पर', startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
