@@ -53,3 +53,9 @@ it.each(['empty', 'duplicate'])('allows repair of an invalid %s outline', async 
   expect((await analyzeTranscriptWithModel({ ...input, model })).findings).toHaveLength(3);
   expect(model.doGenerateCalls).toHaveLength(2);
 });
+it('repairs findings without requiring repeated topic wording', async () => {
+  const model = modelWith([{ topics, findings: [findings[0]], warnings: [] },
+    { topics: ['Creating components', 'Managing state', 'The last exercise'], findings, warnings: [] }]);
+  expect((await analyzeTranscriptWithModel({ ...input, model })).findings).toHaveLength(3);
+  expect(JSON.stringify(model.doGenerateCalls[1]!.responseFormat)).not.toContain('"topics"');
+});

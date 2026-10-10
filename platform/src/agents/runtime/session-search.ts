@@ -1,4 +1,4 @@
-import { parseSegmentCitation } from './transcript-segments';
+import { parseSegmentCitation, usableTranscriptSegment } from './transcript-segments';
 import { AgentSessionProvider, Session, type SessionMessage } from 'agents/experimental/memory/session';
 import { evidencePacketForModel } from './model-evidence';
 import { tool, type ToolSet } from 'ai';
@@ -39,6 +39,14 @@ export class SessionSearch {
       'CREATE VIRTUAL TABLE IF NOT EXISTS session_context_fts USING fts5(id UNINDEXED, owner UNINDEXED, scope UNINDEXED, content, metadata UNINDEXED)',
     );
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_assets (version TEXT PRIMARY KEY)');
+    sql.exec('CREATE TABLE IF NOT EXISTS session_search_format (version INTEGER PRIMARY KEY)');
+    if (!sql.exec('SELECT 1 FROM session_search_format WHERE version=2').toArray().length) {
+      // Legacy chunk offsets may point inside omitted oversized captions. Rebuild
+      // asset indexes lazily with one row per usable original segment.
+      sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
+      sql.exec('DELETE FROM session_search_assets');
+      sql.exec('INSERT INTO session_search_format VALUES (2)');
+    }
     // Source-table triggers make deletion and memory corrections atomic with index maintenance.
     sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_asset_delete AFTER DELETE ON session_assets BEGIN
       DELETE FROM session_context_fts WHERE owner='asset:' || OLD.version;
@@ -140,9 +148,11 @@ export class SessionSearch {
   indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
     const owner = `asset:${version}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    excerpts.forEach((excerpt, index) =>
-      this.insert(`evidence:${version}:${index}`, owner, 'evidence', excerpt.text, { version, offset: index }),
-    );
+    for (const excerpt of excerpts) {
+      const segment = parseSegmentCitation(excerpt.id);
+      if (segment?.version === version && usableTranscriptSegment(excerpt.text))
+        this.insert(excerpt.id, owner, 'evidence', excerpt.text, { version });
+    }
     this.sql.exec('INSERT OR IGNORE INTO session_search_assets VALUES (?)', version);
   }
   private insert(id: string, owner: string, scope: string, content: string, metadata: unknown) {
@@ -202,13 +212,13 @@ export class SessionSearch {
       const found = metadata.version
         // Backstop for a version that crossed the limit between the query and this read.
         ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
-          ? (await store.readEvidence(metadata.version, metadata.offset, undefined, 1, undefined, true)).packets
+          ? await store.evidenceForCitations([row.id])
           : []
         : await store.evidenceForCitations([row.id]);
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
         // Legacy asset index IDs and stable packet IDs can resolve to the same caption.
-        const excerpts = (metadata.version ? packet.excerpts : packet.excerpts.filter((excerpt) => excerpt.id === row.id))
+        const excerpts = packet.excerpts.filter((excerpt) => excerpt.id === row.id)
           .filter(excerpt => !seen.has(excerpt.id));
         if (!excerpts.length) continue;
         packets.push({ ...packet, packetId: `search:${row.id}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });

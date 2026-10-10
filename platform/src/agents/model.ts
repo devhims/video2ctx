@@ -72,7 +72,7 @@ function configuredAgentModel(
     throw new Error('Unsupported finalizer reasoning effort.');
   }
   if (finalizerEffort && profile?.modelId !== FIREWORKS_GLM_MODEL_ID) {
-    throw new Error('Finalizer reasoning effort requires GLM Flash.');
+    throw new Error('Finalizer reasoning effort requires GLM Flash. Clear AGENT_FINALIZER_REASONING_EFFORT when using DeepSeek; reasoning stays disabled.');
   }
   const glmFinalizerOptions = finalizerEffort
     ? { reasoningEffort: finalizerEffort === 'medium' ? 'high' : 'low' } : undefined;

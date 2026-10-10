@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flatTranscript, hasSpeechAtTimestamp, MAX_TRANSCRIPT_SEGMENT_CHARACTERS, transcriptContextIndexes } from '../src/agents/runtime/transcript-segments';
+import { flatTranscript, hasSpeechAtTimestamp, MAX_TRANSCRIPT_SEGMENT_CHARACTERS, timestampVideoBounds, transcriptContextIndexes } from '../src/agents/runtime/transcript-segments';
 import { completeTranscriptEvidence, executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
 import { versionEvidencePacket } from '../src/agents/runtime/session-evidence';
@@ -89,4 +89,36 @@ describe('timestamp transcript context', () => {
     expect(projected.transcript?.timing).toHaveLength(15);
     expect(projected.transcript?.text).toContain('Caption 14');
   });
+});
+it('projects an empty live timestamp lookup as citable status without caption timing', async () => {
+  const context = { runId: 'test', signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+    provider: { transcript: async () => ({ cacheStatus: 'hit', assetVersions: ['a'.repeat(64)], value: {
+      segments, track: {}, meta: { warnings: [], partial: false },
+    } }) },
+    executeEvidenceTool: async (execution: { execute: () => Promise<EvidencePacket> }) => versionEvidencePacket(await execution.execute()),
+  } as unknown as AgentToolContext;
+  const result = await executeGetVideoTranscript({ videoId }, context, 'outside', { timestampSeconds: 2700 });
+  expect(result.excerpts[0]!.text).toContain('Transcript lookup status');
+  expect(result.excerpts[0]!.startMs).toBeUndefined();
+  const projected = finalizationEvidenceForModel([result], 40000).evidence[0]!;
+  expect(projected.transcript?.text).toBe('');
+  expect(projected.transcript?.timing).toEqual([]);
+  expect(projected.excerpts![0]!.text).toBe(result.excerpts[0]!.text);
+});
+
+it('computes playback bounds from matching metadata, without inferring duration from captions', () => {
+  const context = packet();
+  context.artifacts = [{ type: 'youtube_transcript_context', data: { timestampSeconds: 2700 } }];
+  const metadata = { ...packet(), artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, durationSeconds: 1800 } }] };
+  expect(timestampVideoBounds([context])).toEqual([]);
+  expect(timestampVideoBounds([context, metadata])).toEqual([{ videoId, timestampSeconds: 2700, durationSeconds: 1800, position: 'after the reported video end' }]);
+  context.artifacts[0]!.data.timestampSeconds = 1800;
+  expect(timestampVideoBounds([context, metadata])[0]!.position).toBe('at the reported video end');
+  context.artifacts[0]!.data.timestampSeconds = 120;
+  expect(timestampVideoBounds([context, metadata])[0]!.position).toBe('within the reported video duration');
+  expect(timestampVideoBounds([context, metadata, { ...metadata, artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, durationSeconds: 3600 } }] }])).toEqual([]);
+  const mixed = { ...context, sources: [...context.sources, { ...context.sources[0]!, id: 'other', videoId: 'otherVideo1' }] };
+  expect(timestampVideoBounds([mixed, metadata])).toEqual([]);
+  mixed.artifacts = [{ type: 'youtube_transcript_context', data: { timestampSeconds: 2700, videoId: 'otherVideo1' } }];
+  expect(timestampVideoBounds([mixed, metadata])).toEqual([]);
 });

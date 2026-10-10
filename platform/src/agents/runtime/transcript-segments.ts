@@ -49,3 +49,42 @@ export function parseSegmentCitation(id: string): { version: string; index: numb
 export function segmentCitationId(version: string, index: number): string {
   return `evidence:${version}:segment:${index}`;
 }
+
+/** Citable retrieval metadata, never represented as words spoken in a caption. */
+export function transcriptContextStatus(id: string, sourceId: string, segments: readonly Pick<TranscriptSegment, 'endMs'>[], timestampSeconds: number): EvidencePacket['excerpts'][number] {
+  const endMs = segments.reduce((end, segment) => Math.max(end, segment.endMs), 0);
+  return { id, sourceId, text: `Transcript lookup status: no usable captions were returned near playback time ${timestampSeconds} seconds. `
+    + (segments.length ? `The supplied transcript's last caption ends at ${endMs / 1000} seconds. ` : 'The supplied transcript contains no captions. ')
+    + 'This describes transcript coverage, not the video duration or speech at the requested time.' };
+}
+
+/** Compare playback times with video metadata, never with the last caption time. */
+export function timestampVideoBounds(packets: readonly EvidencePacket[]) {
+  const durations = new Map<string, Set<number>>();
+  for (const packet of packets) for (const artifact of packet.artifacts) {
+    if (artifact.type !== 'youtube_video_metadata') continue;
+    const videoIds = [...new Set(packet.sources.flatMap(source => source.videoId ? [source.videoId] : []))];
+    const videoId = typeof artifact.data.id === 'string' ? artifact.data.id : videoIds.length === 1 ? videoIds[0] : undefined;
+    const duration = artifact.data.durationSeconds;
+    if (!videoId || !videoIds.includes(videoId) || typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) continue;
+    const values = durations.get(videoId) ?? new Set<number>();
+    values.add(duration);
+    durations.set(videoId, values);
+  }
+  return packets.flatMap(packet => packet.artifacts.flatMap(artifact => {
+    if (artifact.type !== 'youtube_transcript_context') return [];
+    const requested = artifact.data.timestampSeconds;
+    if (typeof requested !== 'number' || !Number.isFinite(requested) || requested < 0) return [];
+    const sourceVideos = [...new Set(packet.sources.flatMap(source => source.videoId ? [source.videoId] : []))];
+    const requestedVideo = typeof artifact.data.videoId === 'string' ? artifact.data.videoId : sourceVideos.length === 1 ? sourceVideos[0] : undefined;
+    if (!requestedVideo || !sourceVideos.includes(requestedVideo)) return [];
+    return [requestedVideo].flatMap(videoId => {
+      const values = durations.get(videoId);
+      // Conflicting stored durations cannot establish a single boundary.
+      if (values?.size !== 1) return [];
+      const durationSeconds = [...values][0]!;
+      return [{ videoId, timestampSeconds: requested, durationSeconds,
+        position: requested > durationSeconds ? 'after the reported video end' : requested === durationSeconds ? 'at the reported video end' : 'within the reported video duration' }];
+    });
+  }));
+}

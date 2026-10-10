@@ -23,7 +23,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds
 
 describe.skipIf(!cases.length)('configured transcript rollout', () => {
   it.skipIf(!!cases.length)('requires an explicit local fixture manifest', () => {});
-  for (const fixture of cases) for (const task of (fixture.name === 'react' ? ['overview', 'time', 'analyst', 'facts'] as const : ['overview', 'time', 'analyst'] as const)) {
+  for (const fixture of cases) for (const task of (fixture.name === 'react' ? ['overview', 'time', 'analyst', 'facts', 'mixed', 'past-end'] as const : ['overview', 'time', 'analyst'] as const)) {
     it(`${fixture.name}: ${task}`, async () => {
       const transcript = load(fixture.transcript) as Transcript;
       const video = load(fixture.video);
@@ -56,7 +56,9 @@ describe.skipIf(!cases.length)('configured transcript rollout', () => {
       let answer: ReturnType<typeof buildAgentTurnResult> | undefined;
       let analysis: Awaited<ReturnType<typeof analyzeTranscriptWithModel>> | undefined;
       let failure: string | undefined;
-      const message = (task === 'time' ? `What is being explained at ${fixture.times.map(clock).join(' and ')}? Explain each moment in English.` : fixture.overview)
+      const message = (task === 'mixed' ? `Who uploaded this video, and what do they explain at ${clock(fixture.times[0]!)}? Cite both facts.`
+        : task === 'past-end' ? `Use the transcript timestamp tool to check what is said at ${clock(video.durationSeconds + 600)}. Explain any coverage limitation and check the video duration.`
+        : task === 'time' ? `What is being explained at ${fixture.times.map(clock).join(' and ')}? Explain each moment in English.` : fixture.overview)
         + ` Use only the spoken transcript, not frames or storyboards. https://www.youtube.com/watch?v=${transcript.videoId}`;
       try {
         if (task === 'analyst' || task === 'facts') {
@@ -102,7 +104,17 @@ describe.skipIf(!cases.length)('configured transcript rollout', () => {
               && segment.startMs === citation.startMs && segment.endMs === citation.endMs)).toBe(true);
             else expect(packets.some(packet => packet.excerpts.some(excerpt => excerpt.id === citation.id && excerpt.text === citation.excerpt))).toBe(true);
           }
-          if (task === 'time') {
+          if (task === 'mixed') {
+            expect(answer!.citations.some(citation => citation.startMs !== undefined)).toBe(true);
+            expect(answer!.citations.some(citation => citation.startMs === undefined)).toBe(true);
+            expect(answer!.answer).toContain(video.channel.name);
+          } else if (task === 'past-end') {
+            expect(tools.some(tool => tool.name === 'get_transcript_context')).toBe(true);
+            expect(answer!.citations.some(citation => citation.excerpt.includes('Transcript lookup status'))).toBe(true);
+            expect(answer!.citations.every(citation => citation.startMs === undefined)).toBe(true);
+            expect(answer!.answer).toMatch(/after|beyond|outside|past the/i);
+            expect(answer!.answer).not.toMatch(/inside the video.s runtime/i);
+          } else if (task === 'time') {
             expect(tools.some(tool => tool.name === 'get_transcript_context')).toBe(true);
             for (const time of fixture.times) expect(answer!.citations.some(citation => citation.startMs! >= (time - 90) * 1000 && citation.startMs! <= (time + 30) * 1000)).toBe(true);
           } else {

@@ -1,5 +1,5 @@
 import { evidencePacketForModel } from '../../../runtime/model-evidence';
-import { transcriptContextIndexes, hasSpeechAtTimestamp, usableTranscriptSegment } from '../../../runtime/transcript-segments';
+import { transcriptContextIndexes, hasSpeechAtTimestamp, transcriptContextStatus, usableTranscriptSegment } from '../../../runtime/transcript-segments';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
@@ -126,7 +126,7 @@ export function executeGetVideoTranscript(
           videoId: parsed.videoId,
           url: `https://www.youtube.com/watch?v=${parsed.videoId}`,
         }],
-        excerpts,
+        excerpts: contextRequest && !excerpts.length ? [transcriptContextStatus(`transcript:${parsed.videoId}:context:${String(contextRequest.timestampSeconds).replace('.', '_')}`, sourceId, response.value.segments, contextRequest.timestampSeconds)] : excerpts,
         artifacts: [{
           type: contextRequest ? 'youtube_transcript_context' : evidence.artifactType,
           title: evidence.artifactTitle,

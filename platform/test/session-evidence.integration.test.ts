@@ -1263,3 +1263,44 @@ test.each([false, true])('concurrent passive and requested reads share one stora
     expect(requested).toHaveBeenCalledExactlyOnceWith(id);
     expect(get).toHaveBeenCalledOnce();
   }));
+
+test.each([false, true])('oversized caption chunks cannot crowd searchable captions (legacy: %s)', async legacy =>
+  within(`oversized-search-${legacy}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = [
+      { text: 'needle '.repeat(10000), startMs: 0, endMs: 1000, durationMs: 1000 },
+      { text: 'A later needle passage with useful context.', startMs: 1000, endMs: 2000, durationMs: 1000 },
+    ];
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    if (legacy) {
+      sql.exec('DELETE FROM session_context_fts');
+      for (let index = 0; index < 35; index++) sql.exec('INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?, ?, ?, ?, ?)',
+        `evidence:${version}:${index}`, `asset:${version}`, 'evidence', 'needle', JSON.stringify({ version, offset: index }));
+      // Simulate a session created before the canonical-segment index format.
+      sql.exec('DELETE FROM session_search_format');
+    }
+    const current = reopen();
+    const found = await current.search.searchEvidence(current, 'needle');
+    expect(found.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text)).toEqual([value.segments[1]!.text]);
+    expect(found.packets[0]!.excerpts[0]!.id).toBe(`evidence:${version}:segment:1`);
+    expect(sql.exec<{ count: number }>('SELECT COUNT(*) AS count FROM session_context_fts WHERE owner=?', `asset:${version}`).one().count).toBe(1);
+    expect((await reopen().search.searchEvidence(reopen(), 'needle')).packets).toHaveLength(1);
+  }));
+
+test('empty timestamp lookups provide persisted citable status, not invented speech or duration', async () =>
+  within('empty-time-status', async (store, reopen) => {
+    const value = transcript('Last spoken words.');
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    const packet = (await store.readTranscriptContext(version, 2700)).packets[0]!;
+    expect(packet.excerpts).toHaveLength(1);
+    expect(packet.excerpts[0]!.startMs).toBeUndefined();
+    expect(packet.excerpts[0]!.text).toContain('Transcript lookup status');
+    const restored = await reopen().evidenceForCitations([packet.excerpts[0]!.id]);
+    const answer = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'user', creditsRemaining: 1 }, { intent: 'inspect_video', confidence: 'high', warnings: [], artifacts: [], citations: [],
+        answer: `The transcript has no captions near 45:00. [cite:${packet.excerpts[0]!.id}]` }, restored, 0);
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.citations[0]!.startMs).toBeUndefined();
+  }));

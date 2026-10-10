@@ -1,4 +1,4 @@
-import { transcriptContextIndexes, hasSpeechAtTimestamp, parseSegmentCitation, segmentCitationId, usableTranscriptSegment } from './transcript-segments';
+import { transcriptContextIndexes, hasSpeechAtTimestamp, transcriptContextStatus, parseSegmentCitation, segmentCitationId, usableTranscriptSegment } from './transcript-segments';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -197,8 +197,7 @@ export class SessionEvidenceStore implements SessionAccess {
         transcript.videoId,
         transcript.segments,
         `youtube:transcript:${transcript.videoId}`,
-        false, // Preserve offsets in the existing search index.
-      ).excerpts,
+      ).excerpts.map(excerpt => ({ ...excerpt, id: segmentCitationId(version, Number(excerpt.id.split(':').at(-1))) })),
     );
   }
   generation() {
@@ -567,7 +566,7 @@ export class SessionEvidenceStore implements SessionAccess {
             url: `https://www.youtube.com/watch?v=${asset.videoId}`,
           },
         ],
-        excerpts: page,
+        excerpts: context && !page.length ? [transcriptContextStatus(`context:${version}:${String(context.timestampSeconds).replace('.', '_')}`, sourceId, transcript.segments, context.timestampSeconds)] : page,
         artifacts: limit > 30 ? [{type: context ? 'youtube_transcript_context' : 'youtube_complete_transcript', data: {
           ...(context ? { ...context, hasSpeechAtTimestamp: hasSpeechAtTimestamp(transcript.segments, context.timestampSeconds) } : {}),
           ...evidence.artifactData, requiresAnalysis: false,

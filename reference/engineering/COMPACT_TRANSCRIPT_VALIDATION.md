@@ -6,9 +6,27 @@ The initial checks on October 10, 2026 used the saved API transcript for `SqcY0G
 
 The implementation preserves exact source segments within the documented source-text size bound, uses flat numeric input, removes per-claim character limits, and supports timestamp neighborhoods. Keep the PR in draft pending the remaining semantic citation/scope issues documented in the schema follow-up below. A syntactically valid ID is not proof that its caption supports the whole answer block.
 
+## Review follow-up: search, empty timestamps and mixed citations
+
+Confirmed and fixed the oversized-caption search regression. New transcript indexes contain one row per usable original segment, using its canonical ID. A one-time index-format migration invalidates old asset-owned chunk rows and their indexing markers. The next evidence search rebuilds those indexes from saved transcripts before querying. Source assets, packets, findings and memories remain unchanged. This can require reading saved transcript blobs once per existing session during the next search. Real SQLite regressions cover both fresh indexes and seeded legacy chunks crowding out a later valid caption.
+
+Empty timestamp lookups now return a citable application-generated status excerpt, distinct from spoken captions. Live tools and saved-version reads use the same status wording. It reports the requested time and available transcript coverage without inferring video duration from the last caption. Projection puts this status in ordinary evidence, never in caption timing. This preserves the citation requirement while allowing a useful answer when no caption exists at the requested time.
+
+Timestamp citation rules apply per answer block. Spoken explanations use timed transcript references; context blocks can cite uploader/duration metadata, search or visual evidence, and lookup status. Mixed inspection, research and saved-context answers are covered. Inline citations receive the same scope check as declared citations. The former extra global membership refinement is gone; the existing membership helper and zero-reference array bounds retain unknown-ID protection.
+
+Overview repair no longer regenerates an outline. The application retains the original topic list and asks for findings by index. Reworded or omitted outline text cannot lose the analysis, and deleting a finding still fails coverage validation. Version cleanup now removes only unitless duplicate numerical encodings, preserving a real measurement such as `16 GB` in the same quote as Node `16`.
+
+The reported DeepSeek reasoning override did not reproduce. The previous head already rejected a nonempty GLM-only effort setting before model construction. Existing tests cover this guard. The error now explicitly tells the operator to clear `AGENT_FINALIZER_REASONING_EFFORT` for DeepSeek. The production model split remains intentional in this PR: its next deployment selects DeepSeek without reasoning for text roles and final answers, with GLM retained for visuals.
+
+Build and 1,649 unit tests passed. All 309 tests across the five Workers integration suites passed. Two focused live DeepSeek cases also passed without finalizer repair: mixed uploader plus 17:20 used 12,796 input / 432 output tokens; a 90:04 query on the 80:04 React video used 14,815 / 476. The latter correctly explains that the requested time is after the reported video end and cites metadata separately from lookup status.
+
+An earlier live beyond-end answer passed citation validation but incorrectly described 90:04 as inside an 80:04 video. That result is retained. Finalization now receives an application-computed time comparison from matching video metadata; unknown or conflicting durations produce no comparison. The revised live test checks the outside-duration explanation as well as citation validity. This is a targeted improvement, not proof of universal semantic accuracy. Broader overview/focused quality limitations documented below remain open, and the PR remains draft.
+
+Live artifacts: `.scratch/pr178-deepseek-validation/review-timestamps/` and the corrected runs in `review-bounds/`. No production deployment or fresh production A/B was performed.
+
 ## Schema follow-up: literal facts and overview planning
 
-Versions and dates now have quoted string values in `literalFacts`. They do not require measurement units. Validation rejects changed or truncated strings such as `5.2` quoted from `5.2.3`. Existing measurements and counts retain their unit and quote checks. If the model duplicates a verified literal as a number under the same quote, the application retains the exact literal and discards only that duplicate numerical encoding. Old stored findings without `literalFacts` remain readable, and the field survives projection to the finalizer.
+Versions and dates now have quoted string values in `literalFacts`. They do not require measurement units. Validation rejects changed or truncated strings such as `5.2` quoted from `5.2.3`. Existing measurements and counts retain their unit and quote checks. If the model duplicates a verified literal as a unitless number under the same quote, the application retains the exact literal and discards only that duplicate numerical encoding. Old stored findings without `literalFacts` remain readable, and the field survives projection to the finalizer.
 
 The saved-transcript analysis tool now accepts `scope: focused | overview`, defaulting to focused for compatibility. The planner selects this scope; the application does not guess it from keywords. Overview mode returns a short topic outline followed by findings carrying a `topicIndex` and one independent starting `segmentId`. Every planned topic must have a finding. One repair is allowed, retaining the original outline so the model cannot pass by deleting missing topics. This checks delivery against the plan, not whether the plan lists every important topic. The outline is temporary validation data, not another copy of transcript evidence.
 
@@ -69,7 +87,7 @@ Run `platform/test/transcript-rollout.live.test.ts` with `TRANSCRIPT_ROLLOUT_MAN
 ## Automated checks
 
 - Platform build, including dependency prebuilds and TypeScript checks.
-- Node suite: 1,640 tests passed, 61 opt-in tests skipped (schema follow-up).
+- Node suite: 1,649 tests passed, 61 opt-in tests skipped (review follow-up).
 - Workers integration: 306 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, model-selected timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.

@@ -190,3 +190,11 @@ For transcript answers with timestamp-tool evidence and no visual or comment evi
 Transcript findings may include `literalFacts` containing an exact quoted string and a `version` or `date` kind. This optional field remains compatible with older findings. Measurements retain numeric values and units. The analyst validates literals against the cited explanation and preserves accepted literals in finalizer input.
 
 The saved transcript tool selects `focused` or `overview` scope. Overview output first plans topic names, then associates findings with topic indices while retaining one source segment ID per finding. Missing planned topics trigger at most one repair; repair cannot remove the original obligations. This validates plan completion, not semantic completeness. Topic outlines are temporary and do not alter canonical segment identities or stored citation resolution.
+
+### Search format and timestamp lookup status
+
+Transcript search format 2 indexes each usable original segment once under its canonical citation ID. The first upgraded session initialization invalidates legacy asset chunk indexes and their indexing markers; the next search rebuilds them from saved transcript assets. Oversized source captions never enter the candidate limit. Packet, memory and source storage are retained.
+
+A timestamp lookup with no usable captions returns a citable lookup-status excerpt without timestamps. This is application-derived coverage information, not a spoken caption or evidence of video duration. Model projection keeps it outside compact caption input. Finalization permits context citations for these limitations and metadata facts alongside timed transcript citations for spoken explanations, validating declared and inline references per block. Known video bounds are computed from matching video metadata, never from transcript coverage.
+
+Overview repair uses the original application-held topic list; it returns findings by index without repeating topic text. Valid unit-bearing measurements remain separate from quoted version/date strings even when their numeric values and source quotes coincide.

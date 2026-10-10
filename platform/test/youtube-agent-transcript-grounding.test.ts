@@ -344,3 +344,18 @@ it.each([
   expect(() => assertTranscriptFacts({ claim: '', entities: [], quantities: [], uncertainty: null,
     literalFacts: [{ kind, value, quote }] }, [quote])).toThrow('Unsupported');
 });
+it('retains a real measurement sharing its number and quote with a version', async () => {
+  const quote = 'Node 16 needs 16 GB.';
+  const quantity = { metric: 'memory', value: 16, unit: 'GB', basis: null, kind: 'reported', quote };
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ findings: [{ claim: quote, segmentId: 0,
+      literalFacts: [{ kind: 'version', value: '16', quote }], quantities: [quantity], entities: [], uncertainty: null }], warnings: [] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+    usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } },
+  }) });
+  const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'What is required?', focus: 'Requirements',
+    segments: [{ text: quote, startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
+  expect(result.findings[0]!.quantities).toEqual([quantity]);
+  expect(result.findings[0]!.literalFacts).toHaveLength(1);
+  expect(result.warnings).toEqual([]);
+});

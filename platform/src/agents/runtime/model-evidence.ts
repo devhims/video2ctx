@@ -100,13 +100,14 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
   if (packet.kind === 'youtube_transcript' && !packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')) {
     const context = packet.artifacts.find(artifact => artifact.type === 'youtube_transcript_context');
     const hidden = packet.artifacts.some(artifact => artifact.data.requiresAnalysis);
-    const compact = compactTranscript(packet.excerpts);
+    const captions = packet.excerpts.filter(excerpt => excerpt.startMs !== undefined && excerpt.endMs !== undefined);
+    const compact = compactTranscript(captions);
     return modelEvidencePacketSchema.parse({
       packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
       continuation: packet.continuation,
-      excerpts: [],
+      excerpts: packet.excerpts.filter(excerpt => excerpt.startMs === undefined || excerpt.endMs === undefined),
       transcript: hidden ? undefined : { ...compact, ...(context ? { timestampSeconds: context.data.timestampSeconds, hasSpeechAtTimestamp: context.data.hasSpeechAtTimestamp,
-        timing: packet.excerpts.map(excerpt => [excerpt.id.slice(compact.citationPrefix.length), excerpt.startMs, excerpt.endMs]) } : {}) },
+        timing: captions.map(excerpt => [excerpt.id.slice(compact.citationPrefix.length), excerpt.startMs, excerpt.endMs]) } : {}) },
       artifacts: packet.artifacts.map(({ type, title }) => ({ type, title })), warnings: packet.warnings,
     });
   }

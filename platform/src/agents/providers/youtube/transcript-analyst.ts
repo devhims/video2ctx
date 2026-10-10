@@ -15,8 +15,8 @@ const MAX_ANALYST_OUTPUT_TOKENS = 2_400;
 const ANALYST_WAIT_MS = 90_000;
 
 const overviewTopicsSchema = z.array(z.string().trim().min(1).max(120));
-const transcriptAnalystOutputSchema = (maximum: number, repair = false, overview = false) => z.object({
-  ...(overview ? { topics: overviewTopicsSchema.max(maximum).describe('Plan the major topics across the entire video before writing findings. Each topic must have a finding referring to its zero-based topicIndex.') } : {}),
+const transcriptAnalystOutputSchema = (maximum: number, repair = false, overview = false, repairTopics?: string[]) => z.object({
+  ...(overview && !repairTopics ? { topics: overviewTopicsSchema.max(maximum).describe('Plan the major topics across the entire video before writing findings. Each topic must have a finding referring to its zero-based topicIndex.') } : {}),
   findings: z.array(transcriptFactsSchema.extend({
     ...(overview ? { topicIndex: z.number().int().min(0).max(maximum - 1).describe('Index in topics for this finding. Cover every planned topic.') } : {}),
     entities: transcriptFactsSchema.shape.entities.unwrap().max(repair ? 1 : 3).default([]),
@@ -161,7 +161,7 @@ export async function analyzeTranscriptWithModel(
             ...(input.segments.length >= 3 ? [`For a whole-video overview, distribute the remaining useful findings across these segment-ID ranges: beginning 0-${Math.floor(input.segments.length / 3) - 1}, middle ${Math.floor(input.segments.length / 3)}-${Math.floor(2 * input.segments.length / 3) - 1}, ending ${Math.floor(2 * input.segments.length / 3)}-${input.segments.length - 1}. After the reserved ending finding, choose a substantive middle-range finding before early material. Balance coverage; do not fill the budget with the first chapters, repeat claims or invent content for an empty range. These are coverage checkpoints, not timestamps. Focused questions should select only relevant material instead.`] : []),
           ] : ['This is a focused question. Return only findings that directly answer the research question and focus. Do not add unrelated topics, setup advice or a final exercise. The maximum finding count is not a target.']),
           ...(overview ? ['This is a whole-video overview. Write topics FIRST as a compact outline of substantive lessons across the entire transcript, then one finding per topic using its zero-based topicIndex. Choose the actual starting segmentId independently for each finding. Select middle and later lessons as well as setup. Include explicitly requested final topics. A chapter announcement is not a substitute for its actual lesson. Keep each finding concise enough to cover every outlined topic within the output budget.'] : []),
-          ...(requiredTopics ? [`Preserve and cover every topic in this previous outline: ${JSON.stringify(requiredTopics)}. Do not remove topics to satisfy validation.`] : []),
+          ...(requiredTopics ? [`Cover every topic index in this application-owned outline. Do not return a new outline: ${JSON.stringify(requiredTopics)}. Do not remove topics to satisfy validation.`] : []),
           `Return at most ${attemptMaximum} distinct findings, each with one starting segmentId.`,
           'Return an empty findings array when the transcript does not contain relevant evidence.',
           ...(repairFeedback
@@ -179,7 +179,7 @@ export async function analyzeTranscriptWithModel(
         output: Output.object({
           name: 'TranscriptAnalysis',
           description: 'A complete-video analysis that references application-owned transcript segment IDs.',
-          schema: transcriptAnalystOutputSchema(attemptMaximum, attempt > 0, overview),
+          schema: transcriptAnalystOutputSchema(attemptMaximum, attempt > 0, overview, requiredTopics),
         }),
         temperature: 0.1,
         // The outline adds output. A modest ceiling increase avoids resending a long
@@ -220,7 +220,7 @@ export async function analyzeTranscriptWithModel(
         }
         parsedOutput = result.output;
         if (overview) {
-          const topics = overviewTopicsSchema.parse(parsedOutput.topics ?? []);
+          const topics = requiredTopics ?? overviewTopicsSchema.parse(parsedOutput.topics ?? []);
           const expected = requiredTopics ?? topics;
           const indices = parsedOutput.findings.map(finding => z.object({ topicIndex: z.number().int().nonnegative() }).parse(finding).topicIndex);
           const covered = new Set(indices);
@@ -228,7 +228,7 @@ export async function analyzeTranscriptWithModel(
           // Preserve only a valid plan; an empty or duplicate outline can be repaired.
           if (topics.length && new Set(topics).size === topics.length) requiredTopics ??= topics;
           if ((!topics.length && parsedOutput.findings.length > 0) || new Set(topics).size !== topics.length
-            || JSON.stringify(topics) !== JSON.stringify(expected) || indices.some(index => index >= topics.length) || missing.length) {
+            || indices.some(index => index >= topics.length) || missing.length) {
             const message = missing.length ? `Missing findings for topics: ${JSON.stringify(missing)}. Return all planned findings.`
               : 'Preserve the distinct topic outline in its original order and use its topic indices for findings.';
             issues.push({ code: 'OVERVIEW_COVERAGE', message });
@@ -259,7 +259,7 @@ export async function analyzeTranscriptWithModel(
         emit(error.finishReason === 'length' ? 'rejected' : 'failed', { code: error.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'SCHEMA_INVALID', finishReason: error.finishReason,
           rejectedOutput: error.text?.slice(0, 24000), captureTruncated: (error.text?.length ?? 0) > 24000,
           inputTokens: error.usage?.inputTokens, outputTokens: error.usage?.outputTokens,
-          issues: schemaFailureIssues(error.text, attemptMaximum, overview) });
+          issues: schemaFailureIssues(error.text, attemptMaximum, overview, requiredTopics) });
         if (error.finishReason === 'length' && attempt === 0) {
           repairFeedback = 'The previous analysis exhausted its output-token limit. Return fewer findings with complete short source quotes.';
           continue;
@@ -314,7 +314,7 @@ function resolveAnalysis(
     // Models sometimes duplicate a version/date as a numeric measurement. Only
     // discard that encoding after the exact literal has independently grounded.
     finding.quantities = finding.quantities.filter(quantity => !(finding.literalFacts ?? []).some(literal => {
-      if (quantity.quote !== literal.quote || !(literal.value === String(quantity.value)
+      if (quantity.unit !== null || quantity.quote !== literal.quote || !(literal.value === String(quantity.value)
         || (literal.kind === 'version' && literal.value.startsWith(`${quantity.value}.`)))) return false;
       try {
         assertTranscriptFacts({ claim: '', entities: [], quantities: [], literalFacts: [literal], uncertainty: null }, supportingPassages);
@@ -397,9 +397,9 @@ function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
 }
 
-function schemaFailureIssues(text: string | undefined, maximum: number, overview = false): TranscriptValidationIssue[] {
+function schemaFailureIssues(text: string | undefined, maximum: number, overview = false, repairTopics?: string[]): TranscriptValidationIssue[] {
   try {
-    const parsed = transcriptAnalystOutputSchema(maximum, false, overview).safeParse(JSON.parse(text ?? ''));
+    const parsed = transcriptAnalystOutputSchema(maximum, false, overview, repairTopics).safeParse(JSON.parse(text ?? ''));
     if (!parsed.success) return parsed.error.issues.slice(0, 100).map(issue => ({ code: 'SCHEMA_INVALID',
       message: `${issue.path.join('.')}: ${issue.message}`.slice(0, 1000) }));
   } catch {

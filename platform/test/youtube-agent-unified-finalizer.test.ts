@@ -1496,7 +1496,7 @@ it.each(['table', 'prose repair'])('single transcript citations support table ro
 
 it.each([
   [false, 'inspect_video', 'metadata-proof'], [true, 'inspect_video', 'metadata-proof'],
-  [true, 'inspect_video', 'ref_1'], [true, 'finalize', 'metadata-proof'],
+  [true, 'inspect_video', 'ref_1'], [true, 'finalize', 'metadata-proof'], [true, 'inspect_video', 'inline'],
 ] as const)('transcript citation constraint (timestamp: %s, route: %s, reference: %s)', async (timestamp, route, metadataReference) => {
   const { options } = setup('context_answer');
   const metadata: EvidencePacket = { packetId: 'video-metadata', kind: 'youtube_video',
@@ -1518,8 +1518,8 @@ it.each([
   let attempts = 0;
   const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
     content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [], blocks: [{
-      text: timestamp ? 'React builds a virtual DOM.' : 'The video is called React lesson.',
-      evidenceIds: [attempts++ === 0 ? metadataReference : transcript.excerpts[0]!.id],
+      text: timestamp ? `React builds a virtual DOM.${metadataReference === 'inline' && attempts === 0 ? ' [cite:metadata-proof]' : ''}` : 'The video is called React lesson.',
+      evidenceIds: [attempts++ === 0 && metadataReference !== 'inline' ? metadataReference : transcript.excerpts[0]!.id],
     }] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
   }) });
   models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
@@ -1530,4 +1530,37 @@ it.each([
   const result = await vi.mocked(options.finalize).mock.results[0]!.value;
   expect(result.citations[0]!.id).toBe(timestamp ? transcript.excerpts[0]!.id : 'metadata-proof');
   if (timestamp) expect(result.citations[0]!.url).toContain('&t=0');
+});
+it.each(['inspect_video', 'topic_research', 'finalize', 'empty'] as const)('allows mixed metadata and timestamp citations on %s', async route => {
+  const { options } = setup('context_answer');
+  const packet: EvidencePacket = { packetId: 'mixed', kind: 'youtube_transcript',
+    sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' },
+      { id: 'transcript', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: 'uploader', sourceId: 'video', text: 'Uploaded by Example. Duration: 1800 seconds.' },
+      route === 'empty' ? { id: 'spoken', sourceId: 'transcript', text: 'Transcript lookup status: no captions near 2700 seconds. The last caption ends at 1799 seconds.' }
+        : { id: 'spoken', sourceId: 'transcript', text: 'State triggers a render.', startMs: 130000, endMs: 132000 }],
+    artifacts: [{ type: 'youtube_transcript_context', data: { timestampSeconds: 130 } }], usage: [], warnings: [] };
+  options.persistedRoute = route === 'inspect_video' || route === 'empty' ? { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false }
+    : route === 'topic_research' ? { route, researchVideoCount: 1, searchQuery: 'React' }
+    : { route, responseIntent: 'context_answer', contextScope: 'mixed', reason: 'Use saved evidence.' };
+  options.conversationHistory = [];
+  options.recoveredEvidence = [packet];
+  options.message = 'Who uploaded this and what do they say at 2:10?';
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [], blocks: [
+      { text: route === 'empty' ? 'This video is 30 minutes long.' : 'Uploaded by Example.', citationScope: 'context', evidenceIds: ['uploader'] },
+      { text: route === 'empty' ? 'No transcript is available at 45:00.' : 'At 2:10 they explain state triggers a render.', citationScope: route === 'empty' ? 'context' : 'transcript', evidenceIds: ['spoken'] },
+    ] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
+  }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  const answer = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(answer.citations.map((citation: { id: string }) => citation.id)).toEqual(['uploader', 'spoken']);
 });
