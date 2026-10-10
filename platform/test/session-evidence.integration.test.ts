@@ -1333,7 +1333,42 @@ test.each([false, true])('multi-word search spans captions and window boundaries
       id: `evidence:${version}:segment:${index}`, text: value.segments[index]!.text, startMs: index * 1000,
     }));
     expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+    // The matching window spans ten captions; only the run covering the terms is returned.
+    expect(excerpts).toHaveLength(3);
     expect(found.pendingTranscripts).toBe(0);
+  }));
+
+test('unreadable transcripts rotate behind healthy index work', async () =>
+  within('search-index-failure-rotation', async (store, _reopen, sql) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 6; index++) {
+      const videoId = `rotatevid${String(index).padStart(2, '0')}`;
+      const value = { ...transcript('needle cleanup function'), videoId };
+      const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+      versions.push(result.assetVersions![0]!);
+    }
+    sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
+    sql.exec('DELETE FROM session_search_assets');
+    const current = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/search-index-failure-rotation/');
+    const broken = new Set(versions.slice(0, 4));
+    const original = current.read.bind(current);
+    const read = vi.spyOn(current, 'read').mockImplementation(async (version, markRequested) =>
+      version === versions[0] ? Promise.reject(new Error('R2 unavailable')) : broken.has(version) ? null : original(version, markRequested));
+    // The four unreadable versions fill the first batch.
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 6 });
+    expect(new Set(read.mock.calls.map(([version]) => version))).toEqual(broken);
+    expect(sql.exec('SELECT version FROM session_search_index_failures').toArray()).toHaveLength(4);
+    // Recorded failures move behind untried versions, so healthy work still completes.
+    read.mockClear();
+    expect(await current.ensureSearchIndexed('needle')).toEqual({ pendingTranscripts: 4 });
+    expect(read.mock.calls.map(([version]) => version).slice(0, 2).sort()).toEqual(versions.slice(4).sort());
+    const indexed = new Set(sql.exec<{ version: string }>('SELECT version FROM session_search_assets').toArray().map(row => row.version));
+    for (const version of versions.slice(4)) expect(indexed.has(version)).toBe(true);
+    expect((await current.search.searchEvidence(current, 'needle cleanup')).packets.length).toBeGreaterThan(0);
+    // A later successful read clears the failure record.
+    read.mockRestore();
+    await current.ensureSearchIndexed('needle');
+    expect(sql.exec('SELECT version FROM session_search_index_failures').toArray()).toHaveLength(0);
   }));
 
 test('legacy search upgrades only matching assets in bounded passive batches', async () =>

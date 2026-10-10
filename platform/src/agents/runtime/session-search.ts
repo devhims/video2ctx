@@ -40,6 +40,10 @@ export class SessionSearch {
     );
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_assets (version TEXT PRIMARY KEY)');
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_format (version INTEGER PRIMARY KEY)');
+    sql.exec('CREATE TABLE IF NOT EXISTS session_search_index_failures (version TEXT PRIMARY KEY, failed_at INTEGER NOT NULL)');
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_index_failure_delete AFTER DELETE ON session_assets BEGIN
+      DELETE FROM session_search_index_failures WHERE version=OLD.version;
+    END`);
     if (!sql.exec('SELECT 1 FROM session_search_format WHERE version=3').toArray().length) {
       // Format 2 already contains exact captions. Add search windows from SQLite,
       // without invalidating any index or reading transcript blobs on upgrade.
@@ -173,9 +177,17 @@ export class SessionSearch {
       start += Math.max(1, Math.floor(window.length / 2));
     }
     this.sql.exec('INSERT OR IGNORE INTO session_search_assets VALUES (?)', version);
+    this.sql.exec('DELETE FROM session_search_index_failures WHERE version=?', version);
+  }
+  indexFailures(): Map<string, number> {
+    return new Map(this.sql.exec<{ version: string; failed_at: number }>('SELECT version, failed_at FROM session_search_index_failures')
+      .toArray().map(row => [row.version, row.failed_at]));
+  }
+  recordIndexFailure(version: string) {
+    this.sql.exec('INSERT OR REPLACE INTO session_search_index_failures VALUES (?, ?)', version, Date.now());
   }
   legacyCandidates(query?: string): Set<string> {
-    const tokens = query?.slice(0, 200).match(/[\p{L}\p{N}_]+/gu)?.slice(0, 20);
+    const tokens = query === undefined ? undefined : searchTokens(query);
     const match = tokens?.length ? ' AND session_context_fts MATCH ?' : '';
     return new Set(this.sql.exec<{ owner: string }>(`SELECT DISTINCT owner FROM session_context_fts
       WHERE owner LIKE 'asset:%' AND json_extract(metadata,'$.offset') IS NOT NULL${match}`,
@@ -194,11 +206,8 @@ export class SessionSearch {
   }
   private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): SearchRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
-    const tokens = query
-      .slice(0, 200)
-      .match(/[\p{L}\p{N}_]+/gu)
-      ?.slice(0, 20);
-    if (!tokens?.length) return [];
+    const tokens = searchTokens(query);
+    if (!tokens.length) return [];
     // Exclude owners and deduplicate stable IDs before the result limit.
     // Materialize FTS scores before windowing, since rank must run in the FTS query.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
@@ -242,6 +251,13 @@ export class SessionSearch {
     // Resolve every selected caption in one batch, so overlapping hits read each
     // transcript once rather than fetching its R2 object for every FTS row.
     const found = await store.evidenceForCitations([...new Set(candidates.flatMap(candidate => candidate.ids))]);
+    // A window only locates a match. Return the shortest caption run inside it
+    // that contains the query terms, not all ten captions.
+    const texts = new Map(found.flatMap(packet => packet.excerpts.map(excerpt => [excerpt.id, excerpt.text] as const)));
+    const terms = [...foldedTokens(searchTokens(query).join(' '))];
+    for (const candidate of candidates) {
+      if (candidate.metadata.segmentIds) candidate.ids = coveringSpan(candidate.ids, texts, terms);
+    }
     for (const { row, metadata, ids } of candidates) {
       if (ids.every(id => seen.has(id))) continue;
       for (const packet of found) {
@@ -319,4 +335,29 @@ export class SessionSearch {
       }),
     };
   }
+}
+
+function searchTokens(query: string): string[] {
+  return query.slice(0, 200).match(/[\p{L}\p{N}_]+/gu)?.slice(0, 20) ?? [];
+}
+
+/** Approximates the FTS5 unicode61 tokenizer: case-folded, diacritics removed. */
+function foldedTokens(text: string): Set<string> {
+  return new Set(text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []);
+}
+
+/** The shortest contiguous run of captions containing every query term found in the window. */
+function coveringSpan(ids: string[], texts: ReadonlyMap<string, string>, terms: readonly string[]): string[] {
+  const captionTerms = ids.map(id => foldedTokens(texts.get(id) ?? ''));
+  const wanted = terms.filter(term => captionTerms.some(tokens => tokens.has(term)));
+  if (!wanted.length) return ids;
+  let best = { start: 0, end: ids.length - 1 };
+  for (let start = 0; start < ids.length; start++) {
+    const covered = new Set<string>();
+    for (let end = start; end < ids.length && end - start < best.end - best.start; end++) {
+      for (const term of wanted) if (captionTerms[end]!.has(term)) covered.add(term);
+      if (covered.size === wanted.length) { best = { start, end }; break; }
+    }
+  }
+  return ids.slice(best.start, best.end + 1);
 }

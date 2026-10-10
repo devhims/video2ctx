@@ -171,12 +171,16 @@ export class SessionEvidenceStore implements SessionAccess {
   async ensureSearchIndexed(query?: string) {
     const generation = this.generation();
     const legacy = this.search.legacyCandidates(query);
+    const failures = this.search.indexFailures();
     const rows = this.sql.exec<{ version: string; video_id: string; details_json: string; indexed: number }>(
       `SELECT version,video_id,details_json,version IN (SELECT version FROM session_search_assets) AS indexed
        FROM session_assets WHERE kind='transcript'`).toArray()
       .filter(row => (!row.indexed || legacy.has(row.version)) &&
         !this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
-      .sort((a, b) => Number(legacy.has(b.version)) - Number(legacy.has(a.version)));
+      // Untried versions first, then the least recently failed, so unreadable
+      // blobs rotate behind healthy work instead of holding every batch slot.
+      .sort((a, b) => (failures.get(a.version) ?? 0) - (failures.get(b.version) ?? 0)
+        || Number(legacy.has(b.version)) - Number(legacy.has(a.version)));
     // Never make a foreground search scan a session's whole R2 library. Retain
     // old indexes until their replacement is ready, and report remaining work.
     let completed = 0;
@@ -186,13 +190,15 @@ export class SessionEvidenceStore implements SessionAccess {
         transcript = (await this.read(version, false)) as Transcript | null;
       } catch {
         // One unavailable blob must not suppress evidence from healthy indexes.
+        transcript = null;
+      }
+      if (generation !== this.generation() || !this.has(version)) return;
+      if (!transcript) {
+        this.search.recordIndexFailure(version);
         return;
       }
-      if (generation !== this.generation()) return;
-      if (transcript && this.has(version)) {
-        this.indexTranscript(version, transcript);
-        completed++;
-      }
+      this.indexTranscript(version, transcript);
+      completed++;
     }));
     if (generation !== this.generation()) throw new Error('Session evidence changed during indexing. Retry the search.');
     return { pendingTranscripts: rows.length - completed };
