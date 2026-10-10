@@ -14,12 +14,12 @@ const profiles: Record<string, { modelId: string; providerOptions: ProviderOptio
   },
   'deepseek-v4p1-flash': {
     modelId: 'accounts/fireworks/models/deepseek-v4p1-flash',
-    providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
+    providerOptions: { fireworks: { reasoningEffort: 'none' } },
     pricing: { uncachedInputUsdPerMillionTokens: .375, cachedInputUsdPerMillionTokens: .0075, outputUsdPerMillionTokens: 1.5 },
   },
   'deepseek-v4-flash-0731': {
     modelId: 'accounts/fireworks/models/deepseek-v4-flash-0731',
-    providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
+    providerOptions: { fireworks: { reasoningEffort: 'none' } },
     pricing: { uncachedInputUsdPerMillionTokens: .275, cachedInputUsdPerMillionTokens: .00875, outputUsdPerMillionTokens: .825 },
   },
   'gpt-oss-120b': {

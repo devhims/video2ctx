@@ -179,3 +179,8 @@ Finalization reuses validated run evidence first and hydrates missing citations 
 Canonical transcript captions use the asset search index rather than another FTS entry for every lookup packet. Search deduplicates stable excerpt IDs before the 20-candidate limit, preserving the best-ranked match and handling duplicate rows left by earlier indexing. It also removes duplicate resolved captions when legacy index IDs and stable segment IDs refer to the same passage.
 
 Source excerpts and citation text have a 16,000-character safety limit, independent of generated claim length. Oversized original captions are omitted with a warning instead of truncated or split into invented segments. Citation reads are passive and do not mark a video as requested. The reference index is populated once per immutable transcript version. SQL filters requested citation IDs before packet deserialization; memory validation checks only proposed references. Session evidence APIs always return promises.
+
+
+### Timestamp citation eligibility
+
+For transcript answers with timestamp-tool evidence and no visual or comment evidence, finalization permits only timed transcript excerpts as citations. The same restriction applies to short aliases and full evidence IDs, including saved-context finalization. Metadata remains available for source context but cannot substitute for a playback-time citation. Metadata-only questions retain their ordinary citation behavior. This checks source type and timestamp availability; semantic alignment with the beginning of an explanation still requires evaluation.

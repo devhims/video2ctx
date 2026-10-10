@@ -1,20 +1,60 @@
 # Compact transcript validation
 
-Local checks on October 10, 2026 used the saved API transcript for `SqcY0GlETPk`: 2,151 original segments, ending at 1:19:58.8. No production deployment or source retrieval was performed.
+The initial checks on October 10, 2026 used the saved API transcript for `SqcY0GlETPk`: 2,151 original segments, ending at 1:19:58.8. No production deployment or source retrieval was performed.
 
 ## Status
 
-The implementation preserves exact source segments within the documented source-text size bound, uses flat numeric input, removes per-claim character limits, and supports timestamp neighborhoods. Keep the PR in draft pending the remaining summary citation-quality issue below. A syntactically valid ID is not proof that its caption supports the whole answer block.
+The implementation preserves exact source segments within the documented source-text size bound, uses flat numeric input, removes per-claim character limits, and supports timestamp neighborhoods. Keep the PR in draft pending the remaining analyst overview coverage issue documented in the latest rollout below. A syntactically valid ID is not proof that its caption supports the whole answer block.
+
+## Latest rollout: DeepSeek text, GLM visuals
+
+Production configuration now selects DeepSeek v4p1 Flash for classification, research, transcript analysis, memory updates and final answers. GLM remains the visual model. DeepSeek requests explicitly disable reasoning and do not reserve reasoning output tokens. Local overrides must also clear the GLM-only finalizer reasoning setting.
+
+Timestamp explanations accept only timed transcript evidence, not video metadata. This constraint uses actual timestamp-tool evidence, not clock-like strings in a question. Ordinary metadata answers remain supported. The one-starting-citation prose rule and the multiple-row-citation table exception are now both visible in the model's JSON Schema. Transcript text remains flat numeric-ID input; overview prompts use ID ranges as coverage hints, without adding caption timestamps or windows.
+
+### Live results
+
+The latest finalizer checks ran six cases; the latest analyst checks ran three separately. They used saved API transcripts and metadata with real Fireworks calls through the configured model factory. All captured requests selected DeepSeek with `reasoning_effort: none`; provider usage reported zero reasoning tokens. Input counts include cached tokens and repeated context across every call. Output includes tool calls and answers. These are single observations, not averages.
+
+| Video | Task | Input tokens | Output tokens | Result |
+| --- | --- | ---: | ---: | --- |
+| hindi | analyst | 70,404 | 2,195 | Passed checks |
+| react | analyst | 23,492 | 1,502 | Failed middle coverage |
+| short | analyst | 4,147 | 1,285 | Passed checks |
+| hindi | overview | 151,104 | 2,490 | Passed checks |
+| hindi | time | 17,110 | 581 | Passed checks |
+| react | overview | 57,304 | 2,348 | Passed checks |
+| react | time | 17,564 | 693 | Passed checks |
+| short | overview | 18,619 | 1,033 | Passed checks |
+| short | time | 15,899 | 867 | Passed checks |
+
+Videos: React tutorial `SqcY0GlETPk` (about 80 minutes), Hindi Node course `BLl32FvcdVM` (about 109 minutes), and English theory discussion `-AUwOIjA1v4` (about eight minutes). The short transcript ends around 7:46; metadata reports 7:56.
+
+All six finalizer cases resolved source text and times exactly. The React overview covered state, props and the final dismissible alert exercise, with the alert citation at 1:14:21.28. Timestamp answers used the timestamp tool. Hindi answers retained warnings about noisy transcription. The short video's answer distinguished the speaker's speculation from established story events. Its timestamp response still has a broad opening anchor and an awkward truncated quotation warning, so the automated time-neighborhood check is not a claim of ideal answer quality.
+
+Two of three direct analyst cases passed the ending and middle coverage checks. React still failed middle coverage: it returned the final alert exercise first, then concentrated the remaining findings on early lessons, omitting substantive state/props lessons. All its IDs resolved, demonstrating why reference validity alone cannot establish summary quality. The failed assertion remains in the opt-in suite. Stronger planning and segment-range guidance did not solve this reliably. Some numerical details were flagged unverified by existing quote validation; do not treat those claims as independently verified.
+
+Earlier iterations exposed invalid ID formatting, missing endings and repeated prose-schema repairs. Explicit prefix guidance, ending-first planning and a model-visible prose/table schema improved those cases. The six latest finalizer runs needed no answer repair. This does not establish that hallucinations or incomplete summaries are eliminated.
+
+### Production comparison and limits
+
+The earlier matched React production runs measured at least 401,439 input / 6,737 output tokens for overview and 297,514 / 5,809 for timestamps in the core/finalizer phases. The latest PR cases measured 57,304 / 2,348 and 17,564 / 693 respectively. Production totals exclude unknown usage from timed-out GLM calls, so they are lower bounds. Production used the older mixed GLM/DeepSeek flow. This comparison supports lower observed token use; it does not isolate the effect of model choice, prompt, routing or serialization.
+
+No deployment or new production run used these configuration changes. The live harness forces inspection routing and substitutes saved provider data. It does not exercise classification, memory persistence, session context gathering or the gateway. Unit tests verify visual GLM routing and payloads; no new live visual benchmark was run. Deterministic build, unit and Workers checks are separate from the outstanding semantic live-test failure.
+
+Captured local artifacts: `.scratch/pr178-deepseek-validation/schema-final/`, `analyst-final/` and their logs. Earlier rounds are retained alongside them. Production comparison artifacts remain in `.scratch/pr178-live-prod-2026-10-10/`.
+
+Run `platform/test/transcript-rollout.live.test.ts` with `TRANSCRIPT_ROLLOUT_MANIFEST` pointing to an array of cases containing `name`, `transcript`, `video`, `overview`, `terms`, `times` (seconds), and `endingStartMs`. Paths resolve from the working directory. Optionally set `TRANSCRIPT_LIVE_RESULTS` to an existing output directory. Load the authorized key through the local env file as in the reproduction command below. The test is skipped without an explicit manifest.
 
 ## Automated checks
 
 - Platform build, including dependency prebuilds and TypeScript checks.
-- Node suite: 1,620 tests passed, 60 opt-in tests skipped.
+- Node suite: 1,626 tests passed, 61 opt-in tests skipped (latest rollout).
 - Workers integration: 306 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, model-selected timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.
 
-## Live model checks
+## Earlier live model checks
 
 The opt-in test runs the actual inspection loop and unified finalizer with a saved transcript provider and direct Fireworks models. It checks exact citation text and times, both requested timestamp neighborhoods, summary topics, and an ending citation. It does not run classification, the session context-gathering model phase, production failover wrappers, or provider extraction. Counts below include every generation in the tested flow, including repeated context and tool calls. These are individual runs, not averages or a fresh production A/B comparison.
 
@@ -29,7 +69,7 @@ These recorded timestamp flows used the earlier default of three neighboring cap
 
 Earlier full-flow checks exposed two defects corrected in this branch. Renumbering captions between inspection and finalization allowed valid but unrelated references; single-source numeric IDs now stay stable. Enumerating every short and full ID in the output schema made DeepSeek's finalizer input roughly 47,000 tokens larger; large catalogs now use application-side membership validation instead.
 
-## Remaining quality issue
+## Earlier quality findings
 
 GLM sometimes combines the Button and dismissible Alert exercises into one block, then cites the Button introduction at 1:07:20.56. The final Alert exercise begins at 1:14:21.28. The prose covers both, but the single citation lands about seven minutes before the requested final exercise. The live overview regression correctly fails on that response. Do not describe this as a complete citation-quality pass.
 

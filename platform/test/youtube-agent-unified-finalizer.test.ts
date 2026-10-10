@@ -1484,8 +1484,50 @@ it.each(['table', 'prose repair'])('single transcript citations support table ro
     { userId: 'user', creditsRemaining: 100 }, input, [packet], 0));
   await executeResearchRun(options);
   expect(finalizer.doGenerateCalls).toHaveLength(mode === 'table' ? 1 : 2);
+  const advertisedSchema = JSON.stringify(finalizer.doGenerateCalls[0]!.responseFormat);
+  expect(advertisedSchema).toContain('"maxItems":1');
+  expect(advertisedSchema).toContain('"anyOf"');
+  expect(advertisedSchema).toContain('"pattern"');
   const result = await vi.mocked(options.finalize).mock.results[0]!.value;
   expect(result.citations).toHaveLength(5);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   expect(result.answer).not.toContain('[source unavailable]');
+});
+
+it.each([
+  [false, 'inspect_video', 'metadata-proof'], [true, 'inspect_video', 'metadata-proof'],
+  [true, 'inspect_video', 'ref_1'], [true, 'finalize', 'metadata-proof'],
+] as const)('transcript citation constraint (timestamp: %s, route: %s, reference: %s)', async (timestamp, route, metadataReference) => {
+  const { options } = setup('context_answer');
+  const metadata: EvidencePacket = { packetId: 'video-metadata', kind: 'youtube_video',
+    sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: 'metadata-proof', sourceId: 'video', text: 'Video title: React lesson' }], artifacts: [], usage: [], warnings: [] };
+  const transcript: EvidencePacket = { packetId: 'timestamp-context', kind: 'youtube_transcript',
+    sources: [{ id: 'transcript', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+    excerpts: [{ id: 'transcript:abcdefghijk:segment:0', sourceId: 'transcript', text: 'React builds a virtual DOM.', startMs: 0, endMs: 2000 }],
+    artifacts: [{ type: timestamp ? 'youtube_transcript_context' : 'youtube_complete_transcript', data: { timestampSeconds: 0 } }], usage: [], warnings: [] };
+  options.persistedRoute = route === 'inspect_video' ? { route, videoId: 'abcdefghijk', useStoryboard: false }
+    : { route, responseIntent: 'context_answer', contextScope: 'video', reason: 'Use saved timestamp evidence.' };
+  options.conversationHistory = [];
+  options.recoveredEvidence = [metadata, transcript];
+  options.message = timestamp ? 'What happens at 0:00?' : 'What is the video title?';
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'done', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  let attempts = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [], blocks: [{
+      text: timestamp ? 'React builds a virtual DOM.' : 'The video is called React lesson.',
+      evidenceIds: [attempts++ === 0 ? metadataReference : transcript.excerpts[0]!.id],
+    }] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
+  }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: options.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'user', creditsRemaining: 100 }, input, [metadata, transcript], 0));
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(timestamp ? 2 : 1);
+  const result = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations[0]!.id).toBe(timestamp ? transcript.excerpts[0]!.id : 'metadata-proof');
+  if (timestamp) expect(result.citations[0]!.url).toContain('&t=0');
 });

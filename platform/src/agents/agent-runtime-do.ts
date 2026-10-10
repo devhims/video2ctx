@@ -1119,7 +1119,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE run_id = ${runId}`;
   }
 
-  /** Tests replace this model. It uses the same provider configuration as other GLM roles. */
+  /** Tests replace this model. It uses the configured text model with reasoning disabled for DeepSeek. */
   private memoryUpdaterModel(runId: string): LanguageModel {
     const state = this.modelFailoverState(runId);
     state.deadlineAt = Date.now() + this.memoryUpdateTimeoutMs();

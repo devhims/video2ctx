@@ -1005,20 +1005,37 @@ async function runUnifiedFinalizer(options: {
     assertModelCostAvailable(options.modelBudget);
     prepared = prepareEvidence();
     // Inventory, packet IDs and unrelated history are not valid excerpt references.
-    const allowedIds = [...new Set([...prepared.fullIds.keys(), ...prepared.fullIds.values(), ...gatheredEvidenceIds])];
+    let allowedIds = [...new Set([...prepared.fullIds.keys(), ...prepared.fullIds.values(), ...gatheredEvidenceIds])];
     const singleTranscript = options.decision.route === 'inspect_video' && !comparisonVideoIds.length
       && prepared.evidence.some(packet => packet.transcript)
       && !options.evidence.some(packet => ['youtube_frames', 'youtube_storyboard', 'youtube_comments'].includes(packet.kind));
-    const reference = modelCitationReference(allowedIds);
+    // Use actual tool evidence, not clock-like text, to identify timestamp answers.
+    const timestampTranscript = !options.evidence.some(packet => ['youtube_frames', 'youtube_storyboard', 'youtube_comments'].includes(packet.kind))
+      && options.evidence.some(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_context'));
+    if (timestampTranscript) {
+      const transcriptIds = new Set(options.evidence.flatMap(packet => packet.excerpts.filter(excerpt =>
+        excerpt.startMs !== undefined && excerpt.endMs !== undefined
+        && packet.sources.some(source => source.id === excerpt.sourceId && source.kind === 'transcript'))
+        .map(excerpt => excerpt.id)));
+      allowedIds = allowedIds.filter(id => transcriptIds.has(prepared.fullIds.get(id) ?? id));
+    }
+    const reference = modelCitationReference(allowedIds).refine(id => !timestampTranscript || allowedIds.includes(id),
+      'Timestamp explanations require a timed transcript citation, not video metadata.');
+    const minimumReferences = conversational || intent === 'context_answer' || !allowedIds.length ? 0 : 1;
+    const blockSchema = baseOutputSchema.shape.blocks.element.extend({
+      evidenceIds: z.array(reference).min(minimumReferences)
+        .max(conversational || !allowedIds.length ? 0 : 12).describe('Supporting source references.'),
+    });
+    // Put the prose/table distinction in JSON Schema so the model sees it before
+    // generating. A runtime-only refinement previously advertised maxItems: 12.
+    const citedBlockSchema = singleTranscript ? z.union([
+      blockSchema.extend({ evidenceIds: z.array(reference).min(minimumReferences).max(1)
+        .describe('One starting transcript citation per prose explanation. Split distinct explanations into separate blocks.') }),
+      blockSchema.extend({ text: blockSchema.shape.text.regex(/(?:^|\n)\s*\|?\s*:?-{3,}:?\s*\|/,
+        'Multiple citations require a Markdown table with a separator row.') }),
+    ]) : blockSchema;
     const answerSchema = baseOutputSchema.extend({
-      blocks: z.array(baseOutputSchema.shape.blocks.element.extend({
-        evidenceIds: z.array(reference).min(conversational || intent === 'context_answer' || !allowedIds.length ? 0 : 1)
-          .max(conversational || !allowedIds.length ? 0 : 12)
-          .describe(singleTranscript ? 'One starting segment ID per explanation. Tables may include one starting ID per row. Split distinct prose explanations into separate blocks. Never number citations sequentially.' : 'Supporting source references.'),
-      }).superRefine((block, ctx) => {
-        const table = /^\s*\|?\s*:?-{3,}:?\s*\|/m.test(block.text);
-        if (singleTranscript && !table && block.evidenceIds.length > 1) ctx.addIssue({ code: 'custom', path: ['evidenceIds'], message: 'Use one starting citation per prose explanation; split separate explanations into separate blocks.' });
-      })).min(1).max(conversational ? 1 : 20),
+      blocks: z.array(citedBlockSchema).min(1).max(conversational ? 1 : 20),
     });
     // Answer and repair calls produce answers only. Unsolicited fields such as
     // memory proposals are stripped by the schema and never reach persistence.
@@ -1087,7 +1104,8 @@ async function runUnifiedFinalizer(options: {
           'Metadata carried from conversation memory is historical. Label changing counts with their recorded or fetched time; do not describe a remembered value as current.',
           'Answer the request now. Never return only a plan, progress update, promise to look something up, or a sentence fragment. If context is unavailable, explain that concrete limitation instead.',
           ...(singleTranscript ? ['Use one starting transcript segment per prose explanation. Each prose block should cover one continuous explanation. A table block may contain multiple explanations: cite each row separately and include all row references in evidenceIds. Copy the numeric ID printed beside that explanation, never the answer item number or a newly assigned citation number. Do not list every caption in the passage. Split topics into separate blocks.', 'For a whole-video overview, select the major topics across the ENTIRE transcript before writing. Prefer roughly six to eight concise topic blocks, not a detailed chronological walkthrough of early lessons. Reserve space for every explicitly requested later section and final exercise. Put the final exercise in its own block with its own starting citation, distinct from earlier exercises. Finish coverage before adding setup details or introductory material.'] : []),
-          'A flat transcript line contains a numeric ID followed by caption text. For citations prepend its citationPrefix to that ID. Choose only the starting segment of the actual supporting explanation per claim. IDs are not timestamps. Use the supplied timing context for time-specific questions. Return blocks containing text and evidenceIds. Use the short ref_N excerpt IDs from supplied evidence, including transcriptAnalysis.findings.excerptIds. For Markdown tables, place [cite:ref_N] in each Source cell and include the same references in that block evidenceIds. Use only supplied references. The application validates and renders them as compact source numbers. Outside tables, omit inline citation markers and let the application append citations.',
+          'Return blocks containing text and evidenceIds. Transcript lines have numeric IDs and a shared citationPrefix. Example: citationPrefix="ref_" and line "450 React takes this component tree" means evidenceIds=["ref_450"]. Copy the prefix exactly; never use a packet ID or invent a form such as ref_1:450. Choose the starting line of the actual supporting explanation. IDs indicate order, not timestamps; use the supplied timing for timestamp questions. Other evidence uses its supplied ref_N excerpt IDs, including transcriptAnalysis.findings.excerptIds. Video metadata supports only metadata facts such as title, channel, duration and views. It NEVER supports claims about what is taught, said or happens in the video; those require transcript or analyzed visual evidence. For Markdown tables, place [cite:ref_N] in each Source cell and include those references in evidenceIds. Outside tables, omit inline markers; the application appends them.',
+          ...(timestampTranscript ? ['This answer uses timestamp transcript context. Every explanation must cite a timed transcript segment. Video metadata, titles and descriptions are not valid citations for what is said at a playback time. Omit metadata-only introductory blocks and start with the requested explanations.'] : []),
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
