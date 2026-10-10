@@ -10,7 +10,7 @@ The implementation preserves exact source segments, uses flat numeric input, rem
 
 - Platform build, including dependency prebuilds and TypeScript checks.
 - Node suite: 1,616 tests passed, 60 opt-in tests skipped.
-- Workers integration: 180 tests across session evidence, agent billing and runtime behavior.
+- Workers integration: 182 tests across session evidence, agent billing and runtime behavior.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, saved-only timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.
 
@@ -48,3 +48,7 @@ node --env-file=../.env.agent-test.local ./node_modules/vitest/vitest.mjs run te
 ```
 
 The fixture is the API response containing `videoId`, `segments`, `track` and `meta`. The live cases target this React video and are skipped by default. They intentionally retain the failing semantic coverage assertion rather than accepting any valid numeric ID.
+
+## Packet identity regression
+
+PR feedback identified that session storage derived its packet key from the first citation ID. Stable segment IDs share an asset-version prefix, so later lookups replaced earlier packets. Two Workers integration regressions reproduced the loss before the fix. Storage now uses the existing packet ID independently of segment identity. Both tests pass, covering disjoint timestamp packets, analysis findings, evidence-backed memory, replaying one packet, and a full read followed by a narrow lookup. Separate calls with identical content may now retain separate packets. Existing overwritten packets are not reconstructed by this change.

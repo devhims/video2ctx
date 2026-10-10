@@ -282,9 +282,10 @@ export class SessionEvidenceStore implements SessionAccess {
   savePacket(packet: EvidencePacket) {
     const versions = packet.assetVersions ?? [];
     if (!versions.length || versions.some((version) => !this.has(version))) return;
-    // Repeated analysis with identical content needs one session copy, while run audit packets remain separate.
-    const packetKey = packet.excerpts[0]?.id.match(/^(evidence:[a-f0-9]{64}):/)?.[1];
-    const id = packet.packetId.startsWith('session:') ? packet.packetId : (packetKey ?? packet.packetId);
+    // A stable segment ID identifies source text, not the retrieval or analysis
+    // containing it. Keep each run/tool-call packet (or saved-read packet) distinct.
+    // Replaying the same packet still replaces its own copy.
+    const id = packet.packetId;
     this.sql.exec(
       'INSERT OR REPLACE INTO session_packets VALUES (?, ?, ?)',
       id,

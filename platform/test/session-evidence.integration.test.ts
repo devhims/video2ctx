@@ -1082,3 +1082,48 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
       }
     }
   }));
+
+test('retains disjoint transcript packets, findings and backed memory for one asset', async () =>
+  within('distinct-transcript-packets', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const p = sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store);
+    const ctx = context(store, p);
+    const first = await executeGetVideoTranscript({ videoId: id }, ctx, 'first-time', { timestampSeconds: 0.2, before: 0, after: 0 });
+    const second = await executeGetVideoTranscript({ videoId: id }, ctx, 'second-time', { timestampSeconds: 5.2, before: 0, after: 0 });
+    for (const [index, packet] of [first, second].entries()) {
+      store.savePacket({ ...packet, packetId: `analysis:${index}`, artifacts: [{ type: 'youtube_transcript_analysis', data: {
+        findings: [{ claim: `Finding ${index}`, excerptIds: [packet.excerpts[0]!.id] }],
+      } }] });
+    }
+    const restored = reopen();
+    expect(restored.evidence()).toHaveLength(4);
+    for (const [index, packet] of [first, second].entries()) {
+      const saved = restored.evidenceForCitations([packet.excerpts[0]!.id]);
+      expect(saved).toHaveLength(2);
+      expect(saved.flatMap(item => item.artifacts).some(artifact =>
+        JSON.stringify(artifact.data).includes(`Finding ${index}`))).toBe(true);
+    }
+    const result = remember(restored, 'memory-run', [first, second].map((packet, index) => ({
+      kind: 'finding', topic: `topic-${index}`, text: `Finding ${index}`, evidenceIds: [packet.excerpts[0]!.id],
+    })));
+    expect(result.applied).toBe(2);
+    expect(reopen().brief().memories).toHaveLength(2);
+    // Retrying the same packet remains an upsert, not an additional copy.
+    restored.savePacket(first);
+    expect(reopen().evidence()).toHaveLength(4);
+  }));
+
+test('a narrow lookup does not replace a previously saved full transcript packet', async () =>
+  within('full-then-narrow-transcript', async (store, reopen) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({ text: `Caption ${index}`, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 }));
+    const ctx = context(store, sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store));
+    const full = await executeGetVideoTranscript({ videoId: id }, ctx, 'full');
+    const narrow = await executeGetVideoTranscript({ videoId: id }, ctx, 'narrow', { timestampSeconds: 5.2, before: 0, after: 0 });
+    const restored = reopen();
+    expect(restored.evidence()).toHaveLength(2);
+    expect(restored.evidenceForCitations([full.excerpts[0]!.id])[0]!.excerpts).toHaveLength(6);
+    expect(narrow.excerpts[0]!.id).toBe(full.excerpts[5]!.id);
+    expect(restored.evidenceForCitations([narrow.excerpts[0]!.id])).toHaveLength(2);
+  }));
