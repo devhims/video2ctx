@@ -158,3 +158,12 @@ Only a failed or timed-out storage read permits saving a research answer with no
 Storage warnings are appended to the output, leaving the model input's 50-warning limit intact. Concurrent citation and ordinary transcript reads share a fetch while only ordinary reads mark the video as requested. The inspection prompt now refers to context returned by the timestamp tool. Removed the redundant analyst caption-size check after catalog filtering.
 
 The platform build, 1,620 unit tests and 306 Workers integration tests passed. Regressions cover invalid-only research citations, earlier-turn frames and metadata during a storage outage, mixed valid and unknown references, storage failure with 50 input warnings, and concurrent reads in either order. No fresh live-model or production test was performed.
+
+
+## Multi-caption search and bounded index upgrades
+
+The format 2 index made multi-word queries require all terms in one caption. Format 3 adds overlapping search windows of up to ten consecutive usable captions and 2,000 characters while retaining single-caption rows for single-word searches. Search resolves supporting captions with their exact text, timestamps and original IDs, even when they belong to separate saved lookup packets. This changes search indexing, not the flat input supplied to the analyst or finalizer.
+
+The previous migration deleted asset indexes and made the next search read every saved transcript. Format 2 now upgrades entirely from SQLite. Earlier chunk indexes remain available for identifying query-relevant assets, with at most four passive transcript reads per repair batch. The tool reports pending or unavailable indexes rather than presenting incomplete coverage as complete. Repeated searches can finish large migrations. Selected search results resolve in one batch, avoiding repeated R2 reads for overlapping hits.
+
+Four new Workers regression cases cover words spanning caption and window boundaries, the same query after a format 2 upgrade without migration reads, nine matching legacy assets plus an unrelated asset repaired in batches of four without catalog-request side effects, and exclusion of oversized-caption gaps. Existing duplicate-caption, oversized-caption, duration-limit and deletion-race tests remain passing. The platform build, 1,649 unit tests and 313 Workers integration tests passed. No live-model or production test was performed for this follow-up. Broader semantic citation limitations remain unchanged.

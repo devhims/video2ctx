@@ -1050,7 +1050,7 @@ test('long transcript matches cannot crowd short-video matches out of the top 20
 
     // Precondition: without the limit, the long transcript fills every one of the 20 slots.
     const crowded = await unlimited.search.searchEvidence(unlimited, 'gold medal');
-    expect(crowded.packets).toHaveLength(20);
+    expect(crowded.packets.flatMap(packet => packet.excerpts).length).toBeGreaterThanOrEqual(20);
     expect(videos(crowded.packets)).not.toContain(shortId);
 
     const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
@@ -1303,4 +1303,78 @@ test('empty timestamp lookups provide persisted citable status, not invented spe
         answer: `The transcript has no captions near 45:00. [cite:${packet.excerpts[0]!.id}]` }, restored, 0);
     expect(answer.citations).toHaveLength(1);
     expect(answer.citations[0]!.startMs).toBeUndefined();
+  }));
+
+test.each([false, true])('multi-word search spans captions and window boundaries (format 2 upgrade: %s)', async upgrade =>
+  within(`multi-caption-search-${upgrade}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 15 }, (_, index) => ({
+      text: index === 9 ? 'useEffect' : index === 10 ? 'returns a cleanup' : index === 11 ? 'function on unmount' : `Caption ${index}`,
+      startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    const version = result.assetVersions![0]!;
+    // Window support can be spread over independently saved lookup packets.
+    await store.readTranscriptContext(version, 9.2, 0, 0);
+    await store.readTranscriptContext(version, 10.2, 0, 0);
+    if (upgrade) {
+      sql.exec("DELETE FROM session_context_fts WHERE json_extract(metadata,'$.segmentIds') IS NOT NULL");
+      sql.exec('DELETE FROM session_search_format');
+      sql.exec('INSERT INTO session_search_format VALUES (2)');
+    }
+    const current = reopen();
+    const read = vi.spyOn(current, 'read');
+    await current.ensureSearchIndexed('useEffect cleanup function');
+    expect(read).not.toHaveBeenCalled();
+    const found = await current.search.searchEvidence(current, 'useEffect cleanup function');
+    expect(read).toHaveBeenCalledTimes(1);
+    const excerpts = found.packets.flatMap(packet => packet.excerpts);
+    for (const index of [9, 10, 11]) expect(excerpts).toContainEqual(expect.objectContaining({
+      id: `evidence:${version}:segment:${index}`, text: value.segments[index]!.text, startMs: index * 1000,
+    }));
+    expect(new Set(excerpts.map(excerpt => excerpt.id)).size).toBe(excerpts.length);
+    expect(found.pendingTranscripts).toBe(0);
+  }));
+
+test('legacy search upgrades only matching assets in bounded passive batches', async () =>
+  within('bounded-search-upgrade', async (store, _reopen, sql) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 10; index++) {
+      const videoId = `searchvid${String(index).padStart(2, '0')}`;
+      const value = { ...transcript(index < 9 ? 'needle cleanup function' : 'unrelated lecture'), videoId };
+      const result = await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(videoId);
+      versions.push(result.assetVersions![0]!);
+    }
+    sql.exec('DELETE FROM session_context_fts');
+    sql.exec('DELETE FROM session_search_format');
+    for (const [index, version] of versions.entries()) sql.exec(
+      'INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?,?,?,?,?)',
+      `evidence:${version}:0`, `asset:${version}`, 'evidence', index < 9 ? 'needle cleanup function' : 'unrelated lecture', JSON.stringify({ version, offset: 0 }));
+    const requested = vi.fn(async () => {});
+    const current = new SessionEvidenceStore(sql, env.RESEARCH, 'test-session/bounded-search-upgrade/', requested);
+    // Construction must retain existing indexes and their markers.
+    expect(sql.exec('SELECT * FROM session_context_fts').toArray()).toHaveLength(10);
+    const read = vi.spyOn(current, 'read');
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 5 });
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(read.mock.calls.every(([, requested]) => requested === false)).toBe(true);
+    expect(read.mock.calls.some(([version]) => version === versions[9])).toBe(false);
+    expect(requested).not.toHaveBeenCalled();
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 1 });
+    expect(await current.ensureSearchIndexed('needle cleanup')).toEqual({ pendingTranscripts: 0 });
+    const found = await current.search.searchEvidence(current, 'needle cleanup function');
+    expect(found.packets).toHaveLength(9);
+    expect(requested).not.toHaveBeenCalled();
+    expect(current.search.legacyCandidates('unrelated')).toEqual(new Set([versions[9]]));
+  }));
+
+test('search windows do not bridge omitted oversized captions', async () =>
+  within('search-window-omission', async (store) => {
+    const value = transcript();
+    value.segments = ['useEffect', 'x'.repeat(16001), 'cleanup function'].map((text, index) => ({
+      text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    await sessionProvider(provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const }))), store).transcript(id);
+    expect((await store.search.searchEvidence(store, 'useEffect cleanup function')).packets).toEqual([]);
+    expect((await store.search.searchEvidence(store, 'cleanup function')).packets[0]!.excerpts[0]!.text).toBe('cleanup function');
   }));

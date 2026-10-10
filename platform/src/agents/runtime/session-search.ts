@@ -40,12 +40,19 @@ export class SessionSearch {
     );
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_assets (version TEXT PRIMARY KEY)');
     sql.exec('CREATE TABLE IF NOT EXISTS session_search_format (version INTEGER PRIMARY KEY)');
-    if (!sql.exec('SELECT 1 FROM session_search_format WHERE version=2').toArray().length) {
-      // Legacy chunk offsets may point inside omitted oversized captions. Rebuild
-      // asset indexes lazily with one row per usable original segment.
-      sql.exec("DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'");
-      sql.exec('DELETE FROM session_search_assets');
-      sql.exec('INSERT INTO session_search_format VALUES (2)');
+    if (!sql.exec('SELECT 1 FROM session_search_format WHERE version=3').toArray().length) {
+      // Format 2 already contains exact captions. Add search windows from SQLite,
+      // without invalidating any index or reading transcript blobs on upgrade.
+      const versions = sql.exec<{ owner: string }>(`SELECT DISTINCT owner FROM session_context_fts
+        WHERE owner LIKE 'asset:%' AND id GLOB 'evidence:*:segment:*'`).toArray();
+      for (const { owner } of versions) {
+        const captions = sql.exec<SearchRow>('SELECT id,owner,content,metadata FROM session_context_fts WHERE owner=?', owner)
+          .toArray().filter(row => parseSegmentCitation(row.id))
+          .sort((a, b) => parseSegmentCitation(a.id)!.index - parseSegmentCitation(b.id)!.index);
+        this.indexTranscript(owner.slice(6), captions.map(row => ({ id: row.id, text: row.content, sourceId: 'migration' })));
+      }
+      // Retain older chunks as a candidate index for query-relevant upgrades.
+      sql.exec('INSERT INTO session_search_format VALUES (3)');
     }
     // Source-table triggers make deletion and memory corrections atomic with index maintenance.
     sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_asset_delete AFTER DELETE ON session_assets BEGIN
@@ -148,12 +155,32 @@ export class SessionSearch {
   indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
     const owner = `asset:${version}`;
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    for (const excerpt of excerpts) {
-      const segment = parseSegmentCitation(excerpt.id);
-      if (segment?.version === version && usableTranscriptSegment(excerpt.text))
-        this.insert(excerpt.id, owner, 'evidence', excerpt.text, { version });
+    const usable = excerpts.filter(excerpt => parseSegmentCitation(excerpt.id)?.version === version && usableTranscriptSegment(excerpt.text));
+    for (const excerpt of usable) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { version });
+    // Search-only windows contain up to ten captions and overlap by half. Models still receive flat,
+    // original segments; the window carries all IDs needed to resolve its evidence.
+    for (let start = 0; start < usable.length;) {
+      const window: typeof usable = [];
+      let characters = 0;
+      for (const excerpt of usable.slice(start, start + 10)) {
+        if (window.length && (characters + excerpt.text.length > 2_000 ||
+          parseSegmentCitation(excerpt.id)!.index !== parseSegmentCitation(window.at(-1)!.id)!.index + 1)) break;
+        window.push(excerpt);
+        characters += excerpt.text.length + 1;
+      }
+      if (window.length > 1) this.insert(window[0]!.id, owner, 'evidence', window.map(excerpt => excerpt.text).join(' '),
+        { version, segmentIds: window.map(excerpt => excerpt.id) });
+      start += Math.max(1, Math.floor(window.length / 2));
     }
     this.sql.exec('INSERT OR IGNORE INTO session_search_assets VALUES (?)', version);
+  }
+  legacyCandidates(query?: string): Set<string> {
+    const tokens = query?.slice(0, 200).match(/[\p{L}\p{N}_]+/gu)?.slice(0, 20);
+    const match = tokens?.length ? ' AND session_context_fts MATCH ?' : '';
+    return new Set(this.sql.exec<{ owner: string }>(`SELECT DISTINCT owner FROM session_context_fts
+      WHERE owner LIKE 'asset:%' AND json_extract(metadata,'$.offset') IS NOT NULL${match}`,
+      ...(tokens?.length ? [tokens.map(token => `"${token}"`).join(' OR ')] : []))
+      .toArray().map(row => row.owner.slice(6)));
   }
   private insert(id: string, owner: string, scope: string, content: string, metadata: unknown) {
     this.sql.exec(
@@ -180,6 +207,8 @@ export class SessionSearch {
         `WITH matches AS MATERIALIZED (
         SELECT id,owner,content,metadata,rank AS score FROM session_context_fts
         WHERE session_context_fts MATCH ? AND scope=?${excluded}
+          AND json_extract(metadata,'$.offset') IS NULL
+          ${tokens.length === 1 ? "AND json_extract(metadata,'$.segmentIds') IS NULL" : ''}
       ), unique_matches AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
       )
@@ -200,34 +229,32 @@ export class SessionSearch {
     });
   }
   async searchEvidence(store: SessionEvidenceStore, query: string) {
-    await store.ensureSearchIndexed();
+    const indexing = await store.ensureSearchIndexed(query);
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
     const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
-    for (const row of this.matches('evidence', query, excluded)) {
-      if (seen.has(row.id)) continue;
-      const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string };
-      const found = metadata.version
-        // Backstop for a version that crossed the limit between the query and this read.
-        ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
-          ? await store.evidenceForCitations([row.id])
-          : []
-        : await store.evidenceForCitations([row.id]);
+    const candidates = this.matches('evidence', query, excluded).map(row => {
+      const metadata = JSON.parse(row.metadata) as { version?: string; segmentIds?: string[]; packetId?: string };
+      return { row, metadata, ids: metadata.segmentIds ?? [row.id] };
+    }).filter(({ metadata }) => !metadata.version || (store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)));
+    // Resolve every selected caption in one batch, so overlapping hits read each
+    // transcript once rather than fetching its R2 object for every FTS row.
+    const found = await store.evidenceForCitations([...new Set(candidates.flatMap(candidate => candidate.ids))]);
+    for (const { row, metadata, ids } of candidates) {
+      if (ids.every(id => seen.has(id))) continue;
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
         // Legacy asset index IDs and stable packet IDs can resolve to the same caption.
-        const excerpts = packet.excerpts.filter((excerpt) => excerpt.id === row.id)
+        const excerpts = packet.excerpts.filter((excerpt) => ids.includes(excerpt.id))
           .filter(excerpt => !seen.has(excerpt.id));
         if (!excerpts.length) continue;
-        packets.push({ ...packet, packetId: `search:${row.id}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
-        seen.add(row.id);
+        packets.push({ ...packet, packetId: `search:${row.id}:${packets.length}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
         for (const excerpt of excerpts) seen.add(excerpt.id);
-        break;
       }
     }
-    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))) };
+    return { packets: packets.filter((packet) => packet.assetVersions?.every((version) => store.has(version))), ...indexing };
   }
   async tools(
     store: SessionEvidenceStore,
@@ -272,7 +299,7 @@ export class SessionSearch {
             // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
             const packets = onEvidence(found.packets) ?? found.packets;
             const withheld = found.packets.length - packets.length;
-            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
+            return JSON.stringify({ packets: packets.map(evidencePacketForModel), ...(found.pendingTranscripts ? { pendingTranscripts: found.pendingTranscripts, indexingNote: 'Some saved transcript indexes are pending upgrade or unavailable. Search again to include another batch.' } : {}), ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
         },
       });

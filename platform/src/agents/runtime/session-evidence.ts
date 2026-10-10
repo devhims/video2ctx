@@ -168,22 +168,34 @@ export class SessionEvidenceStore implements SessionAccess {
   searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
-  async ensureSearchIndexed() {
+  async ensureSearchIndexed(query?: string) {
     const generation = this.generation();
-    const rows = this.sql
-      .exec<{ version: string; video_id: string; details_json: string }>(
-        `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'
-      AND version NOT IN (SELECT version FROM session_search_assets)`,
-      )
-      .toArray();
-    for (const { version, video_id: videoId, details_json: details } of rows) {
-      // Over-limit transcripts saved before the limit existed stay out of the search index.
-      if (this.overLimit({ kind: 'transcript', videoId, details: JSON.parse(details) })) continue;
-      const transcript = (await this.read(version)) as Transcript | null;
-      if (generation !== this.generation())
-        throw new Error('Session evidence changed during indexing. Retry the search.');
-      if (transcript) this.indexTranscript(version, transcript);
-    }
+    const legacy = this.search.legacyCandidates(query);
+    const rows = this.sql.exec<{ version: string; video_id: string; details_json: string; indexed: number }>(
+      `SELECT version,video_id,details_json,version IN (SELECT version FROM session_search_assets) AS indexed
+       FROM session_assets WHERE kind='transcript'`).toArray()
+      .filter(row => (!row.indexed || legacy.has(row.version)) &&
+        !this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
+      .sort((a, b) => Number(legacy.has(b.version)) - Number(legacy.has(a.version)));
+    // Never make a foreground search scan a session's whole R2 library. Retain
+    // old indexes until their replacement is ready, and report remaining work.
+    let completed = 0;
+    await Promise.all(rows.slice(0, 4).map(async ({ version }) => {
+      let transcript: Transcript | null;
+      try {
+        transcript = (await this.read(version, false)) as Transcript | null;
+      } catch {
+        // One unavailable blob must not suppress evidence from healthy indexes.
+        return;
+      }
+      if (generation !== this.generation()) return;
+      if (transcript && this.has(version)) {
+        this.indexTranscript(version, transcript);
+        completed++;
+      }
+    }));
+    if (generation !== this.generation()) throw new Error('Session evidence changed during indexing. Retry the search.');
+    return { pendingTranscripts: rows.length - completed };
   }
   private indexSegmentRefs(version: string, transcript: Transcript) {
     this.sql.exec('INSERT OR IGNORE INTO session_segment_refs VALUES (?, ?)', version,
