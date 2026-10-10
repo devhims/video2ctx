@@ -10,7 +10,7 @@ The implementation preserves exact source segments, uses flat numeric input, rem
 
 - Platform build, including dependency prebuilds and TypeScript checks.
 - Node suite: 1,616 tests passed, 60 opt-in tests skipped.
-- Workers integration: 294 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
+- Workers integration: 296 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, saved-only timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.
 
@@ -56,3 +56,7 @@ PR feedback identified that session storage derived its packet key from the firs
 ## Direct segment resolution
 
 Session lookup records now retain canonical segment references rather than copied captions. A new Workers test resolves exact text and timing with no lookup packets, checks empty and out-of-range IDs, verifies memory validity and reference-only storage, and confirms deletion removes citation availability and associated memory. Analysis findings remain in their own records. Three race tests hold citation hydration open while cancellation or deletion occurs and verify that no answer or memory job is accepted afterward. Historical audit payloads remain unchanged. This storage change does not alter model input or address the outstanding live overview quality issue.
+
+## Search candidate deduplication
+
+The direct-resolution change stopped new canonical transcript captions from being indexed per lookup packet. The follow-up regression still reproduced search crowding with older packet-owned FTS rows: 25 repeated reads of a short matching caption hid a later matching caption. Search now selects the best-ranked row for each excerpt ID before applying its 20-candidate limit. Returned captions are also deduplicated after legacy index IDs resolve to original segment IDs. Workers tests cover 25 distinct tool runs with both clean indexes and seeded legacy rows, preserve both passage times, and retain all original lookup records. Both regressions pass with real Workers SQLite.

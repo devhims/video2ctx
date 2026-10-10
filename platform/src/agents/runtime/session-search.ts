@@ -158,12 +158,19 @@ export class SessionSearch {
       .match(/[\p{L}\p{N}_]+/gu)
       ?.slice(0, 20);
     if (!tokens?.length) return [];
-    // Exclusions apply before the limit, so excluded rows can never fill the top 20.
+    // Exclude owners and deduplicate stable IDs before the result limit.
+    // Materialize FTS scores before windowing, since rank must run in the FTS query.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
     return this.sql
       .exec<SearchRow>(
-        `SELECT id,owner,content,metadata FROM session_context_fts
-      WHERE session_context_fts MATCH ? AND scope=?${excluded} ORDER BY rank LIMIT 20`,
+        `WITH matches AS MATERIALIZED (
+        SELECT id,owner,content,metadata,rank AS score FROM session_context_fts
+        WHERE session_context_fts MATCH ? AND scope=?${excluded}
+      ), unique_matches AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY score,owner) AS occurrence FROM matches
+      )
+      SELECT id,owner,content,metadata FROM unique_matches
+      WHERE occurrence=1 ORDER BY score,id LIMIT 20`,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
@@ -196,10 +203,13 @@ export class SessionSearch {
         : await store.evidenceForCitations([row.id]);
       for (const packet of found) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
-        const excerpts = metadata.version ? packet.excerpts : packet.excerpts.filter((excerpt) => excerpt.id === row.id);
+        // Legacy asset index IDs and stable packet IDs can resolve to the same caption.
+        const excerpts = (metadata.version ? packet.excerpts : packet.excerpts.filter((excerpt) => excerpt.id === row.id))
+          .filter(excerpt => !seen.has(excerpt.id));
         if (!excerpts.length) continue;
         packets.push({ ...packet, packetId: `search:${row.id}${metadata.version ? ':segments' : ''}`, excerpts, artifacts: [] });
         seen.add(row.id);
+        for (const excerpt of excerpts) seen.add(excerpt.id);
         break;
       }
     }

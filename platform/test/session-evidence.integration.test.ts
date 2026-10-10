@@ -1171,3 +1171,32 @@ test('direct segment citations stay pinned to their transcript version after ref
     expect(packets[0]!.warnings.some(warning => warning.code === 'SUPERSEDED_SESSION_EVIDENCE')).toBe(true);
     expect(await reopen().evidence()).toEqual([]);
   }));
+
+test.each([false, true])('repeated cross-run reads preserve lower-ranked search matches (legacy rows: %s)', async legacyRows =>
+  within(`search-distinct-captions-${legacyRows}`, async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = Array.from({ length: 6 }, (_, index) => ({
+      text: index === 0 ? 'needle' : index === 5 ? 'needle appears later in this longer explanation about components and state' : `Unrelated caption ${index}`,
+      startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000,
+    }));
+    const p = provider(vi.fn(async () => ({ value, cacheStatus: 'miss' as const })));
+    for (let run = 0; run < 25; run++) {
+      const current = reopen();
+      const packet = await executeGetVideoTranscript({ videoId: id }, context(current, sessionProvider(p, current)), 'lookup',
+        { timestampSeconds: 0.2, before: 0, after: 0 });
+      if (legacyRows) {
+        // Rows written by the earlier packet-per-call indexing implementation.
+        sql.exec('INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?, ?, ?, ?, ?)',
+          packet.excerpts[0]!.id, `packet:${packet.packetId}`, 'evidence', packet.excerpts[0]!.text, JSON.stringify({ packetId: packet.packetId }));
+      }
+    }
+    const current = reopen();
+    await executeGetVideoTranscript({ videoId: id }, context(current, sessionProvider(p, current)), 'later',
+      { timestampSeconds: 5.2, before: 0, after: 0 });
+    const restored = reopen();
+    const found = await restored.search.searchEvidence(restored, 'needle');
+    expect(found.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.startMs).sort((a, b) => a! - b!)).toEqual([0, 5000]);
+    expect(sql.exec("SELECT * FROM session_packets WHERE packet_id LIKE 'packet:%'").toArray()).toHaveLength(26);
+    expect(p.transcript).toHaveBeenCalledOnce();
+    if (!legacyRows) expect(sql.exec("SELECT * FROM session_context_fts WHERE owner LIKE 'packet:%'").toArray()).toEqual([]);
+  }));
