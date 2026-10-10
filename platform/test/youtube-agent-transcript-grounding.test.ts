@@ -173,7 +173,7 @@ describe('transcript grounding', () => {
     expect(result.findings).toHaveLength(2);
     expect(result.findings[1]).toMatchObject({ claim: 'Contains 54.2g protein.', quantities: [], uncertainty: expect.stringContaining('unverified') });
     expect(result.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 70000]);
-    expect(result.warnings).toEqual([expect.stringContaining('Some figures in 1 transcript finding could not be matched')]);
+    expect(result.warnings).toEqual([expect.stringContaining('Some facts in 1 transcript finding could not be matched')]);
   });
 
   it('accepts sentence punctuation without accepting fragments of malformed decimals', () => {
@@ -313,3 +313,34 @@ describe('transcript grounding', () => {
   });
 });
 
+
+it('preserves quoted versions and dates through analyst and finalizer projection without measurement warnings', async () => {
+  const text = 'Use Bootstrap 5.2.3. React was created in 2011.';
+  const literalFacts = [{ kind: 'version' as const, value: '5.2.3', quote: 'Use Bootstrap 5.2.3.' },
+    { kind: 'date' as const, value: '2011', quote: 'React was created in 2011.' }];
+  const finding = { claim: text, entities: [], quantities: [], literalFacts, uncertainty: null };
+  const duplicated = { ...finding, quantities: [{ metric: 'Bootstrap version', value: 5.2, unit: null, basis: null, kind: 'reported', quote: literalFacts[0]!.quote }] };
+  expect(() => assertTranscriptFacts(finding, [text])).not.toThrow();
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ findings: [{ ...duplicated, segmentId: 0 }], warnings: [] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+    usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } },
+  }) });
+  const result = await analyzeTranscriptWithModel({ model, videoId: 'abcdefghijk', researchQuestion: 'Which version and year?', focus: 'Version and date',
+    segments: [{ text, startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
+  expect(result.warnings).toEqual([]);
+  expect(result.findings[0]!.literalFacts).toEqual(literalFacts);
+  expect(result.findings[0]!.quantities).toEqual([]);
+  const evidence = packet(finding);
+  expect(finalizationEvidenceForModel([evidence], 40000).evidence[0]!.transcriptAnalysis!.findings[0]!.literalFacts).toEqual(literalFacts);
+});
+
+it.each([
+  ['version', '5.2', 'Use Bootstrap 5.2.3.'],
+  ['version', '5.2.4', 'Use Bootstrap 5.2.3.'],
+  ['date', '201', 'Created in 2011.'],
+  ['date', '2012', 'Created in 2011.'],
+] as const)('rejects altered %s strings: %s', (kind, value, quote) => {
+  expect(() => assertTranscriptFacts({ claim: '', entities: [], quantities: [], uncertainty: null,
+    literalFacts: [{ kind, value, quote }] }, [quote])).toThrow('Unsupported');
+});

@@ -14,8 +14,11 @@ const MAX_FINDINGS = 5;
 const MAX_ANALYST_OUTPUT_TOKENS = 2_400;
 const ANALYST_WAIT_MS = 90_000;
 
-const transcriptAnalystOutputSchema = (maximum: number, repair = false) => z.object({
+const overviewTopicsSchema = z.array(z.string().trim().min(1).max(120));
+const transcriptAnalystOutputSchema = (maximum: number, repair = false, overview = false) => z.object({
+  ...(overview ? { topics: overviewTopicsSchema.max(maximum).describe('Plan the major topics across the entire video before writing findings. Each topic must have a finding referring to its zero-based topicIndex.') } : {}),
   findings: z.array(transcriptFactsSchema.extend({
+    ...(overview ? { topicIndex: z.number().int().min(0).max(maximum - 1).describe('Index in topics for this finding. Cover every planned topic.') } : {}),
     entities: transcriptFactsSchema.shape.entities.unwrap().max(repair ? 1 : 3).default([]),
     quantities: transcriptFactsSchema.shape.quantities.unwrap().max(repair ? 3 : 10).default([]),
     claim: z.string().trim().min(1),
@@ -41,6 +44,7 @@ export interface TranscriptAnalystInput {
   modelCallId?: string;
   sourceContext?: TranscriptSourceContext;
   maxFindings?: number;
+  scope?: 'focused' | 'overview';
   onDiagnostic?: TranscriptDiagnosticSink;
 }
 
@@ -98,7 +102,8 @@ export async function analyzeTranscriptWithModel(
     modelBudget?: AgentModelCostBudget;
   },
 ): Promise<TranscriptAnalystResult> {
-  const maximum = Math.max(MAX_FINDINGS, Math.min(20, Math.floor(input.maxFindings ?? MAX_FINDINGS)));
+  const overview = input.scope === 'overview';
+  const maximum = Math.max(overview ? 8 : MAX_FINDINGS, Math.min(20, Math.floor(input.maxFindings ?? MAX_FINDINGS)));
   const catalog = transcriptCatalog(input.segments);
   if (catalog.length === 0) {
     return {
@@ -112,8 +117,10 @@ export async function analyzeTranscriptWithModel(
 
   const modelCallId = input.modelCallId ?? `transcript-analyst:${crypto.randomUUID()}`;
   let repairFeedback: string | undefined;
+  let requiredTopics: z.infer<typeof overviewTopicsSchema> | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptMaximum = attempt === 0 ? maximum : Math.min(maximum, 3);
+    const attemptMaximum = attempt === 0 ? maximum : overview
+      ? (requiredTopics?.length ? maximum : Math.min(maximum, 8)) : Math.min(maximum, 3);
     assertModelCostAvailable(input.modelBudget);
     const startedAt = Date.now();
     const attemptId = crypto.randomUUID();
@@ -149,8 +156,12 @@ export async function analyzeTranscriptWithModel(
           'Return at most three warnings, only for limitations this transcript\'s content demonstrates, such as unintelligible or music-only captions. The catalog holds every caption supplied. Brevity, duration or a short transcript is never a limitation by itself; a clear 30-second lesson gets no warning. Do not warn about finding counts, instructions, or unreviewed results, and do not repeat findings or claim caveats in warnings. Put claim-specific caveats in the claim.',
           'Each transcript line starts with its original numeric segment ID. Cite one starting segmentId per finding, where the actual explanation begins, not an earlier topic announcement. For summaries, cover distinct major topics across the beginning, middle and end. When the ending or final exercise is requested, return its finding FIRST, before allocating findings to early material. Address every explicit subquestion. Each finding should point to one continuous explanation; do not combine distant topics under one starting ID.',
           'Do not invent identifiers, timestamps, or quotations. The application resolves segment IDs back to the original text and timestamps. IDs indicate order, never elapsed time.',
-          'For a whole-video overview, plan the topic anchors across the entire transcript BEFORE writing findings. Reserve the final requested topic or exercise first, then select major topics from the middle and beginning. Write the reserved ending finding first, then the other selected topics. Do not spend the finding budget on early setup lessons and stop before later material. Combine minor setup details, but never combine distinct exercises under one citation.',
-          ...(input.segments.length >= 3 ? [`For a whole-video overview, distribute the remaining useful findings across these segment-ID ranges: beginning 0-${Math.floor(input.segments.length / 3) - 1}, middle ${Math.floor(input.segments.length / 3)}-${Math.floor(2 * input.segments.length / 3) - 1}, ending ${Math.floor(2 * input.segments.length / 3)}-${input.segments.length - 1}. After the reserved ending finding, choose a substantive middle-range finding before early material. Balance coverage; do not fill the budget with the first chapters, repeat claims or invent content for an empty range. These are coverage checkpoints, not timestamps. Focused questions should select only relevant material instead.`] : []),
+          ...(overview ? [
+            'For a whole-video overview, plan the topic anchors across the entire transcript BEFORE writing findings. Reserve the final requested topic or exercise first, then select major topics from the middle and beginning. Write the reserved ending finding first, then the other selected topics. Do not spend the finding budget on early setup lessons and stop before later material. Combine minor setup details, but never combine distinct exercises under one citation.',
+            ...(input.segments.length >= 3 ? [`For a whole-video overview, distribute the remaining useful findings across these segment-ID ranges: beginning 0-${Math.floor(input.segments.length / 3) - 1}, middle ${Math.floor(input.segments.length / 3)}-${Math.floor(2 * input.segments.length / 3) - 1}, ending ${Math.floor(2 * input.segments.length / 3)}-${input.segments.length - 1}. After the reserved ending finding, choose a substantive middle-range finding before early material. Balance coverage; do not fill the budget with the first chapters, repeat claims or invent content for an empty range. These are coverage checkpoints, not timestamps. Focused questions should select only relevant material instead.`] : []),
+          ] : ['This is a focused question. Return only findings that directly answer the research question and focus. Do not add unrelated topics, setup advice or a final exercise. The maximum finding count is not a target.']),
+          ...(overview ? ['This is a whole-video overview. Write topics FIRST as a compact outline of substantive lessons across the entire transcript, then one finding per topic using its zero-based topicIndex. Choose the actual starting segmentId independently for each finding. Select middle and later lessons as well as setup. Include explicitly requested final topics. A chapter announcement is not a substitute for its actual lesson. Keep each finding concise enough to cover every outlined topic within the output budget.'] : []),
+          ...(requiredTopics ? [`Preserve and cover every topic in this previous outline: ${JSON.stringify(requiredTopics)}. Do not remove topics to satisfy validation.`] : []),
           `Return at most ${attemptMaximum} distinct findings, each with one starting segmentId.`,
           'Return an empty findings array when the transcript does not contain relevant evidence.',
           ...(repairFeedback
@@ -168,10 +179,12 @@ export async function analyzeTranscriptWithModel(
         output: Output.object({
           name: 'TranscriptAnalysis',
           description: 'A complete-video analysis that references application-owned transcript segment IDs.',
-          schema: transcriptAnalystOutputSchema(attemptMaximum, attempt > 0),
+          schema: transcriptAnalystOutputSchema(attemptMaximum, attempt > 0, overview),
         }),
         temperature: 0.1,
-        maxOutputTokens: MAX_ANALYST_OUTPUT_TOKENS,
+        // The outline adds output. A modest ceiling increase avoids resending a long
+        // transcript solely because the added structure exhausts the old budget.
+        maxOutputTokens: overview ? 3_600 : MAX_ANALYST_OUTPUT_TOKENS,
         maxRetries: 2,
         abortSignal: input.signal,
         timeout: { totalMs: ANALYST_WAIT_MS },
@@ -206,6 +219,22 @@ export async function analyzeTranscriptWithModel(
           throw new TranscriptGroundingError('Analysis reached its output limit. Return fewer findings with complete source quotes.');
         }
         parsedOutput = result.output;
+        if (overview) {
+          const topics = overviewTopicsSchema.parse(parsedOutput.topics ?? []);
+          const expected = requiredTopics ?? topics;
+          const indices = parsedOutput.findings.map(finding => z.object({ topicIndex: z.number().int().nonnegative() }).parse(finding).topicIndex);
+          const covered = new Set(indices);
+          const missing = expected.flatMap((topic, topicIndex) => covered.has(topicIndex) ? [] : [{ topicIndex, topic }]);
+          // Preserve only a valid plan; an empty or duplicate outline can be repaired.
+          if (topics.length && new Set(topics).size === topics.length) requiredTopics ??= topics;
+          if ((!topics.length && parsedOutput.findings.length > 0) || new Set(topics).size !== topics.length
+            || JSON.stringify(topics) !== JSON.stringify(expected) || indices.some(index => index >= topics.length) || missing.length) {
+            const message = missing.length ? `Missing findings for topics: ${JSON.stringify(missing)}. Return all planned findings.`
+              : 'Preserve the distinct topic outline in its original order and use its topic indices for findings.';
+            issues.push({ code: 'OVERVIEW_COVERAGE', message });
+            throw new TranscriptGroundingError(message);
+          }
+        }
         const analysis = resolveAnalysis(input.videoId, input.segments, catalog, parsedOutput, input.sourceContext, issue => issues.push(issue));
         emit('accepted', issues.length ? capture() : usage);
         return analysis;
@@ -230,7 +259,7 @@ export async function analyzeTranscriptWithModel(
         emit(error.finishReason === 'length' ? 'rejected' : 'failed', { code: error.finishReason === 'length' ? 'OUTPUT_LIMIT' : 'SCHEMA_INVALID', finishReason: error.finishReason,
           rejectedOutput: error.text?.slice(0, 24000), captureTruncated: (error.text?.length ?? 0) > 24000,
           inputTokens: error.usage?.inputTokens, outputTokens: error.usage?.outputTokens,
-          issues: schemaFailureIssues(error.text, attemptMaximum) });
+          issues: schemaFailureIssues(error.text, attemptMaximum, overview) });
         if (error.finishReason === 'length' && attempt === 0) {
           repairFeedback = 'The previous analysis exhausted its output-token limit. Return fewer findings with complete short source quotes.';
           continue;
@@ -282,6 +311,16 @@ function resolveAnalysis(
     const anchor = segmentByIndex.get(finding.segmentId)!;
     const supportingPassages = [catalog.filter(segment => segment.index >= anchor.index && segment.startMs < anchor.startMs + 60_000)
       .map(segment => segment.text).join('\n')];
+    // Models sometimes duplicate a version/date as a numeric measurement. Only
+    // discard that encoding after the exact literal has independently grounded.
+    finding.quantities = finding.quantities.filter(quantity => !(finding.literalFacts ?? []).some(literal => {
+      if (quantity.quote !== literal.quote || !(literal.value === String(quantity.value)
+        || (literal.kind === 'version' && literal.value.startsWith(`${quantity.value}.`)))) return false;
+      try {
+        assertTranscriptFacts({ claim: '', entities: [], quantities: [], literalFacts: [literal], uncertainty: null }, supportingPassages);
+        return true;
+      } catch (error) { if (!(error instanceof TranscriptGroundingError)) throw error; return false; }
+    }));
     try {
       assertTranscriptFacts(finding, supportingPassages);
     } catch (error) {
@@ -290,6 +329,10 @@ function resolveAnalysis(
       unverifiedFindings += 1;
       // A mixed comparison may contain both an unclear ASR number and a valid
       // measurement. Keep fields checked against their source quotes, never the rejected prose.
+      const literalFacts = (finding.literalFacts ?? []).filter(fact => {
+        try { assertTranscriptFacts({ claim: '', entities: [], quantities: [], literalFacts: [fact], uncertainty: null }, supportingPassages); return true; }
+        catch (error) { if (!(error instanceof TranscriptGroundingError)) throw error; return false; }
+      });
       const quantities = finding.quantities.filter(quantity => {
         try {
           assertTranscriptFacts({ claim: '', entities: [], quantities: [quantity], uncertainty: finding.uncertainty }, supportingPassages);
@@ -301,17 +344,17 @@ function resolveAnalysis(
       });
       if (quantities.length) return [{
         claim: quantities.map(quantity => `${quantity.kind} ${quantity.metric}: ${quantity.value}${quantity.unit ?? ' (unit unclear)'}`).join('; ') + '.',
-        excerptIds, entities: finding.entities, quantities,
+        excerptIds, entities: finding.entities, literalFacts, quantities,
         uncertainty: ('Only source-checked measurements were retained; the original claim contained unsupported details.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
       }];
       // Nothing checkable survived. Keep the finding marked unverified rather than
       // discarding it; the final answer notes any figure its sources do not contain.
       return [{
-        claim: finding.claim, excerptIds, entities: finding.entities, quantities: [],
-        uncertainty: ('Some figures in this finding could not be matched to the transcript. Treat them as unverified.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
+        claim: finding.claim, excerptIds, entities: finding.entities, literalFacts, quantities: [],
+        uncertainty: ('Some facts in this finding could not be matched to the transcript. Treat them as unverified.' + (finding.uncertainty ? ` ${finding.uncertainty}` : '')).slice(0, 240),
       }];
     }
-    return [{ claim: finding.claim, excerptIds, entities: finding.entities, quantities: finding.quantities, uncertainty: finding.uncertainty }];
+    return [{ claim: finding.claim, excerptIds, entities: finding.entities, ...(finding.literalFacts ? { literalFacts: finding.literalFacts } : {}), quantities: finding.quantities, uncertainty: finding.uncertainty }];
   });
 
   const acceptedIds = new Set(findings.flatMap(finding => finding.excerptIds));
@@ -332,7 +375,7 @@ function resolveAnalysis(
     sourceContext,
     findings,
     excerpts,
-    warnings: [...output.warnings, ...(segments.some(segment => segment.text && !usableTranscriptSegment(segment.text)) ? ['Oversized transcript captions were omitted without truncation.'] : []), ...(unverifiedFindings ? [`Some figures in ${unverifiedFindings} transcript finding${unverifiedFindings === 1 ? '' : 's'} could not be matched to the transcript and are marked unverified.`] : [])],
+    warnings: [...output.warnings, ...(segments.some(segment => segment.text && !usableTranscriptSegment(segment.text)) ? ['Oversized transcript captions were omitted without truncation.'] : []), ...(unverifiedFindings ? [`Some facts in ${unverifiedFindings} transcript finding${unverifiedFindings === 1 ? '' : 's'} could not be matched to the transcript and are marked unverified.`] : [])],
     coverage: completeCoverage(segments),
   };
 }
@@ -354,9 +397,9 @@ function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
 }
 
-function schemaFailureIssues(text: string | undefined, maximum: number): TranscriptValidationIssue[] {
+function schemaFailureIssues(text: string | undefined, maximum: number, overview = false): TranscriptValidationIssue[] {
   try {
-    const parsed = transcriptAnalystOutputSchema(maximum).safeParse(JSON.parse(text ?? ''));
+    const parsed = transcriptAnalystOutputSchema(maximum, false, overview).safeParse(JSON.parse(text ?? ''));
     if (!parsed.success) return parsed.error.issues.slice(0, 100).map(issue => ({ code: 'SCHEMA_INVALID',
       message: `${issue.path.join('.')}: ${issue.message}`.slice(0, 1000) }));
   } catch {

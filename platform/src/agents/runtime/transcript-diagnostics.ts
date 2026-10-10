@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const transcriptValidationIssueSchema = z.object({
-  code: z.enum(['ENTITY_NOT_SUPPORTED', 'QUANTITY_NOT_SUPPORTED', 'UNIT_NOT_EXPLICIT', 'UNIT_MISMATCH', 'BASIS_NOT_SUPPORTED', 'UNCERTAINTY_MISSING', 'CLAIM_QUANTITY_NOT_SUPPORTED', 'UNKNOWN_WINDOW', 'UNKNOWN_SEGMENT', 'OUTPUT_LIMIT', 'SCHEMA_INVALID']),
+  code: z.enum(['ENTITY_NOT_SUPPORTED', 'LITERAL_NOT_SUPPORTED', 'OVERVIEW_COVERAGE', 'QUANTITY_NOT_SUPPORTED', 'UNIT_NOT_EXPLICIT', 'UNIT_MISMATCH', 'BASIS_NOT_SUPPORTED', 'UNCERTAINTY_MISSING', 'CLAIM_QUANTITY_NOT_SUPPORTED', 'UNKNOWN_WINDOW', 'UNKNOWN_SEGMENT', 'OUTPUT_LIMIT', 'SCHEMA_INVALID']),
   findingIndex: z.number().int().nonnegative().optional().describe('Zero-based index in the rejected model output.'),
   fieldIndex: z.number().int().nonnegative().optional(),
   segmentId: z.number().int().nonnegative().optional(),

@@ -184,3 +184,9 @@ Source excerpts and citation text have a 16,000-character safety limit, independ
 ### Timestamp citation eligibility
 
 For transcript answers with timestamp-tool evidence and no visual or comment evidence, finalization permits only timed transcript excerpts as citations. The same restriction applies to short aliases and full evidence IDs, including saved-context finalization. Metadata remains available for source context but cannot substitute for a playback-time citation. Metadata-only questions retain their ordinary citation behavior. This checks source type and timestamp availability; semantic alignment with the beginning of an explanation still requires evaluation.
+
+### Analyst literal facts and overview scope
+
+Transcript findings may include `literalFacts` containing an exact quoted string and a `version` or `date` kind. This optional field remains compatible with older findings. Measurements retain numeric values and units. The analyst validates literals against the cited explanation and preserves accepted literals in finalizer input.
+
+The saved transcript tool selects `focused` or `overview` scope. Overview output first plans topic names, then associates findings with topic indices while retaining one source segment ID per finding. Missing planned topics trigger at most one repair; repair cannot remove the original obligations. This validates plan completion, not semantic completeness. Topic outlines are temporary and do not alter canonical segment identities or stored citation resolution.

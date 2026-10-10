@@ -8537,6 +8537,8 @@
                                 "type": "string",
                                 "enum": [
                                   "ENTITY_NOT_SUPPORTED",
+                                  "LITERAL_NOT_SUPPORTED",
+                                  "OVERVIEW_COVERAGE",
                                   "QUANTITY_NOT_SUPPORTED",
                                   "UNIT_NOT_EXPLICIT",
                                   "UNIT_MISMATCH",
@@ -10146,6 +10148,8 @@
                             "type": "string",
                             "enum": [
                               "ENTITY_NOT_SUPPORTED",
+                              "LITERAL_NOT_SUPPORTED",
+                              "OVERVIEW_COVERAGE",
                               "QUANTITY_NOT_SUPPORTED",
                               "UNIT_NOT_EXPLICIT",
                               "UNIT_MISMATCH",
@@ -11744,6 +11748,8 @@
                             "type": "string",
                             "enum": [
                               "ENTITY_NOT_SUPPORTED",
+                              "LITERAL_NOT_SUPPORTED",
+                              "OVERVIEW_COVERAGE",
                               "QUANTITY_NOT_SUPPORTED",
                               "UNIT_NOT_EXPLICIT",
                               "UNIT_MISMATCH",

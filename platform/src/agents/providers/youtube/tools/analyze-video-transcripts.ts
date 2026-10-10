@@ -21,17 +21,18 @@ export const analyzeVideoTranscriptsInputSchema = z.object({
     .min(1)
     .max(8)
     .refine((ids) => new Set(ids).size === ids.length, 'Select distinct transcript versions.'),
+  scope: z.enum(['focused', 'overview']).default('focused').describe('Use overview for a whole-video summary covering major topics across the video. Use focused for specific questions or comparisons.'),
   focus: z.string().trim().min(1).max(500),
 });
 export function createAnalyzeVideoTranscriptsTool(context: AgentToolContext) {
   return tool({
     description:
-      'Analyze complete transcripts already saved in this session. Submit selected transcript assetVersions in one batch and a focused evidence question. Never retrieves transcripts or calls YouTube. Retrieve missing transcripts first using get_video_transcript. Independent analyses are bounded by the research target; failures do not discard successful evidence.',
+      'Analyze complete transcripts already saved in this session. Submit selected transcript assetVersions in one batch and an evidence question. Choose scope overview for a whole-video summary, or focused for specific questions. Never retrieves transcripts or calls YouTube. Retrieve missing transcripts first using get_video_transcript. Independent analyses are bounded by the research target; failures do not discard successful evidence.',
     inputSchema: analyzeVideoTranscriptsInputSchema,
-    execute: async ({ assetVersions, focus }, { toolCallId }) => {
+    execute: async ({ assetVersions, focus, scope }, { toolCallId }) => {
       const outcomes = await Promise.allSettled(
         assetVersions.map((assetVersion, index) =>
-          executeAnalyzeVideoTranscript({ assetVersion, focus }, context, `${toolCallId}:${index}`),
+          executeAnalyzeVideoTranscript({ assetVersion, focus, scope }, context, `${toolCallId}:${index}`),
         ),
       );
       context.signal.throwIfAborted();
@@ -55,12 +56,12 @@ export function createAnalyzeVideoTranscriptsTool(context: AgentToolContext) {
   });
 }
 export async function executeAnalyzeVideoTranscript(
-  input: { assetVersion: string; focus: string },
+  input: { assetVersion: string; focus: string; scope?: 'focused' | 'overview' },
   context: AgentToolContext,
   toolCallId: string,
 ) {
   const parsed = z
-    .object({ assetVersion: assetVersionSchema, focus: analyzeVideoTranscriptsInputSchema.shape.focus })
+    .object({ assetVersion: assetVersionSchema, focus: analyzeVideoTranscriptsInputSchema.shape.focus, scope: analyzeVideoTranscriptsInputSchema.shape.scope })
     .parse(input);
   if (context.transcriptPolicy.mode !== 'contextual_analysis')
     throw new Error('Read the saved transcript directly in single-video inspection.');
@@ -94,7 +95,7 @@ export async function executeAnalyzeVideoTranscript(
           context.signal,
           () =>
             analystEvidence(
-              { videoId: asset.videoId, focus: parsed.focus },
+              { videoId: asset.videoId, focus: parsed.focus, scope: parsed.scope },
               context,
               transcript.segments,
               sourceId,
@@ -151,7 +152,7 @@ export async function executeAnalyzeVideoTranscript(
 }
 
 async function analystEvidence(
-  input: { videoId: string; focus: string },
+  input: { videoId: string; focus: string; scope: 'focused' | 'overview' },
   context: AgentToolContext,
   segments: TranscriptSegment[],
   sourceId: string,
@@ -170,6 +171,7 @@ async function analystEvidence(
       sourceContext,
       researchQuestion: context.transcriptPolicy.researchQuestion,
       focus: input.focus,
+      scope: input.scope,
       segments,
       signal: context.signal,
       modelCallId: toolCallId,

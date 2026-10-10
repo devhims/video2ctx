@@ -4,9 +4,29 @@ The initial checks on October 10, 2026 used the saved API transcript for `SqcY0G
 
 ## Status
 
-The implementation preserves exact source segments within the documented source-text size bound, uses flat numeric input, removes per-claim character limits, and supports timestamp neighborhoods. Keep the PR in draft pending the remaining analyst overview coverage issue documented in the latest rollout below. A syntactically valid ID is not proof that its caption supports the whole answer block.
+The implementation preserves exact source segments within the documented source-text size bound, uses flat numeric input, removes per-claim character limits, and supports timestamp neighborhoods. Keep the PR in draft pending the remaining semantic citation/scope issues documented in the schema follow-up below. A syntactically valid ID is not proof that its caption supports the whole answer block.
 
-## Latest rollout: DeepSeek text, GLM visuals
+## Schema follow-up: literal facts and overview planning
+
+Versions and dates now have quoted string values in `literalFacts`. They do not require measurement units. Validation rejects changed or truncated strings such as `5.2` quoted from `5.2.3`. Existing measurements and counts retain their unit and quote checks. If the model duplicates a verified literal as a number under the same quote, the application retains the exact literal and discards only that duplicate numerical encoding. Old stored findings without `literalFacts` remain readable, and the field survives projection to the finalizer.
+
+The saved-transcript analysis tool now accepts `scope: focused | overview`, defaulting to focused for compatibility. The planner selects this scope; the application does not guess it from keywords. Overview mode returns a short topic outline followed by findings carrying a `topicIndex` and one independent starting `segmentId`. Every planned topic must have a finding. One repair is allowed, retaining the original outline so the model cannot pass by deleting missing topics. This checks delivery against the plan, not whether the plan lists every important topic. The outline is temporary validation data, not another copy of transcript evidence.
+
+Overview mode permits at least eight findings and 3,600 output tokens. Focused mode keeps the previous five-finding default and 2,400-token ceiling. The larger overview ceiling avoids repeating a long input just because the added outline exceeds the old output budget. Neither mode restores a per-claim character cap or windowed transcript input.
+
+The final React and Hindi overview cases used one call each: React 23,980 input / 1,287 output; Hindi 70,892 / 2,000. The prior analyst runs used 23,492 / 1,502 and 70,404 / 2,195. Total usage increased about 1.1% and 0.4%, respectively. This is not an isolated schema A/B: the prior harness allowed 12 findings, while the latest run uses the production default, raised to eight for overview mode. React now includes middle state/props material and the final alert; Hindi includes middle modules/server material and deployment.
+
+The focused React case used 23,642 input / 531 output. All requested values, Node `16` and `19`, Vite `4.1.0`, Bootstrap `5.2.3`, and React's creation year `2011`, survived source validation as exact strings. Its strict no-warning check still failed because the model added an unrequested React/React DOM version finding under an earlier citation. That finding was marked unverified. Keep this failing assertion; the schema fix does not guarantee semantic relevance.
+
+The first short-video run used 4,635 input / 1,463 output. Its ending assertion failed against the original 7:04 checkpoint. Manual source review established that the conclusion begins at segment 103, 7:02.06, with “that's just fan fiction,” before rejecting the extended theory and stating the narrower conclusion. The selected segment was appropriate. The fixture boundary was corrected to that exact start and the comparison made inclusive. The original failed result is retained. The separate rerun passed with 4,635 input / 1,159 output tokens in 1 call. Across the latest applicable runs, all three overview checks passed; the focused case retains the no-warning failure described above.
+
+Earlier experiments are retained, including the Hindi output-limit retry, overly strict matching of outline citation IDs, and a focused run that still encoded integer versions as quantities. The final design uses topic indices, explicit integer-version guidance and an independent citation anchor. No claim of eliminating hallucinations follows from valid IDs: some overview findings still combine material from several lessons, and noisy Hindi captions still produce unverified facts. The PR remains draft for these quality limits.
+
+Build and 1,640 unit tests passed. The five Workers integration suites passed all 306 tests after the storage-compatible literal field was added; later changes affected only overview planning, prompts and tests. New regressions cover literal preservation, altered strings, duplicate numerical encodings, finalizer projection, missing-topic repair, attempted outline deletion, invalid topic indices, focused output and tool scope propagation. The six finalizer live cases from the preceding rollout were not rerun for this analyst-focused change.
+
+Artifacts are under `.scratch/pr178-deepseek-validation/topic-index-final/` and `topic-index-boundary/`, with earlier experiments preserved in the neighboring directories. No production deployment or fresh production comparison was performed.
+
+## Previous rollout: DeepSeek text, GLM visuals
 
 Production configuration now selects DeepSeek v4p1 Flash for classification, research, transcript analysis, memory updates and final answers. GLM remains the visual model. DeepSeek requests explicitly disable reasoning and do not reserve reasoning output tokens. Local overrides must also clear the GLM-only finalizer reasoning setting.
 
@@ -49,7 +69,7 @@ Run `platform/test/transcript-rollout.live.test.ts` with `TRANSCRIPT_ROLLOUT_MAN
 ## Automated checks
 
 - Platform build, including dependency prebuilds and TypeScript checks.
-- Node suite: 1,626 tests passed, 61 opt-in tests skipped (latest rollout).
+- Node suite: 1,640 tests passed, 61 opt-in tests skipped (schema follow-up).
 - Workers integration: 306 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, model-selected timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.

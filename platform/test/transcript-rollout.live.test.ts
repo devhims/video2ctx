@@ -23,7 +23,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds
 
 describe.skipIf(!cases.length)('configured transcript rollout', () => {
   it.skipIf(!!cases.length)('requires an explicit local fixture manifest', () => {});
-  for (const fixture of cases) for (const task of ['overview', 'time', 'analyst'] as const) {
+  for (const fixture of cases) for (const task of (fixture.name === 'react' ? ['overview', 'time', 'analyst', 'facts'] as const : ['overview', 'time', 'analyst'] as const)) {
     it(`${fixture.name}: ${task}`, async () => {
       const transcript = load(fixture.transcript) as Transcript;
       const video = load(fixture.video);
@@ -59,16 +59,23 @@ describe.skipIf(!cases.length)('configured transcript rollout', () => {
       const message = (task === 'time' ? `What is being explained at ${fixture.times.map(clock).join(' and ')}? Explain each moment in English.` : fixture.overview)
         + ` Use only the spoken transcript, not frames or storyboards. https://www.youtube.com/watch?v=${transcript.videoId}`;
       try {
-        if (task === 'analyst') {
+        if (task === 'analyst' || task === 'facts') {
           analysis = await analyzeTranscriptWithModel({ model: modelFor('transcript_analyst'), videoId: transcript.videoId,
-            researchQuestion: fixture.overview, focus: 'Cover the major topics across the beginning, middle and ending. Give the final topic its own finding.',
-            segments: transcript.segments, signal: AbortSignal.timeout(180000), maxFindings: 12 });
+            researchQuestion: task === 'facts' ? 'Which Node, Vite and Bootstrap versions does the instructor specify, and what year was React created? Preserve exact versions.' : fixture.overview,
+            focus: task === 'facts' ? 'Separate findings for the Node requirements and demonstrated version, Vite version, Bootstrap version, and React creation year.' : 'Cover the major topics across the beginning, middle and ending. Give the final topic its own finding.',
+            segments: transcript.segments, signal: AbortSignal.timeout(180000), maxFindings: 5, scope: task === 'facts' ? 'focused' : 'overview' });
           expect(analysis.findings.length).toBeGreaterThan(0);
           for (const excerpt of analysis.excerpts) expect(transcript.segments.some(segment => segment.text === excerpt.text
             && segment.startMs === excerpt.startMs && segment.endMs === excerpt.endMs)).toBe(true);
-          expect(analysis.excerpts.some(excerpt => excerpt.startMs > fixture.endingStartMs)).toBe(true);
+          if (task === 'facts') {
+            const values = analysis.findings.flatMap(finding => finding.literalFacts ?? []).map(fact => fact.value);
+            for (const value of ['16', '19', '4.1.0', '5.2.3', '2011']) expect(values).toContain(value);
+            expect(analysis.warnings).toEqual([]);
+          } else {
+          expect(analysis.excerpts.some(excerpt => excerpt.startMs >= fixture.endingStartMs)).toBe(true);
           expect(analysis.excerpts.some(excerpt => excerpt.startMs >= transcript.segments.at(-1)!.endMs * 0.5
             && excerpt.startMs < transcript.segments.at(-1)!.endMs * 0.8)).toBe(true);
+          }
         } else {
           const unexpected = async (): Promise<never> => { throw new Error('Unexpected provider request'); };
           const context: AgentToolContext = {
@@ -100,7 +107,7 @@ describe.skipIf(!cases.length)('configured transcript rollout', () => {
             for (const time of fixture.times) expect(answer!.citations.some(citation => citation.startMs! >= (time - 90) * 1000 && citation.startMs! <= (time + 30) * 1000)).toBe(true);
           } else {
             for (const term of fixture.terms) expect(answer!.answer.toLowerCase()).toContain(term);
-            expect(answer!.citations.some(citation => citation.startMs! > fixture.endingStartMs)).toBe(true);
+            expect(answer!.citations.some(citation => citation.startMs! >= fixture.endingStartMs)).toBe(true);
           }
         }
         expect(requests.length).toBeGreaterThan(0);
