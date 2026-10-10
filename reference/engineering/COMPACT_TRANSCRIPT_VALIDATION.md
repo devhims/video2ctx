@@ -10,7 +10,7 @@ The implementation preserves exact source segments within the documented source-
 
 - Platform build, including dependency prebuilds and TypeScript checks.
 - Node suite: 1,620 tests passed, 60 opt-in tests skipped.
-- Workers integration: 301 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
+- Workers integration: 306 tests across session evidence, agent billing, runtime behavior, memory updates and shared catalog storage.
 - Added checks for original whitespace, captions longer than 2,000 characters, empty-caption index stability, overlapping timestamps, boundaries and gaps, unknown references, version isolation, stable numbers across context expansion, legacy search offsets, deletion, model-selected timestamp routing, separate timestamped links for different passages in one video, and long claims surviving finalization.
 - A large reference schema remains under 300 serialized characters while application validation rejects unknown IDs. This prevents a second transcript-sized identifier catalog in the output schema.
 
@@ -71,3 +71,12 @@ The direct-resolution change stopped new canonical transcript captions from bein
 - Evidence APIs are consistently asynchronous; saved citation parsing and timestamp overlap checks use shared helpers. Corrected the duplicated word in the quantity-basis prompt.
 
 New regressions cover a five-row table without repair, clock-like messages without retrieval, source-read failure, existing-evidence fallback, cancellation of a stalled read, oversized-caption omission, passive index behavior and targeted deserialization. No new live-model quality or token comparison was run for this follow-up.
+
+
+## Citation finalization follow-up
+
+Only a failed or timed-out storage read permits saving a research answer with no resolved citations. Unknown IDs still produce the citation-required 422. Earlier-turn evidence and metadata use the same resolution context as final answer construction, so they need no redundant storage read and do not produce a partial-evidence warning.
+
+Storage warnings are appended to the output, leaving the model input's 50-warning limit intact. Concurrent citation and ordinary transcript reads share a fetch while only ordinary reads mark the video as requested. The inspection prompt now refers to context returned by the timestamp tool. Removed the redundant analyst caption-size check after catalog filtering.
+
+The platform build, 1,620 unit tests and 306 Workers integration tests passed. Regressions cover invalid-only research citations, earlier-turn frames and metadata during a storage outage, mixed valid and unknown references, storage failure with 50 input warnings, and concurrent reads in either order. No fresh live-model or production test was performed.

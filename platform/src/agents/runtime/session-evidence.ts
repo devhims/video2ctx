@@ -109,7 +109,7 @@ export function sessionBriefForModel(brief: SessionBrief) {
 export class SessionEvidenceStore implements SessionAccess {
   readonly search: SessionSearch;
   private readonly pending = new Map<string, Promise<CachedResult<unknown>>>();
-  private readonly reads = new Map<string, Promise<unknown | null>>();
+  private readonly reads = new Map<string, { value: Promise<unknown | null>; requested?: Promise<void> }>();
   constructor(
     private readonly sql: SqlStorage,
     private readonly bucket: R2Bucket,
@@ -388,18 +388,27 @@ export class SessionEvidenceStore implements SessionAccess {
     return value === null ? null : { asset, value };
   }
   async read(version: string, markRequested = true): Promise<unknown | null> {
-    const key = `${this.generation()}:${version}:${markRequested}`;
-    const pending = this.reads.get(key);
-    if (pending) return pending;
-    const work = this.readStored(version, markRequested);
-    this.reads.set(key, work);
+    const generation = this.generation();
+    // Share storage reads regardless of whether the caller records a video request.
+    const key = `${generation}:${version}`;
+    let pending = this.reads.get(key);
+    if (!pending) {
+      pending = { value: this.readStored(version) };
+      this.reads.set(key, pending);
+    }
     try {
-      return await work;
+      const value = await pending.value;
+      if (generation !== this.generation() || !this.has(version)) return null;
+      if (markRequested && value !== null && this.onVideoRead) {
+        const row = this.sql.exec<{ video_id: string }>('SELECT video_id FROM session_assets WHERE version=?', version).toArray()[0];
+        if (row) await (pending.requested ??= this.onVideoRead(row.video_id));
+      }
+      return generation === this.generation() && this.has(version) ? value : null;
     } finally {
-      this.reads.delete(key);
+      if (this.reads.get(key) === pending) this.reads.delete(key);
     }
   }
-  private async readStored(version: string, markRequested: boolean): Promise<unknown | null> {
+  private async readStored(version: string): Promise<unknown | null> {
     const generation = this.generation();
     const row = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).toArray()[0];
     if (!row) return null;
@@ -435,7 +444,6 @@ export class SessionEvidenceStore implements SessionAccess {
     if (generation !== this.generation()) return null;
     if (value !== null && this.has(version) && row.kind === 'transcript'
       && !this.sql.exec('SELECT 1 FROM session_segment_refs WHERE version=?', version).toArray().length) this.indexSegmentRefs(version, value as Transcript);
-    if (markRequested && value !== null && this.has(version)) await this.onVideoRead?.(row.video_id);
     return this.has(version) && generation === this.generation() ? value : null;
   }
   private linkCatalog(version: string, reference: SessionCatalogReference) {

@@ -266,7 +266,7 @@ function resolveAnalysis(
     const segmentIndexes = [finding.segmentId];
     const excerptIds = segmentIndexes.map((segmentIndex) => {
       const segment = segmentByIndex.get(segmentIndex);
-      if (!segment || !usableTranscriptSegment(segment.text)) {
+      if (!segment) {
         onIssue?.({ code: 'UNKNOWN_SEGMENT', findingIndex, segmentId: segmentIndex, message: `Unknown segment ${segmentIndex}; available indexes are 0 through ${Math.max(0, segments.length - 1)}.` });
         throw new TranscriptAnalysisInvalidReferenceError(
           `Transcript analyst referenced unknown segment ID ${segmentIndex}; available indexes are 0 through ${Math.max(0, segments.length - 1)}.`,

@@ -1241,3 +1241,25 @@ test('targeted citation lookup and memory validation ignore unrelated packet pay
       expect(remember(reopen(), 'invalid-memory', [{ kind: 'finding', topic: 'invalid', text: 'Invalid', evidenceIds: [`evidence:${version}:segment:999999`] }]).applied).toBe(0);
     } finally { spy.mockRestore(); }
   }));
+
+
+test.each([false, true])('concurrent passive and requested reads share one storage fetch (active first: %s)', async activeFirst =>
+  within(`shared-caption-read-${activeFirst}`, async (store, _reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    const version = store.brief().assets[0]!.version;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const get = vi.fn(async (...args: Parameters<R2Bucket['get']>) => { await gate; return env.RESEARCH.get(...args); });
+    const requested = vi.fn(async () => {});
+    const reader = new SessionEvidenceStore(sql, { get } as unknown as R2Bucket, `test-session/shared-caption-read-${activeFirst}/`, requested);
+    const first = reader.read(version, activeFirst);
+    const second = reader.read(version, !activeFirst);
+    expect(get).toHaveBeenCalledOnce();
+    expect(requested).not.toHaveBeenCalled();
+    release();
+    const values = await Promise.all([first, second]);
+    expect(values[0]).toEqual(values[1]);
+    expect(values[0]).not.toBeNull();
+    expect(requested).toHaveBeenCalledExactlyOnceWith(id);
+    expect(get).toHaveBeenCalledOnce();
+  }));

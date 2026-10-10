@@ -505,14 +505,20 @@ test.each(['cancel', 'single-delete', 'bulk-delete'] as const)('citation hydrati
   });
 });
 
-test('caption storage failure preserves the answer with unavailable citations', async () => {
-  const { runtime, addRun } = await seed('citation-storage-unavailable');
+test.each([0, 50])('caption storage failure preserves the answer with %s input warnings', async warningCount => {
+  const { runtime, addRun } = await seed(`citation-storage-unavailable-${warningCount}`);
   await runInDurableObject(runtime, async instance => {
     const runId = await addRun(instance, 1);
     const { version } = await evidence(instance, runId);
     const store = internals(instance).sessionStore;
     vi.spyOn(store, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
-    const saved = await internals(instance).finalizeRun(runId, 'final', answer(`An explanation. [cite:evidence:${version}:segment:0]`));
+    const input = answer(`An explanation. [cite:evidence:${version}:segment:0]`);
+    input.intent = 'inspect_video';
+    input.warnings = Array.from({ length: warningCount }, (_, i) => ({ code: `TEST_${i}`, message: `Warning ${i}` }));
+    instance.sql`UPDATE agent_routes SET decision_json = ${JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false })} WHERE run_id = ${runId}`;
+    const saved = await internals(instance).finalizeRun(runId, 'final', input);
+    expect(saved.warnings.filter(warning => warning.code.startsWith('TEST_'))).toHaveLength(warningCount);
+    expect(input.warnings).toHaveLength(warningCount);
     expect(saved.answer).toBe('An explanation. [source unavailable]');
     expect(saved.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')).toBe(true);
     expect(jobs(instance)).toHaveLength(1);
@@ -546,5 +552,18 @@ test('cancellation interrupts a stalled caption read without waiting for storage
     await rejected;
     expect(read).toHaveBeenCalledOnce();
     expect(jobs(instance)).toEqual([]);
+  });
+});
+
+
+test('unknown citations do not bypass the research citation requirement', async () => {
+  const { runtime, addRun } = await seed('citation-invalid-only');
+  await runInDurableObject(runtime, async instance => {
+    const runId = await addRun(instance, 1);
+    instance.sql`UPDATE agent_routes SET decision_json = ${JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false })} WHERE run_id = ${runId}`;
+    const input = { ...answer('An invented claim. [cite:made-up]'), intent: 'inspect_video' as const };
+    await expect(internals(instance).finalizeRun(runId, 'final', input)).rejects.toMatchObject({ status: 422, code: 'AGENT_CITATION_REQUIRED' });
+    expect(jobs(instance)).toEqual([]);
+    expect(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId}`[0]).toEqual({ result_json: null });
   });
 });

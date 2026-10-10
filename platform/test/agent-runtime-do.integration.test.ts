@@ -239,17 +239,20 @@ test('restores provider metadata for follow-ups and validates historical citatio
     const citationId = history[0]!.metadata![0]!.excerpts[0]!.id;
     const route = JSON.stringify({ route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false });
     instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
+    const citationRead = vi.spyOn((instance as unknown as { sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore }).sessionStore, 'evidenceForCitations').mockRejectedValue(new Error('R2 unavailable'));
     const result = await methods.finalizeRun(receipt.runId, 'final', { intent: 'inspect_video', confidence: 'medium',
       answer: `The earlier record showed 404433 views. [cite:${citationId}]`, citations: [], artifacts: [], warnings: [] });
     expect(result.citations[0]).toMatchObject({ videoId: 'abcdefghijk' });
+    expect(citationRead).not.toHaveBeenCalled();
+    expect(result.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')).toBe(false);
     expect(result.billing.creditsCharged).toBe(0);
     expect(instance.sql`SELECT * FROM agent_evidence_packets WHERE run_id = ${receipt.runId}`).toHaveLength(0);
     fiber.mockRestore();
   });
 });
 
-test('direct finalization restores cited frame evidence from ancestors and marks other references unavailable', async () => {
-  const { runtime, userId, runId, conversationId } = await seed('agent-frame-context', 'completed');
+test.each([false, true])('direct finalization restores earlier frame evidence (include unknown citation: %s)', async includeUnknown => {
+  const { runtime, userId, runId, conversationId } = await seed(`agent-frame-context-${includeUnknown}`, 'completed');
   await runInDurableObject(runtime, async instance => {
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
     const citation = { id: 'frame-proof', sourceId: 'video', provider: 'youtube', videoId: 'abcdefghijk',
@@ -283,12 +286,17 @@ test('direct finalization restores cited frame evidence from ancestors and marks
       expect(() => methods.readConversationHistory({ ...row, user_id: 'other-user' })).toThrow(/parent/);
       const route = JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Correct the earlier roles.' });
       instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
+      const citationRead = vi.spyOn((instance as unknown as { sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore }).sessionStore, 'evidenceForCitations');
+      if (!includeUnknown) citationRead.mockRejectedValue(new Error('R2 unavailable'));
       const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
-        answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
+        answer: `The woman holds the microphone. [cite:frame-proof]${includeUnknown ? ' [cite:uncited-proof]' : ''}` };
       const result = await methods.finalizeRun(receipt.runId, 'final', input);
-      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable]');
+      expect(result.answer).toBe(`The woman holds the microphone. [cite:frame-proof]${includeUnknown ? ' [source unavailable]' : ''}`);
+      if (includeUnknown) expect(citationRead).toHaveBeenCalledExactlyOnceWith(['uncited-proof']);
+      else expect(citationRead).not.toHaveBeenCalled();
       expect(result.citations).toEqual([{ ...citation, url: 'https://www.youtube.com/watch?v=abcdefghijk&t=30' }]);
-      expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
+      expect(result.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')).toBe(false);
+      if (includeUnknown) expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
       expect(result.billing.creditsCharged).toBe(0);
       expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${receipt.runId}`)
         .toMatchObject([{ tool_name: 'finalize_answer', credits: 0 }]);

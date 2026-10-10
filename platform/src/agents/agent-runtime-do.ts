@@ -904,7 +904,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
     const generation = this.sessionStore.generation();
     const runEvidence = this.readEvidencePackets(runId);
-    const available = new Set(runEvidence.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)));
+    const initialHistory = this.readConversationHistory(initial);
+    const availableEvidence = conversationEvidence(evidenceWithConversationMetadata(runEvidence, initialHistory), initialHistory);
+    const available = new Set(availableEvidence.flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)));
     const missing = citedIds.filter(id => !available.has(id));
     let citedSessionEvidence: EvidencePacket[] = [];
     let resolutionFailed = false;
@@ -915,7 +917,6 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       try {
         citedSessionEvidence = await withRunDeadline(Date.now() + AGENT_PERSISTENCE_TIMEOUT_MS, controller.signal,
           () => this.sessionStore.evidenceForCitations(missing), 'Citation resolution timeout.');
-        resolutionFailed = missing.some(id => !citedSessionEvidence.some(packet => packet.excerpts.some(excerpt => excerpt.id === id)));
       } catch {
         controller.signal.throwIfAborted();
         resolutionFailed = true;
@@ -925,7 +926,6 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       }
     }
     if (generation !== this.sessionStore.generation()) throw new Error('Session evidence changed during citation resolution.');
-    if (resolutionFailed) parsedInput.warnings.push({ code: 'PARTIAL_EVIDENCE', message: 'Some citation sources could not be loaded. Their claims remain marked as source unavailable.' });
     // After optional asset hydration, validation and commit run synchronously. Cancellation,
     // evidence deletion or a concurrent finalize cannot interleave between validating
     // this answer and persisting it.
@@ -971,6 +971,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
     } : undefined, resolutionFailed);
+    // System warnings belong to the output, not the model's capped warning input.
+    if (resolutionFailed) result.warnings.push({ code: 'PARTIAL_EVIDENCE', message: 'Some citation sources could not be loaded. Their claims remain marked as source unavailable.' });
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);
