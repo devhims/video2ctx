@@ -378,13 +378,15 @@ it.each([
   expect(() => assertTranscriptFacts({ claim: quote, entities: [], quantities: [], literalFacts: [{ kind: 'version', value, quote }], uncertainty: null }, [source])).not.toThrow();
 });
 
-it('keeps a cropped literal unverified even when duplicated as a unitless quantity', async () => {
-  const text = 'Use Bootstrap 5.2.3.';
-  const quote = 'Use Bootstrap 5.2';
+it.each([
+  ['Use Bootstrap 5.2.3.', 'Use Bootstrap 5.2', '5.2', 5.2],
+  ['Use version 1.2.3+7.', '7', '7', 7],
+  ['Use version 1+build.7.', '1', '1', 1],
+] as const)('keeps a cropped literal unverified even when duplicated as a unitless quantity: %s', async (text, quote, value, number) => {
   const model = new MockLanguageModelV4({ doGenerate: async () => ({
     content: [{ type: 'text', text: JSON.stringify({ findings: [{ claim: quote, segmentId: 0, entities: [], uncertainty: null,
-      literalFacts: [{ kind: 'version', value: '5.2', quote }],
-      quantities: [{ metric: 'Bootstrap version', value: 5.2, unit: null, basis: null, kind: 'reported', quote }],
+      literalFacts: [{ kind: 'version', value, quote }],
+      quantities: [{ metric: 'software version', value: number, unit: null, basis: null, kind: 'reported', quote }],
     }], warnings: [] }) }], finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
     usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 100, text: 100, reasoning: undefined } },
   }) });
@@ -392,4 +394,22 @@ it('keeps a cropped literal unverified even when duplicated as a unitless quanti
     segments: [{ text, startMs: 0, endMs: 1000, durationMs: 1000 }], signal: new AbortController().signal });
   expect(result.findings[0]!.uncertainty).toContain('unverified');
   expect(result.warnings).toEqual([expect.stringContaining('could not be matched')]);
+});
+
+
+it.each([
+  ['1.2.3+7', '7'],
+  ['1.2.3+7', '1.2.3'],
+  ['1.2.3+build.7', '1.2.3'],
+  ['1.2.3+build.7', 'build.7'],
+  ['1.2.3-rc.1+build.7', '1.2.3-rc.1'],
+  ['1.2.3+build.7', '7'],
+])('rejects build-metadata crops: %s to %s', (version, value) => {
+  expect(() => assertTranscriptFacts({ claim: `Use version ${value}.`, entities: [], quantities: [], uncertainty: null,
+    literalFacts: [{ kind: 'version', value, quote: value }] }, [`Use version ${version}.`])).toThrow('Unsupported');
+});
+
+it.each(['1.2.3+7', '1.2.3+build.7', '1.2.3-rc.1+build.7', '7'])('accepts the complete version %s', value => {
+  expect(() => assertTranscriptFacts({ claim: `Use version ${value}.`, entities: [], quantities: [], uncertainty: null,
+    literalFacts: [{ kind: 'version', value, quote: value }] }, [`Use version ${value}.`])).not.toThrow();
 });

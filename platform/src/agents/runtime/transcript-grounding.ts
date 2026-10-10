@@ -106,9 +106,11 @@ export function assertTranscriptFacts(finding: TranscriptFacts & { claim: string
   for (const [fieldIndex, fact] of (finding.literalFacts ?? []).entries()) {
     const quote = normalized(fact.quote);
     const value = normalized(fact.value);
-    // Boundaries prevent accepting version 5.2 as a substring of 5.2.3.
+    // Version build metadata is part of the token, including its + separator.
+    // Neither a core version nor a build suffix verifies the complete version.
+    const buildSeparator = fact.kind === 'version' ? '+' : '';
     const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const literal = new RegExp(`(?<![\\p{L}\\p{N}._-])${escaped}(?![\\p{L}\\p{N}_-]|\\.\\d)`, 'uy');
+    const literal = new RegExp(`(?<![\\p{L}\\p{N}._${buildSeparator}-])${escaped}(?![\\p{L}\\p{N}_${buildSeparator}-]|\\.\\d)`, 'uy');
     // A cropped quote must not manufacture a boundary. Match the value at its
     // actual position inside a source occurrence of that exact quote.
     const supported = quote.length > 0 && value.length > 0 && transcript.some(text => {

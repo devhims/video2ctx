@@ -204,3 +204,5 @@ A timestamp lookup with no usable captions returns a citable lookup-status excer
 Overview repair uses the original application-held topic list; it returns findings by index without repeating topic text. Valid unit-bearing measurements remain separate from quoted version/date strings even when their numeric values and source quotes coincide.
 
 Literal validation checks version/date boundaries at the exact quote occurrence in the original supporting passage. A cropped quote cannot turn `5.2.3` into a verified `5.2`. Repeated occurrences are checked independently, and unit-bearing measurements retain their separate validation.
+
+Version-token boundaries include the `+` build-metadata separator. A complete `1.2.3+7` is supported, but neither its core `1.2.3` nor its suffix `7` is verified as a standalone source version. Cropped values remain unverified through the analyst even when also returned as unitless quantities. Date boundaries and measurement validation are unchanged.

@@ -192,3 +192,10 @@ The previous fix kept whole ten-caption windows whenever a window contained any 
 The per-search read cache previously kept every transcript it read until the search ended. It now remembers failed reads for the whole search but keeps at most four successful parsed transcripts, least recently used first. An evicted transcript may be read again; an unavailable transcript is still requested once.
 
 The platform build, 1,663 unit tests and 397 Workers integration tests passed. Added regressions cover Unicode punctuation, Hindi single-word and multi-word queries, cross-caption phrases alone and with another term, a failed read surviving cache eviction across six healthy transcripts, and unit tests for eviction, recency, failure retention for missing blobs and storage errors, and shared in-flight reads. The search still continues until twenty distinct matches or index exhaustion. No live-model or production run was performed.
+
+
+## Version build-metadata boundaries
+
+The source-position check still treated `+` as a boundary, accepting a cropped core or numeric build suffix as a complete version. Version boundaries now include `+` on both sides; date and measurement checks are unchanged. Tests cover numeric and named build suffixes, prerelease-plus-build strings, prefix/suffix crops, complete versions, and both prefix and suffix crops duplicated as unitless quantities through the analyst. Complete versions remain valid; cropped analyst findings retain their unverified warning.
+
+Seven checks failed before the correction. All 77 grounding tests now pass. The platform build, 1,675 unit tests and all 397 Workers tests in the user-account integration configuration passed. No live-model test, production run or deployment was performed. Broader semantic citation/coverage limitations remain open.
