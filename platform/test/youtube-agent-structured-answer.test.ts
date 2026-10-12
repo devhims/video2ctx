@@ -20,6 +20,64 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('preserves the same reference group in inline and fenced code while citing prose', () => {
+    const marker = '[ref_2405, ref_2406]';
+    const code = `Inline: \`${marker}\`.\n\n\`\`\`js\nconst refs = ${marker};\n\`\`\``;
+    const text = `Claim ${marker}.\n\n${code}`;
+    const aliases = new Map([['ref_2405', 'e1'], ['ref_2406', 'e2']]);
+    const block = { text, evidenceIds: ['e1'] };
+    const evidence: EvidencePacket = { ...packet,
+      sources: [{ ...packet.sources[0]!, videoId: 'video000001' },
+        { ...packet.sources[0]!, id: 'source:2', videoId: 'video000002' }],
+      excerpts: [...packet.excerpts, { id: 'e2', sourceId: 'source:2', text: 'Second passage.' }],
+    };
+    expect(blockReferences({ text: code, evidenceIds: [] }, aliases)).toEqual([]);
+    expect(blockReferences(block, aliases)).toEqual(['e1', 'e2']);
+    const input = renderStructuredAnswer({ ...base, blocks: [block] }, aliases);
+    expect(input.answer).toBe(`Claim [cite:e1] [cite:e2].\n\n${code}`);
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 }, input, [evidence], 1);
+    expect(compactAgentResult(result).answer).toBe(`Claim [1][2].\n\n${code}`);
+    expect(renderPartialAnswer({ blocks: [block] })).toBe(`Claim .\n\n${code}`);
+  });
+  it.each([
+    '```js\n[ref_2405, ref_2406]\n```',
+    '```js\n[ref_2405, ref_2406]',
+    '    [ref_2405, ref_2406]',
+    '> ~~~js\n> [ref_2405, ref_2406]\n> ~~~',
+    '- Example:\n\n  ```js\n  [ref_2405, ref_2406]\n  ```',
+  ])('keeps appended citations outside a trailing code block: %s', text => {
+    const rendered = renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] });
+    expect(rendered.answer).toBe(`Sources: [cite:e1]\n\n${text}`);
+  });
+  it('leaves literal canonical markers intact when a prose citation is unavailable', () => {
+    const code = '`[cite:unknown]` and `[cite:e1]`';
+    const result = finalize(['e1'], `Missing [cite:unknown]. Examples ${code}.`);
+    expect(compactAgentResult(result).answer).toBe(`Missing [source unavailable]. Examples ${code}. [1]`);
+    expect(result.citations.map(citation => citation.id)).toEqual(['e1']);
+  });
+  it.each(['[ref_2405, ref_2406]', '[cite:e1]', '[cite:unknown]', '(source marker:e1]'])('does not validate or format code-only markers: %s', marker => {
+    const text = `Inline: \`${marker}\`.\n\n~~~text\n${marker}\n~~~`;
+    const block = { text, evidenceIds: [] };
+    expect(blockReferences(block)).toEqual([]);
+    const input = renderStructuredAnswer({ ...base, intent: 'context_answer', blocks: [block] });
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 }, input, [packet], 1);
+    expect(result.citations).toEqual([]);
+    expect(result.answer).toBe(text);
+    expect(compactAgentResult(result).answer).toBe(text);
+    expect(renderPartialAnswer({ blocks: [block] })).toBe(text);
+  });
+  it.each([
+    '\`\`\`js\n[ref_2405, ref_2406]',
+    'Inline: \`[ref_2405, ref_2406]',
+    'Inline: \`\`a \` [ref_2405, ref_2406]',
+    '> ~~~js\n> [ref_2405, ref_2406]',
+  ])('preserves unfinished code in streaming previews: %s', text => {
+    expect(renderPartialAnswer({ blocks: [{ text }] })).toBe(text);
+  });
   it.each(['[ref_2405, ref_2406]', '【ref_2405, ref_2406】', '[ ref_2405,ref_2406 ]'])('resolves grouped bare references through validation and public formatting: %s', marker => {
     const aliases = new Map([['ref_2405', 'e1'], ['ref_2406', 'e2']]);
     const block = { text: `Claim ${marker}.`, evidenceIds: ['e1'] };

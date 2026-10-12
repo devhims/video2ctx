@@ -1,3 +1,4 @@
+import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { isDurationLimitFallback, type DurationLimitAnswerContext } from './research/duration-limit-answer';
 import { ApiError } from '../lib/http';
 import {
@@ -26,7 +27,7 @@ export function buildAgentTurnResult(
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
 ): AgentTurnResult {
-  const markers = [...new Set([...input.answer.matchAll(CITATION_MARKER)].map((match) => match[1]!))];
+  const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
   const unresolved = new Set<string>();
   for (const marker of markers) {
@@ -59,7 +60,7 @@ export function buildAgentTurnResult(
   }
   // The claim stays, visibly unsupported, as it does after a source is deleted.
   const answer = unresolved.size
-    ? input.answer.replace(CITATION_MARKER, (marker, id: string) => unresolved.has(id) ? '[source unavailable]' : marker)
+    ? mapCitationProse(input.answer, prose => prose.replace(CITATION_MARKER, (marker, id: string) => unresolved.has(id) ? '[source unavailable]' : marker))
     : input.answer;
 
   const warnings = deduplicateWarnings([

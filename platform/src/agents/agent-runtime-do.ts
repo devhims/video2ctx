@@ -1,3 +1,4 @@
+import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
 import { createHash } from 'node:crypto';
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
@@ -325,7 +326,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       if (version && !affectedRuns.has(row.id) && !result.citations.some(citation=>deletedIds.has(citation.id))
         && !result.artifacts.some(artifact=>typeof artifact.data.videoId==='string' && removedVideos.has(artifact.data.videoId))) continue;
       result.citations = result.citations.filter(citation=>!deletedIds.has(citation.id));
-      result.answer = result.answer.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker);
+      result.answer = mapCitationProse(result.answer, prose => prose.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker));
       result.artifacts = [];
       result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. This historical answer is not reusable source evidence.'});
       const serialized = JSON.stringify(result);
@@ -931,7 +932,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     });
     const creditsCharged = this.evidenceLedger.committed(runId);
     const history = this.readConversationHistory(run);
-    const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
+    const citedIds=answerCitationIds(parsedInput.answer);
     const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
     const result = buildAgentTurnResult({
       runId,

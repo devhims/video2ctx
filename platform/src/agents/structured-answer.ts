@@ -1,3 +1,4 @@
+import { endsInCodeBlock, mapCitationProse, trimCitationProse } from './markdown-citations';
 import { parsePartialJson } from 'ai';
 import { z } from 'zod';
 import { finalizeAnswerInputSchema, type FinalizeAnswerInput } from './contracts';
@@ -12,7 +13,7 @@ const fields = finalizeAnswerInputSchema.omit({ answer: true, citations: true, i
 const block = z.object({
   // The SDK bounds generation tokens and the rendered contract bounds total
   // characters. A decoding limit on each paragraph can split words at its edge.
-  text: z.string().trim().min(1).describe('One complete paragraph, list item, or Markdown table. Finish the table within this block. End prose at a natural sentence boundary; never continue a sentence in the next block.'),
+  text: z.string().min(1).regex(/\S/, 'A block must contain non-whitespace text.').describe('One complete paragraph, list item, or Markdown table. Finish the table within this block. End prose at a natural sentence boundary; never continue a sentence in the next block.'),
   evidenceIds: z.array(z.string().regex(/^[A-Za-z0-9:_-]+$/).max(300)).min(1).max(12),
 });
 // Executable routes require references in the transmitted JSON schema itself.
@@ -98,11 +99,10 @@ function closedBlockCount(text: string): number {
 export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | undefined> }): string {
   return (value.blocks ?? []).flatMap(block => {
     if (typeof block?.text !== 'string' || !block.text.trim()) return [];
-    return [block.text
+    return [trimCitationProse(mapCitationProse(block.text, prose => prose
       .replace(/【\s*ref_[^】\n]*(?:】|$)|\[\s*ref_[^\]\n]*(?:\]|$)/g, '')
       .replace(/\[cite:[^\]]*\]?/g, '')
-      .replace(/\(source marker:[^\]]*\]?/g, '')
-      .trim()];
+      .replace(/\(source marker:[^\]]*\]?/g, ''), true), true)];
   }).filter(Boolean).join('\n\n').slice(0, 20_000);
 }
 
@@ -123,7 +123,12 @@ function markerReferences(raw: string, aliases: ReadonlyMap<string, string>): st
 /** Every reference a block's rendered citations come from: declared and inline. The
  * figure and coverage checks use this same set, so they judge what the reader sees. */
 export function blockReferences(block: { text: string; evidenceIds: readonly string[] }, aliases: ReadonlyMap<string, string> = new Map()): string[] {
-  const inline = [...normalizeBareReferences(block.text).matchAll(INLINE_MARKER)].flatMap(([, inlineId, escapedId]) => markerReferences((inlineId ?? escapedId)!, aliases));
+  const inline: string[] = [];
+  mapCitationProse(block.text, prose => {
+    inline.push(...[...normalizeBareReferences(prose).matchAll(INLINE_MARKER)]
+      .flatMap(([, inlineId, escapedId]) => markerReferences((inlineId ?? escapedId)!, aliases)));
+    return prose;
+  });
   return [...new Set([...block.evidenceIds.map(id => aliases.get(id) ?? id), ...inline])];
 }
 
@@ -139,17 +144,18 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     // Inline references stay where the model placed them, even when the block did not
     // declare them; persisted evidence validation decides whether each one resolves.
     // A marker with no usable reference is shown as unavailable rather than dropped.
-    const text = normalizeBareReferences(block.text)
+    const text = mapCitationProse(block.text, prose => normalizeBareReferences(prose)
       .replace(INLINE_MARKER, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
         const ids = markerReferences((inlineId ?? escapedId)!, aliases);
         if (!ids.length) return '[source unavailable]';
         for (const id of ids) placed.add(id);
         return ids.map(id => `[cite:${id}]`).join(' ');
-      });
+      }));
     const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
     // Appending text to the final table row would create an extra cell.
+    if (remaining && endsInCodeBlock(text)) return `Sources: ${remaining}\n\n${text}`;
     const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
-    return remaining ? `${text}${separator}${remaining}`.trim() : text.trim();
+    return trimCitationProse(remaining ? `${text}${separator}${remaining}` : text);
   }).join('\n\n');
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,
