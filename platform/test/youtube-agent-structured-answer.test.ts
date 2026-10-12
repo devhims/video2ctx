@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { zodSchema } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { renderPartialAnswer, renderStructuredAnswer, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, numberedItemsMismatch, fillerOnlyAnswer, salvageTruncatedAnswer } from '../src/agents/structured-answer';
+import { renderPartialAnswer, renderStructuredAnswer, blockReferences, structuredAnswerSchema, finalizationOutputSchema, clarificationAnswerSchema, numberedItemsMismatch, fillerOnlyAnswer, salvageTruncatedAnswer } from '../src/agents/structured-answer';
 import { compactAgentResult } from '../src/agents/response';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -20,6 +20,39 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it.each(['[ref_2405, ref_2406]', '【ref_2405, ref_2406】', '[ ref_2405,ref_2406 ]'])('resolves grouped bare references through validation and public formatting: %s', marker => {
+    const aliases = new Map([['ref_2405', 'e1'], ['ref_2406', 'e2']]);
+    const block = { text: `Claim ${marker}.`, evidenceIds: ['e1'] };
+    const evidence: EvidencePacket = { ...packet,
+      sources: [{ ...packet.sources[0]!, videoId: 'video000001' },
+        { ...packet.sources[0]!, id: 'source:2', videoId: 'video000002' }],
+      excerpts: [...packet.excerpts, { id: 'e2', sourceId: 'source:2', text: 'Second passage.', startMs: 3000, endMs: 4000 }],
+    };
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 },
+    renderStructuredAnswer({ ...base, blocks: [block] }, aliases), [evidence], 1);
+    const compact = compactAgentResult(result);
+    expect(compact.answer).toBe('Claim [1][2].');
+    expect(compact.sources.map(source => source.url)).toEqual([
+      'https://www.youtube.com/watch?v=video000001',
+      'https://www.youtube.com/watch?v=video000002',
+    ]);
+    expect(blockReferences(block, aliases)).toEqual(['e1', 'e2']);
+  });
+  it('marks an unknown grouped bare reference unavailable without inventing a source', () => {
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 },
+    renderStructuredAnswer({ ...base, blocks: [{ text: 'Claim [ref_2405, ref_9999].', evidenceIds: ['e1'] }] },
+      new Map([['ref_2405', 'e1']])), [packet], 1);
+    expect(compactAgentResult(result).answer).toBe('Claim [1] [source unavailable].');
+    expect(result.citations.map(citation => citation.id)).toEqual(['e1']);
+  });
+  it.each(['[ref_2405, ref_2406]', '[ref_2405, ref_', '【ref_2405, ref_2406】'])('hides grouped references in provisional output: %s', marker => {
+    expect(renderPartialAnswer({ blocks: [{ text: `Claim ${marker}` }] })).toBe('Claim');
+  });
+
   it('keeps validated row citations inside a comparison table without leaking evidence IDs', () => {
     const table='| Test | Result | Source |\n| --- | --- | --- |\n| Coding | Supported result | [cite:ref_1] |';
     const input=renderStructuredAnswer({...base,blocks:[{text:table,evidenceIds:['e1']}]},new Map([['ref_1','e1']]));
@@ -193,11 +226,11 @@ describe('structured answer citations', () => {
     expect(result.answer).toBe('Text [source unavailable] [cite:e1]');
     expect(result.citations.map(citation => citation.id)).toEqual(['e1']);
   });
-  it('removes model-written short reference markers before adding validated citations', () => {
+  it('resolves single bare references using the same validation path', () => {
     const rendered = renderStructuredAnswer({ ...base, blocks: [
-      { text: 'Supported claim【ref_1】 with an example[ref_2].', evidenceIds: ['e1'] },
-    ] });
-    expect(rendered.answer).toBe('Supported claim with an example. [cite:e1]');
+      { text: 'Supported claim【ref_1】 with an example[ref_2].', evidenceIds: ['ref_1'] },
+    ] }, new Map([['ref_1', 'e1'], ['ref_2', 'e2']]));
+    expect(rendered.answer).toBe('Supported claim[cite:e1] with an example[cite:e2].');
   });
 });
 

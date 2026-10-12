@@ -99,11 +99,17 @@ export function renderPartialAnswer(value: { blocks?: Array<{ text?: string } | 
   return (value.blocks ?? []).flatMap(block => {
     if (typeof block?.text !== 'string' || !block.text.trim()) return [];
     return [block.text
-      .replace(/【ref_\d*】?|\[ref_\d*\]?/g, '')
+      .replace(/【\s*ref_[^】\n]*(?:】|$)|\[\s*ref_[^\]\n]*(?:\]|$)/g, '')
       .replace(/\[cite:[^\]]*\]?/g, '')
       .replace(/\(source marker:[^\]]*\]?/g, '')
       .trim()];
   }).filter(Boolean).join('\n\n').slice(0, 20_000);
+}
+
+/** Normalize model-written aliases before both reference checks and rendering. */
+function normalizeBareReferences(text: string): string {
+  return text.replace(/\[\s*(ref_\d+(?:\s*,\s*ref_\d+)*)\s*\]|【\s*(ref_\d+(?:\s*,\s*ref_\d+)*)\s*】/g,
+    (_marker, square: string | undefined, wide: string | undefined) => `[cite:${square ?? wide}]`);
 }
 
 const INLINE_MARKER = /\[cite:([^\]]+)\]|\(source marker:([^\]]+)\]/g;
@@ -117,7 +123,7 @@ function markerReferences(raw: string, aliases: ReadonlyMap<string, string>): st
 /** Every reference a block's rendered citations come from: declared and inline. The
  * figure and coverage checks use this same set, so they judge what the reader sees. */
 export function blockReferences(block: { text: string; evidenceIds: readonly string[] }, aliases: ReadonlyMap<string, string> = new Map()): string[] {
-  const inline = [...block.text.matchAll(INLINE_MARKER)].flatMap(([, inlineId, escapedId]) => markerReferences((inlineId ?? escapedId)!, aliases));
+  const inline = [...normalizeBareReferences(block.text).matchAll(INLINE_MARKER)].flatMap(([, inlineId, escapedId]) => markerReferences((inlineId ?? escapedId)!, aliases));
   return [...new Set([...block.evidenceIds.map(id => aliases.get(id) ?? id), ...inline])];
 }
 
@@ -128,13 +134,12 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
   if (fillerOnlyAnswer(input)) throw new z.ZodError([{ code: 'custom', path: ['blocks'],
     message: 'The answer is only a fragment or promise of future work. Answer the request now, or state the concrete missing context. Do not report planned work as completed.' }]);
   const answer = input.blocks.map(block => {
-    const declared = new Set(block.evidenceIds);
+    const declared = new Set(block.evidenceIds.map(id => aliases.get(id) ?? id));
     const placed = new Set<string>();
     // Inline references stay where the model placed them, even when the block did not
     // declare them; persisted evidence validation decides whether each one resolves.
     // A marker with no usable reference is shown as unavailable rather than dropped.
-    const text = block.text
-      .replace(/【ref_\d+】|\[ref_\d+\]/g, '')
+    const text = normalizeBareReferences(block.text)
       .replace(INLINE_MARKER, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
         const ids = markerReferences((inlineId ?? escapedId)!, aliases);
         if (!ids.length) return '[source unavailable]';
