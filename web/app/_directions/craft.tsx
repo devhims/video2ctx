@@ -20,12 +20,29 @@ import { Flashlight } from './flashlight';
 import { FlickeringPixelText } from '../_components/flickering-pixel-text';
 import { ArrowRight } from '@phosphor-icons/react/ssr';
 
-const PARTS = [
-  { name: 'Transcript', detail: 'every line, and the second it was said' },
-  { name: 'Channel', detail: 'who published it, as a resolvable identity' },
-  { name: 'Comments', detail: 'the audience underneath, pinned state intact' },
-  { name: 'Playlist', detail: 'the series it sits in, in order' },
-  { name: 'Search', detail: 'the way in when you have a question, not a link' },
+/* The three things video2ctx does, in the order the page shows them. */
+const PILLARS = [
+  {
+    name: 'Inspect any video',
+    detail:
+      'Transcripts, storyboards, frames, and comments as structured data, through skills, CLI, API, or npm package.',
+  },
+  {
+    name: 'Ask across videos',
+    detail: 'Video Agent finds the relevant videos and answers with sources, usually in under 30 seconds.',
+  },
+  {
+    name: 'Catch what’s new',
+    detail: 'Monitors tell you when a channel or topic posts.',
+  },
+];
+
+/* Where video comes from. YouTube is complete; the rest is the stated
+ * direction, so it is labelled as next rather than dated. */
+const ROADMAP = [
+  { name: 'YouTube', status: 'Full support', live: true },
+  { name: 'Other platforms', status: 'Next' },
+  { name: 'Your own uploads', status: 'Next' },
 ];
 
 /* Each route has a distinct boundary. Skills hold agent guidance, the CLI and
@@ -209,29 +226,34 @@ export function CraftDirection() {
         <section className='craft-parts' aria-labelledby='craft-parts-title'>
           <h2 id='craft-parts-title'>What is video2ctx?</h2>
           <p className='craft-parts-intro'>
-            video2ctx is an open-source toolkit for connecting AI agents to
-            video data. Give it a YouTube URL and it returns transcripts,
-            frames, comments, playlists, channel details, and metadata as
-            structured context, with timestamps and links back to the source.
+            video2ctx turns video into context, for the agents you work with
+            and the apps you build. Point it at a video and get what was said,
+            what was shown on screen, and how viewers reacted, each tied to the
+            moment it happened.
           </p>
-          <p className='craft-parts-integrations'>
-            Start with the skills for direct work. Pair them with the{' '}
-            <b>@video2ctx/cli</b> for authenticated hosted operations, or use
-            the <b>all-things-youtube</b> npm package from server-side
-            TypeScript.
-          </p>
-          <h3>What comes back</h3>
           <ul>
-            {PARTS.map((part, index) => (
+            {PILLARS.map((pillar, index) => (
               <li
-                key={part.name}
+                key={pillar.name}
                 style={{ '--i': index } as React.CSSProperties}
               >
-                <b>{part.name}</b>
-                <span>{part.detail}</span>
+                <b>{pillar.name}</b>
+                <span>{pillar.detail}</span>
               </li>
             ))}
           </ul>
+          <div className='craft-roadmap'>
+            <h3>Where video comes from</h3>
+            <ol>
+              {ROADMAP.map((item) => (
+                <li key={item.name} data-live={item.live ? 'true' : undefined}>
+                  <i aria-hidden='true' />
+                  <strong>{item.name}</strong>
+                  <em>{item.status}</em>
+                </li>
+              ))}
+            </ol>
+          </div>
         </section>
       </div>
 
