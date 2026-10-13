@@ -21,6 +21,23 @@ describe('research and answer responsibilities', () => {
   it.each(['inspect_video', 'topic_research'] as const)('keeps answer guidance in the %s finalizer', route => {
     expect(finalizationAnswerGuidance(route)).toContain('For a detailed report, use compact sections');
   });
+  it('teaches every answer path to replace the YC research preamble with useful content', () => {
+    const answerPrompts = [
+      inspectVideoInstructions('finalize_answer'), researchTopicInstructions('finalize_answer'),
+      finalizationAnswerGuidance('inspect_video'), finalizationAnswerGuidance('topic_research'),
+    ];
+    for (const prompt of answerPrompts) {
+      expect(prompt).toContain('Start directly with useful content');
+      expect(prompt).toContain('Do not open by restating the question or narrating the research process');
+      expect(prompt).toContain('Instead of "How to apply to Y Combinator, based on two fully reviewed videos:');
+      expect(prompt).toContain("start with \"YC's own Startup School talk by Dalton Caldwell recommends applying directly");
+      expect(prompt).toContain('Keep source counts and review coverage in citations, coverage metadata or warnings');
+      expect(prompt).toContain('Respect an explicitly requested opening or format');
+    }
+    for (const instructions of [inspectVideoInstructions, researchTopicInstructions]) {
+      expect(instructions('complete_research')).not.toContain('Start directly with useful content');
+    }
+  });
   it('gives every answer builder the same list-order rule, and keeps it out of evidence collection', () => {
     expect(LIST_ORDER_GUIDANCE).toContain('only when cited evidence about that playlist states it');
     expect(LIST_ORDER_GUIDANCE).toContain('establishes order only within that series, course or event');
