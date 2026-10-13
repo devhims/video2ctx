@@ -14,13 +14,13 @@ const inventorySchema = z.object({
   })),
   memories: z.array(z.object({
     id: z.string(), topic: z.string(), kind: z.string(), text: z.string(),
-    evidenceIds: z.array(z.string()), updatedAt: z.number(),
+    evidenceIds: z.array(z.string()), updatedAt: z.number(), deletedEvidenceIds: z.array(z.string()).optional(),
   })),
 });
 type Inventory = z.infer<typeof inventorySchema>;
 type Asset = Inventory['assets'][number];
 type Selection = { asset: Asset; loading: boolean; data?: unknown; error?: string };
-type Confirmation = { path: string; label: string };
+type Confirmation = { kind: 'source' | 'memory' | 'all'; path: string; label: string };
 const payloadSchema = z.object({ data: z.unknown() });
 const visualSchema = z.object({
   frames: z.array(z.object({ imageBase64: z.string(), timestampMs: z.number() })).optional(),
@@ -120,7 +120,7 @@ export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false
               <ArrowClockwiseIcon className={loading ? 'agent-spin' : undefined} size={15} aria-hidden='true' />Refresh
             </button>
             {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy || !inventory || (!inventory.assets.length && !inventory.memories.length)}
-              onClick={() => confirm({ path: 'assets', label: 'all stored evidence and memory in this session' })}>
+              onClick={() => confirm({ kind: 'all', path: 'assets', label: 'all stored evidence and memory in this session' })}>
               <TrashIcon size={15} aria-hidden='true' />Clear saved data
             </button>}
           </div>
@@ -149,7 +149,7 @@ export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false
                     <button className={`${styles.button} ${styles.viewButton}`} aria-label='View' title={`View ${assetName(asset.kind).toLowerCase()}`} disabled={busy} onClick={() => void view(asset)}><EyeIcon size={15} aria-hidden='true' /><span>View</span></button>
                     {!readOnly && <button className={`${styles.button} ${styles.iconButton} ${styles.danger}`} disabled={busy}
                       aria-label={`Delete ${assetName(asset.kind).toLowerCase()} for ${asset.videoId}`} title='Delete evidence'
-                      onClick={() => confirm({ path: `assets/${asset.version}`, label: `this ${assetName(asset.kind).toLowerCase()}` })}>
+                      onClick={() => confirm({ kind: 'source', path: `assets/${asset.version}`, label: `this ${assetName(asset.kind).toLowerCase()}` })}>
                       <TrashIcon size={16} aria-hidden='true' />
                     </button>}
                   </div>
@@ -163,9 +163,9 @@ export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false
                 <div className={styles.row}>
                   <span className={styles.recordIcon}><BrainIcon size={18} aria-hidden='true' /></span>
                   <div className={styles.copy}><strong>{memory.topic}</strong><p className={styles.memoryText}>{memory.text}</p>
-                    <p className={styles.metadata}>{memory.evidenceIds.length} {memory.evidenceIds.length === 1 ? 'source reference' : 'source references'}</p>
+                    <p className={styles.metadata}>{memory.evidenceIds.length} {memory.evidenceIds.length === 1 ? 'source reference' : 'source references'}{memory.deletedEvidenceIds?.length ? ` · ${memory.deletedEvidenceIds.length} deleted, now unverified` : ''}</p>
                   </div>
-                  {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy} onClick={() => confirm({ path: `memory/${encodeURIComponent(memory.id)}`, label: 'this memory' })}>
+                  {!readOnly && <button className={`${styles.button} ${styles.danger}`} disabled={busy} onClick={() => confirm({ kind: 'memory', path: `memory/${encodeURIComponent(memory.id)}`, label: 'this memory' })}>
                     <TrashIcon size={15} aria-hidden='true' />Forget
                   </button>}
                 </div>
@@ -220,7 +220,11 @@ function DeleteConfirmation({ confirmation, busy, error, onClose, onConfirm }: {
     onCancel={event => { if (busy) event.preventDefault(); }}>
     {confirmation && <div className={styles.confirmationBody}>
       <h2 id={headingId}>Delete saved data?</h2>
-      <p>Delete {confirmation.label}? Related saved findings and source excerpts will also be removed. Conversation messages remain.</p>
+      <p>Delete {confirmation.label}?</p>
+      {confirmation.kind === 'source' && <p>The source and its saved excerpts will be removed. Saved memories remain, with references to this source marked deleted and unverified.</p>}
+      {confirmation.kind === 'memory' && <p>This saved memory will be removed. Saved sources and other memories remain.</p>}
+      {confirmation.kind === 'all' && <p>All saved sources, excerpts, and memories in this session will be removed.</p>}
+      <p>Conversation messages remain, and the agent can still refer to them as earlier conversation.</p>
       {error && <p className='alert error' role='alert'>{error}</p>}
       <div className={styles.actions}>
         <button className={styles.button} disabled={busy} onClick={onClose}>Cancel</button>
