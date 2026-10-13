@@ -48,11 +48,18 @@ export default function AdminCredits({ adminUserId }: { adminUserId: string }) {
 
   useEffect(() => { if (review) reviewHeading.current?.focus(); }, [review]);
 
-  function remember(value: PendingGrant | null) {
+  function remember(value: PendingGrant) {
+    try { sessionStorage.setItem(storageKey, JSON.stringify(value)); }
+    catch { /* In-memory request IDs still protect retries in this view. */ }
+  }
+
+  function forget(requestId: string) {
     try {
-      if (value) sessionStorage.setItem(storageKey, JSON.stringify(value));
-      else sessionStorage.removeItem(storageKey);
-    } catch { /* In-memory request IDs still protect retries in this view. */ }
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as PendingGrant | null;
+      // A completion can outlive its panel. It must not clear a newer grant
+      // saved by the replacement panel while this response was in flight.
+      if (saved?.input?.requestId === requestId) sessionStorage.removeItem(storageKey);
+    } catch { /* Leave an unconfirmed request intact when storage cannot be read. */ }
   }
 
   async function lookup(event: FormEvent) {
@@ -85,17 +92,18 @@ export default function AdminCredits({ adminUserId }: { adminUserId: string }) {
     lock.current = true; setBusy('grant'); setError(''); setPending(draft); remember(draft);
     try {
       const response = await grantCredits(draft.input);
-      remember(null);
+      forget(draft.input.requestId);
       if (!mounted.current) return;
       if (response.user.id === adminUserId) window.dispatchEvent(new CustomEvent<number>(CREDIT_BALANCE_EVENT, { detail: response.user.creditBalance }));
       setPending(null); setReview(false); setResult(response);
       setAccount(current => ({ user: response.user, grants: [response.grant, ...(current?.grants ?? []).filter(grant => grant.id !== response.grant.id)].slice(0, 10) }));
     } catch (cause) {
       if (!mounted.current) return;
-      // Only a definite rejection permits changing the draft. Network and server
-      // failures may have committed, so keep the original payload and request ID.
-      if (cause instanceof PlatformApiError && [401, 403, 404, 409, 422].includes(cause.status)) {
-        setPending(null); remember(null);
+      // Authentication rejects a retry before checking the original receipt.
+      // Keep the ID through 401/403, connection failures and server errors so
+      // an earlier committed grant can still be confirmed after signing in.
+      if (cause instanceof PlatformApiError && [404, 409, 422].includes(cause.status)) {
+        setPending(null); forget(draft.input.requestId);
       }
       setError(cause instanceof Error ? cause.message : 'Could not confirm this grant. Retry to check its result.');
     } finally { lock.current = false; if (mounted.current) setBusy(null); }

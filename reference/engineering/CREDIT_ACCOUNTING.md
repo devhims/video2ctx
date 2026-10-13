@@ -94,7 +94,11 @@ receipt and balance read share one D1 batch. No new migration is needed.
 The browser keeps an unresolved grant in session storage per admin until the
 response confirms it or the server explicitly rejects it. After a connection
 failure, reload or tab change, the review offers a retry with the original ID
-and payload. It never automatically submits the saved grant.
+and payload. Authentication errors retain that request because they occur
+before the server can check an earlier grant’s receipt. A delayed completion
+clears storage only if the saved request ID still matches its own, so an older
+panel cannot erase a newer unconfirmed grant. The browser never automatically
+submits the saved grant.
 
 ```mermaid
 %%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "signalColor": "#475569", "actorBkg": "#f8fafc", "actorTextColor": "#0f172a", "actorBorder": "#64748b"}}}%%
