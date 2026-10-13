@@ -366,7 +366,7 @@ export function CraftDirection() {
         <CraftFaq />
       </div>
 
-      <div className='craft-reveal'>
+      <div className='craft-reveal craft-close-scene'>
         <section className='craft-close' aria-labelledby='craft-close-title'>
           <h2 id='craft-close-title'>Liked the preview? Save the full results.</h2>
           <p>

@@ -2386,6 +2386,40 @@ html:has(.craft) body {
   text-align: center;
 }
 
+/* The page closes on the landscape it opened with: the hero's voxel scene,
+ * full bleed behind the last call to action. It fades in from the top so the
+ * section edge never shows, and fades out before the footer. A static image,
+ * so it costs no motion and no main-thread time. */
+.craft-close-scene {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.craft-close-scene::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: url('/scene/voxel-horizon-symbols-900.webp') 50% 100% / cover no-repeat;
+  opacity: 0.28;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    oklch(0% 0 0 / 0.35) 30%,
+    oklch(0% 0 0) 70%,
+    oklch(0% 0 0 / 0.6) 92%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+@media (min-width: 1101px) {
+  .craft-close-scene::before {
+    background-image: url('/scene/voxel-horizon-symbols.webp');
+  }
+}
+
 .craft-close h2 {
   max-width: 24ch;
   margin-inline: auto;
