@@ -1663,8 +1663,7 @@ html:has(.craft) body {
 }
 
 .craft-parts li,
-.craft-ways li,
-.craft-trust > div {
+.craft-ways li {
   transition-delay: calc(var(--i) * 45ms);
 }
 
@@ -2276,6 +2275,105 @@ html:has(.craft) body {
   aspect-ratio: 16 / 9;
   border: 1px solid var(--rule-strong);
   background: linear-gradient(90deg, var(--paper) 0 68%, var(--rule-strong) 68%);
+}
+
+/* ---------------------------------------------------------------------- faq */
+
+.craft-faq {
+  scroll-margin-top: 5.5rem;
+}
+
+.craft-faq-list {
+  margin-top: clamp(var(--space-xl), 4vh, var(--space-2xl));
+  border-top: 1px solid var(--rule);
+}
+
+.craft-faq details {
+  border-bottom: 1px solid var(--rule);
+}
+
+.craft-faq summary {
+  min-height: 3.5rem;
+  padding: var(--space-md) 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  list-style: none;
+}
+
+.craft-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A plus that turns into a minus: the vertical bar folds flat on open. */
+.craft-faq summary i {
+  width: 0.75rem;
+  height: 0.75rem;
+  position: relative;
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.craft-faq summary i::before,
+.craft-faq summary i::after {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translateY(-50%);
+  transition: transform var(--control) var(--out);
+}
+
+.craft-faq summary i::after {
+  transform: translateY(-50%) rotate(90deg);
+}
+
+.craft-faq details[open] summary i::after {
+  transform: translateY(-50%) rotate(0deg);
+}
+
+.craft-faq details p {
+  max-width: 62ch;
+  margin: 0;
+  padding: 0 0 var(--space-lg);
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.craft-faq details a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--control) var(--out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .craft-faq details a:hover {
+    text-decoration-color: var(--ink);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .craft-faq details[open] p {
+    animation: craft-faq-open var(--enter) var(--out);
+  }
+}
+
+@keyframes craft-faq-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
 }
 
 /* ----------------------------------------------------------------- close */
@@ -2997,35 +3095,6 @@ html:has(.craft) body {
   margin-top: var(--space-xl);
 }
 
-/* ---------------------------------------------------------------- trust */
-
-.craft-trust {
-  margin: clamp(var(--space-xl), 4vh, var(--space-2xl)) 0 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-xl) clamp(var(--space-xl), 5vw, 3.5rem);
-}
-
-.craft-trust > div {
-  min-width: 0;
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--rule);
-}
-
-.craft-trust dt {
-  font-size: 0.95rem;
-  font-weight: 620;
-  letter-spacing: -0.02em;
-}
-
-.craft-trust dd {
-  max-width: 40ch;
-  margin: var(--space-sm) 0 0;
-  color: var(--ink-muted);
-  font-size: 0.85rem;
-  line-height: 1.65;
-}
-
 .craft-agent-setup {
   scroll-margin-top: 6rem;
 }
@@ -3197,8 +3266,7 @@ html:has(.craft) body {
   }
 
   .craft-ways,
-  .craft-pricing-grid,
-  .craft-trust {
+  .craft-pricing-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-lg);
   }

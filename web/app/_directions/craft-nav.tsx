@@ -7,7 +7,7 @@ import { authClient } from '../../lib/auth-client';
 const LINKS = [
   { label: 'Docs', href: 'https://docs.video2ctx.dev' },
   { label: 'Pricing', href: '#pricing' },
-  { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
+  { label: 'FAQ', href: '#faq' },
   { label: 'CLI + Skill', href: '#agent-setup' },
   /* Phones drop the GitHub icon from the bar, so it lives in the menu there. */
   { label: 'GitHub', href: 'https://github.com/devhims/video2ctx', phonesOnly: true },

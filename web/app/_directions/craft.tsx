@@ -12,6 +12,7 @@
 
 import { CraftDemo } from './craft-demo';
 import { CraftAgentRun } from './craft-agent-run';
+import { CraftFaq } from './craft-faq';
 import { CraftMonitorRun } from './craft-monitor-run';
 import { CraftUseCases } from './craft-use-cases';
 import { CraftCloseAction } from './craft-close-action';
@@ -84,26 +85,6 @@ const ROADMAP = [
 //   },
 // ];
 
-/* Plain-language trust, no invented metrics and no header names. */
-const TRUST = [
-  {
-    title: 'Every moment keeps its source',
-    body: 'A transcript segment says what was said and when. Each one links back to that second in the video, so you can play it and hear it for yourself.',
-  },
-  {
-    title: 'Missing data says so',
-    body: 'Plenty of videos have comments switched off or no captions at all. You are told that plainly, rather than getting an empty result you have to interpret.',
-  },
-  {
-    title: 'Nothing is locked in',
-    body: 'Apache 2.0, and the workspace and API are one codebase. Use the hosted version, install the package, or run all of it yourself.',
-  },
-  {
-    title: 'YouTube first, not YouTube only',
-    body: 'Provider routes are namespaced, so a second source slots in beside YouTube instead of changing the shape of what you already handle.',
-  },
-];
-
 const LICENSE_HREF = 'https://github.com/devhims/video2ctx/blob/main/LICENSE';
 
 /* Grouped by who is looking: a user, a developer, a contributor, or legal. */
@@ -113,7 +94,7 @@ const COLOPHON = [
     links: [
       { label: 'Workspace', href: '/dashboard' },
       { label: 'Pricing', href: '#pricing' },
-      { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
+      { label: 'FAQ', href: '#faq' },
     ],
   },
   {
@@ -382,22 +363,7 @@ export function CraftDirection() {
       </div>
 
       <div className='craft-reveal'>
-        <section className='craft-band' aria-labelledby='craft-trust-title'>
-          <div className='craft-band-head'>
-            <h2 id='craft-trust-title'>Context you can check.</h2>
-          </div>
-          <dl className='craft-trust'>
-            {TRUST.map((item, index) => (
-              <div
-                key={item.title}
-                style={{ '--i': index } as React.CSSProperties}
-              >
-                <dt>{item.title}</dt>
-                <dd>{item.body}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+        <CraftFaq />
       </div>
 
       <div className='craft-reveal'>
