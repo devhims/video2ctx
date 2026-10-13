@@ -253,6 +253,23 @@ function serializedLength(value: unknown): number {
 export function finalizationEvidenceForModel(
   packets: readonly EvidencePacket[], maxCharacters: number, comparisonVideoIds: readonly string[] = [],
 ) {
+  // Raw retrieval is not the answer input once a complete analyst result covers
+  // that exact saved version. Never substitute an analysis of another version.
+  const analyzedVersions = new Set(packets.flatMap(packet =>
+    readTranscriptAnalysis(packet)?.coverage.completeTranscriptRead ? packet.assetVersions ?? [] : []));
+  const handoff = packets.filter(packet => !(packet.artifacts.some(artifact =>
+    artifact.type === 'youtube_complete_transcript' && artifact.data.requiresAnalysis === true)
+    && packet.assetVersions?.length && packet.assetVersions.every(version => analyzedVersions.has(version))));
+  const missingInputs: Array<{ reason: string; packetId?: string; assetVersions?: string[]; videoId?: string }> = [];
+  for (const packet of handoff) {
+    const raw = packet.artifacts.find(artifact => artifact.type === 'youtube_complete_transcript');
+    const analysis = readTranscriptAnalysis(packet);
+    const reason = raw?.data.requiresAnalysis === true ? 'transcript_analysis_missing'
+      : analysis && !analysis.coverage.completeTranscriptRead ? 'transcript_analysis_incomplete'
+      : (packet.kind !== 'youtube_search' && packet.continuation) || raw?.data.allReturnedSegmentsIncluded === false
+        ? 'source_page_missing' : undefined;
+    if (reason) missingInputs.push({ reason, packetId: packet.packetId, assetVersions: packet.assetVersions });
+  }
   const aliases = new Map<string, string>();
   const fullIds = new Map<string, string>();
   const alias = (id: string) => {
@@ -261,7 +278,7 @@ export function finalizationEvidenceForModel(
     return value;
   };
   // Shorten IDs before measuring the input budget, not only after truncation.
-  const compact = packets.map(packet => {
+  const compact = handoff.map(packet => {
     const analysis = readTranscriptAnalysis(packet);
     return { ...packet,
       excerpts: packet.excerpts.map(excerpt => ({ ...excerpt, id: alias(excerpt.id) })),
@@ -282,17 +299,22 @@ export function finalizationEvidenceForModel(
     ...(packet.transcriptAnalysis?.findings.flatMap(finding => finding.excerptIds) ?? []),
   ]));
   for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);
-  // Complete means the budget cut nothing: every packet passed in its ordinary projection,
-  // the same view research tools return. Sampled, shortened or dropped packets are not complete.
-  const fits = (group: typeof compact, maxCharacters: number) => serializedLength(group.map(evidencePacketForModel)) <= maxCharacters;
-  // More discovery candidates do not imply missing evidence from the selected sources.
-  // Ignore search continuation on legacy packets too; source pagination still blocks.
-  const paged = packets.some(packet => (packet.kind !== 'youtube_search' && packet.continuation) || packet.artifacts.some(artifact =>
-    artifact.type === 'youtube_complete_transcript' && artifact.data.allReturnedSegmentsIncluded === false));
-  const complete = !paged && (comparisonVideoIds.length
-    ? compact.every(packet => packet.sources.some(source => source.videoId && comparisonVideoIds.includes(source.videoId)))
-      && comparisonVideoIds.every(videoId => fits(compact.filter(packet => packet.sources.some(source => source.videoId === videoId)),
-        Math.floor(maxCharacters / comparisonVideoIds.length)))
-    : fits(compact, maxCharacters));
-  return { evidence, fullIds, complete };
+  // Identify actual handoff inputs lost to the prompt budget or subject filter.
+  // Normal model projection is intentional; additional reduction is a gap.
+  for (const packet of compact) {
+    const expected = evidencePacketForModel(packet);
+    const actual = evidence.find(item => item.packetId === packet.packetId);
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      missingInputs.push({ reason: 'prompt_evidence_cut', packetId: packet.packetId, assetVersions: packet.assetVersions });
+    }
+  }
+  for (const videoId of comparisonVideoIds) {
+    if (!evidence.some(packet => packet.kind === 'youtube_transcript'
+      && packet.sources.some(source => source.videoId === videoId)
+      && (packet.transcriptAnalysis || packet.excerpts?.length))) {
+      missingInputs.push({ reason: 'comparison_transcript_missing', videoId });
+    }
+  }
+  const complete = missingInputs.length === 0;
+  return { evidence, fullIds, complete, missingInputs };
 }

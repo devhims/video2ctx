@@ -175,3 +175,16 @@ it('does not treat more discovery results as missing source evidence', () => {
   expect(finalizationEvidenceForModel([search, transcriptPacket()], 40_000).complete).toBe(true);
   expect(finalizationEvidenceForModel([search, { ...transcriptPacket(), continuation: 'missing-source-page' }], 40_000).complete).toBe(false);
 });
+
+it('only lets complete analysis of the same saved version replace raw transcript paging', () => {
+  const analysis = { ...transcriptPacket(), assetVersions: ['a'.repeat(64)] };
+  const raw = { ...transcriptPacket(), packetId: 'raw', assetVersions: ['a'.repeat(64)],
+    artifacts: [{ type:'youtube_complete_transcript', data:{ requiresAnalysis:true, allReturnedSegmentsIncluded:false } }] };
+  expect(finalizationEvidenceForModel([raw, analysis], 40_000).complete).toBe(true);
+  expect(finalizationEvidenceForModel([raw, { ...analysis, assetVersions:['b'.repeat(64)] }], 40_000).complete).toBe(false);
+  expect(finalizationEvidenceForModel([raw], 40_000).missingInputs).toContainEqual({
+    reason:'transcript_analysis_missing', packetId:'raw', assetVersions:raw.assetVersions,
+  });
+  const incomplete = { ...analysis, artifacts: analysis.artifacts.map(a => ({...a,data:{...a.data,coverage:{completeTranscriptRead:false,segmentCount:10,startMs:0,endMs:100}}})) };
+  expect(finalizationEvidenceForModel([raw, incomplete], 40_000).complete).toBe(false);
+});
