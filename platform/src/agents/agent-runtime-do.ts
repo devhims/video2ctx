@@ -1,4 +1,4 @@
-import type { ResearchContext } from './runtime/context-handoff';
+import { reconcileResearchMemory, type ResearchContext } from './runtime/context-handoff';
 import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
 import { createHash } from 'node:crypto';
@@ -296,6 +296,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   async deleteSessionMemory(conversationId:string,userId:string,id:string) {
     if (!this.hasSessionOwner(conversationId,userId)) return null;
     this.sessionStore.deleteMemory(z.string().max(200).parse(id));
+    // Purge checkpoint copies synchronously too. A later in-flight write is
+    // reconciled again by persistResearchContext and cannot resurrect them.
+    for (const row of this.sql<{ id: string; research_context_json: string }>`SELECT id,research_context_json FROM agent_runs WHERE research_context_json IS NOT NULL`) {
+      const context = this.prepareResearchContext(JSON.parse(row.research_context_json));
+      this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(context)} WHERE id=${row.id}`;
+    }
     return {deleted:true};
   }
   async deleteSessionAssets(conversationId:string,userId:string,version?:string) {
@@ -666,6 +672,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         recoveredEvidence: this.readEvidencePackets(runId),
         recoveredResearchContext: row.research_context_json ? JSON.parse(row.research_context_json) as ResearchContext : undefined,
         persistResearchContext: context => this.persistResearchContext(runId, context),
+        prepareResearchContext: context => this.prepareResearchContext(context),
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
         deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
@@ -1350,9 +1357,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     for (const schedule of this.getSchedules()) await this.cancelSchedule(schedule.id);
   }
 
+  private prepareResearchContext(context: ResearchContext): ResearchContext {
+    return reconcileResearchMemory(context, id => {
+      const row = this.sql<{ memory_json: string }>`SELECT memory_json FROM session_memories WHERE id=${id}`[0];
+      return row ? JSON.parse(row.memory_json) : undefined;
+    });
+  }
+
   private persistResearchContext(runId: string, context: ResearchContext) {
     this.assertRunActive(runId);
-    this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(context)} WHERE id=${runId}`;
+    this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(this.prepareResearchContext(context))} WHERE id=${runId}`;
   }
 
   private readEvidencePackets(runId: string): EvidencePacket[] {

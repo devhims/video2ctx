@@ -114,6 +114,7 @@ export async function executeResearchRun(options: {
   finalizationDeadlineAt?: number;
   recoveredResearchContext?: ResearchContext;
   persistResearchContext?: (context: ResearchContext) => void;
+  prepareResearchContext?: (context: ResearchContext) => ResearchContext;
   env: Env;
   modelFailover?: ModelFailoverState;
   runId: string;
@@ -229,7 +230,8 @@ export async function executeResearchRun(options: {
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, historyPage, sessionBrief,
         context: { traceToolCall: options.traceToolCall, runId: options.runId, currentDate: options.currentDate, signal,
           finalize: (id, input) => persist(() => options.finalize(id, input)) },
-        evidence: handoffEvidence, handoffGaps, researchContext: options.recoveredResearchContext, toolFailures: options.recoveredToolFailures,
+        evidence: handoffEvidence, handoffGaps, researchContext: options.recoveredResearchContext
+          ? options.prepareResearchContext?.(options.recoveredResearchContext) ?? options.recoveredResearchContext : undefined, toolFailures: options.recoveredToolFailures,
         modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix, onDraft: options.onDraft,
       }), 'Finalization phase timeout.');
       return;
@@ -308,6 +310,7 @@ export async function executeResearchRun(options: {
     finalizationDeadlineAt: options.finalizationDeadlineAt,
     recoveredResearchContext: options.recoveredResearchContext,
     persistResearchContext: options.persistResearchContext,
+    prepareResearchContext: options.prepareResearchContext,
     onFinalizing: options.onFinalizing,
     onDraft: options.onDraft,
     message: options.message,
@@ -330,6 +333,7 @@ export async function runResearchAgent(options: {
   finalizationDeadlineAt?: number;
   recoveredResearchContext?: ResearchContext;
   persistResearchContext?: (context: ResearchContext) => void;
+  prepareResearchContext?: (context: ResearchContext) => ResearchContext;
   onFinalizing?: (deadlineAt: number) => void | Promise<void>;
   onDraft?: (draft: AgentDraft) => void;
   env: Env;
@@ -358,6 +362,7 @@ export async function runResearchAgent(options: {
     finalizationDeadlineAt: options.finalizationDeadlineAt,
     recoveredResearchContext: options.recoveredResearchContext,
     persistResearchContext: options.persistResearchContext,
+    prepareResearchContext: options.prepareResearchContext,
     onFinalizing: options.onFinalizing,
     onDraft: options.onDraft,
     model: runModel(
@@ -405,6 +410,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   finalizationDeadlineAt?: number;
   recoveredResearchContext?: ResearchContext;
   persistResearchContext?: (context: ResearchContext) => void;
+  prepareResearchContext?: (context: ResearchContext) => ResearchContext;
   onFinalizing?: (deadlineAt: number) => void | Promise<void>;
   onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
@@ -759,7 +765,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           return persist(() => trackedContext.finalize(id, input));
         } },
         evidence: [...evidence.values()],
-        researchContext: contextHandoff.snapshot(),
+        researchContext: options.prepareResearchContext?.(contextHandoff.snapshot()) ?? contextHandoff.snapshot(),
         toolFailures: [...toolFailures.values()],
         researchInterrupted: error !== finalizationHandoff,
         modelBudget: options.modelBudget,

@@ -1755,3 +1755,13 @@ it('restores attributed research context when resuming the answer phase', async 
   expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('$837');
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });
+
+it('rechecks mutable memory before a recovered context reaches the answer prompt', async () => {
+  const { options, finalizer } = setup('context_answer');
+  options.recoveredResearchContext = { reads: [{ tool: 'search_context', input: { label: 'memory', query: 'budget' },
+    result: JSON.stringify([{ id: 'deleted-memory', text: 'Deleted budget $837.' }]) }], truncated: false };
+  const { reconcileResearchMemory } = await import('../src/agents/runtime/context-handoff');
+  options.prepareResearchContext = context => reconcileResearchMemory(context, () => undefined);
+  await executeResearchRun(options);
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).not.toContain('Deleted budget');
+});
