@@ -94,7 +94,7 @@ const COLOPHON = [
     links: [
       { label: 'Workspace', href: '/dashboard' },
       { label: 'Pricing', href: '#pricing' },
-      { label: 'FAQ', href: '#faq' },
+      { label: 'FAQs', href: '#faq' },
     ],
   },
   {
@@ -105,7 +105,7 @@ const COLOPHON = [
         label: 'API reference',
         href: 'https://docs.video2ctx.dev/api-reference/introduction',
       },
-      { label: 'CLI + Skill', href: '#agent-setup' },
+      { label: 'Installation', href: '#agent-setup' },
     ],
   },
   {
@@ -268,10 +268,10 @@ export function CraftDirection() {
             <h2 id='craft-agent-title'>
               Ask a question.
               <br />
-              Video agent watches the video for you.
+              Video Agent watches the video for you.
             </h2>
             <p>
-              Video agent reads transcripts, frames, and comments across up to
+              Video Agent reads transcripts, frames, and comments across up to
               eight videos, then answers with sources.
             </p>
           </div>
@@ -370,7 +370,7 @@ export function CraftDirection() {
         <section className='craft-close' aria-labelledby='craft-close-title'>
           <h2 id='craft-close-title'>Liked the preview? Save the full results.</h2>
           <p>
-            Full transcripts and comments, saved to your projects.
+            Ask across videos, read what’s on screen, and catch new uploads.
             <br />
             Start with 1,000 free credits.
           </p>
@@ -385,7 +385,7 @@ export function CraftDirection() {
         <div className='craft-colophon-inner'>
           <p className='craft-colophon-lede'>
             <b>video2ctx</b>
-            Turn videos into context for LLMs and agents. YouTube first, not
+            Turn video into context for agents and apps. YouTube first, not
             YouTube only.
           </p>
           <nav aria-label='Footer'>

@@ -104,7 +104,7 @@ export function CraftPricing() {
   return (
     <section className='craft-band craft-pricing' id='pricing' aria-labelledby='craft-pricing-title'>
       <div className='craft-band-head'>
-        <h2 id='craft-pricing-title'>Start small. Pay when you build.</h2>
+        <h2 id='craft-pricing-title'>Start free. Pay when you build.</h2>
         <p>
           Every plan includes the dashboard and API. Credits are charged according to the data you request.
         </p>
