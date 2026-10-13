@@ -1605,3 +1605,17 @@ it('keeps gathering after research when the run has no stored request ID', async
   expect(plans).toEqual(['gather_older_conversation']);
   expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([false, true]);
 });
+
+it('skips context gathering after topic research with a search continuation token', async () => {
+  const { options, finalizer, plans, restore } = freshResearch(options => {
+    options.persistedRoute = { route: 'topic_research', searchQuery: 'photography shutter speed' };
+    options.conversationHistory = [];
+    options.recoveredEvidence = [...options.recoveredEvidence!, {
+      packetId: 'legacy-search', kind: 'youtube_search', sources: [], excerpts: [], artifacts: [],
+      continuation: 'next-search-page', warnings: [], usage: [],
+    }];
+  });
+  try { await executeResearchRun(options); } finally { restore(); }
+  expect(plans).toEqual(['skip']);
+  expect(finalizer.doGenerateCalls.map(call => call.responseFormat?.type === 'json')).toEqual([true]);
+});

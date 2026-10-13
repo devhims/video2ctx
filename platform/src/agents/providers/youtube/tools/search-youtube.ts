@@ -20,7 +20,6 @@ export const searchYouTubeInputSchema = z.object({
   captionsOnly: z.boolean().optional(),
   live: z.enum(['live', 'upcoming', 'completed']).optional(),
   minViews: z.number().int().nonnegative().max(10_000_000_000).optional(),
-  continuation: z.string().max(4_000).optional(),
 });
 
 export type SearchYouTubeInput = z.infer<typeof searchYouTubeInputSchema>;
@@ -28,7 +27,7 @@ export type SearchYouTubeInput = z.infer<typeof searchYouTubeInputSchema>;
 export function createSearchYouTubeTool(context: AgentToolContext) {
   return tool({
     description: [
-      'Search YouTube with one focused query and optional filters.',
+      'Search the first YouTube results page with one focused query and optional filters. Do not paginate search results.',
       'Each call performs exactly one provider search. Topic research permits one call per run, so choose the query carefully.',
       'The result contains bounded candidate evidence and canonical credit usage.',
     ].join(' '),
@@ -55,7 +54,6 @@ export function executeSearchYouTube(
     captionsOnly: parsed.captionsOnly,
     live: parsed.live,
     minViews: parsed.minViews,
-    continuation: parsed.continuation,
   };
   const semanticKey = `search:${JSON.stringify(parsed)}`;
 
@@ -105,7 +103,6 @@ export function executeSearchYouTube(
             candidates: results.map((result) => candidateArtifact(result)),
           },
         }],
-        continuation: response.value.continuation,
         warnings: [
           ...response.value.meta.warnings.map((message) => ({ code: 'YOUTUBE_PROVIDER_WARNING', message })),
           ...(response.value.meta.partial

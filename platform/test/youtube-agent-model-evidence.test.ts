@@ -167,3 +167,11 @@ it('treats a transcript returned in pages as incomplete even when it fits', () =
   expect(finalizationEvidenceForModel([{ ...transcriptPacket(), continuation: 'next-page' }], 40_000).complete).toBe(false);
 });
 
+
+it('does not treat more discovery results as missing source evidence', () => {
+  const search: EvidencePacket = { packetId: 'search', kind: 'youtube_search', sources: [], excerpts: [],
+    artifacts: [], continuation: 'more-discovery-results', warnings: [], usage: [] };
+  expect(evidencePacketForModel(search).continuation).toBeUndefined();
+  expect(finalizationEvidenceForModel([search, transcriptPacket()], 40_000).complete).toBe(true);
+  expect(finalizationEvidenceForModel([search, { ...transcriptPacket(), continuation: 'missing-source-page' }], 40_000).complete).toBe(false);
+});

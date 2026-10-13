@@ -85,7 +85,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
   if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
     return modelEvidencePacketSchema.parse({
       packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
-      continuation: packet.continuation,
+      continuation: packet.kind === 'youtube_search' ? undefined : packet.continuation,
       excerpts: packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript' && artifact.data.requiresAnalysis) ? [] : packet.excerpts,
       artifacts: packet.artifacts.map(({ type, title }) => ({ type, title })), warnings: packet.warnings,
     });
@@ -141,7 +141,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
       type: artifact.type,
       title: artifact.title,
     })),
-    continuation: packet.continuation,
+    continuation: packet.kind === 'youtube_search' ? undefined : packet.continuation,
     warnings: packet.warnings,
   });
 }
@@ -285,8 +285,9 @@ export function finalizationEvidenceForModel(
   // Complete means the budget cut nothing: every packet passed in its ordinary projection,
   // the same view research tools return. Sampled, shortened or dropped packets are not complete.
   const fits = (group: typeof compact, maxCharacters: number) => serializedLength(group.map(evidencePacketForModel)) <= maxCharacters;
-  // A transcript returned in pages is incomplete even when every page fits.
-  const paged = packets.some(packet => packet.continuation || packet.artifacts.some(artifact =>
+  // More discovery candidates do not imply missing evidence from the selected sources.
+  // Ignore search continuation on legacy packets too; source pagination still blocks.
+  const paged = packets.some(packet => (packet.kind !== 'youtube_search' && packet.continuation) || packet.artifacts.some(artifact =>
     artifact.type === 'youtube_complete_transcript' && artifact.data.allReturnedSegmentsIncluded === false));
   const complete = !paged && (comparisonVideoIds.length
     ? compact.every(packet => packet.sources.some(source => source.videoId && comparisonVideoIds.includes(source.videoId)))

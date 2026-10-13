@@ -63,6 +63,8 @@ describe('YouTube agent evidence tools', () => {
       query: 'agent UI design skills',
       type: 'video',
       captionsOnly: true,
+      // Older callers cannot turn discovery into pagination.
+      ...{ continuation: 'old-next-page' },
     }, context, 'call-search-1');
 
     expect(search).toHaveBeenCalledTimes(1);
@@ -77,7 +79,8 @@ describe('YouTube agent evidence tools', () => {
     expect(projected.excerpts![2]!.text).not.toContain('Live now:');
     expect(packet.sources).toHaveLength(12);
     expect(packet.excerpts).toHaveLength(12);
-    expect(packet.continuation).toBe('next-page');
+    expect(packet.continuation).toBeUndefined();
+    expect(search).toHaveBeenCalledWith('agent UI design skills', expect.not.objectContaining({ continuation: expect.anything() }));
     expect(packet.usage).toEqual([{ operation: 'search', credits: 2, cacheStatus: 'miss' }]);
     expect(packet.warnings.map((warning) => warning.code)).toEqual([
       'YOUTUBE_PROVIDER_WARNING',
