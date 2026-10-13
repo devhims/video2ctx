@@ -8,6 +8,7 @@ const fields = finalizeAnswerInputSchema.omit({ answer: true, citations: true, i
   warnings: z.array(z.object({
     code: z.enum(['SOURCE_CAVEAT', 'ANSWER_SCOPE_SHORTFALL']).describe('SOURCE_CAVEAT: limitations of sources, such as unverified demos. ANSWER_SCOPE_SHORTFALL: a specific requested item, count, or question could not be answered. Source uncertainty alone is not an unmet request.'),
     message: z.string().min(1).max(1_000),
+    unansweredPart: z.string().max(400).optional().describe('Required to mark ANSWER_SCOPE_SHORTFALL as partial: identify the specific requested item, count, or question that this answer leaves unanswered. Do not list a source limitation or an extra requirement the user did not ask for. Omit for SOURCE_CAVEAT. Without a nonblank unansweredPart the warning remains a source caveat.'),
   })).max(3).default([]).describe('At most three distinct, material limitations. The application already returns warnings from the evidence packets. Do not repeat inherited warnings, summarize the answer, or discuss generating the response.'),
 });
 const block = z.object({
@@ -39,11 +40,11 @@ export const contextAnswerSchema = fields.extend({
 export const finalizationOutputSchema = structuredAnswerSchema.omit({ intent: true, artifacts: true });
 export const contextFinalizationOutputSchema = contextAnswerSchema.omit({ intent: true, artifacts: true });
 export const conversationalFinalizationOutputSchema = clarificationAnswerSchema.omit({ intent: true, artifacts: true });
-export const FINALIZATION_SCHEMA_VERSION = 'answer-blocks-v3';
+export const FINALIZATION_SCHEMA_VERSION = 'answer-blocks-v4';
 
 /** Log-only signal. A count mismatch never rejects an answer. */
 export function numberedItemsMismatch(output: Pick<z.infer<typeof finalizationOutputSchema>, 'blocks' | 'warnings'>, expected: number | undefined): boolean {
-  if (expected === undefined || output.warnings.some(warning => warning.code === 'ANSWER_SCOPE_SHORTFALL')) return false;
+  if (expected === undefined || output.warnings.some(warning => warning.code === 'ANSWER_SCOPE_SHORTFALL' && warning.unansweredPart?.trim())) return false;
   const numbers = new Set([...output.blocks.map(block => block.text).join('\n').matchAll(
     /(?:^|\n)[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*)?(\d+)[.)][ \t]+/g,
   )].map(match => Number(match[1])));
@@ -161,7 +162,15 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     intent: input.intent,
     confidence: input.confidence,
     artifacts: input.artifacts,
-    warnings: input.warnings.map(warning => ({ ...warning, code: warning.code === 'ANSWER_SCOPE_SHORTFALL' ? 'PARTIAL_EVIDENCE' : warning.code })),
+    // A model's category alone is not evidence of an unmet request. Keep the
+    // caveat, but only promote a separately identified unanswered part to partial.
+    // Application-generated coverage/failure warnings are added outside this path.
+    warnings: input.warnings.map(warning => {
+      const unansweredPart = warning.unansweredPart?.trim();
+      return warning.code === 'ANSWER_SCOPE_SHORTFALL' && unansweredPart
+        ? { code: 'PARTIAL_EVIDENCE', message: `Unanswered request: ${unansweredPart}. ${warning.message}`.slice(0, 1_000) }
+        : { code: 'SOURCE_CAVEAT', message: warning.message };
+    }),
     citations: [],
     answer,
   });

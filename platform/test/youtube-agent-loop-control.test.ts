@@ -2067,7 +2067,7 @@ it.each([false, true])('preserves supported findings and scopes duration notices
     if (comparison) expect(prompt).toContain('applicationDurationNotice');
     return finalizerModelResult({ blocks: [{ text: 'Use the supported workflow.', evidenceIds: ['ref_1'] }],
       intent: 'topic_research', confidence: 'low', artifacts: [],
-      warnings: comparison ? [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'The other video could not be reviewed.' }] : [] });
+      warnings: comparison ? [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'The requested comparison with the second video', message: 'The other video could not be reviewed.' }] : [] });
   } });
   await expect(runResearchAgentWithModel({
     model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research phase timeout.'); } }),
@@ -2129,7 +2129,7 @@ it('repairs a near-limit answer without dropping the duration notice or truncati
     attempts++;
     if (attempts === 2) expect(JSON.stringify(call.prompt)).toContain('Shorten the rendered answer');
     return finalizerModelResult({ blocks: [{ text: attempts === 1 ? 'Supported evidence. '.repeat(990) : 'Supported finding.', evidenceIds: ['ref_1'] }],
-      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'The course transcript was unavailable.' }] });
+      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'The requested course analysis', message: 'The course transcript was unavailable.' }] });
   } });
   await runResearchAgentWithModel({ model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
     finalizationModel: recovery, context, message: 'Compare these videos',
@@ -2157,7 +2157,7 @@ it('retains distinct rejected videos in model context and avoids repeating an ex
     expect(payload.providerFailures.map((failure: { durationLimit: { videoId: string } }) => failure.durationLimit.videoId)).toEqual(['rfscVS0vtbw', 'long0000001']);
     expect(payloadText).not.toContain('PRIVATE_DUPLICATE_DIAGNOSTIC');
     return finalizerModelResult({ blocks: [{ text: `${payload.applicationDurationNotice}\n\nSupported finding.`, evidenceIds: ['ref_1'] }],
-      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'Both courses could not be reviewed.' }] });
+      intent: 'topic_research', confidence: 'low', artifacts: [], warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'The requested comparison of both courses', message: 'Both courses could not be reviewed.' }] });
   } });
   await runResearchAgentWithModel({ model: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('timeout'); } }),
     finalizationModel: recovery, context, message: 'Compare these three videos',

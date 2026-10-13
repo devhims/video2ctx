@@ -176,7 +176,10 @@ describe('structured answer citations', () => {
     })) };
     expect(numberedItemsMismatch(complete, 10)).toBe(false);
     expect(numberedItemsMismatch({ ...output, warnings: [{
-      code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only one item is supported by the available evidence.',
+      code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only sampled images were inspected.',
+    }] }, 10)).toBe(true);
+    expect(numberedItemsMismatch({ ...output, warnings: [{
+      code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'The second requested item', message: 'Only one item is supported by the available evidence.',
     }] }, 10)).toBe(false);
   });
   it('flags filler-only answers as a signal', () => {
@@ -261,8 +264,16 @@ describe('structured answer citations', () => {
   it('distinguishes source caveats from unmet scope and reserves runtime warning codes', () => {
     const blocks = [{ text: 'Supported finding', evidenceIds: ['e1'] }];
     expect(renderStructuredAnswer({ ...base, blocks, warnings: [{ code: 'SOURCE_CAVEAT', message: 'Self-reported demo.' }] }).warnings[0]?.code).toBe('SOURCE_CAVEAT');
-    expect(renderStructuredAnswer({ ...base, blocks, warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: 'Only six of ten requested examples are supported.' }] }).warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
+    expect(renderStructuredAnswer({ ...base, blocks, warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'Four of the ten requested examples', message: 'Only six of ten requested examples are supported.' }] }).warnings[0]?.code).toBe('PARTIAL_EVIDENCE');
     expect(structuredAnswerSchema.safeParse({ ...base, blocks, warnings: [{ code: 'PARTIAL_EVIDENCE', message: 'Other search results were not reviewed.' }] }).success).toBe(false);
+  });
+
+  it('keeps source caveats nonblocking even if the model supplies an unansweredPart', () => {
+    const warnings = renderStructuredAnswer({ ...base,
+      blocks: [{ text: 'Supported finding', evidenceIds: ['e1'] }],
+      warnings: [{ code: 'SOURCE_CAVEAT', unansweredPart: 'Only sampled frames', message: 'Brief moments may be missed.' }],
+    }).warnings;
+    expect(warnings).toEqual([{ code: 'SOURCE_CAVEAT', message: 'Brief moments may be missed.' }]);
   });
 
   it('requires references on every block, not just somewhere in the answer', () => {

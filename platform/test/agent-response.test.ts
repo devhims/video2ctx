@@ -1,3 +1,4 @@
+import { renderStructuredAnswer } from '../src/agents/structured-answer';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
 import type { AgentRunView } from '../src/agents/agent-runtime-do';
@@ -17,6 +18,46 @@ function completedRun(): AgentRunView {
 }
 
 describe('compact agent response', () => {
+  // Minimized from photography run 1041746e-684d-4624-8608-7212c3f14474.
+  // The request allowed clearly labeled suggestions for a cyclist and waterfall.
+  it('keeps the fulfilled photography answer answered despite a model scope warning containing only caveats', () => {
+    const run = completedRun();
+    const rendered = renderStructuredAnswer({
+      intent: 'topic_research', confidence: 'high', artifacts: [],
+      blocks: [{ text: 'Wolf Amri and Jason Vong demonstrate freezing and blurring motion. My suggestions: start at 1/1000 second for the cyclist, and 1/4 to 1 second on a tripod for the waterfall. These are suggestions, not creator quotations.', evidenceIds: ['a', 'b', 'c'] }],
+      warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', message: "Neither video demonstrates waterfall photography, so the waterfall starting settings are my own extrapolation from the creators' stated freeze/blur principles, clearly labeled as suggestions rather than their advice. Visual observations also cover sampled storyboard frames only (2-second intervals for Amri, 5-second for Vong), so brief on-screen moments between samples may have been missed." }],
+    });
+    Object.assign(run.result!, { answer: rendered.answer, warnings: rendered.warnings });
+    const result = compactAgentRun(run).result!;
+    expect(result.outcome).toBe('answered');
+    expect(result.warnings).toEqual([{ code: 'SOURCE_CAVEAT', message: rendered.warnings[0]!.message }]);
+  });
+
+  it.each(['topic_research', 'inspect_video', 'context_answer'] as const)('keeps a specific unanswered recommendation partial for %s', intent => {
+    const run = completedRun();
+    const rendered = renderStructuredAnswer({
+      intent, confidence: 'medium', artifacts: [],
+      blocks: [{ text: 'I can compare the demonstrations, but cannot provide the requested waterfall recommendation.', evidenceIds: ['a'] }],
+      warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart: 'A starting setting for photographing a flowing waterfall', message: 'The supplied evidence does not support a recommendation.' }],
+    });
+    Object.assign(run.result!, { answer: rendered.answer, warnings: rendered.warnings });
+    expect(compactAgentRun(run).result).toMatchObject({ outcome: 'partial', warnings: [{
+      code: 'PARTIAL_EVIDENCE', message: 'Unanswered request: A starting setting for photographing a flowing waterfall. The supplied evidence does not support a recommendation.',
+    }] });
+  });
+
+  it.each([undefined, '', '   '])('does not promote a model warning without an unanswered part (%s)', unansweredPart => {
+    const run = completedRun();
+    const rendered = renderStructuredAnswer({
+      intent: 'topic_research', confidence: 'high', artifacts: [],
+      blocks: [{ text: 'Both requested recommendations are supplied.', evidenceIds: ['a'] }],
+      warnings: [{ code: 'ANSWER_SCOPE_SHORTFALL', unansweredPart, message: 'Only sampled frames were inspected.' }],
+    });
+    run.result!.warnings = rendered.warnings;
+    expect(compactAgentRun(run).result?.outcome).toBe('answered');
+    expect(rendered.warnings).toEqual([{ code: 'SOURCE_CAVEAT', message: 'Only sampled frames were inspected.' }]);
+  });
+
   it('repairs escaped table source markers in existing answers using only validated citations', () => {
     const run=completedRun();
     run.result!.answer='| Test | Source |\n| --- | --- |\n| Coding | (source marker:a](source marker:b] |\n| Unknown | (source marker:evidence:unknown:ref_9] |';
@@ -111,7 +152,7 @@ describe('compact agent response', () => {
 
   it.each([
     ['NO_CONTENT_EVIDENCE', 'insufficient_evidence'], ['PARTIAL_EVIDENCE', 'partial'],
-    ['RESEARCH_COVERAGE_SHORTFALL', 'answered'], ['FINAL_SYNTHESIS_UNAVAILABLE', 'partial'], ['CHANNEL_INSPECTION_INCOMPLETE', 'partial'], ['ANSWER_SCOPE_SHORTFALL', 'partial'], ['TRANSCRIPT_ANALYST_WARNING', 'answered'],
+    ['RESEARCH_COVERAGE_SHORTFALL', 'answered'], ['FINAL_SYNTHESIS_UNAVAILABLE', 'partial'], ['CHANNEL_INSPECTION_INCOMPLETE', 'partial'], ['ANSWER_SCOPE_SHORTFALL', 'partial'], ['TRANSCRIPT_ANALYST_WARNING', 'answered'], ['SOURCE_CAVEAT', 'answered'], ['SAMPLED_VISUAL_EVIDENCE', 'answered'], ['PARTIAL_STORYBOARD', 'answered'],
   ])('maps %s to %s', (code, outcome) => {
     const run = completedRun(); run.result!.warnings = [{ code, message: 'Limitation' }];
     expect(compactAgentRun(run).result?.outcome).toBe(outcome);

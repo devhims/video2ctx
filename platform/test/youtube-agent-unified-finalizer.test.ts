@@ -745,7 +745,7 @@ it.each(['abcdefghijk', 'zzzzzzzzzzz'])('ignores an unexpected inspection reques
 it('answers with an explicit evidence gap instead of requesting another inspection', async () => {
   const {options,classifier}=setup('context_answer');
   const finalizer=new MockLanguageModelV4({doGenerate:async()=>({
-    content:[{type:'text',text:JSON.stringify({confidence:'low',warnings:[{code:'ANSWER_SCOPE_SHORTFALL',message:'The stored evidence does not identify the participants.'}],
+    content:[{type:'text',text:JSON.stringify({confidence:'low',warnings:[{code:'ANSWER_SCOPE_SHORTFALL',unansweredPart:'The requested participant identities',message:'The stored evidence does not identify the participants.'}],
       blocks:[{text:'The collected evidence does not establish who the participants are.',evidenceIds:[]}]})}],
     finishReason:{unified:'stop',raw:'stop'},usage,warnings:[],
   })});
@@ -753,7 +753,7 @@ it('answers with an explicit evidence gap instead of requesting another inspecti
   await executeResearchRun(options);
   expect(options.executeEvidenceTool).not.toHaveBeenCalled();
   expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
-  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('does not establish')}));
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({answer:expect.stringContaining('does not establish'), warnings: expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE', message: expect.stringContaining('The requested participant identities') })])}));
 });
 
 
@@ -1091,6 +1091,10 @@ describe('earlier-turn source content and history-only routes', () => {
       : { content: [{ type: 'text', text: 'Enough.' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] } });
     models.select.mockImplementation(() => finalizer);
     await executeResearchRun({ ...options, persistedRoute: decision });
+    // A downgraded model caveat must not suppress the application's concrete gap.
+    expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      warnings: expect.arrayContaining([expect.objectContaining({ code: 'PARTIAL_EVIDENCE', message: expect.stringContaining("doesn't cite evidence") })]),
+    }));
     expect(deliverEvidence.mock.calls[0]?.[1]).toBe('inherited_subject');
     expect(deliverEvidence.mock.calls[0]?.[0].map(packet => packet.packetId)).toEqual(['prior-frames']);
     expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('The woman holds the microphone toward the man.');
