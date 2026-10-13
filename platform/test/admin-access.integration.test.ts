@@ -13,6 +13,69 @@ const headers = (cookie: string) => ({ cookie, origin: base, 'content-type': 'ap
 const access = (cookie: string) => request('/v1/admin/access', { headers: { cookie } });
 const grant = (cookie: string, email: string) => request('/v1/admin/agent-access', { method: 'POST', headers: headers(cookie), body: JSON.stringify({ email }) });
 
+describe('admin credit grants', () => {
+  async function setup() {
+    const admin = await session();
+    await env.DB.prepare("UPDATE user SET role='admin' WHERE id=?").bind(admin.user.id).run();
+    const customer = await session();
+    const input = { userId: customer.user.id, requestId: crypto.randomUUID(), credits: 10000 };
+    const post = (value: object, cookie = admin.cookie, origin = base) => request('/v1/admin/credits/grants', {
+      method: 'POST', headers: { ...headers(cookie), origin }, body: JSON.stringify(value),
+    });
+    return { admin, customer, input, post };
+  }
+
+  test('looks up identity and balance, grants without a reason, and records the authenticated admin', async () => {
+    const { admin, customer, input, post } = await setup();
+    const before = await request(`/v1/admin/credits?user=${encodeURIComponent(customer.user.email.toUpperCase())}`, { headers: headers(admin.cookie) });
+    expect(before.status).toBe(200);
+    expect(before.headers.get('cache-control')).toBe('no-store');
+    expect(await before.json()).toMatchObject({ user: { ...customer.user, creditBalance: 1000 }, grants: [] });
+    const response = await post({ ...input, adminUserId: customer.user.id });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ user: { id: customer.user.id, creditBalance: 11000 }, replayed: false,
+      grant: { id: input.requestId, credits: 10000, reason: '', adminUserId: admin.user.id } });
+    const after = await request(`/v1/admin/credits?user=${customer.user.id}`, { headers: headers(admin.cookie) });
+    expect(await after.json()).toMatchObject({ user: { creditBalance: 11000 }, grants: [{ id: input.requestId, reason: '', credits: 10000 }] });
+    const balance = await env.DB.prepare('SELECT SUM(credits) AS balance FROM credit_ledger WHERE user_id=?').bind(customer.user.id).first<{ balance: number }>();
+    expect(balance?.balance).toBe(11000);
+  });
+
+  test('concurrent duplicate submissions grant once; changed payloads and cross-user reuse are rejected', async () => {
+    const { customer, input, post } = await setup();
+    const responses = await Promise.all([post({ ...input, reason: ' Test allowance ' }), post({ ...input, reason: 'Test allowance' })]);
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    const results = await Promise.all(responses.map(response => response.json() as Promise<{ replayed: boolean }>));
+    expect(results.map(result => result.replayed).sort()).toEqual([false, true]);
+    expect((await post({ ...input, credits: 5000, reason: 'Test allowance' })).status).toBe(409);
+    expect((await post({ ...input, reason: 'Different reason' })).status).toBe(409);
+    const other = await session();
+    expect((await post({ ...input, userId: other.user.id, reason: 'Test allowance' })).status).toBe(409);
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 11000 });
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(other.user.id).first()).toMatchObject({ available_credits: 1000 });
+  });
+
+  test('validates credits and account existence and rejects untrusted origins and non-admin credentials', async () => {
+    const { admin, customer, input, post } = await setup();
+    for (const credits of [0, -100, 1.5, 1000001, '10000']) expect((await post({ ...input, credits })).status).toBe(422);
+    expect((await post({ ...input, reason: 'x'.repeat(501) })).status).toBe(422);
+    expect((await post({ ...input, requestId: 'invalid' })).status).toBe(422);
+    expect((await post({ ...input, userId: crypto.randomUUID() })).status).toBe(404);
+    expect((await post(input, admin.cookie, 'https://untrusted.test')).status).toBe(403);
+    expect((await post(input, customer.cookie)).status).toBe(403);
+    for (const path of ['/v1/admin/credits?user=missing', '/v1/admin/credits/grants']) {
+      const init = path.endsWith('grants') ? { method: 'POST', body: JSON.stringify(input) } : {};
+      expect((await request(path, { ...init, headers: { ...headers(admin.cookie), authorization: 'Bearer invalid' } })).status).toBe(403);
+      expect((await request(path, { ...init, headers: { ...headers(admin.cookie), 'x-api-key': 'invalid' } })).status).toBe(403);
+      expect((await request(path, { ...init, headers: headers(customer.cookie) })).status).toBe(403);
+      expect((await request(path, init)).status).toBe(401);
+    }
+    await env.DB.prepare("UPDATE user SET role='user' WHERE id=?").bind(admin.user.id).run();
+    expect((await post(input)).status).toBe(403);
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 1000 });
+  });
+});
+
 describe('admin plugin and Agent access management', () => {
   test('an existing operator can use the plugin and manage D1 grants independently of Agent access', async () => {
     const admin = await session('bootstrap-admin@example.test');

@@ -36,6 +36,6 @@ export async function requireAdminSession(c: Context<App>): Promise<string> {
 
 export function requireAdminMutationOrigin(c: Context<App>): void {
   if (c.req.header('origin') !== c.env.APP_ORIGIN) {
-    throw new ApiError(403, 'INVALID_ORIGIN', 'Use the dashboard to manage Agent access.');
+    throw new ApiError(403, 'INVALID_ORIGIN', 'Use the dashboard for administrative changes.');
   }
 }

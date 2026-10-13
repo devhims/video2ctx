@@ -75,6 +75,63 @@ resets, and per-operation credit prices are unchanged.
 
 ## Manual credits
 
+The dashboard’s Admin → Credits section looks up an existing account by user ID
+or exact email. The selected account appears in a row with its current balance
+and inline amount/Add controls. Operators can add 1 through 1,000,000 credits per
+grant. There is no reason field or separate review screen. This does not change
+the plan.
+
+A successful grant immediately updates the displayed balance from its receipt,
+then reloads the account balance and recent grants automatically. The amount
+input clears after success so another grant needs a new selection. A failed
+refresh preserves the confirmed grant and its returned balance; Refresh balance
+retries only the read.
+
+`GET /v1/admin/credits?user=…` returns identity, balance and the last ten dashboard
+grants. `POST /v1/admin/credits/grants` takes `userId`, `requestId`, `credits` and
+optional `reason` for compatibility with earlier clients. The dashboard does
+not send a reason for new grants, but preserves the complete payload when
+recovering an earlier unconfirmed grant. Both endpoints require a live verified
+admin browser session; mutations also require the dashboard Origin. API keys
+and CLI sessions are rejected.
+
+Each grant stores the authenticated admin ID, reason and time in the existing
+ledger. The request UUID is the ledger entry ID and forms its `admin-credit:`
+operation ID. Retrying the same payload returns the original grant; reusing the
+ID for a different recipient, amount, reason or admin returns 409. The insert,
+receipt and balance read share one D1 batch. No new migration is needed.
+
+The browser keeps an unresolved grant in session storage per admin until the
+response confirms it or the server explicitly rejects it. After a connection
+failure, reload or tab change, the row offers a retry with the original ID
+and payload. Authentication errors retain that request because they occur
+before the server can check an earlier grant’s receipt. A delayed completion
+clears storage only if the saved request ID still matches its own, so an older
+panel cannot erase a newer unconfirmed grant. The browser never automatically
+submits the saved grant.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "signalColor": "#475569", "actorBkg": "#f8fafc", "actorTextColor": "#0f172a", "actorBorder": "#64748b"}}}%%
+sequenceDiagram
+    autonumber
+    participant Admin
+    participant Dashboard
+    participant Worker
+    participant DB as D1
+    Admin->>Dashboard: Look up user, choose amount, click Add
+    Dashboard->>Worker: Grant with stable request ID
+    Worker->>Worker: Verify live admin session and Origin
+    Worker->>DB: Batch ledger insert, receipt and balance read
+    Note over DB: Existing trigger updates balance once
+    DB-->>Worker: Grant receipt and current balance
+    Worker-->>Dashboard: Confirm result and balance
+    Dashboard->>Worker: Refresh account balance and recent grants
+    Worker->>DB: Read current account data
+    DB-->>Worker: Current balance and grants
+    Worker-->>Dashboard: Refresh the row and history
+    Note over Dashboard,DB: Lost response: retry the same ID to confirm the existing grant
+```
+
 Append an `adjustment` to the ledger, with a positive integer to grant credits or
 a negative integer to deduct them. Use a stable operation ID for retries of one
 adjustment and a new ID for each distinct adjustment. Do not update
