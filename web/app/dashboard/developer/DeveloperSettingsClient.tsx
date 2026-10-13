@@ -96,7 +96,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
       credits={credits}
       onSignOut={() => void signOut()}
     />
-    <div className={`workspace-main ${pageStyles.pages}`}>
+    <div className={`workspace-main ${pageStyles.pages}`} tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='API keys'>
         {localPreview && <span className='developer-preview-badge'>Local preview</span>}
         <a className={pageStyles.headerLink} href='/api/platform/docs' target='_blank' rel='noreferrer'>API reference ↗</a>

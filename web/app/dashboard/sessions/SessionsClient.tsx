@@ -45,7 +45,7 @@ export function AgentShell({ children }: { children: ReactNode }) {
       onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/login?returnTo=%2Fdashboard%2Fsessions')} accountName={user?.name ?? user?.email}
       onSignOut={() => void signOut()} />
-    <div className='workspace-main'>
+    <div className='workspace-main' tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='Agent'>{agentAccess && <Link href='/dashboard/sessions' prefetch={true} className='agent-new-session'><PlusIcon size={16} aria-hidden='true' />New session</Link>}</DashboardHeader>
       {children}
     </div>

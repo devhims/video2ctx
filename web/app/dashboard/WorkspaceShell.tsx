@@ -38,7 +38,7 @@ export function WorkspaceShell({
         onSignOut={() => void signOut()}
         mobileActions={section !== 'developer' ? <div ref={setMobileNotificationsTarget} /> : undefined}
       />
-      <div className={`workspace-main ${pageStyles.pages}`}>
+      <div className={`workspace-main ${pageStyles.pages}`} tabIndex={0} role='region' aria-label='Dashboard content'>
         <DashboardHeader title={title}>
           {section !== 'developer' && <PlatformStatus path={`/dashboard/${section === 'discover' ? 'sources' : section}`} />}
           {section !== 'developer' && <WorkspaceNotifications mobileContainer={mobileNotificationsTarget} />}

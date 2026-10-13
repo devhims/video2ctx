@@ -22,7 +22,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
       onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/login')} accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
       credits={usage?.creditBalance} onSignOut={() => void signOut()} />
-    <div className={`workspace-main ${styles.pages}`}>
+    <div className={`workspace-main ${styles.pages}`} tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='Settings' />
       <section className='content-section standalone settings-page'>
         <header className={styles.intro}><h2>Workspace settings</h2><p>Manage your plan, notifications, and account.</p></header>

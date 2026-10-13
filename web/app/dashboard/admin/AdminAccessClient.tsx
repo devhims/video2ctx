@@ -74,7 +74,7 @@ export default function AdminAccessClient() {
       onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
       onSignIn={() => router.push('/dashboard')} accountName={user?.name ?? user?.email}
       credits={credits} onSignOut={() => void signOut()} />
-    <div className='workspace-main'>
+    <div className='workspace-main' tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='Admin' />
       <section className={styles.content}>
         {!accessReady ? <DashboardSkeleton label='Checking admin access' variant='panel' /> : !user || !adminAccess ? <div className={styles.empty}>

@@ -9,9 +9,8 @@
 }
 
 .sidebar {
-  position: sticky;
-  top: .25rem;
-  height: calc(100dvh - .5rem);
+  height: calc(100% - .5rem);
+  min-height: 0;
   min-width: 0;
   margin: .25rem 0 .25rem .25rem;
   border: 1px solid var(--color-dashboard-rule);
@@ -33,7 +32,7 @@
 .expand > svg { display: none; }
 .expand:hover > img, .expand:focus-visible > img { display: none; }
 .expand:hover > svg, .expand:focus-visible > svg { display: block; }
-.scrollArea { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.scrollArea { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: none; scrollbar-width: thin; }
 .navigation, .group { display: grid; gap: .125rem; }
 .group + .group { margin-top: 1rem; }
 .groupLabel, .projectHeading { color: var(--color-dashboard-muted); font-size: .6875rem; font-weight: 500; }
@@ -116,13 +115,13 @@
   .mobileActions { display: flex; align-items: center; margin-left: auto; }
   .mobileActions :global(.notification-trigger) { width: 2.75rem; height: 2.75rem; }
   .drawer[open] { display: block; }
-  .drawer { position: fixed; inset: 0 auto 0 0; width: min(19rem, calc(100vw - 3rem)); height: 100dvh; max-height: 100dvh; max-width: none; margin: 0; padding: 0; border: 0; border-right: 1px solid var(--color-dashboard-rule); background: var(--color-dashboard-sidebar); }
+  .drawer { position: fixed; inset: 0 auto 0 0; width: min(19rem, calc(100vw - 3rem)); height: 100dvh; max-height: 100dvh; max-width: none; margin: 0; padding: 0; overflow: hidden; overscroll-behavior-y: none; border: 0; border-right: 1px solid var(--color-dashboard-rule); background: var(--color-dashboard-sidebar); }
   .drawer::backdrop { background: var(--color-dashboard-overlay); }
   .drawerContent { height: 100%; padding: .75rem .625rem max(.75rem, env(safe-area-inset-bottom)); }
   .drawer .item { min-height: 2.75rem; }
   .drawer .toggle, .drawer .projectHeading button { min-height: 2.75rem; min-width: 2.75rem; }
   :global(body):has(.drawer[open]) { overflow: hidden; }
-  :global(.workspace-shell):has(> .sidebar) { display: block; }
+  :global(.workspace-shell):has(> .sidebar) { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 0; }
   :global(.workspace-shell):has(> .sidebar) > :global(.workspace-main) { padding-bottom: 0; }
 }
 
