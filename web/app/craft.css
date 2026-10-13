@@ -2036,6 +2036,190 @@ html:has(.craft) body {
   cursor: default;
 }
 
+/* ------------------------------------------------------------- monitor run */
+
+/* Two columns on wide screens: the monitor on the left raises the alert, and
+ * the agent on the right answers it. Phones stack them in reading order. */
+@media (min-width: 761px) {
+  .craft-monitor-panel {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    align-items: start;
+  }
+}
+
+.craft-monitor-watch {
+  display: grid;
+  gap: var(--space-md);
+}
+
+/* Two rows, padded like the question card beside it: the live dot and title,
+ * then the channel and cadence aligned under the title. */
+.craft-monitor-head {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.3rem var(--space-sm);
+  font-size: 0.85rem;
+}
+
+.craft-monitor-head b {
+  font-weight: 650;
+}
+
+.craft-monitor-head span:last-child {
+  grid-column: 2;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-monitor-live {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.craft-monitor[data-running='true'] .craft-monitor-live {
+  animation: craft-run-pulse 900ms var(--in-out) infinite alternate;
+}
+
+.craft-monitor-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-xs);
+}
+
+.craft-monitor-checks li {
+  min-width: 0;
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: 0.15rem;
+  opacity: 0.35;
+  transition:
+    opacity var(--control) var(--out),
+    border-color var(--control) var(--out);
+}
+
+.craft-monitor-checks li:not([data-state='pending']) {
+  border-color: var(--rule-strong);
+  opacity: 1;
+}
+
+.craft-monitor-checks li[data-state='alert'] {
+  border-color: var(--accent);
+}
+
+.craft-monitor-checks i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--rule-strong);
+}
+
+.craft-monitor-checks li[data-state='alert'] i {
+  background: var(--accent);
+}
+
+.craft-monitor-checks span {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+}
+
+.craft-monitor-checks b {
+  overflow: hidden;
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.craft-monitor-checks li[data-state='alert'] b {
+  color: var(--accent);
+}
+
+/* The new alert always holds its slot, so it lands without pushing the
+ * earlier alerts down; it drops in from just above. */
+.craft-monitor-inbox {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.craft-monitor-inbox li {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-sm);
+  row-gap: 0.15rem;
+  opacity: 0.5;
+}
+
+.craft-monitor-inbox span {
+  grid-column: 1 / -1;
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.62rem;
+}
+
+.craft-monitor-inbox b {
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+.craft-monitor-inbox time {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.66rem;
+}
+
+.craft-monitor-inbox li[data-new='true'] {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--rule-strong));
+  background: color-mix(in oklch, var(--accent) 7%, transparent);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity var(--enter) var(--out),
+    transform var(--enter) var(--out);
+}
+
+.craft-monitor-inbox li[data-new='true'][data-on='true'] {
+  opacity: 1;
+  transform: none;
+}
+
+.craft-monitor-inbox li[data-new='true'] span {
+  color: var(--accent);
+}
+
+/* The agent side waits, dimmed, until the alert is handed to it. */
+.craft-monitor-handoff {
+  display: grid;
+  gap: var(--space-md);
+  opacity: 0.35;
+  transition: opacity var(--enter) var(--out);
+}
+
+.craft-monitor-handoff[data-on='true'] {
+  opacity: 1;
+}
+
 /* ----------------------------------------------------------------- close */
 
 /* Same width as the bands above, so the hairlines line up down the page. */

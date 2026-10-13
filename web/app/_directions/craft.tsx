@@ -12,6 +12,7 @@
 
 import { CraftDemo } from './craft-demo';
 import { CraftAgentRun } from './craft-agent-run';
+import { CraftMonitorRun } from './craft-monitor-run';
 import { CraftCloseAction } from './craft-close-action';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
@@ -296,6 +297,33 @@ export function CraftDirection() {
           <div className='craft-agent-actions'>
             <a className='craft-primary' href='/dashboard/sessions'>
               Try Video Agent
+            </a>
+          </div>
+        </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <section
+          id='monitoring'
+          className='craft-band craft-agent'
+          aria-labelledby='craft-monitor-title'
+        >
+          <div className='craft-band-head'>
+            <h2 id='craft-monitor-title'>
+              Monitor a channel.
+              <br />
+              Know the moment it posts.
+            </h2>
+            <p>
+              Monitors check a channel, topic, or search from hourly to weekly
+              and alert you in the dashboard or by email. Hand any new video
+              straight to Video Agent.
+            </p>
+          </div>
+          <CraftMonitorRun />
+          <div className='craft-agent-actions'>
+            <a className='craft-primary' href='/dashboard/monitors'>
+              Set up a monitor
             </a>
           </div>
         </section>
