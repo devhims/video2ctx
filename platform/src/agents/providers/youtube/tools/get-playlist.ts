@@ -2,6 +2,7 @@ import type { Playlist } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
+import { collectionRetrieval } from '../../../runtime/collection-coverage';
 import type { AgentToolContext } from '../tool-context';
 import {
   entityArtifact,
@@ -44,6 +45,14 @@ export function executeGetPlaylist(
   });
 }
 
+/**
+ * The provider falls back to the fetched page length for videoCount when the
+ * playlist header states no count. Only a header count text is a stated total.
+ */
+function reportedPlaylistTotal(playlist: Playlist): number | undefined {
+  return playlist.videoCountText && /\d/.test(playlist.videoCountText) ? playlist.videoCount : undefined;
+}
+
 function playlistPacket(playlist: Playlist, toolCallId: string): Omit<EvidencePacket, 'packetId' | 'usage'> {
   const videos = playlist.videos.slice(0, MAX_PROVIDER_ITEMS);
   const sources = videos.map((video, index) => ({
@@ -73,6 +82,15 @@ function playlistPacket(playlist: Playlist, toolCallId: string): Omit<EvidencePa
         channel: playlist.channel,
         videoCount: playlist.videoCount,
         returnedVideos: videos.map(entityArtifact),
+        collection: collectionRetrieval({
+          fetchedCount: playlist.videos.length,
+          retainedCount: videos.length,
+          reportedTotal: reportedPlaylistTotal(playlist),
+          reportedTotalText: playlist.videoCountText,
+          continuation: playlist.continuation,
+          // get_playlist reads one page and takes no continuation input.
+          continuationAccepted: false,
+        }),
       },
     }],
     continuation: playlist.continuation,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { inspectVideoInstructions } from '../src/agents/research/capabilities/inspect-video';
 import { researchTopicInstructions } from '../src/agents/research/capabilities/research-topic';
-import { finalizationAnswerGuidance } from '../src/agents/research/answer-guidance';
+import { finalizationAnswerGuidance, LIST_ORDER_GUIDANCE } from '../src/agents/research/answer-guidance';
 describe('research and answer responsibilities', () => {
   for (const instructions of [inspectVideoInstructions, researchTopicInstructions]) {
     it(`${instructions.name} collects evidence before separate finalization`, () => {
@@ -20,5 +20,23 @@ describe('research and answer responsibilities', () => {
   }
   it.each(['inspect_video', 'topic_research'] as const)('keeps answer guidance in the %s finalizer', route => {
     expect(finalizationAnswerGuidance(route)).toContain('For a detailed report, use compact sections');
+  });
+  it('gives every answer builder the same list-order rule, and keeps it out of evidence collection', () => {
+    expect(LIST_ORDER_GUIDANCE).toContain('only when cited evidence about that playlist states it');
+    expect(LIST_ORDER_GUIDANCE).toContain('establishes order only within that series, course or event');
+    expect(LIST_ORDER_GUIDANCE).toContain('because a playlist can be reordered or shuffled');
+    expect(LIST_ORDER_GUIDANCE).toContain('unless other cited evidence about that playlist states it');
+    expect(LIST_ORDER_GUIDANCE).toContain('Never present a suggestion as the playlist\'s order.');
+    expect(LIST_ORDER_GUIDANCE).not.toContain('chronology stated in cited evidence may be reported as order');
+    const answerPrompts = {
+      inspectNatural: inspectVideoInstructions('finalize_answer'),
+      topicNatural: researchTopicInstructions('finalize_answer'),
+      inspectFinalizer: finalizationAnswerGuidance('inspect_video'),
+      topicFinalizer: finalizationAnswerGuidance('topic_research'),
+    };
+    for (const [name, prompt] of Object.entries(answerPrompts)) expect(prompt, name).toContain(LIST_ORDER_GUIDANCE);
+    for (const instructions of [inspectVideoInstructions, researchTopicInstructions]) {
+      expect(instructions('complete_research')).not.toContain(LIST_ORDER_GUIDANCE);
+    }
   });
 });

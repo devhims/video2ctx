@@ -10,6 +10,17 @@ When including a numerical comparison, preserve both sides when supported. Read 
 Include costs, timings, and benchmark statistics only when they help answer the question and their workload, setup, and comparison are clear. Never present one task's measured cost as a general per-task price. Omit promotional claims and unrelated benchmarks.
 Select only necessary evidenceIds, usually one to three per point. Keep the answer useful on its own, with material limitations in warnings.
 `.trim();
+/**
+ * List entries reach the model in parser order. The parser groups renderer types and drops repeated
+ * videos, so an entry's place among excerpts is not its playlist position. Series labels describe the
+ * series, not a playlist that may be reordered or shuffled.
+ */
+export const LIST_ORDER_GUIDANCE = `
+Entries in playlist and other list evidence appear in parser order, which is not a verified position: the parser can regroup entries and drop repeated videos. State a video's position in a specific playlist, or that two videos are adjacent in it, only when cited evidence about that playlist states it, such as the playlist's own description listing its order.
+Series, chapter and event chronology, such as "Part 2", a numbered chapter, a description naming the next video, or a published event schedule, establishes order only within that series, course or event. Report it in that scope, for example "the titles number this as part 2 of the series". Never present it as the video's playlist position or adjacency, because a playlist can be reordered or shuffled.
+Do not infer either kind of order from event conventions, titles such as Opening or Closing, published dates, upload order or an entry's place among the excerpts. When a video is not among the shown entries, say its playlist position is not established, unless other cited evidence about that playlist states it.
+A viewing recommendation is allowed when it is labeled as a suggestion and gives its reason, for example "Suggested viewing order, not the playlist order: start with the overview talk because it defines terms the others use." Never present a suggestion as the playlist's order.
+`.trim();
 
 /** Shared writing guidance for both natural tool answers and reserved synthesis. */
 export const ANSWER_SCOPE_GUIDANCE = `
@@ -20,6 +31,7 @@ For ordinary requests, give a concise answer with the strongest distinct points.
 Use only the references needed to support each point. State each material source limitation once in warnings; preserve attribution and qualifications within claims that need them.
 For a detailed report, use compact sections or a comparison table to cover what each recommendation does, how to use it, an example and its limitations, followed by a short workflow. Avoid repeating the recommendations in a closing comparison. State objective measurements separately from subjective recommendations; do not invent best-for labels or composite metrics that the evidence does not establish.
 ${FINAL_FACT_GUIDANCE}
+${LIST_ORDER_GUIDANCE}
 ${EVIDENCE_LIMITATIONS}
 `.trim();
 export const RESEARCH_ANSWER_GUIDANCE = `${ANSWER_SCOPE_GUIDANCE}

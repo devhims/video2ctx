@@ -1,3 +1,4 @@
+import { mapCitationProse } from './markdown-citations';
 import { storedExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research/research-plan';
@@ -78,9 +79,9 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   // Replace a contiguous group together so several excerpts from one video become one reference.
   // Earlier formatters escaped model-written table citations into visible IDs.
   // Restore only citations already validated for this stored answer.
-  const displayAnswer = result.answer.replace(/\(source marker:([^\]]+)\]/g,
-    (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]');
-  const answer = displayAnswer.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
+  const displayAnswer = mapCitationProse(result.answer, prose => prose.replace(/\(source marker:([^\]]+)\]/g,
+    (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]'));
+  const answer = mapCitationProse(displayAnswer, prose => prose.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
     const refs = new Set<string>();
     for (const match of group.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)) {
       const citation = citations.get(match[1]!);
@@ -101,7 +102,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
       refs.add(id);
     }
     return [...refs].map(id => `[${id}]`).join('');
-  });
+  }));
   const codes = new Set(result.warnings.map(warning => warning.code));
   const outcome = result.intent === 'rejected' ? 'rejected'
     : result.intent === 'clarification' ? 'needs_clarification'

@@ -62,7 +62,7 @@ function setup(responseIntent: 'context_answer' | 'clarification' | 'rejected', 
     finalize: vi.fn(async (_id, input) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 },
       input, cited ? [evidence] : [], 0)),
   };
-  return { options, decision, classifier, finalizer, output };
+  return { options, decision, classifier, finalizer, output, identity };
 }
 
 it.each(['context_answer', 'clarification', 'rejected'] as const)('routes %s through the finalizer without research', async intent => {
@@ -199,7 +199,7 @@ it.each([true, false])('skips an expired first attempt without inventing a failu
     expect(options.finalize).not.toHaveBeenCalled();
     const request = finalizer.doStreamCalls[0]!.prompt.find(message => message.role === 'user');
     const text = request?.content.find(part => part.type === 'text');
-    expect(JSON.parse(text?.text ?? '{}')).toHaveProperty('contextIncomplete', false);
+    expect(JSON.parse(text?.text ?? '{}')).toHaveProperty('contextIncomplete', true);
     expect(JSON.parse(text?.text ?? '{}')).not.toHaveProperty('validationFeedback');
     expect(JSON.stringify(finalizer.doStreamCalls[0]!.prompt)).not.toContain('The previous generation ran out of time');
     expect(warnings.mock.calls.map(([message]) => JSON.parse(String(message))))
@@ -1071,15 +1071,15 @@ describe('earlier-turn source content and history-only routes', () => {
     expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ citations: [] }));
   });
 
-  it('does not load or bill unprepared earlier evidence during a mixed follow-up', async () => {
+  it('prepares and bills relevant earlier evidence before a mixed follow-up', async () => {
     const { options, decision, output, deliverEvidence, searchOptions } = historySetup('mixed');
     const finalizer = new MockLanguageModelV4({doGenerate:async()=>({content:[{type:'text',text:JSON.stringify(output)}],finishReason:{unified:'stop',raw:'stop'},usage,warnings:[]})});
     models.select.mockReturnValue(finalizer);
     await executeResearchRun({...options,persistedRoute:decision});
     expect(searchOptions).toEqual([]);
-    expect(deliverEvidence).not.toHaveBeenCalled();
+    expect(deliverEvidence).toHaveBeenCalledWith([evidence], 'read_prior_evidence');
     expect(finalizer.doGenerateCalls).toHaveLength(1);
-    expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).not.toContain('The woman holds the microphone toward the man.');
+    expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('The woman holds the microphone toward the man.');
   });
 
   it('loads and bills earlier evidence for named comparison subjects without a model read', async () => {
@@ -1554,4 +1554,204 @@ it.each(['analysis', 'page'] as const)('names the missing %s input in the answer
   const answerPrompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
   expect(answerPrompt).toContain(missing === 'analysis' ? 'transcript_analysis_missing' : 'source_page_missing');
   expect(answerPrompt).toContain(version);
+});
+
+it('QA 027: the finalizer receives every retained playlist entry with its counts and may cite the last one', async () => {
+  const { options, finalizer, identity } = setup('context_answer', true);
+  const playlist: EvidencePacket = {
+    packetId: 'packet:playlist', kind: 'youtube_playlist',
+    sources: Array.from({ length: 12 }, (_, index) => ({ id: `youtube:playlist:PLcalc:v${String(index + 1).padStart(10, '0')}:${index}`,
+      provider: 'youtube' as const, kind: 'playlist' as const, playlistId: 'PLcalc', videoId: `v${String(index + 1).padStart(10, '0')}`, title: `Chapter ${index + 1}` })),
+    excerpts: Array.from({ length: 12 }, (_, index) => ({ id: `playlist:call:${index}`,
+      sourceId: `youtube:playlist:PLcalc:v${String(index + 1).padStart(10, '0')}:${index}`,
+      text: `Chapter ${index + 1} topic ${['limits', 'derivatives', 'chain rule', 'implicit', 'related rates', 'extrema', 'mean value', 'curve sketching', 'optimization', 'antiderivatives', 'riemann sums', 'fundamental theorem'][index]}\nDuration: 45:00` })),
+    artifacts: [{ type: 'youtube_playlist', title: 'Calculus course', data: {
+      videoCount: 30, collection: { version: 1, fetchedCount: 30, retainedCount: 12, morePages: true, continuationAccepted: false },
+    } }],
+    continuation: 'page-two', warnings: [], usage: [],
+  };
+  options.conversationHistory = [{ ...options.conversationHistory![0]!, evidence: [playlist] }];
+  vi.mocked(options.finalize).mockImplementation(async (_id, input) =>
+    buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, [playlist], 0));
+  // Replacing doGenerate bypasses the mock's own call recording, so record calls here.
+  const calls: typeof finalizer.doGenerateCalls = [];
+  finalizer.doGenerate = async call => {
+    calls.push(call);
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [{
+      text: 'Chapter 12 covers the fundamental theorem.', evidenceIds: ['ref_12'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  };
+  await executeResearchRun(options);
+  expect(calls).toHaveLength(1);
+  const prompt = JSON.stringify(calls[0]!.prompt);
+  for (const topic of ['optimization', 'antiderivatives', 'riemann sums', 'fundamental theorem']) expect(prompt).toContain(topic);
+  expect(prompt).toContain('All 12 entries retained in this packet are shown.');
+  expect(prompt).toContain('18 more were not retained because of the agent item limit');
+  expect(prompt).toContain('No provider-stated total is available');
+  expect(prompt).not.toContain('page-two');
+  const format = calls[0]!.responseFormat;
+  expect(JSON.stringify(format)).toContain('ref_12');
+  expect(JSON.stringify(format)).not.toContain('ref_13');
+  const result = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations).toMatchObject([{ id: 'playlist:call:11' }]);
+  // The saved response itself discloses coverage: no stated total, the 12-video limit, and listing-only evidence.
+  expect(result.answer).toContain("**Playlist coverage (Calculus course):** The playlist's total number of videos was not reported. The listing returned 30 videos, but details were available for only 12 because video2ctx lists at most 12 videos per playlist, so coverage of this playlist is incomplete.");
+  expect(result.answer).toContain('No transcript or visual content was reviewed for these videos, so statements about them rely on listing details (title, description, duration) only.');
+  expect(result.answer).not.toMatch(/\b30 videos in total|\b8 (?:videos|entries) (?:are )?available/);
+});
+
+function listPacket(packetId: string, playlistId: string, title: string, entries: string[], reportedTotal: number): EvidencePacket {
+  const id = (index: number) => `${playlistId.toLowerCase().slice(2, 6)}${String(index).padStart(7, '0')}`;
+  return {
+    packetId, kind: 'youtube_playlist',
+    sources: entries.map((entry, index) => ({ id: `youtube:playlist:${playlistId}:${id(index)}:${index}`,
+      provider: 'youtube' as const, kind: 'playlist' as const, playlistId, videoId: id(index), title: entry })),
+    excerpts: entries.map((entry, index) => ({ id: `playlist:${packetId}:${index}`,
+      sourceId: `youtube:playlist:${playlistId}:${id(index)}:${index}`, text: `${entry}\nDuration: 30:00` })),
+    artifacts: [{ type: 'youtube_playlist', title, data: { videoCount: reportedTotal, collection: { version: 1, fetchedCount: reportedTotal,
+      retainedCount: entries.length, reportedTotal, reportedTotalText: `${reportedTotal} videos`, morePages: false, continuationAccepted: false } } }],
+    warnings: [], usage: [],
+  };
+}
+
+/** Runs one direct finalization with fixed list evidence and a mocked answer. Mocks prove wiring, not model behavior. */
+async function finalizeListQuestion(message: string, packets: EvidencePacket[], block: { text: string; evidenceIds: string[] }) {
+  const { options, finalizer, identity } = setup('context_answer', true);
+  options.message = message;
+  options.conversationHistory = [{ ...options.conversationHistory![0]!, evidence: packets }];
+  vi.mocked(options.finalize).mockImplementation(async (_id, input) =>
+    buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, packets, 0));
+  const calls: typeof finalizer.doGenerateCalls = [];
+  finalizer.doGenerate = async call => {
+    calls.push(call);
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [block] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  };
+  await executeResearchRun(options);
+  expect(calls).toHaveLength(1);
+  const prompt = JSON.stringify(calls[0]!.prompt);
+  expect(prompt).toContain('only when cited evidence about that playlist states it');
+  expect(prompt).toContain('establishes order only within that series, course or event');
+  expect(prompt).toContain('unless other cited evidence about that playlist states it');
+  expect(prompt).toContain('A viewing recommendation is allowed when it is labeled as a suggestion and gives its reason');
+  expect(prompt).toContain('When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note');
+  expect(prompt).toContain('Otherwise no note is appended, so state any material playlist coverage limit yourself.');
+  expect(prompt).not.toContain('The application appends a playlist coverage note stating');
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  return { prompt, result };
+}
+
+it('BCON: the finalizer gets the list-order rule and an accurate note promise, but an unsupported order claim is not rejected', async () => {
+  const playlist = listPacket('bcon', 'PLbcon', 'Blender Conference', ['SciExplorer', 'Geometry Nodes Workshop', 'Grease Pencil Update',
+    'Studio Pipeline', 'Cycles Roadmap', 'EEVEE Next', 'Animation 2025', 'Sculpting Session', 'Python API Tips', 'Asset Browser',
+    'Open Movie Q&A', 'Fall of Reach'], 94);
+  // Search titles identify the two talks but say nothing about their playlist position.
+  const search: EvidencePacket = {
+    packetId: 'packet:search', kind: 'youtube_search',
+    sources: ['suzanneaw01', 'closingev01'].map((videoId, index) => ({ id: `youtube:search:${videoId}:${index}`,
+      provider: 'youtube' as const, kind: 'search' as const, videoId, title: index ? 'Closing Event' : 'Suzanne Awards' })),
+    excerpts: ['Suzanne Awards', 'Closing Event'].map((title, index) => ({ id: `search:call:${index}`,
+      sourceId: `youtube:search:${['suzanneaw01', 'closingev01'][index]}:${index}`, text: `${title}\nChannel: Blender\nPublished: 1 year ago` })),
+    artifacts: [], warnings: [], usage: [],
+  };
+  const claim = 'The Suzanne Awards come directly before the Closing Event in the playlist.';
+  const { result } = await finalizeListQuestion('In the conference playlist, does the Suzanne Awards come right before the Closing Event?',
+    [playlist, search], { text: claim, evidenceIds: ['ref_13', 'ref_14'] });
+  expect(result.citations.map(citation => citation.id)).toEqual(['search:call:0', 'search:call:1']);
+  // Guidance only: the application still accepts the claim unchanged, and metadata citations add no playlist note.
+  expect(result.answer).toContain(claim);
+  expect(result.answer).not.toContain('**Playlist coverage');
+  expect(result.artifacts.some(artifact => artifact.type === 'playlist_coverage')).toBe(false);
+});
+
+it('shuffled playlist control: part labels reach the model in parser order and a series-scoped answer keeps its note', async () => {
+  // A complete playlist whose parser order differs from the series order its titles state.
+  const playlist = listPacket('shuffled', 'PLmix1', 'Rigging series (shuffled)',
+    ['Rigging Basics Part 3: Constraints', 'Rigging Basics Part 1: Bones', 'Rigging Basics Part 2: Weights'], 3);
+  const answer = 'The titles number "Rigging Basics Part 2: Weights" as part 2 of the series. The evidence does not establish its position in this playlist.';
+  const { prompt, result } = await finalizeListQuestion('Is Part 2 the second video in this playlist?', [playlist],
+    { text: answer, evidenceIds: ['ref_3'] });
+  for (const title of ['Part 3: Constraints', 'Part 1: Bones', 'Part 2: Weights']) expect(prompt).toContain(title);
+  expect(prompt.indexOf('Part 3: Constraints')).toBeLessThan(prompt.indexOf('Part 1: Bones'));
+  expect(prompt.indexOf('Part 1: Bones')).toBeLessThan(prompt.indexOf('Part 2: Weights'));
+  expect(result.citations.map(citation => citation.id)).toEqual(['playlist:shuffled:2']);
+  for (const sentence of answer.split(/(?<=\.) /)) expect(result.answer).toContain(sentence);
+  expect(result.answer).toContain('**Playlist coverage (Rigging series (shuffled)):** This playlist has 3 videos in total, and listing details were available for all 3.');
+});
+
+it('prepares inherited frame evidence before a direct answer without named subjects', async () => {
+  const { options, finalizer } = setup('context_answer', true);
+  options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'video', reason: 'Correct the saved observation.' };
+  const deliver = vi.fn((packets: EvidencePacket[]) => ({ admitted: packets, withheld: [], unavailable: [], receipts: [] }));
+  options.deliverEvidence = deliver;
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], searchTools: vi.fn() } as any;
+  options.onFinalizing = () => { expect(deliver).toHaveBeenCalled(); };
+  await executeResearchRun(options);
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain(evidence.excerpts[0]!.text);
+  expect(deliver).toHaveBeenCalledWith([evidence], 'read_prior_evidence');
+  expect(options.session!.searchTools).not.toHaveBeenCalled();
+});
+
+it.each(['complete', 'timeout'] as const)('carries an attributed older history read into the answer after research %s', async completion => {
+  const { options, finalizer } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [{ ...evidence, sources: evidence.sources.map(s => ({ ...s, title: 'Saved video' })) }];
+  const history = { messages: [{ id: 'older-user-budget', role: 'user', text: 'My exact budget is $837.', createdAt: '2026-10-01' }] };
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [], searchTools: async () => ({
+    read_session_history: tool({ description: 'Read older messages.', inputSchema: z.object({}), execute: async () => history }),
+  }) } as any;
+  let step = 0;
+  const core = new MockLanguageModelV4({ doGenerate: async call => {
+    if (step++) {
+      expect(JSON.stringify(call.prompt)).toContain('$837');
+      if (completion === 'timeout') throw new Error('Research phase timeout.');
+    }
+    return { content: [{ type: 'tool-call', toolCallId: `step-${step}`, toolName: step === 1 ? 'read_session_history' : 'complete_research', input: '{}' }],
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+  } });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'finalizer' ? finalizer : core);
+  await executeResearchRun(options);
+  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+  expect(prompt).toContain('$837');
+  expect(prompt).toContain('older-user-budget');
+  expect(prompt).toContain('user');
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+});
+
+it('reports withheld inherited evidence as an explicit handoff gap', async () => {
+  const { options, finalizer } = setup('context_answer');
+  options.conversationHistory[0]!.evidence = [evidence];
+  options.deliverEvidence = packets => ({ admitted: [], withheld: packets, unavailable: [], receipts: [] });
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [] } as any;
+  await executeResearchRun(options);
+  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+  expect(prompt).toContain('saved_evidence_unavailable');
+  expect(prompt).toContain('contextIncomplete\\":true');
+  expect(prompt).not.toContain(evidence.excerpts[0]!.text);
+});
+
+it('does not bill unrelated older subjects when preparing a vague correction', async () => {
+  const { options, finalizer } = setup('context_answer', true);
+  const unrelated = { ...evidence, packetId: 'unrelated', sources: [{ ...evidence.sources[0]!, videoId: 'zzzzzzzzzzz' }],
+    excerpts: [{ ...evidence.excerpts[0]!, id: 'unrelated-excerpt', text: 'Unrelated older video.' }] };
+  options.conversationHistory.unshift({ ...options.conversationHistory[0]!, evidence: [unrelated] });
+  const deliver = vi.fn((packets: EvidencePacket[]) => ({ admitted: packets, withheld: [], unavailable: [], receipts: [] }));
+  options.deliverEvidence = deliver;
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [] } as any;
+  await executeResearchRun(options);
+  expect(deliver).toHaveBeenCalledExactlyOnceWith([evidence], 'read_prior_evidence');
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).not.toContain('Unrelated older video.');
+});
+
+it('restores attributed research context when resuming the answer phase', async () => {
+  const { options, finalizer } = setup('context_answer', true);
+  options.persistedRoute = { route: 'inspect_video', videoId: 'abcdefghijk', useStoryboard: false };
+  options.recoveredEvidence = [evidence];
+  options.finalizationDeadlineAt = Date.now() + 60_000;
+  options.recoveredResearchContext = { truncated: false, reads: [{ tool: 'read_session_history', input: { offset: 20 },
+    result: { messages: [{ id: 'older-budget', role: 'user', text: 'My exact budget is $837.' }] } }] };
+  models.select.mockReturnValue(finalizer);
+  await executeResearchRun(options);
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).toContain('$837');
+  expect(options.executeEvidenceTool).not.toHaveBeenCalled();
 });

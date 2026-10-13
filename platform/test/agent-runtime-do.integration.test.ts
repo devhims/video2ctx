@@ -284,9 +284,9 @@ test('direct finalization restores cited frame evidence from ancestors and marks
       const route = JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Correct the earlier roles.' });
       instance.sql`INSERT INTO agent_routes (run_id,decision_json,created_at) VALUES (${receipt.runId},${route},2001)`;
       const input: FinalizeAnswerInput = { intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [],
-        answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof]' };
+        answer: 'The woman holds the microphone. [cite:frame-proof] [cite:uncited-proof] Example: `[cite:uncited-proof]`.' };
       const result = await methods.finalizeRun(receipt.runId, 'final', input);
-      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable]');
+      expect(result.answer).toBe('The woman holds the microphone. [cite:frame-proof] [source unavailable] Example: `[cite:uncited-proof]`.');
       expect(result.citations).toEqual([citation]);
       expect(result.warnings).toContainEqual({ code: 'CITATIONS_UNAVAILABLE', message: '1 citation did not match the saved sources and is marked [source unavailable].' });
       expect(result.billing.creditsCharged).toBe(0);
@@ -921,6 +921,7 @@ test('an exhausted transcript can be requested in another run', async () => {
 test('session assets enforce ownership and deletion removes run copies, citations and memory', async()=> {
   const {runtime,runId,userId,conversationId}=await seed('session-asset-owner','running');
   let version='';
+  let example='';
   let sharedReference: import('../src/lib/video-catalog').VideoAssetReference;
   await runInDurableObject(runtime,async (instance,state)=>{
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
@@ -931,7 +932,8 @@ test('session assets enforce ownership and deletion removes run copies, citation
     const writer=instance as unknown as {performEvidenceTool(runId:string,execution:EvidenceToolExecution):Promise<EvidencePacket>;finalizeRun(runId:string,toolId:string,input:FinalizeAnswerInput):Promise<AgentTurnResult>};
     const packet=await writer.performEvidenceTool(runId,{toolCallId:'transcript',toolName:'get_video_transcript',semanticKey:'transcript',operation:'transcript',input:{videoId:'abcdefghijk'},execute:async()=>({packetId:'stored-private',kind:'youtube_transcript',assetVersions:[version],sources:[{id:'source',provider:'youtube',kind:'transcript',videoId:'abcdefghijk'}],excerpts:[{id:'legacy',sourceId:'source',text:'Private captions'}],artifacts:[],warnings:[],usage:[]})});
     instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({route:'finalize',responseIntent:'context_answer',reason:'Stored evidence'})},0)`;
-    await writer.finalizeRun(runId,'finish',{intent:'context_answer',answer:`A caption [cite:${packet.excerpts[0]!.id}]`,confidence:'high',citations:[],artifacts:[],warnings:[]});
+    example = `Example: \`[cite:${packet.excerpts[0]!.id}]\`.`;
+    await writer.finalizeRun(runId,'finish',{intent:'context_answer',answer:`A caption [cite:${packet.excerpts[0]!.id}] Example: \`[cite:${packet.excerpts[0]!.id}]\`.`,confidence:'high',citations:[],artifacts:[],warnings:[]});
     const {remember}=await import('./fixtures/memory');
     remember(store,runId,[{kind:'finding',topic:'caption',text:'A finding',evidenceIds:[packet.excerpts[0]!.id]}]);
     expect(store.brief().memories).toHaveLength(1);
@@ -949,7 +951,7 @@ test('session assets enforce ownership and deletion removes run copies, citation
     expect(JSON.stringify(instance.sql`SELECT result_json FROM agent_tool_calls`)).not.toContain('Private captions');
     const run=await instance.getRun(runId);
     expect(run?.result?.citations).toEqual([]);
-    expect(run?.result?.answer).toContain('[source deleted]');
+    expect(run?.result?.answer).toBe(`A caption [source deleted] ${example}`);
     const {SessionEvidenceStore}=await import('../src/agents/runtime/session-evidence');
     const store=(instance as unknown as {sessionStore:InstanceType<typeof SessionEvidenceStore>}).sessionStore;
     expect(await store.search.searchHistory('A caption')).toEqual([]);
@@ -1854,5 +1856,20 @@ test('retains rejected answers in private agent traces and revokes them on sessi
     expect(await readAdminToolTrace(env, runId, row!.trace_id)).toMatchObject({ payloadState: 'deleted', input: null });
     const objects = await env.RESEARCH.list({ prefix: 'agent-traces/' });
     expect(objects.objects.filter(object => object.key.includes(runId))).toHaveLength(0);
+  });
+});
+
+test('persists attributed research context on the run for answer-phase recovery', async () => {
+  const { runtime, runId } = await seed('research-context-recovery', 'running');
+  const context = { reads: [{ tool: 'read_session_history', input: { offset: 20 }, result: {
+    messages: [{ id: 'older-budget', role: 'user', text: 'My exact budget is $837.' }],
+  } }], truncated: false };
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as { persistResearchContext(id: string, context: import('../src/agents/runtime/context-handoff').ResearchContext): void };
+    writer.persistResearchContext(runId, context);
+  });
+  await runInDurableObject(runtime, async instance => {
+    const rows = instance.sql<{ research_context_json: string }>`SELECT research_context_json FROM agent_runs WHERE id=${runId}`;
+    expect(JSON.parse(rows[0]!.research_context_json)).toEqual(context);
   });
 });

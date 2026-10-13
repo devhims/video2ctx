@@ -1,3 +1,5 @@
+import type { ResearchContext } from './runtime/context-handoff';
+import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
 import { createHash } from 'node:crypto';
 import { ToolCallTraceManager } from './runtime/tool-call-trace';
@@ -110,6 +112,7 @@ interface RunRow {
   phase: string;
   classification_deadline_at: number | null;
   research_deadline_at: number | null;
+  research_context_json: string | null;
   finalization_deadline_at: number | null;
   result_json: string | null;
   draft_json: string | null;
@@ -325,7 +328,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       if (version && !affectedRuns.has(row.id) && !result.citations.some(citation=>deletedIds.has(citation.id))
         && !result.artifacts.some(artifact=>typeof artifact.data.videoId==='string' && removedVideos.has(artifact.data.videoId))) continue;
       result.citations = result.citations.filter(citation=>!deletedIds.has(citation.id));
-      result.answer = result.answer.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker);
+      result.answer = mapCitationProse(result.answer, prose => prose.replace(/\[cite:([^\]]+)\]/g,(marker,id)=>deletedIds.has(id) ? '[source deleted]' : marker));
       result.artifacts = [];
       result.warnings.push({code:'SESSION_EVIDENCE_DELETED',message:'Supporting session evidence was deleted. This historical answer is not reusable source evidence.'});
       const serialized = JSON.stringify(result);
@@ -661,6 +664,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         `[0]?.count ?? 0) > 0,
         // Earlier-turn content is resolved by the run against its route and billed on delivery.
         recoveredEvidence: this.readEvidencePackets(runId),
+        recoveredResearchContext: row.research_context_json ? JSON.parse(row.research_context_json) as ResearchContext : undefined,
+        persistResearchContext: context => this.persistResearchContext(runId, context),
         recoveredToolFailures: this.readEvidenceToolFailures(runId),
         deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
         deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
@@ -932,7 +937,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     });
     const creditsCharged = this.evidenceLedger.committed(runId);
     const history = this.readConversationHistory(run);
-    const citedIds=[...parsedInput.answer.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)].map(match=>match[1]!);
+    const citedIds=answerCitationIds(parsedInput.answer);
     const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
     const result = buildAgentTurnResult({
       runId,
@@ -1343,6 +1348,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // SDK snapshots contain run identifiers only, but clear those too.
     this.sql`DELETE FROM cf_agents_fibers`;
     for (const schedule of this.getSchedules()) await this.cancelSchedule(schedule.id);
+  }
+
+  private persistResearchContext(runId: string, context: ResearchContext) {
+    this.assertRunActive(runId);
+    this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(context)} WHERE id=${runId}`;
   }
 
   private readEvidencePackets(runId: string): EvidencePacket[] {
@@ -1792,6 +1802,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.sql`ALTER TABLE agent_runs ADD COLUMN finalization_deadline_at INTEGER`;
       this.sql`UPDATE agent_runs SET finalization_deadline_at = updated_at + ${AGENT_FINALIZATION_TIMEOUT_MS}
         WHERE phase = 'finalizing' AND status IN ('pending', 'running')`;
+    }
+    if (!columns.some(column => column.name === 'research_context_json')) {
+      this.sql`ALTER TABLE agent_runs ADD COLUMN research_context_json TEXT`;
     }
     this.ensureTurnOrdinalColumn();
     this.traceManager.initialize();
