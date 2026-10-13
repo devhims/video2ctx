@@ -523,16 +523,33 @@ html:has(.workspace-shell) body {
   color: var(--color-dashboard-ink);
 }
 
-.workspace-main {
-  /* Keep positioned descendants inside this panel's scrollable bounds. */
-  position: relative;
-  min-height: 0;
-  height: 100%;
-  overflow-y: auto;
-  overscroll-behavior-y: none;
+/* This grid layer stays painted when the transparent content panel bounces. */
+.workspace-shell::before {
+  content: "";
+  grid-area: 1 / 2;
+  pointer-events: none;
   background:
     radial-gradient(circle at 72% -8%, var(--color-dashboard-accent-wash), transparent 25rem),
     var(--color-dashboard-paper);
+}
+
+.workspace-main {
+  /* Keep positioned descendants inside this panel's scrollable bounds. */
+  position: relative;
+  grid-area: 1 / 2;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  /* Preserve native bounce without handing the gesture to the document. */
+  overscroll-behavior-y: contain;
+  background: transparent;
+}
+
+@media (max-width: 700px) {
+  .workspace-shell::before,
+  .workspace-main {
+    grid-area: 2 / 1;
+  }
 }
 
 /* A modal drawer must also lock the panel now that the body no longer scrolls. */

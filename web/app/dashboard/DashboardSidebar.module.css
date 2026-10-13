@@ -32,7 +32,7 @@
 .expand > svg { display: none; }
 .expand:hover > img, .expand:focus-visible > img { display: none; }
 .expand:hover > svg, .expand:focus-visible > svg { display: block; }
-.scrollArea { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: none; scrollbar-width: thin; }
+.scrollArea { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
 .navigation, .group { display: grid; gap: .125rem; }
 .group + .group { margin-top: 1rem; }
 .groupLabel, .projectHeading { color: var(--color-dashboard-muted); font-size: .6875rem; font-weight: 500; }

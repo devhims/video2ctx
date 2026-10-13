@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
 
+function scrollPanel(element: unknown, bottom = false) {
+  const panel = element as { scrollTop: number; scrollHeight: number };
+  panel.scrollTop = bottom ? panel.scrollHeight : 0;
+}
+
 test('session loading uses one compact placeholder and dashboard headers scroll away', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   // Streaming can retain hidden fallback and completed headers in the DOM.
@@ -141,7 +146,7 @@ test('allowed account can search, paginate, open history and read cited answers'
     const expected = await page.evaluate<string>(`getComputedStyle(document.querySelector('.agent-caveats > summary')).getPropertyValue('${property}')`);
     await expect(activity).toHaveCSS(property, expected);
   }
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, 0));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel);
   await page.screenshot({ path: testInfo.outputPath('session-desktop.png'), fullPage: true });
   await page.getByRole('button', { name: 'Load older messages' }).click();
   await expect(page.getByText('Earlier request in this session.')).toBeVisible();
@@ -150,7 +155,7 @@ test('allowed account can search, paginate, open history and read cited answers'
   await expect(page.getByRole('button', { name: 'View sources and tool activity' })).toHaveCount(0);
   await expect(page.getByText('Summarise the key takeaways from this video.', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, 0));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel);
   await page.screenshot({ path: testInfo.outputPath('session-mobile.png'), fullPage: true });
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
 });
@@ -266,7 +271,7 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await expect(latest.getByText('Loading Transcript', { exact: true })).toBeVisible();
   await latest.getByText('Loading Transcript', { exact: true }).click();
   await expect(latest.locator('pre')).toContainText('P7bxbDSnZRM');
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, 0));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel);
   await page.screenshot({ path: testInfo.outputPath('follow-up-streaming.png'), fullPage: true });
   await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
   expect(posts).toHaveLength(1);
@@ -281,7 +286,7 @@ test('follow-up recovers a lost receipt from the session without resubmitting an
   await expect(page.getByText('1 source · 4 evidence excerpts', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, 0));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel);
   await page.screenshot({ path: testInfo.outputPath('follow-up-mobile.png'), fullPage: true });
 });
 
@@ -361,7 +366,7 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   await latestAnswer.getByRole('button', { name: 'Copy answer', exact: true }).click();
   await expect(latestAnswer.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
   expect(await page.evaluate('navigator.clipboard.readText()')).toBe(answer);
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, 0));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel);
   await page.screenshot({ path: testInfo.outputPath('markdown-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(latestAnswer.locator('.agent-avatar')).toBeHidden();
@@ -375,7 +380,7 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
   expect(mobileAnswerBounds.x).toBe(16);
   expect(mobileAnswerBounds.x + mobileAnswerBounds.width).toBe(374);
   await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Which claims are supported by the transcript?');
-  await page.locator('.workspace-main:visible').evaluate(el => el.scrollTo(0, el.scrollHeight));
+  await page.locator('.workspace-main:visible').evaluate(scrollPanel, true);
   await expect(page.getByRole('button', { name: 'Send follow-up' })).toBeInViewport();
   expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
   const sendBounds = (await page.getByRole('button', { name: 'Send follow-up' }).boundingBox())!;
