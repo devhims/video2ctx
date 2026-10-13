@@ -2220,6 +2220,64 @@ html:has(.craft) body {
   opacity: 1;
 }
 
+/* ---------------------------------------------------------------- use cases */
+
+.craft-cases {
+  margin-top: clamp(var(--space-xl), 4vh, var(--space-2xl));
+}
+
+.craft-cases .craft-run {
+  margin-top: var(--space-md);
+}
+
+.craft-case .craft-run-sources {
+  grid-template-columns: repeat(var(--count), minmax(0, 1fr));
+}
+
+.craft-case .craft-run-sources li {
+  min-width: 0;
+}
+
+/* The storyboard as a contact sheet, one tile per second. Tiles scan in while
+ * it is read; the seconds pulled as full frames light up once that step ends. */
+.craft-case-sheet {
+  max-width: 9rem;
+  margin-top: 0.35rem;
+  display: grid;
+  grid-template-columns: repeat(18, minmax(0, 1fr));
+  gap: 1px;
+}
+
+.craft-case-sheet i {
+  aspect-ratio: 16 / 9;
+  border-radius: 1px;
+  background: var(--rule-strong);
+  opacity: 0;
+  transition:
+    opacity var(--control) var(--out),
+    background-color var(--control) var(--out);
+  transition-delay: calc(var(--i) * 7ms);
+}
+
+.craft-run-sources li:not([data-state='pending']) .craft-case-sheet i {
+  opacity: 0.7;
+}
+
+.craft-run-sources li[data-state='done'] .craft-case-sheet i[data-picked='true'] {
+  background: var(--accent);
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
+/* Stand-ins for interface frames: a viewport with a properties strip, not a
+ * picture of the video. */
+.craft-case-frames i {
+  width: 1.5rem;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--rule-strong);
+  background: linear-gradient(90deg, var(--paper) 0 68%, var(--rule-strong) 68%);
+}
+
 /* ----------------------------------------------------------------- close */
 
 /* Same width as the bands above, so the hairlines line up down the page. */
@@ -3210,7 +3268,8 @@ html:has(.craft) body {
     content: none;
   }
 
-  .craft-run-sources {
+  .craft-run-sources,
+  .craft-case .craft-run-sources {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: var(--space-md);
   }

@@ -13,6 +13,7 @@
 import { CraftDemo } from './craft-demo';
 import { CraftAgentRun } from './craft-agent-run';
 import { CraftMonitorRun } from './craft-monitor-run';
+import { CraftUseCases } from './craft-use-cases';
 import { CraftCloseAction } from './craft-close-action';
 import { CraftCode } from './craft-code';
 import { CraftNav } from './craft-nav';
@@ -326,6 +327,23 @@ export function CraftDirection() {
               Set up a monitor
             </a>
           </div>
+        </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <section
+          id='use-cases'
+          className='craft-band craft-agent'
+          aria-labelledby='craft-cases-title'
+        >
+          <div className='craft-band-head'>
+            <h2 id='craft-cases-title'>What people use it for.</h2>
+            <p>
+              Three real runs: numbers read straight off the screen, a lecture
+              turned into notes, and three tutorials compared.
+            </p>
+          </div>
+          <CraftUseCases />
         </section>
       </div>
 
