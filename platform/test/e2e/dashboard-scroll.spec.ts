@@ -164,6 +164,43 @@ test('agent composer and focused messages remain reachable with native page scro
   }
 });
 
+for (const newSession of [true, false]) {
+  test(`mobile long ${newSession ? 'first messages' : 'follow-ups'} stay below navigation before and after admission`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/dashboard/sessions');
+    if (!newSession) {
+      await page.getByRole('textbox', { name: 'Start a new session' }).fill('Summarise the key evidence.');
+      await page.getByRole('button', { name: 'Start session', exact: true }).click();
+    }
+    const composer = page.getByRole('textbox', { name: newSession ? 'Start a new session' : 'Follow-up message' });
+    await expect(composer).toBeVisible();
+    let release!: () => void;
+    const admission = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/platform/v1/agent?*', async route => { await admission; await route.continue(); });
+    const prompt = Array.from({ length: 32 }, (_, index) => `Point ${index + 1}: explain the evidence for this claim.`).join('\n');
+    await composer.fill(prompt);
+    await expect(page.getByRole('button', { name: newSession ? 'Start session' : 'Send follow-up', exact: true })).toBeEnabled();
+    await composer.press('Enter');
+    const message = page.locator('.agent-user-message').filter({ hasText: prompt });
+    const navigation = page.getByRole('button', { name: 'Open navigation' }).locator('..');
+    const expectClearOfNavigation = async () => {
+      await expect(message).toBeFocused();
+      const bar = (await navigation.boundingBox())!;
+      await expect.poll(async () => (await message.boundingBox())!.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+      await expect(message.locator('time')).toBeInViewport();
+    };
+    try {
+      await expect(message.getByRole('status')).toHaveText('Sending…');
+      await page.screenshot({ path: testInfo.outputPath('mobile-pending-long-message-focus.png') });
+      await expectClearOfNavigation();
+    } finally { release(); }
+    await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+    await expect(message).toHaveCount(1);
+    await expectClearOfNavigation();
+    await page.screenshot({ path: testInfo.outputPath('mobile-long-message-focus.png') });
+  });
+}
+
 test('mobile touch swipes use the document at both scroll boundaries', async ({ browser, browserName, baseURL }) => {
   test.skip(browserName !== 'chromium', 'Touch gestures use the Chromium input protocol.');
   const context = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

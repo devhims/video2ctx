@@ -587,6 +587,11 @@ html:has(.workspace-shell dialog[open]) body {
 }
 
 @media (max-width: 700px) {
+  /* Keep scroll targets below the fixed mobile navigation. */
+  html:has(.workspace-shell) {
+    scroll-padding-top: 3.5rem;
+  }
+
   .workspace-main {
     grid-area: auto;
     min-height: calc(100dvh - 3.5rem);
