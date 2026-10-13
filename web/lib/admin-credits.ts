@@ -3,7 +3,7 @@ import { platformRequest } from './platform-request.ts';
 export type CreditUser = { id: string; name: string; email: string; creditBalance: number };
 export type CreditGrant = { id: string; userId: string; credits: number; reason: string; adminUserId: string; createdAt: number };
 export type CreditAccount = { user: CreditUser; grants: CreditGrant[] };
-export type CreditGrantInput = { userId: string; requestId: string; credits: number; reason: string };
+export type CreditGrantInput = { userId: string; requestId: string; credits: number; reason?: string };
 export type CreditGrantResult = { user: CreditUser; grant: CreditGrant; replayed: boolean };
 
 export function lookupCreditAccount(user: string, signal?: AbortSignal) {

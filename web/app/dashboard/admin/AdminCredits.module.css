@@ -11,71 +11,67 @@
 .empty { display: grid; justify-items: center; padding: 52px 24px; border: 1px dashed var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-md); color: var(--color-dashboard-ink-soft); text-align: center; }
 .empty h3 { margin: 16px 0 8px; color: var(--color-dashboard-ink); font-size: 14px; font-weight: 500; }
 .empty p { margin: 0; max-width: 340px; font-size: 13px; line-height: 1.7; }
-.account { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 24px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-md) var(--radius-dashboard-md) 0 0; background: var(--color-dashboard-surface); }
+.accountTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-md); overflow: hidden; background: var(--color-dashboard-surface); }
+.userColumn { width: 42%; }
+.balanceColumn { width: 21%; }
+.addColumn { width: 37%; }
+.accountTable th { padding: 14px 20px; background: var(--color-dashboard-paper); border-bottom: 1px solid var(--color-dashboard-rule-strong); color: var(--color-dashboard-ink-soft); font-size: 11px; font-weight: 500; text-align: left; }
+.accountTable td { padding: 24px 20px; vertical-align: top; }
 .identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
 .identity > div { min-width: 0; }
-.avatar { flex-shrink: 0; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: 50%; font-size: 16px; background: var(--color-dashboard-paper); }
-.identity h3 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-.identity p { margin: 5px 0 8px; color: var(--color-dashboard-ink-soft); font-size: 12px; overflow-wrap: anywhere; }
-.identity code { font-size: 10px; color: var(--color-dashboard-ink-soft); overflow-wrap: anywhere; }
-.balance { display: grid; gap: 5px; flex-shrink: 0; text-align: right; }
-.balance span { font-size: 11px; color: var(--color-dashboard-ink-soft); }
-.balance strong { font-size: 28px; font-weight: 500; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
-.grantForm, .review, .success { padding: 24px; border: 1px solid var(--color-dashboard-rule-strong); border-top: 0; border-radius: 0 0 var(--radius-dashboard-md) var(--radius-dashboard-md); }
-.amountHeading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
-.amountHeading > span { font-size: 11px; color: var(--color-dashboard-ink-soft); }
-.amountField { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-paper); }
-.amountField:focus-within { outline: 2px solid var(--color-dashboard-ink); outline-offset: 3px; }
-.panel .amountField input { width: 100%; min-width: 0; padding: 4px 0; border: 0; border-radius: 0; background: transparent; font-size: 32px; font-weight: 500; letter-spacing: -.04em; font-variant-numeric: tabular-nums; outline: none; }
-.amountField > span { font-size: 13px; color: var(--color-dashboard-ink-soft); }
-.presets { display: flex; gap: 8px; margin-top: 12px; }
-.panel .presets button { min-height: 32px; padding: 5px 10px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.avatar { flex-shrink: 0; display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: 50%; font-size: 14px; background: var(--color-dashboard-paper); }
+.identity h3 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.identity p { margin: 5px 0 10px; color: var(--color-dashboard-ink-soft); font-size: 12px; overflow-wrap: anywhere; }
+.identity code { display: block; font-size: 10px; line-height: 1.6; color: var(--color-dashboard-ink-soft); overflow-wrap: anywhere; }
+.balance { display: grid; gap: 8px; }
+.balance span { font-size: 10px; color: var(--color-dashboard-ink-soft); }
+.balance strong { font-size: 28px; font-weight: 500; letter-spacing: -.04em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.balance .mobileLabel { display: none; }
+.amountLabel { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.addControls { display: flex; gap: 8px; }
+.panel .addControls input { width: 100%; min-width: 0; padding: 9px 10px; font-size: 16px; font-variant-numeric: tabular-nums; }
+.addControls button { min-width: 60px; white-space: nowrap; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.panel .presets button { min-height: 30px; padding: 4px 7px; font-size: 10px; font-variant-numeric: tabular-nums; }
 .panel .presets button[aria-pressed='true'] { border-color: var(--color-dashboard-ink); background: var(--color-dashboard-paper); }
-.hint { margin: 12px 0 0; font-size: 12px; color: var(--color-dashboard-ink-soft); line-height: 1.65; }
+.hint { margin: 10px 0 0; font-size: 11px; color: var(--color-dashboard-ink-soft); line-height: 1.65; }
 .hint strong { color: var(--color-dashboard-ink); font-weight: 500; font-variant-numeric: tabular-nums; }
-.grantForm > label { margin-top: 28px; margin-bottom: 10px; }
-.optional { margin-left: 6px; color: var(--color-dashboard-ink-soft); font-size: 11px; font-weight: 400; }
-.panel textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; min-height: 76px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-paper); color: var(--color-dashboard-ink); padding: 11px 12px; font: inherit; font-size: 13px; line-height: 1.6; }
-.panel textarea:focus-visible { outline: 2px solid var(--color-dashboard-ink); outline-offset: 3px; }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 .panel .primary { background: var(--color-dashboard-ink); color: var(--color-dashboard-paper); }
 .panel button { transition: transform 120ms ease-out, border-color 120ms ease; }
 .panel button:active:not(:disabled) { transform: scale(.98); }
-.error { margin: 0 0 20px; padding: 12px 14px; border: 1px solid var(--color-dashboard-danger); border-radius: var(--radius-dashboard-sm); color: var(--color-dashboard-danger); font-size: 13px; line-height: 1.65; }
-.review h3, .success h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
-.review h3:focus { outline: none; }
-.review > p, .success p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.calculation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; padding: 20px; border-radius: var(--radius-dashboard-sm); background: var(--color-dashboard-surface); border: 1px solid var(--color-dashboard-rule-strong); }
-.calculation > div { display: grid; gap: 8px; }
-.calculation span { font-size: 11px; color: var(--color-dashboard-ink-soft); }
-.calculation strong { font-size: 22px; font-weight: 500; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-.reason { display: grid; gap: 6px; white-space: pre-wrap; }
-.reason span { color: var(--color-dashboard-ink-soft); font-size: 11px; }
-.success { display: flex; align-items: flex-start; gap: 12px; }
+.error, .recovery, .refreshError { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-sm); font-size: 12px; line-height: 1.65; }
+.error { border-color: var(--color-dashboard-danger); color: var(--color-dashboard-danger); }
+.recovery h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; outline: none; }
+.recovery p, .refreshError p { margin: 0; color: var(--color-dashboard-ink-soft); }
+.refreshError { margin: 16px 0 0; }
+.refreshError button { margin-top: 10px; }
+.success { display: flex; align-items: flex-start; gap: 10px; margin-top: 18px; }
 .success > svg { flex-shrink: 0; }
-.success p { color: var(--color-dashboard-ink-soft); margin: 8px 0 16px; }
+.success h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.success p { color: var(--color-dashboard-ink-soft); margin: 6px 0 0; font-size: 12px; line-height: 1.7; }
 .history { margin-top: 36px; }
 .history h3 { display: flex; justify-content: space-between; margin: 0 0 16px; font-size: 13px; font-weight: 600; }
 .history h3 span { color: var(--color-dashboard-ink-soft); font-size: 11px; font-weight: 400; }
 .history ol { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--color-dashboard-rule-strong); }
 .history li { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--color-dashboard-rule-strong); padding: 16px 0; }
-.history li > div { min-width: 0; }
+.history li > div { display: grid; gap: 6px; min-width: 0; }
 .history strong { font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.history p { margin: 6px 0; font-size: 12px; color: var(--color-dashboard-ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
 .history small, .history time { font-size: 10px; color: var(--color-dashboard-ink-soft); overflow-wrap: anywhere; }
 .history time { flex-shrink: 0; text-align: right; }
 @media (max-width: 700px) {
   .lookupRow { flex-direction: column; }
-  .account { flex-direction: column; align-items: stretch; gap: 20px; padding: 20px; }
-  .balance { text-align: left; padding-left: 50px; }
-  .grantForm, .review, .success { padding: 20px; }
-  .amountHeading { flex-direction: column; gap: 6px; }
-  .calculation { gap: 8px; padding: 14px 10px; }
-  .calculation strong { font-size: 18px; }
-  .calculation span { font-size: 10px; }
-  .calculation > svg { width: 14px; flex-shrink: 0; }
+  .accountTable, .accountTable tbody, .accountTable tr { display: block; }
+  .accountTable colgroup, .accountTable thead { display: none; }
+  .accountTable tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, auto); }
+  .accountTable td { display: block; min-width: 0; padding: 20px 16px; }
+  .accountTable td:nth-child(2) { padding-left: 0; text-align: right; }
+  .accountTable td:nth-child(3) { grid-column: 1 / -1; border-top: 1px solid var(--color-dashboard-rule-strong); background: var(--color-dashboard-paper); }
+  .panel .amountLabel { position: static; width: auto; height: auto; margin: 0 0 12px; overflow: visible; clip: auto; white-space: normal; font-size: 12px; }
+  .balance .mobileLabel { display: block; font-size: 10px; }
+  .balance strong { font-size: 26px; }
+  .avatar { display: none; }
+  .panel .presets button { min-height: 34px; padding: 6px 10px; font-size: 11px; }
   .history li { flex-direction: column; gap: 8px; }
   .history time { text-align: left; }
-  .actions > button { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) { .panel button { transition: none; } .panel button:active:not(:disabled) { transform: none; } }
