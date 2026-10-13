@@ -1,15 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// Browser globals stay in page expressions; locator callbacks use only their scrolling contract.
+// Locator callbacks use a scrolling contract rather than adding DOM types to the Worker compiler.
 type ScrollPanel = { scrollTop: number; scrollHeight: number; clientHeight: number };
 const readScrollTop = (element: unknown) => (element as ScrollPanel).scrollTop;
 const readScrollLimit = (element: unknown, bottom: boolean) => {
   const panel = element as ScrollPanel;
   return bottom ? panel.scrollHeight - panel.clientHeight : 0;
-};
-const hasOverflow = (element: unknown) => {
-  const panel = element as ScrollPanel;
-  return panel.scrollHeight > panel.clientHeight;
 };
 const scrollToEdge = (element: unknown, bottom: boolean) => {
   const panel = element as ScrollPanel;
@@ -23,142 +19,130 @@ test.beforeEach(async ({ context }) => {
   ]);
 });
 
-async function expectViewportFrame(page: Page) {
-  const shell = page.locator('.workspace-shell:visible');
-  const main = shell.locator(':scope > .workspace-main');
-  const height = page.viewportSize()!.height;
-  await expect.poll(async () => {
-    const bounds = await shell.boundingBox();
-    return bounds && { y: bounds.y, height: bounds.height };
-  }).toEqual({ y: 0, height });
-  expect(await page.evaluate(`({
-    top: document.scrollingElement.scrollTop,
-    height: document.scrollingElement.scrollHeight,
-    width: document.scrollingElement.scrollWidth,
-  })`)).toEqual({ top: 0, height, width: page.viewportSize()!.width });
-  await expect(main).toHaveCSS('overflow-y', 'auto');
-  await expect(main).toHaveCSS('overscroll-behavior-y', 'contain');
-  // The backdrop belongs to the non-scrolling frame, so bounce cannot uncover a different color.
+async function expectPageScrolling(page: Page) {
+  const root = page.locator('html');
+  const main = page.locator('.workspace-main:visible');
+  await expect(root).toHaveCSS('overflow-y', 'visible');
+  await expect(root).toHaveCSS('overscroll-behavior-y', 'auto');
+  await expect(root).toHaveCSS('background-attachment', /^fixed(?:, fixed)*$/);
+  await expect(main).toHaveCSS('overflow-y', 'visible');
   await expect(main).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(main).toHaveCSS('background-image', 'none');
   const backdrop = await page.evaluate<{
-    content: string; image: string; row: string; column: string;
-    width: number; height: number; panelWidth: number; panelHeight: number;
+    image: string; canvas: string; position: string; top: number; left: number;
+    width: number; height: number; documentWidth: number;
   }>(`(() => {
-    const el = [...document.querySelectorAll('.workspace-shell')].find(el => el.getBoundingClientRect().height > 0);
-    const style = getComputedStyle(el, '::before');
-    const panel = el.querySelector('.workspace-main').getBoundingClientRect();
+    const shell = [...document.querySelectorAll('.workspace-shell')].find(el => el.getBoundingClientRect().height > 0);
+    const style = getComputedStyle(shell, '::before');
     return {
-      content: style.content,
       image: style.backgroundImage,
-      row: style.gridRowStart,
-      column: style.gridColumnStart,
-      width: parseFloat(style.width),
-      height: parseFloat(style.height),
-      panelWidth: panel.width,
-      panelHeight: panel.height,
+      canvas: getComputedStyle(document.documentElement).backgroundImage,
+      position: style.position,
+      top: parseFloat(style.top), left: parseFloat(style.left),
+      width: parseFloat(style.width), height: parseFloat(style.height),
+      documentWidth: document.scrollingElement.scrollWidth,
     };
   })()`);
-  expect(backdrop.content).toBe('""');
+  expect(backdrop.position).toBe('fixed');
+  expect(backdrop.top).toBe(0);
+  expect(backdrop.left).toBe(0);
   expect(backdrop.image).toContain('radial-gradient');
-  expect(backdrop.width).toBeCloseTo(backdrop.panelWidth, 1);
-  expect(backdrop.height).toBeCloseTo(backdrop.panelHeight, 1);
-  const mobile = page.viewportSize()!.width <= 700;
-  expect(backdrop.row).toBe(mobile ? '2' : '1');
-  expect(backdrop.column).toBe(mobile ? '1' : '2');
-  return main;
+  expect(backdrop.image).toBe(backdrop.canvas);
+  expect(backdrop.width).toBe(page.viewportSize()!.width);
+  expect(backdrop.height).toBe(page.viewportSize()!.height);
+  expect(backdrop.documentWidth).toBeLessThanOrEqual(page.viewportSize()!.width);
+  return root;
 }
 
-test('desktop content scrolls within the viewport while the sidebar stays in place', async ({ page }, testInfo) => {
+test('desktop keeps native page scrolling while the sidebar and gradient stay fixed', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
-  const main = await expectViewportFrame(page);
-  expect(await main.evaluate(hasOverflow)).toBe(true);
+  const root = await expectPageScrolling(page);
+  expect(await root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
+  await expect(sidebar).toHaveCSS('position', 'fixed');
   const initial = await sidebar.boundingBox();
   await page.mouse.move(1000, 400);
   await page.mouse.wheel(0, 500);
-  await expect.poll(() => main.evaluate(readScrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
+  expect(await page.locator('.workspace-main:visible').evaluate(readScrollTop)).toBe(0);
   expect(await sidebar.boundingBox()).toEqual(initial);
   await expect(page.locator('.topbar:visible')).not.toBeInViewport();
-  for (const direction of [1, -1]) {
-    await main.evaluate(scrollToEdge, direction > 0);
-    await page.mouse.wheel(0, direction * 10000);
-    await expect.poll(() => main.evaluate(readScrollTop)).toBe(
-      await main.evaluate(readScrollLimit, direction > 0),
-    );
-    await expectViewportFrame(page);
+  for (const bottom of [true, false]) {
+    await root.evaluate(scrollToEdge, bottom);
+    await page.mouse.wheel(0, bottom ? 10000 : -10000);
+    await expect.poll(() => root.evaluate(readScrollTop)).toBe(await root.evaluate(readScrollLimit, bottom));
+    await expectPageScrolling(page);
     expect(await sidebar.boundingBox()).toEqual(initial);
   }
   await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-  await expectViewportFrame(page);
+  await expectPageScrolling(page);
+  await expect(sidebar).toHaveCSS('position', 'fixed');
   await page.getByRole('button', { name: 'Expand sidebar' }).click();
-  await page.screenshot({ path: testInfo.outputPath('desktop-scroll.png') });
+  expect(await sidebar.boundingBox()).toEqual(initial);
+  await page.screenshot({ path: testInfo.outputPath('desktop-native-scroll.png') });
 });
 
-test('mobile content scrolls and the drawer isolates its scrolling from the page', async ({ page }, testInfo) => {
+test('mobile preserves page scrolling while the drawer isolates its own scrolling', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
-  const main = await expectViewportFrame(page);
+  const root = await expectPageScrolling(page);
   await page.mouse.move(300, 400);
   await page.mouse.wheel(0, 600);
-  await expect.poll(() => main.evaluate(readScrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeInViewport();
   await page.getByRole('button', { name: 'Open navigation' }).click();
   const drawer = page.getByRole('dialog', { name: 'Dashboard navigation' });
   await expect(drawer).toBeVisible();
-  await expect(main).toHaveCSS('overflow-y', 'hidden');
-  const previousScroll = await main.evaluate(readScrollTop);
-  // A short viewport must keep navigation scrollable and the account footer reachable.
+  await expect(root).toHaveCSS('overflow-y', 'hidden');
+  const previousScroll = await root.evaluate(readScrollTop);
   await page.setViewportSize({ width: 390, height: 480 });
   const drawerBounds = (await drawer.boundingBox())!;
   expect(drawerBounds.y).toBe(0);
   expect(drawerBounds.height).toBe(480);
-  const navigation = drawer.getByRole('navigation');
-  const scroller = navigation.locator('..');
-  expect(await scroller.evaluate(hasOverflow)).toBe(true);
+  const scroller = drawer.getByRole('navigation').locator('..');
+  expect(await scroller.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   await expect(scroller).toHaveCSS('overscroll-behavior-y', 'contain');
   await page.mouse.move(150, 220);
   await page.mouse.wheel(0, 10000);
   await expect.poll(() => scroller.evaluate(readScrollTop)).toBeGreaterThan(0);
   await page.mouse.wheel(0, 10000);
-  expect(await main.evaluate(readScrollTop)).toBe(previousScroll);
+  expect(await root.evaluate(readScrollTop)).toBe(previousScroll);
   expect(await drawer.boundingBox()).toEqual(drawerBounds);
   await expect(drawer.locator('summary')).toBeInViewport();
-  await page.screenshot({ path: testInfo.outputPath('mobile-drawer.png') });
+  await page.screenshot({ path: testInfo.outputPath('mobile-native-scroll.png') });
   await page.getByRole('button', { name: 'Close navigation' }).click();
-  await expect(main).toHaveCSS('overflow-y', 'auto');
   await page.mouse.move(300, 300);
   await page.mouse.wheel(0, -10000);
-  await expect.poll(() => main.evaluate(readScrollTop)).toBe(0);
-  await expectViewportFrame(page);
+  await expect.poll(() => root.evaluate(readScrollTop)).toBe(0);
+  await expectPageScrolling(page);
   await page.setViewportSize({ width: 844, height: 390 });
-  await expectViewportFrame(page);
+  await expectPageScrolling(page);
   await expect(page.getByRole('complementary', { name: 'Workspace sidebar' })).toBeInViewport();
 });
 
-test('all dashboard shells fit the viewport and keyboard scrolling still reaches content', async ({ page }) => {
+test('all dashboard routes retain page scrolling and keyboard navigation', async ({ page }) => {
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     for (const route of ['sources', 'projects', 'developer', 'admin', 'sessions']) {
       await page.goto(`/dashboard/${route}`);
       await expect(page.locator('.topbar:visible')).toBeVisible();
-      await expectViewportFrame(page);
+      await expectPageScrolling(page);
     }
   }
   await page.goto('/dashboard/settings');
-  const main = await expectViewportFrame(page);
-  await main.focus();
-  await expect(main).toBeFocused();
+  const root = await expectPageScrolling(page);
+  const content = page.getByRole('region', { name: 'Dashboard content' });
+  await content.focus();
+  await expect(content).toBeFocused();
   await page.keyboard.press('PageDown');
-  await expect.poll(() => main.evaluate(readScrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
   await page.keyboard.press('PageUp');
-  await expect.poll(() => main.evaluate(readScrollTop)).toBe(0);
+  await expect.poll(() => root.evaluate(readScrollTop)).toBe(0);
 });
 
-test('agent composer and focused messages remain reachable inside the content scroller', async ({ page }) => {
+test('agent composer and focused messages remain reachable with native page scrolling', async ({ page }) => {
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await page.goto('/dashboard/sessions');
@@ -166,8 +150,8 @@ test('agent composer and focused messages remain reachable inside the content sc
     await page.getByRole('button', { name: 'Start session', exact: true }).click();
     const composer = page.getByRole('textbox', { name: 'Follow-up message' });
     await expect(composer).toBeVisible();
-    const main = await expectViewportFrame(page);
-    await main.evaluate(scrollToEdge, true);
+    const root = await expectPageScrolling(page);
+    await root.evaluate(scrollToEdge, true);
     await expect(composer).toBeInViewport();
     await composer.fill('Explain the evidence for this conclusion.');
     await expect(page.getByRole('button', { name: 'Send follow-up', exact: true })).toBeEnabled();
@@ -176,18 +160,18 @@ test('agent composer and focused messages remain reachable inside the content sc
     await expect(message).toContainText('Explain the evidence for this conclusion.');
     await expect(message).toBeFocused();
     await expect(message).toBeInViewport();
-    await expectViewportFrame(page);
+    await expectPageScrolling(page);
   }
 });
 
-test('touch swipes scroll mobile content without moving the document at either edge', async ({ browser, browserName, baseURL }) => {
+test('mobile touch swipes use the document at both scroll boundaries', async ({ browser, browserName, baseURL }) => {
   test.skip(browserName !== 'chromium', 'Touch gestures use the Chromium input protocol.');
   const context = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     await context.addCookies([{ name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' }]);
     const page = await context.newPage();
     await page.goto('/dashboard/settings');
-    const main = await expectViewportFrame(page);
+    const root = await expectPageScrolling(page);
     const input = await context.newCDPSession(page);
     const swipe = async (down: boolean) => {
       const start = down ? 650 : 250;
@@ -199,21 +183,17 @@ test('touch swipes scroll mobile content without moving the document at either e
       await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     };
     await swipe(true);
-    await expect.poll(() => main.evaluate(readScrollTop)).toBeGreaterThan(0);
-    for (const down of [true, false]) {
-      await main.evaluate(scrollToEdge, down);
-      await swipe(down);
-      await expectViewportFrame(page);
-      await expect.poll(() => main.evaluate(readScrollTop)).toBe(
-        await main.evaluate(readScrollLimit, down),
-      );
+    await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
+    for (const bottom of [true, false]) {
+      await root.evaluate(scrollToEdge, bottom);
+      await swipe(bottom);
+      await expectPageScrolling(page);
+      await expect.poll(() => root.evaluate(readScrollTop)).toBe(await root.evaluate(readScrollLimit, bottom));
     }
-  } finally {
-    await context.close();
-  }
+  } finally { await context.close(); }
 });
 
-test('leaving the dashboard restores document scrolling on the homepage', async ({ page }) => {
+test('leaving the dashboard keeps normal homepage scrolling', async ({ page }) => {
   await page.goto('/dashboard/settings');
   await expect(page.locator('.workspace-shell:visible')).toBeVisible();
   await page.getByRole('complementary', { name: 'Workspace sidebar' }).getByRole('link', { name: 'video2ctx home' }).click();

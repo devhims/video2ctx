@@ -9,10 +9,12 @@
 }
 
 .sidebar {
-  height: calc(100% - .5rem);
+  position: fixed;
+  inset: .25rem auto .25rem .25rem;
+  width: calc(var(--dashboard-sidebar-width, 15rem) - .25rem);
   min-height: 0;
   min-width: 0;
-  margin: .25rem 0 .25rem .25rem;
+  margin: 0;
   border: 1px solid var(--color-dashboard-rule);
   border-radius: .875rem;
   z-index: 20;
@@ -105,12 +107,12 @@
 .mobileBar, .drawer { display: none; }
 
 /* The shell follows the sidebar on every dashboard route. */
-:global(.workspace-shell):has(> .sidebar) { grid-template-columns: 15rem minmax(0, 1fr); gap: .25rem; }
-:global(.workspace-shell):has(> .sidebar[data-collapsed='true']) { grid-template-columns: 3.75rem minmax(0, 1fr); }
+:global(.workspace-shell):has(> .sidebar) { --dashboard-sidebar-width: 15rem; grid-template-columns: var(--dashboard-sidebar-width) minmax(0, 1fr); gap: .25rem; }
+:global(.workspace-shell):has(> .sidebar[data-collapsed='true']) { --dashboard-sidebar-width: 3.75rem; }
 
 @media (max-width: 700px) {
   .sidebar { display: none; }
-  .mobileBar { display: flex; align-items: center; gap: .25rem; height: 3.5rem; padding: .375rem .5rem; border-bottom: 1px solid var(--color-dashboard-rule); background: var(--color-dashboard-sidebar); color: var(--color-dashboard-ink); }
+  .mobileBar { position: fixed; inset: 0 0 auto; z-index: 20; display: flex; align-items: center; gap: .25rem; height: 3.5rem; padding: .375rem .5rem; border-bottom: 1px solid var(--color-dashboard-rule); background: var(--color-dashboard-sidebar); color: var(--color-dashboard-ink); }
   .mobileBar > button { width: 2.75rem; height: 2.75rem; }
   .mobileActions { display: flex; align-items: center; margin-left: auto; }
   .mobileActions :global(.notification-trigger) { width: 2.75rem; height: 2.75rem; }
@@ -121,7 +123,7 @@
   .drawer .item { min-height: 2.75rem; }
   .drawer .toggle, .drawer .projectHeading button { min-height: 2.75rem; min-width: 2.75rem; }
   :global(body):has(.drawer[open]) { overflow: hidden; }
-  :global(.workspace-shell):has(> .sidebar) { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 0; }
+  :global(.workspace-shell):has(> .sidebar) { display: block; padding-top: 3.5rem; }
   :global(.workspace-shell):has(> .sidebar) > :global(.workspace-main) { padding-bottom: 0; }
 }
 

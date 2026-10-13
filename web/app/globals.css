@@ -492,11 +492,26 @@ html:has(.developer-page) body {
   color-scheme: dark;
 }
 
-/* Dashboard panels own scrolling; the document must never expose its edges. */
-html:has(.workspace-shell),
+/* Keep the native page scroller and paint the same backdrop on its canvas. */
+html:has(.workspace-shell) {
+  --dashboard-backdrop:
+    radial-gradient(circle at 72% -8%, var(--color-dashboard-accent-wash), transparent 25rem),
+    var(--color-dashboard-paper);
+  background: var(--dashboard-backdrop);
+  background-attachment: fixed;
+  background-size: 100vw 100dvh;
+  background-repeat: no-repeat;
+  overscroll-behavior-y: auto;
+}
+
 html:has(.workspace-shell) body {
-  height: 100%;
-  overflow: hidden;
+  background: transparent;
+}
+
+/* Modal navigation and evidence viewers lock the page without changing its scroll owner. */
+html:has(.workspace-shell dialog[open]),
+html:has(.workspace-shell dialog[open]) body {
+  overflow-y: hidden;
   overscroll-behavior-y: none;
 }
 
@@ -514,47 +529,36 @@ html:has(.workspace-shell) body {
   --out: cubic-bezier(0.23, 1, 0.32, 1);
   --press: 140ms;
   --control: 200ms;
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
-  grid-template-rows: minmax(0, 1fr);
+  min-height: 100dvh;
+  isolation: isolate;
   grid-template-columns: 16rem minmax(0, 1fr);
-  background: var(--color-dashboard-paper);
+  background: transparent;
   color: var(--color-dashboard-ink);
 }
 
-/* This grid layer stays painted when the transparent content panel bounces. */
+/* This viewport layer remains stationary during native page overscroll. */
 .workspace-shell::before {
   content: "";
-  grid-area: 1 / 2;
+  position: fixed;
+  inset: 0;
+  z-index: -1;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 72% -8%, var(--color-dashboard-accent-wash), transparent 25rem),
-    var(--color-dashboard-paper);
+  background: var(--dashboard-backdrop);
 }
 
 .workspace-main {
-  /* Keep positioned descendants inside this panel's scrollable bounds. */
   position: relative;
   grid-area: 1 / 2;
-  min-height: 0;
-  height: 100%;
-  overflow-y: auto;
-  /* Preserve native bounce without handing the gesture to the document. */
-  overscroll-behavior-y: contain;
+  min-height: 100dvh;
+  overflow: visible;
   background: transparent;
 }
 
 @media (max-width: 700px) {
-  .workspace-shell::before,
   .workspace-main {
-    grid-area: 2 / 1;
+    grid-area: auto;
+    min-height: calc(100dvh - 3.5rem);
   }
-}
-
-/* A modal drawer must also lock the panel now that the body no longer scrolls. */
-.workspace-shell:has(dialog[open]) > .workspace-main {
-  overflow: hidden;
 }
 
 .workspace-brand {
