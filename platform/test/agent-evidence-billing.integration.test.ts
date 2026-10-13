@@ -288,7 +288,9 @@ test('admits saved analysis inputs before inference without counting a hold, and
 
 // Runtime wiring: the Durable Object prices tool records, deliveries and settlement.
 import { vi } from 'vitest';
-import { reserveAgentCredits } from '../src/agents/runtime/billing';
+import { AGENT_CREDIT_RESERVE, reserveAgentCredits } from '../src/agents/runtime/billing';
+import { compactAgentRun } from '../src/agents/response';
+import type { AgentRunView, AgentRuntimeDO } from '../src/agents/agent-runtime-do';
 import { creditBalance } from '../src/lib/entitlements';
 import type { EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { AgentTurnResult, FinalizeAnswerInput } from '../src/agents/contracts';
@@ -444,6 +446,105 @@ test('a finalize-only answer from saved evidence pays for that evidence and repo
     // A duplicate finalize returns the same settled answer without charging again.
     expect((await runtimeInternals.finalizeRun(runId!, 'finish-again', { intent: 'context_answer', answer: 'Other.',
       confidence: 'medium', citations: [], artifacts: [], warnings: [] } as FinalizeAnswerInput)).billing.creditsCharged).toBe(2);
+  });
+});
+
+type RuntimeStub = ReturnType<typeof env.AGENT_RUNTIME.getByName>;
+const readView = async (runtime: RuntimeStub, runId: string) => await runtime.getRun(runId) as AgentRunView | null;
+// The stub's RPC typing collapses the progress snapshot to never; read it as the method's declared result.
+const readProgress = async (runtime: RuntimeStub, runId: string) =>
+  await runtime.getRunProgress(runId) as Awaited<ReturnType<AgentRuntimeDO['getRunProgress']>>;
+const paidReadThenFail = (runtime: RuntimeStub, runId: string, error: string) => runInDurableObject(runtime, async instance => {
+  (instance as unknown as RuntimeInternals).deliverEvidence(runId, 'read_session_evidence', [packet('read', [v(1)])]);
+  instance.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed', error = ${error} WHERE id = ${runId}`;
+});
+const transcriptCharge = { source: 'read_session_evidence', operation: 'transcript', price: 'cached', credits: 1, videoId: VIDEO };
+
+test('a failed run without an answer reports its settled receipt once, across reads and later balance changes', async () => {
+  const { runtime, userId, runIds: [runId] } = await seedRuns('failed-receipt');
+  await paidReadThenFail(runtime, runId!, 'Agent run did not finish before its deadline.');
+  const reserved = await creditBalance(env, userId);
+  const receipt = { creditsCharged: 1, creditsRemaining: reserved + AGENT_CREDIT_RESERVE - 1, charges: [transcriptCharge] };
+  const first = await readView(runtime, runId!);
+  expect(first).toMatchObject({ status: 'failed', error: 'Agent run did not finish before its deadline.', billingStatus: 'settled', billing: receipt });
+  expect(first).not.toHaveProperty('result');
+  expect(compactAgentRun(first!)).toMatchObject({ status: 'failed', billingStatus: 'settled', billing: receipt });
+  expect(compactAgentRun(first!)).not.toHaveProperty('result');
+  // Later account activity changes the live balance, never the recorded receipt.
+  await reserveAgentCredits(env, userId, crypto.randomUUID());
+  for (let read = 0; read < 3; read++) {
+    expect((await readView(runtime, runId!))?.billing).toEqual(receipt);
+    const progress = await readProgress(runtime, runId!);
+    expect(progress?.run).toMatchObject({ status: 'failed', billingStatus: 'settled', billing: receipt });
+    expect(progress?.run).not.toHaveProperty('result');
+  }
+  await runtime.reconcileRun(runId!);
+  expect(await settled(userId, runId!)).toEqual([{ credits: AGENT_CREDIT_RESERVE - 1 }]);
+  await runInDurableObject(runtime, async instance => {
+    expect(instance.sql`SELECT result_json FROM agent_runs WHERE id = ${runId!}`).toEqual([{ result_json: null }]);
+  });
+});
+
+test('zero-credit failures and cancellations report a settled zero receipt without an answer', async () => {
+  const { runtime, userId, runIds: [failed, cancelled] } = await seedRuns('zero-receipt', 2);
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_runs SET status = 'failed', phase = 'failed', error = 'Provider unavailable.' WHERE id = ${failed!}`;
+  });
+  const reserved = await creditBalance(env, userId);
+  expect(await runtime.cancelRun(cancelled!)).toBe(true);
+  const expected = [[cancelled!, reserved + AGENT_CREDIT_RESERVE], [failed!, reserved + 2 * AGENT_CREDIT_RESERVE]] as const;
+  for (const [runId, creditsRemaining] of expected) {
+    for (let read = 0; read < 2; read++) {
+      const run = await readView(runtime, runId);
+      expect(run).toMatchObject({ billingStatus: 'settled' });
+      expect(run?.billing).toEqual({ creditsCharged: 0, creditsRemaining });
+      expect(run).not.toHaveProperty('result');
+      expect((await readProgress(runtime, runId))?.run.billing).toEqual({ creditsCharged: 0, creditsRemaining });
+    }
+    expect(await settled(userId, runId)).toEqual([{ credits: AGENT_CREDIT_RESERVE }]);
+  }
+  expect((await readView(runtime, cancelled!))?.status).toBe('cancelled');
+});
+
+test('a finished run whose settlement is not recorded reports pending billing, then its settled receipt', async () => {
+  const { runtime, userId, runIds: [runId] } = await seedRuns('pending-receipt');
+  await paidReadThenFail(runtime, runId!, 'Research timed out.');
+  // Without its reservation the ledger refuses a charged settlement, standing in for an unavailable ledger.
+  await env.DB.prepare("DELETE FROM credit_ledger WHERE user_id = ? AND operation_id = ? AND entry_type = 'reserve'")
+    .bind(userId, `agent:${runId!}`).run();
+  for (let read = 0; read < 2; read++) {
+    const pending = await readView(runtime, runId!);
+    expect(pending).toMatchObject({ status: 'failed', error: 'Research timed out.', billingStatus: 'pending' });
+    expect(pending).not.toHaveProperty('billing');
+    const progress = await readProgress(runtime, runId!);
+    expect(progress?.run).toMatchObject({ status: 'failed', billingStatus: 'pending' });
+    expect(progress?.run).not.toHaveProperty('billing');
+  }
+  expect(await settled(userId, runId!)).toEqual([]);
+  // Whichever read or reconciliation settles next records the same balance: restored reserve, then 1 charged.
+  const beforeRestore = await creditBalance(env, userId);
+  expect(await reserveAgentCredits(env, userId, runId!)).toBe(true);
+  const receipt = { creditsCharged: 1, creditsRemaining: beforeRestore - 1, charges: [transcriptCharge] };
+  expect(await readView(runtime, runId!)).toMatchObject({ billingStatus: 'settled', billing: receipt });
+  expect((await readProgress(runtime, runId!))?.run).toMatchObject({ billingStatus: 'settled', billing: receipt });
+  expect(await settled(userId, runId!)).toEqual([{ credits: AGENT_CREDIT_RESERVE - 1 }]);
+});
+
+test('failed runs settled before run receipts were stored stay settled without a reconstructed receipt', async () => {
+  const { runtime, userId, runIds: [runId] } = await seedRuns('legacy-receipt');
+  await paidReadThenFail(runtime, runId!, 'Research timed out.');
+  await readView(runtime, runId!);
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`ALTER TABLE agent_runs DROP COLUMN billing_json`;
+  });
+  await reserveAgentCredits(env, userId, crypto.randomUUID());
+  const legacy = await readView(runtime, runId!);
+  expect(legacy).toMatchObject({ status: 'failed', billingStatus: 'settled' });
+  expect(legacy).not.toHaveProperty('billing');
+  expect(compactAgentRun(legacy!)).not.toHaveProperty('billing');
+  expect(await settled(userId, runId!)).toEqual([{ credits: AGENT_CREDIT_RESERVE - 1 }]);
+  await runInDurableObject(runtime, async instance => {
+    expect(instance.sql`SELECT billing_json FROM agent_runs WHERE id = ${runId!}`).toEqual([{ billing_json: null }]);
   });
 });
 

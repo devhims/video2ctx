@@ -24,6 +24,36 @@ test('polls only active runs and accepts failed response envelopes without inven
   assert.equal(failed.error, 'Classification failed');
 });
 
+test('keeps settled receipts for runs without answers and treats pending settlement as not final', async () => {
+  const { isFinalAgentSnapshot } = await import('./agent-sessions.ts');
+  const identity = { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', runId: 'f1611a8b-cb84-4305-a365-328bd06bedac' };
+  const billing = { creditsCharged: 4, creditsRemaining: 671, charges: [{ source: 'get_video_transcript', operation: 'transcript', price: 'fresh', credits: 4, videoId: 'abcdefghijk' }] };
+  const failed = agentRunSchema.parse({ ...identity, status: 'failed', error: 'Research timed out.', billing, billingStatus: 'settled' });
+  assert.equal(failed.result, undefined);
+  assert.deepEqual(failed.billing, billing);
+  assert.equal(isFinalAgentSnapshot(failed), true);
+  const pending = agentRunSchema.parse({ ...identity, status: 'cancelled', billingStatus: 'pending' });
+  assert.equal(pending.billing, undefined);
+  assert.equal(isFinalAgentSnapshot(pending), false);
+  // Older API responses carry no billingStatus and stay final; an unknown state does not discard the run.
+  assert.equal(isFinalAgentSnapshot(agentRunSchema.parse({ ...identity, status: 'completed' })), true);
+  assert.equal(agentRunSchema.parse({ ...identity, status: 'failed', billingStatus: 'refunding' }).billingStatus, undefined);
+  for (const status of ['pending', 'running']) assert.equal(isFinalAgentSnapshot({ status, billingStatus: 'settled' } as never), false);
+});
+
+test('keeps reading a finished run while its settlement is pending, then stops at the settled snapshot', async () => {
+  const { consumeAgentStream } = await import('./agent-sessions.ts');
+  const run = { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', runId: 'f1611a8b-cb84-4305-a365-328bd06bedac', status: 'failed', error: 'Research timed out.' };
+  const pending = { run: { ...run, billingStatus: 'pending' }, phase: 'failed', tools: [] };
+  const settled = { run: { ...run, billingStatus: 'settled', billing: { creditsCharged: 4, creditsRemaining: 671 } }, phase: 'failed', tools: [] };
+  const stream = (...snapshots: unknown[]) => new Response(snapshots.map(value => `event: snapshot\ndata: ${JSON.stringify(value)}\n\n`).join(''),
+    { headers: { 'content-type': 'text/event-stream' } });
+  const seen: unknown[] = [];
+  assert.equal(await consumeAgentStream(stream(pending), value => seen.push(value)), false);
+  assert.equal(await consumeAgentStream(stream(pending, settled), value => seen.push(value)), true);
+  assert.deepEqual(seen, [pending, pending, settled]);
+});
+
 test('consumes split UTF-8 SSE and restores a terminal snapshot after live tool activity', async () => {
   const { consumeAgentStream } = await import('./agent-sessions.ts');
   const run = { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', runId: 'f1611a8b-cb84-4305-a365-328bd06bedac', status: 'running' };

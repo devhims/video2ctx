@@ -22,7 +22,11 @@ export const agentRunSchema = z.object({
     warnings: z.array(z.object({ code: z.string(), message: z.string() })),
     coverage: z.object({ reviewedVideos: z.number(), targetVideos: z.number() }).optional(),
   }).optional(),
-  billing: z.object({ creditsCharged: z.number(), creditsRemaining: z.number() }).optional(),
+  billing: z.object({ creditsCharged: z.number(), creditsRemaining: z.number(),
+    charges: z.array(z.object({ source: z.string(), operation: z.string(), price: z.string(), credits: z.number(), videoId: z.string().optional() })).optional(),
+  }).optional(),
+  // A future settlement state must not discard the whole run snapshot.
+  billingStatus: z.enum(['pending', 'settled']).optional().catch(undefined),
 });
 export type AgentSessionList = z.infer<typeof agentSessionListSchema>;
 export type AgentSessionDetail = z.infer<typeof agentSessionDetailSchema>;
@@ -139,7 +143,7 @@ export async function consumeAgentStream(response: Response, receive: (value: Ag
         if (event !== 'snapshot') continue;
         const snapshot = agentProgressSchema.parse(JSON.parse(data));
         receive(snapshot);
-        if (!isActiveAgentRun(snapshot.run.status)) return true;
+        if (isFinalAgentSnapshot(snapshot.run)) return true;
       }
     }
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -189,3 +193,8 @@ export function safeSourceUrl(value: string | undefined): string | undefined {
 }
 
 export function isActiveAgentRun(status: string) { return status === 'pending' || status === 'running'; }
+
+/** A finished run keeps being watched until its credit settlement is recorded. */
+export function isFinalAgentSnapshot(run: Pick<AgentRun, 'status' | 'billingStatus'>) {
+  return !isActiveAgentRun(run.status) && run.billingStatus !== 'pending';
+}

@@ -144,6 +144,46 @@ describe('compact agent response', () => {
     if (status === 'failed') expect(response.error).toBe('Provider unavailable');
   });
 
+  it.each(['failed', 'cancelled'] as const)('reports the settled receipt of a %s run without inventing a result', status => {
+    const run = completedRun(); delete run.result; run.status = status;
+    const billing = { creditsCharged: 6, creditsRemaining: 94, charges: [
+      { source: 'get_video_transcript', operation: 'transcript' as const, price: 'fresh' as const, credits: 6, videoId: 'video000001' }] };
+    Object.assign(run, { billing, billingStatus: 'settled', ...(status === 'failed' ? { error: 'Research timed out.' } : {}) });
+    const before = structuredClone(run);
+    const compact = compactAgentRun(run);
+    expect(compactAgentRunSchema.safeParse(compact).success).toBe(true);
+    expect(compact).toMatchObject({ status, billing, billingStatus: 'settled' });
+    expect(compact).not.toHaveProperty('result');
+    const legacy = legacyAgentRun(run);
+    expect(legacy).toMatchObject({ status, billing, billingStatus: 'settled' });
+    expect(legacy).not.toHaveProperty('result');
+    expect(run).toEqual(before);
+  });
+
+  it('does not present provisional answer billing as final while settlement is pending', () => {
+    const run = completedRun();
+    Object.assign(run, { billingStatus: 'pending' });
+    const compact = compactAgentRun(run);
+    expect(compact).toMatchObject({ status: 'completed', billingStatus: 'pending', result: { outcome: 'answered' } });
+    expect(compact).not.toHaveProperty('billing');
+    expect(legacyAgentRun(run)).toMatchObject({ billingStatus: 'pending' });
+    expect(legacyAgentRun(run)).not.toHaveProperty('billing');
+    const failed = completedRun(); delete failed.result; failed.status = 'failed';
+    Object.assign(failed, { billingStatus: 'pending', billing: { creditsCharged: 1, creditsRemaining: 5 } });
+    expect(compactAgentRun(failed)).not.toHaveProperty('billing');
+  });
+
+  it('keeps completed result billing and settled runs from before receipts unchanged', () => {
+    const run = completedRun();
+    Object.assign(run, { billingStatus: 'settled' });
+    expect(compactAgentRun(run).billing).toEqual(run.result?.billing);
+    expect(legacyAgentRun(run).result?.billing).toEqual(run.result?.billing);
+    const legacy = completedRun(); delete legacy.result; legacy.status = 'failed';
+    Object.assign(legacy, { billingStatus: 'settled' });
+    expect(compactAgentRun(legacy)).toMatchObject({ billingStatus: 'settled' });
+    expect(compactAgentRun(legacy)).not.toHaveProperty('billing');
+  });
+
   it('preserves non-video sources and rejects missing citation references', () => {
     const run = completedRun();
     run.result!.citations[0] = { id: 'a', sourceId: 'channel:A', provider: 'youtube', channelId: 'UC123', url: 'https://www.youtube.com/channel/UC123', excerpt: 'Channel information' };

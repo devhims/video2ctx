@@ -341,7 +341,8 @@ agentRoutes.get('/agent/:sessionId/runs/:runId/events', async (c) => {
         }
         const data = JSON.stringify(snapshot);
         if (data !== previous) { await stream.writeSSE({ event: 'snapshot', data }); previous = data; }
-        if (!['pending', 'running'].includes(snapshot.run.status)) return;
+        // A finished run whose credit settlement is not recorded yet is not final for its receipt.
+        if (!['pending', 'running'].includes(snapshot.run.status) && snapshot.run.billingStatus !== 'pending') return;
         if (Date.now() >= until) return;
         if (Date.now() - heartbeatAt >= 10_000) { await stream.writeSSE({ event: 'heartbeat', data: '{}' }); heartbeatAt = Date.now(); }
         await stream.sleep(1_000);

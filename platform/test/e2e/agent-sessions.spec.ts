@@ -744,6 +744,83 @@ for (const failure of [
 });
 
 
+test('failed and cancelled runs show their settled credit receipt, and a pending settlement is not shown as final', async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  const runId = 'b7d0c3e2-5f4a-4c1b-9e8d-2a6f1c3b4d5e';
+  const stamp = 1789111800000;
+  let status: 'failed' | 'cancelled' = 'failed';
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, route => route.fulfill({ json: {
+    sessionId, title: 'Photography research', latestMessagePreview: 'Continue the photography research.',
+    lastRunId: runId, runCount: 2, createdAt: stamp, updatedAt: stamp, nextCursor: null,
+    messages: ['user', 'assistant'].map((role, index) => ({
+      messageId: index ? runId : 'c9e1d2f3-6a5b-4d2c-8f9e-3b7a2d4c5e6f', runId,
+      parentMessageId: null, conversationTurn: 2, role, status: index ? status : 'completed',
+      content: index ? '' : 'Continue the photography research.', createdAt: stamp, updatedAt: stamp,
+    })),
+  } }));
+  const receipt = { creditsCharged: 4, creditsRemaining: 671, charges: [
+    { source: 'get_video_transcript', operation: 'transcript', price: 'fresh', credits: 3, videoId: 'K48wIslK7zg' },
+    { source: 'get_video', operation: 'video', price: 'cached', credits: 1, videoId: 'K48wIslK7zg' },
+  ] };
+  // Each connection replies with the next saved state: pending settlement first, then the settled receipt.
+  let states: Array<Record<string, unknown>> = [];
+  let connections = 0;
+  let release!: () => void;
+  let settlement: Promise<void> | undefined = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', async route => {
+    const index = connections++;
+    // Hold the reconnect so the pending state is observable before settlement is recorded.
+    if (index > 0 && settlement) await settlement;
+    const billing = states[Math.min(index, states.length - 1)];
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: snapshot\ndata: ${JSON.stringify({
+      run: { sessionId, runId, status, ...(status === 'failed' ? { error: 'Agent run did not finish before its deadline.' } : {}), ...billing },
+      phase: status, tools: [],
+    })}\n\n` });
+  });
+  const message = page.locator('.agent-assistant-message').last();
+  const receiptView = message.getByRole('region', { name: 'Credit receipt' });
+
+  states = [{ billingStatus: 'pending' }, { billingStatus: 'settled', billing: receipt }];
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  await expect(message.getByRole('alert')).toContainText('Agent run did not finish before its deadline.');
+  await expect(message.getByRole('status').filter({ hasText: 'Credit settlement pending' })).toBeVisible();
+  await expect(receiptView).toHaveCount(0);
+  await expect(message).not.toContainText('credits charged');
+  release(); settlement = undefined;
+  await expect(receiptView).toBeVisible();
+  await expect(receiptView).toContainText('4 credits charged');
+  await expect(receiptView).toContainText('Balance when recorded: 671 credits');
+  await expect(receiptView.getByRole('listitem')).toHaveText([
+    'get_video_transcript · transcript (fresh) · K48wIslK7zg: 3 credits', 'get_video · video (cached) · K48wIslK7zg: 1 credit',
+  ]);
+  await expect(message.getByText('Credit settlement pending')).toHaveCount(0);
+  await expect(message.getByRole('heading', { name: 'Sources', exact: true })).toHaveCount(0);
+  await expect(message.locator('.agent-result-meta')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('failed-run-receipt.png') });
+  const settledConnections = connections;
+  await page.waitForTimeout(1_500);
+  expect(connections).toBe(settledConnections);
+
+  // A full reload restores the same recorded receipt.
+  connections = 0; states = [{ billingStatus: 'settled', billing: receipt }];
+  await page.reload();
+  await expect(receiptView).toContainText('4 credits charged');
+  await expect(receiptView).toContainText('Balance when recorded: 671 credits');
+
+  status = 'cancelled'; connections = 0; states = [{ billingStatus: 'settled', billing: { creditsCharged: 0, creditsRemaining: 675 } }];
+  await page.reload();
+  await expect(message.getByText('This run was cancelled before an answer was saved.')).toBeVisible();
+  await expect(receiptView).toContainText('0 credits charged');
+  await expect(receiptView).toContainText('Balance when recorded: 675 credits');
+  await expect(receiptView.getByRole('listitem')).toHaveCount(0);
+
+  // Runs settled before receipts were stored say so instead of reconstructing a balance.
+  connections = 0; states = [{ billingStatus: 'settled' }];
+  await page.reload();
+  await expect(message.getByText('No credit receipt was saved for this earlier run.')).toBeVisible();
+  await expect(receiptView).toHaveCount(0);
+});
+
 test('tool activity uses readable labels and distinguishes failures from interrupted calls', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.route('**/api/platform/v1/agent/*/runs/*/events', route => route.fulfill({

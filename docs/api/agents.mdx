@@ -131,6 +131,25 @@ Progress and tool results stream during execution. The answer is delivered after
 finalization and validation, in the terminal snapshot. This endpoint does not
 stream unvalidated model tokens.
 
+## Run credit receipts
+
+Completed, failed, and cancelled runs report `billingStatus`. Once it is
+`settled`, the top-level `billing` object holds the recorded receipt:
+`creditsCharged`, `creditsRemaining`, and itemized `charges` when credits were
+charged. This also applies to failed and cancelled runs with no `result`. A failed
+run can still charge for evidence retrieved before it stopped. `creditsRemaining`
+is the account balance observed when the receipt was recorded, not your current
+balance. Settlement charges a run once, even when it is retried. If a retry has to
+record the receipt again, for example after an interrupted save, `creditsRemaining`
+reflects the balance at that retry.
+
+While `billingStatus` is `pending`, the run has ended but its settlement is not
+recorded yet. Responses omit `billing`, and the event stream keeps sending
+snapshots until settlement is recorded. Reading a run again never settles it
+twice. Failed and cancelled runs that settled before these receipts were stored
+report `settled` without `billing`. For completed runs, `billing` matches
+`result.billing` in legacy responses.
+
 
 ## Stored extraction diagnostics
 

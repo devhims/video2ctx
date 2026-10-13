@@ -1271,7 +1271,7 @@
         ],
         "operationId": "streamAgentRun",
         "summary": "Watch an agent run and its tool activity",
-        "description": "Streams persisted snapshots as SSE. Live admin browser sessions can observe another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.",
+        "description": "Streams persisted snapshots as SSE. Live admin browser sessions can observe another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running, or while a terminal run reports billingStatus pending. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.",
         "security": [
           {
             "bearerApiKey": []
@@ -1313,7 +1313,7 @@
         ],
         "responses": {
           "200": {
-            "description": "SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status. Reconnect after EOF for an active run.",
+            "description": "SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status once billingStatus is not pending. Reconnect after EOF for an active run or a pending settlement.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -8058,6 +8058,7 @@
                 "additionalProperties": false
               },
               "billing": {
+                "description": "Settled ledger receipt. Present for completed, failed and cancelled runs once billingStatus is settled, whether or not an answer was saved. creditsRemaining is the account balance observed when this receipt was recorded, not the current balance. A receipt recorded by a settlement retry reflects the balance at that retry.",
                 "type": "object",
                 "properties": {
                   "creditsCharged": {
@@ -8133,6 +8134,14 @@
                   "creditsRemaining"
                 ],
                 "additionalProperties": false
+              },
+              "billingStatus": {
+                "description": "Terminal runs only. pending means the credit settlement is not recorded yet, so no final receipt is reported. A settled run from before receipts were stored for failed or cancelled runs may have no billing.",
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "settled"
+                ]
               },
               "error": {
                 "type": "string"
@@ -9630,6 +9639,7 @@
             "additionalProperties": false
           },
           "billing": {
+            "description": "Settled ledger receipt. Present for completed, failed and cancelled runs once billingStatus is settled, whether or not an answer was saved. creditsRemaining is the account balance observed when this receipt was recorded, not the current balance. A receipt recorded by a settlement retry reflects the balance at that retry.",
             "type": "object",
             "properties": {
               "creditsCharged": {
@@ -9705,6 +9715,14 @@
               "creditsRemaining"
             ],
             "additionalProperties": false
+          },
+          "billingStatus": {
+            "description": "Terminal runs only. pending means the credit settlement is not recorded yet, so no final receipt is reported. A settled run from before receipts were stored for failed or cancelled runs may have no billing.",
+            "type": "string",
+            "enum": [
+              "pending",
+              "settled"
+            ]
           },
           "error": {
             "type": "string"
@@ -11190,6 +11208,92 @@
               },
               "error": {
                 "type": "string"
+              },
+              "billing": {
+                "type": "object",
+                "properties": {
+                  "creditsCharged": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "creditsRemaining": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "charges": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "operation": {
+                          "type": "string",
+                          "enum": [
+                            "search",
+                            "browse",
+                            "trends",
+                            "video",
+                            "tracks",
+                            "transcript",
+                            "comments",
+                            "endscreen",
+                            "storyboard",
+                            "frames",
+                            "channel",
+                            "channelVideos",
+                            "channelPlaylists",
+                            "playlist"
+                          ]
+                        },
+                        "price": {
+                          "type": "string",
+                          "enum": [
+                            "cached",
+                            "fresh"
+                          ]
+                        },
+                        "credits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "videoId": {
+                          "type": "string",
+                          "maxLength": 100
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "operation",
+                        "price",
+                        "credits"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "creditsCharged",
+                  "creditsRemaining"
+                ],
+                "additionalProperties": false,
+                "description": "Settled ledger receipt for completed, failed and cancelled runs, with or without a result. creditsRemaining is the account balance observed when this receipt was recorded; a receipt recorded by a settlement retry reflects the balance at that retry. For a completed run it matches result.billing."
+              },
+              "billingStatus": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "settled"
+                ],
+                "description": "Terminal runs only. While pending, billing is omitted and result.billing is provisional."
               },
               "extractionDiagnostics": {
                 "type": "array",

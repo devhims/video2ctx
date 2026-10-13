@@ -26,6 +26,7 @@ import {
   agentSessionListSchema, agentSessionDetailSchema, fetchAgentData,
   mergeAgentMessages, safeSourceUrl, isActiveAgentRun, sendAgentMessage, watchAgentRun, AgentSendError,
   type AgentSessionList, type AgentSessionDetail, type AgentMessage, type AgentAdmission, type AgentProgress,
+  type AgentRun,
 } from '../../../lib/agent-sessions';
 
 export function AgentShell({ children }: { children: ReactNode }) {
@@ -235,6 +236,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
       {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div role='alert' className='alert error agent-run-error'><p className='agent-answer'><span className='sr-only'>Run failed. </span>{run.error}</p></div>}
       {run?.status === 'cancelled' && !result && <p>This run was cancelled before an answer was saved.</p>}
+      {run && !result && !isActiveAgentRun(run.status) && <RunReceipt run={run} />}
       {result && <>
         <div className='agent-result-meta'><span className={`agent-outcome outcome-${result.outcome}`}>{result.outcome.replaceAll('_', ' ')}</span>{result.coverage && <span>{result.coverage.reviewedVideos} {result.coverage.reviewedVideos === 1 ? 'video' : 'videos'} reviewed</span>}{run.billing && <span>{run.billing.creditsCharged} credits charged</span>}</div>
         {result.warnings.filter(warning => ['FINAL_SYNTHESIS_UNAVAILABLE', 'YOUTUBE_UNAVAILABLE'].includes(warning.code)).map(warning =>
@@ -253,6 +255,21 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     </footer>
     </div>
   </article>;
+}
+
+const creditCount = (count: number) => `${count} ${count === 1 ? 'credit' : 'credits'}`;
+
+/** A run without an answer can still be charged for evidence retrieved before it stopped. Show only the recorded settlement. */
+function RunReceipt({ run }: { run: AgentRun }) {
+  if (run.billingStatus === 'pending') return <p className='agent-run-receipt' role='status'>Credit settlement pending. The final charge appears once it is recorded.</p>;
+  if (!run.billing) return run.billingStatus === 'settled' ? <p className='agent-run-receipt'>No credit receipt was saved for this earlier run.</p> : null;
+  const { creditsCharged, creditsRemaining, charges = [] } = run.billing;
+  return <section className='agent-run-receipt' aria-label='Credit receipt'>
+    <p><strong>{creditCount(creditsCharged)} charged</strong> · Balance when recorded: {creditCount(creditsRemaining)}</p>
+    {!!charges.length && <ul>{charges.map((charge, index) => <li key={index}>
+      {charge.source} · {charge.operation} ({charge.price}){charge.videoId ? ` · ${charge.videoId}` : ''}: {creditCount(charge.credits)}
+    </li>)}</ul>}
+  </section>;
 }
 
 function UserMessageContent({ content, createdAt, pending = false }: { content: string; createdAt: number; pending?: boolean }) {

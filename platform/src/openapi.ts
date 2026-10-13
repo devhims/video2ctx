@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { commentPageReceiptSchema } from './lib/comment-page-receipt';
 import { saveSourceSchema, sourceSnapshotSchema } from './lib/source-history';
 import { compactAgentRunSchema } from './agents/response';
+import { agentRunBillingSchema } from './agents/contracts';
 import { agentRunProgressSchema } from './agents/runtime/run-progress';
 import {
   BROWSE_CATEGORIES,
@@ -779,11 +780,11 @@ export const openApiDocument = {
     '/v1/agent/{sessionId}/runs/{runId}/events': {
       get: {
         tags: ['Agents'], operationId: 'streamAgentRun', summary: 'Watch an agent run and its tool activity',
-        description: 'Streams persisted snapshots as SSE. Live admin browser sessions can observe another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.',
+        description: 'Streams persisted snapshots as SSE. Live admin browser sessions can observe another user’s run for debugging without an Agent rollout grant. API keys and CLI sessions remain owner-scoped. Each snapshot contains the compact run, phase, and tool trace with public inputs and bounded evidence summaries. During finalization an active snapshot can include a bounded draft object whose answer replaces the previous draft and whose state is streaming or revising. Draft text is provisional and excludes citations. The first event restores the current state, including completed runs. Connections rotate after about 25 seconds; reconnect with GET while the run is pending or running, or while a terminal run reports billingStatus pending. Reconnecting does not start work or incur another run charge. Disconnecting does not cancel durable execution. A terminal snapshot atomically replaces any draft with the validated answer. Internal reasoning, raw provider payloads, and transcript diagnostics are excluded.',
         security: dataSecurity,
         parameters: [pathParameter('sessionId', 'Session UUID returned by agent admission.'), pathParameter('runId', 'Agent run UUID returned by agent admission.')],
         responses: {
-          '200': { description: 'SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status. Reconnect after EOF for an active run.', content: { 'text/event-stream': { schema: { type: 'string' } } } },
+          '200': { description: 'SSE events: snapshot (AgentRunProgress JSON), heartbeat (empty object), unavailable (message). Replace the previous snapshot; close the connection on a terminal run status once billingStatus is not pending. Reconnect after EOF for an active run or a pending settlement.', content: { 'text/event-stream': { schema: { type: 'string' } } } },
           ...standardErrors, '404': responseRef('NotFound'),
         },
       },
@@ -2509,6 +2510,8 @@ export const openApiDocument = {
         allOf: [schemaRef('AgentRunReceipt'), {
           type: 'object', properties: {
             route: schemaRef('AgentRouteDecision'), result: schemaRef('AgentTurnResult'), error: { type: 'string' },
+            billing: { ...z.toJSONSchema(agentRunBillingSchema, { target: 'openapi-3.0' }), description: 'Settled ledger receipt for completed, failed and cancelled runs, with or without a result. creditsRemaining is the account balance observed when this receipt was recorded; a receipt recorded by a settlement retry reflects the balance at that retry. For a completed run it matches result.billing.' },
+            billingStatus: { type: 'string', enum: ['pending', 'settled'], description: 'Terminal runs only. While pending, billing is omitted and result.billing is provisional.' },
             extractionDiagnostics: { type: 'array', maxItems: 64, items: z.toJSONSchema(storedExtractionDiagnosticSchema, { target: 'openapi-3.0' }) },
             extractionDiagnosticsTruncated: { type: 'boolean' },
             transcriptDiagnostics: { type: 'array', items: z.toJSONSchema(transcriptDiagnosticSchema, { target: 'openapi-3.0' }) },

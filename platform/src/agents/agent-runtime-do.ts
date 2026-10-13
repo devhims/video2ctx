@@ -53,6 +53,7 @@ import {
 } from './runtime/conversation-memory';
 import {
   agentAdmissionSchema,
+  agentRunBillingSchema,
   agentRunCheckpointSchema,
   agentRunReceiptSchema,
   agentTurnResultSchema,
@@ -62,6 +63,7 @@ import {
   finalizeAnswerInputSchema,
   agentRequestSchema,
   type AgentAdmission,
+  type AgentRunBilling,
   type AgentRunReceipt,
   type AgentTurnResult,
   type CapabilityRouteDecision,
@@ -117,6 +119,8 @@ interface RunRow {
   error: string | null;
   credits_remaining_at_admission: number;
   billing_settled: number;
+  /** Settled receipt for every terminal outcome. Null before settlement and for runs settled before this column existed. */
+  billing_json: string | null;
   time_zone: string | null;
   created_at: number;
   updated_at: number;
@@ -167,6 +171,10 @@ export interface AgentRunView extends AgentRunReceipt {
   route?: CapabilityRouteDecision;
   result?: AgentTurnResult;
   error?: string;
+  /** Present only once the run's ledger settlement is recorded, with or without an answer. */
+  billing?: AgentRunBilling;
+  /** pending until settlement is recorded. A settled run settled before receipts were stored may have no billing. */
+  billingStatus?: 'pending' | 'settled';
 }
 
 export interface AgentRunRejection {
@@ -466,13 +474,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   async getRun(runId: string): Promise<AgentRunView | null> {
     this.ensureAgentRuntimeSchema();
-    let row = this.readRun(runId);
-    if (!row) return null;
-    if (isTerminal(row.status)) {
-      await this.settleRun(runId);
-      row = this.requireRun(runId);
-    }
+    const found = this.readRun(runId);
+    if (!found) return null;
+    const row = await this.settleForRead(found);
     const route = this.readRoute(runId);
+    const result = row.result_json ? agentTurnResultSchema.parse(JSON.parse(row.result_json)) : undefined;
     return {
       ...this.receipt(row),
       extractionDiagnostics: this.sql<{ payload_json: string }>`
@@ -487,21 +493,24 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         ORDER BY id
       `.map(event => transcriptDiagnosticSchema.parse(JSON.parse(event.payload_json))),
       ...(route ? { route } : {}),
-      ...(row.result_json ? { result: agentTurnResultSchema.parse(JSON.parse(row.result_json)) } : {}),
+      ...(result ? { result } : {}),
       ...(row.error ? { error: row.error } : {}),
+      ...this.runBilling(row, result),
     };
   }
 
   async getRunProgress(runId: string) {
     this.ensureAgentRuntimeSchema();
-    let row = this.readRun(runId);
-    if (!row) return null;
+    const found = this.readRun(runId);
+    if (!found) return null;
+    const row = await this.settleForRead(found);
     const terminal = isTerminal(row.status);
-    if (terminal) { await this.settleRun(runId); row = this.requireRun(runId); }
+    const result = row.result_json ? agentTurnResultSchema.parse(JSON.parse(row.result_json)) : undefined;
     const run: AgentRunView = { ...this.receipt(row),
-      ...(row.result_json ? { result: agentTurnResultSchema.parse(JSON.parse(row.result_json)) } : {}),
+      ...(result ? { result } : {}),
       ...(row.error ? { error: row.error } : {}),
       route: this.readRoute(runId) ?? undefined,
+      ...this.runBilling(row, result),
     };
     return agentRunProgressSchema.parse({
       run: compactAgentRun(run, []),
@@ -1010,9 +1019,38 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       () => settleAgentCredits(this.env, run.user_id, runId, actual, this.answerModelCostMicros(runId)), 'Persistence phase timeout.');
     const result = run.result_json ? agentTurnResultSchema.parse(JSON.parse(run.result_json)) : null;
     const charges = billingCharges(this.evidenceLedger.receipts(runId));
-    if (result) result.billing = { creditsCharged: actual, creditsRemaining: remaining, ...(charges.length ? { charges } : {}) };
-    this.sql`UPDATE agent_runs SET billing_settled = 1,
-      result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId}`;
+    // Failed and cancelled runs keep the same receipt as answered ones; the answer is never required.
+    const billing: AgentRunBilling = { creditsCharged: actual, creditsRemaining: remaining, ...(charges.length ? { charges } : {}) };
+    if (result) result.billing = billing;
+    // The ledger charge is idempotent. This guard only keeps a receipt already recorded here, e.g. by a
+    // concurrent read. If D1 settled but this checkpoint was lost, the retry records the balance it observes now.
+    this.sql`UPDATE agent_runs SET billing_settled = 1, billing_json = ${JSON.stringify(billing)},
+      result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${runId} AND billing_settled = 0`;
+  }
+
+  /**
+   * Read paths retry settlement but stay readable while the ledger is unavailable. The run
+   * then reports pending billing and reconciliation keeps retrying in the background.
+   */
+  private async settleForRead(row: RunRow): Promise<RunRow> {
+    if (!isTerminal(row.status) || row.billing_settled) return row;
+    try { await this.settleRun(row.id); } catch (error) {
+      console.warn({ event: 'agent_settlement_deferred', runId: row.id, ...safeErrorLog(error) });
+      await this.scheduleRunReconciliation(row).catch(() => undefined);
+    }
+    return this.requireRun(row.id);
+  }
+
+  /**
+   * Billing is exposed only from a recorded settlement: the stored receipt, or the receipt
+   * saved inside a completed result before billing_json existed. Never derive it from the
+   * current account balance or an unsettled answer.
+   */
+  private runBilling(row: RunRow, result?: AgentTurnResult): Pick<AgentRunView, 'billing' | 'billingStatus'> {
+    if (!isTerminal(row.status)) return {};
+    if (!row.billing_settled) return { billingStatus: 'pending' };
+    const billing = row.billing_json ? agentRunBillingSchema.parse(JSON.parse(row.billing_json)) : result?.billing;
+    return { billingStatus: 'settled', ...(billing ? { billing } : {}) };
   }
 
   /** Persist a wake-up before relying on in-process work, then start the drain without awaiting it. */
@@ -1776,6 +1814,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         this.sql`UPDATE agent_runs SET billing_settled = 1,
           result_json = ${result ? JSON.stringify(result) : null} WHERE id = ${run.id}`;
       }
+    }
+    if (!columns.some(column => column.name === 'billing_json')) {
+      // Earlier settlements stored a receipt only inside a completed result. Their failed and
+      // cancelled runs have no recorded receipt, so leave them without one rather than report today's balance.
+      this.sql`ALTER TABLE agent_runs ADD COLUMN billing_json TEXT`;
     }
     if (!columns.some(column => column.name === 'classification_deadline_at')) {
       this.sql`ALTER TABLE agent_runs ADD COLUMN classification_deadline_at INTEGER`;
