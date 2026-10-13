@@ -15,6 +15,14 @@ import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
 
 type Schema = Record<string, unknown>;
 
+const adminCreditUserSchema: Schema = { type: 'object', required: ['id', 'name', 'email', 'creditBalance'], properties: {
+  id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string', format: 'email' }, creditBalance: { type: 'integer' },
+} };
+const adminCreditGrantSchema: Schema = { type: 'object', required: ['id', 'userId', 'credits', 'reason', 'adminUserId', 'createdAt'], properties: {
+  id: { type: 'string', format: 'uuid' }, userId: { type: 'string' }, credits: { type: 'integer', minimum: 1, maximum: 1000000 },
+  reason: { type: 'string', maxLength: 500 }, adminUserId: { type: 'string' }, createdAt: { type: 'integer', description: 'Unix milliseconds.' },
+} };
+
 const agentResponseParameters = [
   { name: 'responseFormat', in: 'query', required: false, description: 'Compact is the default: answer, deduplicated sources, outcome, and top-level billing. Use legacy explicitly for the previous detailed format. Applies only to this HTTP response. Does not change execution.', schema: { type: 'string', enum: ['legacy', 'compact'], default: 'compact' } },
   { name: 'include', in: 'query', required: false, description: 'Optional comma-separated details: artifacts,evidence,diagnostics. Requires responseFormat=compact. Evidence sourceId points to result.sources[].id. Details are omitted unless requested.', schema: { type: 'string', maxLength: 100, example: 'evidence,diagnostics' } },
@@ -1643,6 +1651,32 @@ export const openApiDocument = {
         description: 'Requires a live, verified browser session with a Better Auth admin role or an existing operator email. Agent tester membership never grants admin access.',
         security: [{ sessionCookie: [] }],
         responses: { '200': jsonResponse('Admin access is enabled.', { type: 'object', properties: { enabled: { const: true } }, required: ['enabled'] }), ...standardErrors },
+      },
+    },
+    '/v1/admin/credits': {
+      get: {
+        tags: ['Administration'], operationId: 'getAdminCreditAccount', summary: 'Look up an account’s credit balance and recent dashboard grants',
+        description: 'Exact user ID or case-insensitive email lookup. Returns the current spendable balance and the last ten dashboard grants. Requires a live verified admin browser session. Responses are never cached.',
+        security: [{ sessionCookie: [] }],
+        parameters: [{ name: 'user', in: 'query', required: true, schema: { type: 'string', minLength: 1, maxLength: 320 } }],
+        responses: { '200': jsonResponse('Account identity, current balance and recent dashboard grants.', {
+          type: 'object', required: ['user', 'grants'], properties: { user: adminCreditUserSchema, grants: { type: 'array', maxItems: 10, items: adminCreditGrantSchema } },
+        }), '404': jsonResponse('No matching account.', schemaRef('Error')), ...standardErrors },
+      },
+    },
+    '/v1/admin/credits/grants': {
+      post: {
+        tags: ['Administration'], operationId: 'grantAdminCredits', summary: 'Add credits to a user account',
+        description: 'Appends a positive adjustment to the existing ledger and returns the balance after its synchronous trigger. Requires a live verified admin browser session and the dashboard Origin. Retrying the same requestId and payload confirms the original grant without adding credits twice. Reusing an ID with a different user, amount, reason or admin returns 409. A grant never changes the billing plan.',
+        security: [{ sessionCookie: [] }],
+        requestBody: jsonBody({ type: 'object', required: ['userId', 'requestId', 'credits'], properties: {
+          userId: { type: 'string', minLength: 1, maxLength: 128 }, requestId: { type: 'string', format: 'uuid', description: 'New ID for each grant. Keep this ID and payload unchanged until the result is confirmed.' },
+          credits: { type: 'integer', minimum: 1, maximum: 1000000 }, reason: { type: 'string', maxLength: 500, default: '', description: 'Optional audit note. Leading and trailing whitespace is removed.' },
+        } }),
+        responses: { '200': jsonResponse('Confirmed grant and current balance.', { type: 'object', required: ['user', 'grant', 'replayed'], properties: {
+          user: adminCreditUserSchema, grant: adminCreditGrantSchema, replayed: { type: 'boolean' },
+        } }), '404': jsonResponse('Account no longer exists.', schemaRef('Error')),
+          '409': jsonResponse('Request ID already belongs to a different grant.', schemaRef('Error')), ...standardErrors },
       },
     },
     '/v1/admin/agent-access': {

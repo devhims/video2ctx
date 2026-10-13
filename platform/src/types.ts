@@ -19,6 +19,7 @@ export interface AuthPrincipal {
 }
 
 export interface AppVariables {
+  adminUserId?: string;
   auth?: ReturnType<typeof createAuth>;
   principal: AuthPrincipal | null;
   user: AppUser | null;

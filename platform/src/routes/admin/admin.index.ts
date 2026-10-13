@@ -6,16 +6,18 @@ import type { App } from '../../types';
 import { requireAdminMutationOrigin, requireAdminSession } from '../../lib/admin-access';
 import { ApiError, body } from '../../lib/http';
 import { normalizedProxyUrls, proxyKeys, readProxyHealth } from '../../lib/proxy-health';
+import { adminCreditRoutes } from './credits';
 
 export const adminRoutes = new Hono<App>();
 adminRoutes.use('/admin/*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
-  await requireAdminSession(c);
+  c.set('adminUserId', await requireAdminSession(c));
   if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) requireAdminMutationOrigin(c);
   await next();
 });
 
 adminRoutes.get('/admin/access', c => c.json({ enabled: true }));
+adminRoutes.route('/admin/credits', adminCreditRoutes);
 
 const listSchema = z.object({
   q: z.string().trim().max(320).default(''),

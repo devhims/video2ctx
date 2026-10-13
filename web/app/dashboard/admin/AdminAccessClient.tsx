@@ -14,11 +14,12 @@ import { useDashboardSession } from '../DashboardSessionProvider';
 import pageStyles from '../DashboardPages.module.css';
 import styles from './AdminAccess.module.css';
 import AdminTraceInspector from './AdminTraceInspector';
+import AdminCredits from './AdminCredits';
 
 export default function AdminAccessClient() {
   const router = useRouter();
   const { user, adminAccess, accessReady, signOut } = useDashboardSession();
-  const [section, setSection]=useState<'access'|'traces'>('access');
+  const [section, setSection]=useState<'access'|'traces'|'credits'>('access');
   const [email, setEmail] = useState('');
   const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
@@ -78,11 +79,11 @@ export default function AdminAccessClient() {
       <DashboardHeader title='Admin' />
       <section className={styles.content}>
         {!accessReady ? <DashboardSkeleton label='Checking admin access' variant='panel' /> : !user || !adminAccess ? <div className={styles.empty}>
-          <h2>Admin access required</h2><p>Sign in with an authorized admin account to manage Agent access.</p>
+          <h2>Admin access required</h2><p>Sign in with an authorized admin account to manage access and credits.</p>
           <Link href='/dashboard'>Back to dashboard</Link>
         </div> : <>
-          <nav className={styles.tabs} aria-label='Admin sections'><button aria-pressed={section==='access'} onClick={()=>setSection('access')}>Agent access</button><button aria-pressed={section==='traces'} onClick={()=>setSection('traces')}>Tool call traces</button></nav>
-          {section==='traces' ? <AdminTraceInspector /> : <>
+          <nav className={styles.tabs} aria-label='Admin sections'><button aria-pressed={section==='access'} onClick={()=>setSection('access')}>Agent access</button><button aria-pressed={section==='credits'} onClick={()=>setSection('credits')}>Credits</button><button aria-pressed={section==='traces'} onClick={()=>setSection('traces')}>Tool call traces</button></nav>
+          {section==='credits' ? <AdminCredits key={user.id} adminUserId={user.id} /> : section==='traces' ? <AdminTraceInspector /> : <>
           <header className={styles.intro}><h2>Agent access</h2><p>Choose who can try the Agent. This grants testing access only, with no admin permissions.</p></header>
           <form onSubmit={add} className={styles.form}>
             <label htmlFor='agent-access-email'>Email address</label>

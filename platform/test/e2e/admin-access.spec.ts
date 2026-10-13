@@ -1,5 +1,104 @@
 import { expect, test } from '@playwright/test';
 
+test('admin reviews and grants credits without a reason on desktop and mobile', async ({ page, context }, testInfo) => {
+  await context.addCookies([
+    { name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+    { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+  ]);
+  const user = { id: '10495ef1-84c9-4a12-89ea-964e95ebe050', name: 'Atlas', email: 'atlas@example.test', creditBalance: 500 };
+  let submissions = 0;
+  await page.route('**/api/platform/v1/admin/credits?*', route => route.fulfill({ json: { user, grants: [] } }));
+  await page.route('**/api/platform/v1/admin/credits/grants', async route => {
+    submissions++;
+    const input = route.request().postDataJSON();
+    expect(input).toMatchObject({ userId: user.id, credits: 10000, reason: '' });
+    expect(input.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    await route.fulfill({ json: { user: { ...user, creditBalance: 10500 }, grant: { id: input.requestId, userId: user.id, credits: input.credits,
+      reason: '', adminUserId: 'fixture-user', createdAt: Date.now() }, replayed: false } });
+  });
+  await page.goto('/dashboard/admin');
+  await page.getByRole('button', { name: 'Credits', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Start with an account' })).toBeVisible();
+  await page.getByLabel('User ID or email').fill(user.id);
+  await page.getByRole('button', { name: 'Find account', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Atlas', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Credits to add')).toBeFocused();
+  await page.getByLabel('Credits to add').fill('-1');
+  await expect(page.getByRole('button', { name: 'Review grant', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '+10,000', exact: true }).click();
+  await expect(page.getByText('Expected balance 10,500 credits')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('admin-credits-desktop.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Review grant', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Review credit grant' })).toBeFocused();
+  expect(submissions).toBe(0);
+  await page.getByRole('button', { name: 'Back to editing' }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel('Reason Optional')).toHaveValue('');
+  await page.getByRole('button', { name: 'Review grant', exact: true }).click();
+  expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('admin-credits-mobile-review.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Confirm 10,000 credits', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '10,000 credits added', exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('Current balance: 10,500 credits.');
+  await expect(page.getByRole('heading', { name: /Recent dashboard grants/ })).toBeVisible();
+  expect(submissions).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath('admin-credits-mobile-success.png'), fullPage: true });
+});
+
+test('lost grant responses retain the request across reload and safe retry', async ({ page, context }) => {
+  await context.addCookies([
+    { name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+    { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+  ]);
+  const user = { id: 'customer-credit-retry', name: 'Retry account', email: 'retry@example.test', creditBalance: 0 };
+  const requests: Record<string, unknown>[] = [];
+  await page.route('**/api/platform/v1/admin/credits?*', route => route.fulfill({ json: { user, grants: [] } }));
+  await page.route('**/api/platform/v1/admin/credits/grants', async route => {
+    const input = route.request().postDataJSON(); requests.push(input);
+    if (requests.length === 1) return route.abort('failed');
+    await route.fulfill({ json: { user: { ...user, creditBalance: 10000 }, grant: { id: input.requestId, userId: user.id, credits: 10000,
+      reason: input.reason, adminUserId: 'fixture-user', createdAt: Date.now() }, replayed: true } });
+  });
+  await page.goto('/dashboard/admin');
+  await page.getByRole('button', { name: 'Credits', exact: true }).click();
+  await page.getByLabel('User ID or email').fill(user.email);
+  await page.getByRole('button', { name: 'Find account', exact: true }).click();
+  await page.getByLabel('Reason Optional').fill('Testing allowance');
+  await page.getByRole('button', { name: 'Review grant', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm 10,000 credits', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'connection was lost' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry grant', exact: true })).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Credits', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Confirm the grant result' })).toBeVisible();
+  await expect(page.getByLabel('User ID or email')).toBeDisabled();
+  await page.getByRole('button', { name: 'Retry grant', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('No extra credits were added on retry.');
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+  await page.reload();
+  await page.getByRole('button', { name: 'Credits', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Start with an account' })).toBeVisible();
+});
+
+test('credit lookup errors stay visible and non-admins cannot see credit controls', async ({ page, context }) => {
+  await context.addCookies([
+    { name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+    { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+  ]);
+  await page.route('**/api/platform/v1/admin/credits?*', route => route.fulfill({ status: 404, json: { error: { message: 'No account matches that user ID or email.' } } }));
+  await page.goto('/dashboard/admin');
+  await page.getByRole('button', { name: 'Credits', exact: true }).click();
+  await page.getByLabel('User ID or email').fill('missing@example.test');
+  await page.getByRole('button', { name: 'Find account', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'No account matches' })).toBeVisible();
+  await expect(page.getByLabel('User ID or email')).toHaveValue('missing@example.test');
+  await context.clearCookies({ name: 'admin-ui' });
+  await page.evaluate("window.dispatchEvent(new Event('focus'))");
+  await expect(page.getByRole('heading', { name: 'Admin access required' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Credits', exact: true })).toHaveCount(0);
+});
+
 test('admin without Agent access opens a customer session link in a read-only debugging view', async ({ page, context }) => {
   await context.addCookies([
     { name: 'agent-ui', value: 'denied', url: 'http://127.0.0.1:3021' },
