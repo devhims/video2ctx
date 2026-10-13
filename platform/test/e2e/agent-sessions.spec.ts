@@ -89,6 +89,30 @@ async function login(context: import('@playwright/test').BrowserContext, role: s
   await context.addCookies([{ name: 'agent-ui', value: role, domain: '127.0.0.1', path: '/' }]);
 }
 
+test('session navigation automatically loads sources and activity for every displayed answer', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => {
+    const response = await route.fetch();
+    const session = await response.json();
+    if (!new URL(route.request().url()).searchParams.has('cursor')) {
+      const answer = session.messages.find((message: { role: string }) => message.role === 'assistant');
+      session.messages.unshift({ ...answer, messageId: earlierMessageId, runId: earlierRunId, conversationTurn: 1 });
+    }
+    await route.fulfill({ response, json: session });
+  });
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const answers = page.getByRole('article', { name: 'Agent message', exact: true });
+  await expect(answers).toHaveCount(2);
+  for (const answer of await answers.all()) {
+    await expect(answer.locator('.agent-trace > summary')).toHaveText('Tool Activity (1)');
+    await expect(answer.getByRole('heading', { name: 'Sources', exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: 'View sources and tool activity' })).toHaveCount(0);
+});
+
+const earlierRunId = '5a04cf06-ea91-4b07-b892-ce87f63954de';
+const earlierMessageId = 'f1611a8b-cb84-4305-a365-328bd06bedac';
+
 test('allowed account can search, paginate, open history and read cited answers', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sessions');
@@ -121,6 +145,9 @@ test('allowed account can search, paginate, open history and read cited answers'
   await page.screenshot({ path: testInfo.outputPath('session-desktop.png'), fullPage: true });
   await page.getByRole('button', { name: 'Load older messages' }).click();
   await expect(page.getByText('Earlier request in this session.')).toBeVisible();
+  await expect(page.locator('.agent-trace > summary')).toHaveCount(2);
+  await expect(page.getByRole('heading', { name: 'Sources', exact: true })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'View sources and tool activity' })).toHaveCount(0);
   await expect(page.getByText('Summarise the key takeaways from this video.', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate('window.scrollTo(0, 0)');
@@ -303,19 +330,19 @@ test('answers render readable Markdown, block unsafe content, and fit the mobile
       sources: [{ id: '1', title: 'Fable Vs Astra Debate Is Over', url: 'https://www.youtube.com/watch?v=P7bxbDSnZRM' }], warnings: [], coverage: { reviewedVideos: 1, targetVideos: 1 } } }, phase: 'completed', tools: [],
   })}\n\n` }));
   await page.goto(`/dashboard/sessions/${sessionId}`);
-  await expect(page.getByRole('heading', { name: 'What the video shows' })).toBeVisible();
+  const latestAnswer = page.locator('.agent-assistant-message').last();
+  await expect(latestAnswer.getByRole('heading', { name: 'What the video shows' })).toBeVisible();
   await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown strong')).toHaveText('Fable for coding');
   await expect(page.locator('.agent-assistant-message').last().locator('.agent-markdown > ul')).toHaveCSS('list-style-type', 'disc');
-  await expect(page.getByRole('table')).toContainText('Refinement');
-  await expect(page.getByRole('table').getByRole('link', {name:'[1]'})).toHaveCount(2);
-  await expect(page.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('href','https://www.youtube.com/watch?v=P7bxbDSnZRM');
-  await expect(page.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('title','Source 1: Fable Vs Astra Debate Is Over');
-  await page.getByRole('table').screenshot({path:testInfo.outputPath('source-table.png')});
-  await expect(page.getByRole('link', { name: 'Watch the video' })).toHaveAttribute('target', '_blank');
+  await expect(latestAnswer.getByRole('table')).toContainText('Refinement');
+  await expect(latestAnswer.getByRole('table').getByRole('link', {name:'[1]'})).toHaveCount(2);
+  await expect(latestAnswer.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('href','https://www.youtube.com/watch?v=P7bxbDSnZRM');
+  await expect(latestAnswer.getByRole('table').getByRole('link', {name:'[1]'}).first()).toHaveAttribute('title','Source 1: Fable Vs Astra Debate Is Over');
+  await latestAnswer.getByRole('table').screenshot({path:testInfo.outputPath('source-table.png')});
+  await expect(latestAnswer.getByRole('link', { name: 'Watch the video' })).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('link', { name: 'Unsafe link' })).toHaveCount(0);
   await expect(page.locator('.agent-markdown img, .agent-markdown script')).toHaveCount(0);
   expect(imageRequests).toHaveLength(0);
-  const latestAnswer = page.locator('.agent-assistant-message').last();
   await expect(latestAnswer.locator('.agent-avatar')).toBeVisible();
   await expect(latestAnswer.locator('.agent-message-header strong')).toHaveCSS('font-weight', '600');
   await expect(page.locator('.agent-user-message').last().locator('.agent-message-header strong')).toBeVisible();

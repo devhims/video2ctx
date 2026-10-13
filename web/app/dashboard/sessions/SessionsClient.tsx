@@ -192,7 +192,7 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {session?.messages.map(message => message.role === 'user'
         ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label={session.readOnly ? 'User message' : 'Your message'}><UserMessageContent content={message.content} createdAt={message.createdAt} /></article>
-        : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} initiallyOpen={message.runId === session.lastRunId} onProgress={onProgress} />)}
+        : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} onProgress={onProgress} />)}
       {pendingMessage && <PendingUserMessage message={pendingMessage} />}
     </div>
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
@@ -201,23 +201,21 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
   </>;
 }
 
-function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
-  sessionId: string; message: AgentMessage; initiallyOpen: boolean; onProgress: (progress: AgentProgress) => void;
+function RunAnswer({ sessionId, message, onProgress }: {
+  sessionId: string; message: AgentMessage; onProgress: (progress: AgentProgress) => void;
 }) {
-  const [open, setOpen] = useState(initiallyOpen || !message.content);
   const [progress, setProgress] = useState<AgentProgress>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useEffect(() => {
-    // Keep an active run connected even when its answer details are collapsed.
-    if (!open && !isActiveAgentRun(message.status)) return;
+    // Load persisted details for every displayed answer; completed streams close after their snapshot.
     const controller = new AbortController();
     void watchAgentRun(sessionId, message.runId, controller.signal, snapshot => {
       if (controller.signal.aborted) return;
       setProgress(snapshot); setError(''); onProgress(snapshot);
     }).catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); });
     return () => controller.abort();
-  }, [open, sessionId, message.runId, revision, onProgress]);
+  }, [sessionId, message.runId, revision, onProgress]);
   const run = progress?.run;
   const status = run?.status ?? message.status;
   const result = run?.result;
@@ -225,8 +223,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
     <span className='agent-avatar' aria-hidden='true'><StarFourIcon size={14} /></span>
     <div className='agent-message-body'>
     <header className='agent-message-header'><strong>Agent</strong><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time><span className={`agent-status status-${status}`}>{status}</span></header>
-    {!open && <><AgentMarkdown>{message.content}</AgentMarkdown>{message.content && <AnswerActions answer={message.content} />}<button className='agent-answer-toggle' aria-expanded={open} onClick={() => setOpen(true)}>View sources and tool activity <CaretRightIcon size={13} aria-hidden='true' /></button></>}
-    {open && <div className='agent-run-details'>
+    <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <><AgentMarkdown>{message.content}</AgentMarkdown><AnswerActions answer={message.content} /></>}
       {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
@@ -247,7 +244,7 @@ function RunAnswer({ sessionId, message, initiallyOpen, onProgress }: {
         })}</ul></section>}
         {!!result.warnings.length && <details className='agent-caveats'><summary>Source notes and limitations ({result.warnings.length})</summary><ul>{result.warnings.map((warning, index) => <li key={index}>{warning.message}</li>)}</ul></details>}
       </>}
-    </div>}
+    </div>
     <footer className='agent-run-footer'>
       <p className='agent-id'>Run ID: {message.runId}</p>
     </footer>
