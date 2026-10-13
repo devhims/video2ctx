@@ -194,7 +194,13 @@ export function CraftDirection() {
         </h1>
         <p className='craft-sub'>
           Everything your agent needs to understand videos.
-          <span className='craft-open-source'>100% open source</span>
+          <a className='craft-offer' href='/dashboard'>
+            <span>Get started for free</span>
+            <span className='craft-offer-terms'>
+              1,000 credits · No card required
+              <ArrowRight size={10} weight='bold' aria-hidden='true' />
+            </span>
+          </a>
         </p>
         <CraftDemo />
       </section>

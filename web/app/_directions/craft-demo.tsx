@@ -1,8 +1,10 @@
 'use client';
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { ChecksIcon, CopyIcon, PlayIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
+import { ArrowRightIcon, ChecksIcon, CopyIcon, PlayIcon, YoutubeLogoIcon } from '@phosphor-icons/react';
 import { ClipTabs } from './clip-tabs';
+import { CraftWorksWith } from './craft-works-with';
+import { authClient } from '../../lib/auth-client';
 import { videoIdFromInput } from '../../lib/source-data';
 import {
   type DemoResponse,
@@ -152,6 +154,8 @@ export function CraftDemo() {
         ))}
       </div>
 
+      <CraftWorksWith />
+
       {state === 'loading' ? (
         <InspectionProgress currentStep={inspectionStep} />
       ) : limitReached ? (
@@ -203,6 +207,8 @@ function InspectionProgress({ currentStep }: { currentStep: number }) {
 }
 
 function CraftResult({ result }: { result: DemoResponse }) {
+  const { data: session } = authClient.useSession();
+  const signedIn = Boolean(session?.user);
   const [tab, setTab] = useState<Tab>('transcript');
   const [visibleCommentCount, setVisibleCommentCount] = useState(
     INITIAL_COMMENT_COUNT,
@@ -300,11 +306,16 @@ function CraftResult({ result }: { result: DemoResponse }) {
                   </li>
                 ))}
               </ol>
-              <p className='craft-more-count'>
-                {moreCount(transcript.segmentCount, transcript.segments.length)
-                  ? `${moreCount(transcript.segmentCount, transcript.segments.length).toLocaleString()} more segments available`
-                  : 'Full transcript returned'}
-              </p>
+              <MoreCount
+                remaining={moreCount(
+                  transcript.segmentCount,
+                  transcript.segments.length,
+                )}
+                noun='segments'
+                offer='Get the full transcript with 1,000 free credits'
+                complete='Full transcript returned'
+                signedIn={signedIn}
+              />
             </>
           ) : (
             <p className='craft-empty'>No captions published for this video.</p>
@@ -387,17 +398,19 @@ function CraftResult({ result }: { result: DemoResponse }) {
                     more comments
                   </button>
                 ) : null}
-                <p className='craft-more-count'>
-                  {moreCount(
+                <MoreCount
+                  remaining={moreCount(
                     comments.totalCount,
                     Math.min(visibleCommentCount, comments.comments.length),
-                  )
-                    ? `${moreCount(
-                        comments.totalCount,
-                        Math.min(visibleCommentCount, comments.comments.length),
-                      ).toLocaleString()} more comments available`
-                    : 'All returned comments shown'}
-                </p>
+                  )}
+                  noun='comments'
+                  offer='Get them all with 1,000 free credits'
+                  complete='All returned comments shown'
+                  signedIn={signedIn}
+                  // The offer waits until the sample runs out, so the panel
+                  // never shows two different ways to see more at once.
+                  canLoadMore={visibleCommentCount < comments.comments.length}
+                />
               </div>
             </>
           ) : (
@@ -603,6 +616,40 @@ function bestThumbnail(
       (right.width ?? 0) * (right.height ?? 0) -
       (left.width ?? 0) * (left.height ?? 0),
   )[0];
+}
+
+/* The demo returns an excerpt, so the line counting what was left out is where
+ * a visitor finds out there is more. For anyone signed out, that line becomes
+ * the offer to get the rest. */
+function MoreCount({
+  remaining,
+  noun,
+  offer,
+  complete,
+  signedIn,
+  canLoadMore = false,
+}: {
+  remaining: number;
+  noun: string;
+  offer: string;
+  complete: string;
+  signedIn: boolean;
+  canLoadMore?: boolean;
+}) {
+  if (!remaining) return <p className='craft-more-count'>{complete}</p>;
+  const count = `${remaining.toLocaleString()} more ${noun}`;
+  if (signedIn || canLoadMore) {
+    return <p className='craft-more-count'>{count} available</p>;
+  }
+  return (
+    <p className='craft-more-count'>
+      {count}.{' '}
+      <a href='/dashboard'>
+        {offer}
+        <ArrowRightIcon size={10} weight='bold' aria-hidden='true' />
+      </a>
+    </p>
+  );
 }
 
 function moreCount(total: number | undefined, shown: number): number {

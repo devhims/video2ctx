@@ -173,6 +173,19 @@ html:has(.craft) body {
   transition: transform var(--press) var(--out);
 }
 
+.craft-nav-signin {
+  min-height: 2.25rem;
+  padding-inline: var(--space-sm);
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 550;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--control) var(--out);
+}
+
 .craft-nav-menu {
   width: 2.25rem;
   min-height: 2.25rem;
@@ -643,16 +656,39 @@ html:has(.craft) body {
   text-wrap: balance;
 }
 
-.craft-open-source {
-  margin-top: var(--space-xs);
+/* The free offer, set as quietly as the open-source note it replaced so it
+ * reads as a footnote to the claim. It is a link because "Get started" reads
+ * as an action, and a phrase that looks clickable should go somewhere. */
+.craft-offer {
+  width: fit-content;
+  margin: var(--space-xs) auto 0;
   color: var(--ink-muted);
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: color var(--control) var(--out);
   font-family: var(--font-home-mono);
   font-size: 0.72rem;
   font-weight: 540;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   line-height: 1.35;
+  white-space: nowrap;
+}
+
+/* Two phrases that only ever break between each other, so a narrow screen
+ * gets two clean lines instead of "1,000" stranded from "credits". */
+.craft-offer-terms {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+}
+
+.craft-offer-terms::before {
+  content: '·';
+  margin-inline: 0.35em 0;
 }
 
 /* ------------------------------------------------------------------ form */
@@ -819,6 +855,34 @@ html:has(.craft) body {
 .craft-examples button:disabled:not([data-active='true']) {
   opacity: 0.45;
   cursor: progress;
+}
+
+.craft-works-with {
+  margin-top: var(--space-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.craft-works-with-label {
+  color: var(--ink-muted);
+  font-family: var(--font-home-mono);
+  font-size: 0.68rem;
+}
+
+.craft-works-with ul {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  list-style: none;
+}
+
+.craft-works-with li {
+  color: var(--ink-muted);
+  display: flex;
 }
 
 .craft-form-note {
@@ -1465,6 +1529,17 @@ html:has(.craft) body {
   font-family: var(--font-home-mono);
   font-size: 0.68rem;
   text-align: right;
+}
+
+.craft-more-count a {
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 0.25em;
+  transition: color var(--control) var(--out);
 }
 
 .craft-comments-footer .craft-more-count {
@@ -2681,6 +2756,12 @@ html:has(.craft) body {
     transform: translateY(-1px);
   }
 
+  .craft-nav-signin:hover,
+  .craft-offer:hover,
+  .craft-more-count a:hover {
+    color: var(--ink);
+  }
+
   .craft-examples button:enabled:hover {
     border-color: var(--ink-muted);
     color: var(--ink);
@@ -2803,6 +2884,10 @@ html:has(.craft) body {
   .craft-nav-menu {
     display: grid;
   }
+
+  .craft-nav-signin {
+    display: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -2859,6 +2944,14 @@ html:has(.craft) body {
 
   .craft-examples [data-phones='hidden'] {
     display: none;
+  }
+
+  .craft-offer {
+    flex-direction: column;
+  }
+
+  .craft-offer-terms::before {
+    content: none;
   }
 
   .craft-run-sources {
