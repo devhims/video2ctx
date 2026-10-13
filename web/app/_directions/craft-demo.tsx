@@ -137,7 +137,7 @@ export function CraftDemo() {
       </form>
 
       <div className='craft-examples'>
-        <span className='craft-examples-label'>Try</span>
+        <span className='craft-examples-label'>Try:</span>
         {EXAMPLES.map((example) => (
           <button
             key={example.url}

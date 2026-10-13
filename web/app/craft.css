@@ -173,19 +173,6 @@ html:has(.craft) body {
   transition: transform var(--press) var(--out);
 }
 
-.craft-nav-signin {
-  min-height: 2.25rem;
-  padding-inline: var(--space-sm);
-  color: var(--ink-soft);
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.75rem;
-  font-weight: 550;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: color var(--control) var(--out);
-}
-
 .craft-nav-menu {
   width: 2.25rem;
   min-height: 2.25rem;
@@ -516,7 +503,10 @@ html:has(.craft) body {
 .craft-build-cta {
   min-height: 2.25rem;
   margin-bottom: var(--space-xl);
-  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-md);
+  /* Both ends hold a filled shape, so each is inset as far from the side as
+   * from the top and bottom: the arrow box by the small padding, and the
+   * shorter NEW badge by 0.625rem, which matches its vertical gap. */
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) 0.625rem;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-home-control);
   position: relative;
@@ -650,8 +640,11 @@ html:has(.craft) body {
 .craft-sub {
   max-width: 38ch;
   margin: var(--space-lg) 0 0;
-  color: var(--ink-soft);
+  /* Brighter than the soft ink so the offer line under it, which shares the
+   * paragraph, reads as the quieter of the two. */
+  color: color-mix(in oklch, var(--ink) 50%, var(--ink-soft));
   font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
+  font-weight: 550;
   line-height: 1.55;
   text-wrap: balance;
 }
@@ -669,11 +662,9 @@ html:has(.craft) body {
   justify-content: center;
   text-decoration: none;
   transition: color var(--control) var(--out);
-  font-family: var(--font-home-mono);
-  font-size: 0.72rem;
-  font-weight: 540;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
+  font-family: var(--font-home-body);
+  font-size: 0.8125rem;
+  font-weight: 450;
   line-height: 1.35;
   white-space: nowrap;
 }
@@ -803,8 +794,9 @@ html:has(.craft) body {
 .craft-examples-label {
   margin-right: var(--space-2xs);
   color: var(--ink-muted);
-  font-family: var(--font-home-mono);
-  font-size: 0.68rem;
+  font-family: var(--font-home-body);
+  font-size: 0.8125rem;
+  font-weight: 450;
 }
 
 .craft-examples button {
@@ -867,8 +859,9 @@ html:has(.craft) body {
 
 .craft-works-with-label {
   color: var(--ink-muted);
-  font-family: var(--font-home-mono);
-  font-size: 0.68rem;
+  font-family: var(--font-home-body);
+  font-size: 0.8125rem;
+  font-weight: 450;
 }
 
 .craft-works-with ul {
@@ -881,7 +874,7 @@ html:has(.craft) body {
 }
 
 .craft-works-with li {
-  color: var(--ink-muted);
+  color: var(--ink);
   display: flex;
 }
 
@@ -2756,7 +2749,6 @@ html:has(.craft) body {
     transform: translateY(-1px);
   }
 
-  .craft-nav-signin:hover,
   .craft-offer:hover,
   .craft-more-count a:hover {
     color: var(--ink);
@@ -2883,10 +2875,6 @@ html:has(.craft) body {
 
   .craft-nav-menu {
     display: grid;
-  }
-
-  .craft-nav-signin {
-    display: none;
   }
 }
 

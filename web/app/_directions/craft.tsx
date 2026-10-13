@@ -193,7 +193,7 @@ export function CraftDirection() {
           </span>
         </h1>
         <p className='craft-sub'>
-          Everything your agent needs to understand videos.
+          Everything your agent needs to understand videos
           <a className='craft-offer' href='/dashboard'>
             <span>Get started for free</span>
             <span className='craft-offer-terms'>

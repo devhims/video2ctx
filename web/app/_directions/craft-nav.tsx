@@ -58,16 +58,10 @@ export function CraftNav() {
         </nav>
 
         <div className='craft-nav-actions'>
-          {/* New visitors outnumber returning ones here, so the button invites
-              them in and returning users get a quieter text link. Both land on
-              the same login page; phones keep only the button. */}
-          {session?.user ? null : (
-            <a className='craft-nav-signin' href='/login'>
-              Sign in
-            </a>
-          )}
+          {/* "Get Started" rather than "Sign in": most visitors here are new,
+              and returning users reach the same login page through it. */}
           <a className='craft-nav-account' href={session?.user ? '/dashboard' : '/login'}>
-            {session?.user ? 'Dashboard' : 'Get started'}
+            {session?.user ? 'Dashboard' : 'Get Started'}
           </a>
           <a
             className='craft-nav-github'
