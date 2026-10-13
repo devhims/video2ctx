@@ -45,41 +45,42 @@ const ROADMAP = [
   { name: 'Your own uploads', status: 'Next' },
 ];
 
-/* Each route has a distinct boundary. Skills hold agent guidance, the CLI and
- * hosted platform skill form one complementary setup, and the npm package is the
- * direct TypeScript library. */
-const WAYS = [
-  {
-    label: 'YouTube Direct',
-    body: 'Install the skills and agents can handle one-off public YouTube requests directly. No CLI, account, API key, or hosted service is required.',
-    action: 'Browse the skills',
-    href: 'https://github.com/devhims/video2ctx/tree/main/.agents/skills',
-  },
-  {
-    label: 'CLI + Skill',
-    body: 'Install both for hosted agent work. The CLI handles browser authentication and stable commands; the skills provide routing and workflow guidance.',
-    action: '@video2ctx/cli',
-    href: 'https://www.npmjs.com/package/@video2ctx/cli',
-  },
-  {
-    label: 'Hosted API',
-    body: 'Normalised JSON with the source links intact. Bearer auth, versioned under /v1.',
-    action: 'Read the reference',
-    href: 'https://docs.video2ctx.dev/api-reference/introduction',
-  },
-  {
-    label: 'NPM Package',
-    body: 'A server-side TypeScript client for YouTube data, with no hosted service in the path.',
-    action: 'all-things-youtube',
-    href: 'https://www.npmjs.com/package/all-things-youtube',
-  },
-  {
-    label: 'Workspace',
-    body: 'Collect moments into projects, ask questions across them, and monitor channels over time.',
-    action: 'Open the dashboard',
-    href: '/dashboard',
-  },
-];
+// Parked with the "Choose your route." section below.
+// /* Each route has a distinct boundary. Skills hold agent guidance, the CLI and
+//  * hosted platform skill form one complementary setup, and the npm package is the
+//  * direct TypeScript library. */
+// const WAYS = [
+//   {
+//     label: 'YouTube Direct',
+//     body: 'Install the skills and agents can handle one-off public YouTube requests directly. No CLI, account, API key, or hosted service is required.',
+//     action: 'Browse the skills',
+//     href: 'https://github.com/devhims/video2ctx/tree/main/.agents/skills',
+//   },
+//   {
+//     label: 'CLI + Skill',
+//     body: 'Install both for hosted agent work. The CLI handles browser authentication and stable commands; the skills provide routing and workflow guidance.',
+//     action: '@video2ctx/cli',
+//     href: 'https://www.npmjs.com/package/@video2ctx/cli',
+//   },
+//   {
+//     label: 'Hosted API',
+//     body: 'Normalised JSON with the source links intact. Bearer auth, versioned under /v1.',
+//     action: 'Read the reference',
+//     href: 'https://docs.video2ctx.dev/api-reference/introduction',
+//   },
+//   {
+//     label: 'NPM Package',
+//     body: 'A server-side TypeScript client for YouTube data, with no hosted service in the path.',
+//     action: 'all-things-youtube',
+//     href: 'https://www.npmjs.com/package/all-things-youtube',
+//   },
+//   {
+//     label: 'Workspace',
+//     body: 'Collect moments into projects, ask questions across them, and monitor channels over time.',
+//     action: 'Open the dashboard',
+//     href: '/dashboard',
+//   },
+// ];
 
 /* Plain-language trust, no invented metrics and no header names. */
 const TRUST = [
@@ -259,6 +260,23 @@ export function CraftDirection() {
 
       <div className='craft-reveal'>
         <section
+          id='agent-setup'
+          className='craft-band craft-agent-setup'
+          aria-labelledby='craft-code-title'
+        >
+          <div className='craft-band-head'>
+            <h2 id='craft-code-title'>Set it up your way.</h2>
+            <p>
+              Work inside your agent, from the terminal, or in your own code.
+              Each route says when to pick it.
+            </p>
+          </div>
+          <CraftCode />
+        </section>
+      </div>
+
+      <div className='craft-reveal'>
+        <section
           id='agent'
           className='craft-band craft-agent'
           aria-labelledby='craft-agent-title'
@@ -283,23 +301,8 @@ export function CraftDirection() {
         </section>
       </div>
 
-      <div className='craft-reveal'>
-        <section
-          id='agent-setup'
-          className='craft-band craft-agent-setup'
-          aria-labelledby='craft-code-title'
-        >
-          <div className='craft-band-head'>
-            <h2 id='craft-code-title'>Install once. Pick the right route.</h2>
-            <p>
-              YouTube Direct needs only the skill. Hosted agent work pairs the
-              CLI with the skills. Applications can use the API or npm library.
-            </p>
-          </div>
-          <CraftCode />
-        </section>
-      </div>
-
+      {/* "Choose your route." is parked: its descriptions and links now live in
+          the setup tabs above. Restore this block and WAYS to bring it back.
       <div className='craft-reveal'>
         <section className='craft-band' aria-labelledby='craft-ways-title'>
           <div className='craft-band-head'>
@@ -326,6 +329,7 @@ export function CraftDirection() {
           </ul>
         </section>
       </div>
+      */}
 
       <div className='craft-reveal'>
         <CraftPricing />

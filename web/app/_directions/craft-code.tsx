@@ -9,29 +9,50 @@ import { ClipTabs } from './clip-tabs';
 
 type Sample = 'skills' | 'cli-skill' | 'curl' | 'node';
 
-const SAMPLES: Record<Sample, { label: string; code: string; note: string }> = {
+/* Each route's note says when to pick it, and its link goes to the thing you
+ * would install or read next. These absorbed the old route cards. */
+const SAMPLES: Record<
+  Sample,
+  { label: string; code: string; note: string; link: { label: string; href: string } }
+> = {
   skills: {
     label: 'Agent Skills',
-    note: 'Choose either or both skills. youtube-ctx works immediately without an account or hosted service.',
+    note: 'Your agent handles one-off public YouTube requests directly with youtube-ctx. No CLI, account, API key, or hosted service needed. Add video2ctx-platform when you want hosted features.',
     code: 'npx skills add devhims/video2ctx',
+    link: {
+      label: 'Browse the skills',
+      href: 'https://github.com/devhims/video2ctx/tree/main/.agents/skills',
+    },
   },
   'cli-skill': {
     label: 'CLI + Skill',
-    note: 'The CLI handles authenticated hosted commands. The companion platform skill teaches agents when and how to use them.',
+    note: 'For hosted agent work, install both. The CLI handles browser sign-in and stable commands, and the platform skill teaches your agent when and how to use them.',
     code: `npm install --global @video2ctx/cli
 video2ctx auth login
 npx skills add devhims/video2ctx`,
+    link: {
+      label: '@video2ctx/cli on npm',
+      href: 'https://www.npmjs.com/package/@video2ctx/cli',
+    },
   },
   curl: {
     label: 'Hosted API',
-    note: 'Any language, one request. Bearer auth with a key from the dashboard.',
+    note: 'Any language, one request. JSON with the source links intact, Bearer auth with a key from the dashboard, and versioned under /v1.',
     code: `curl 'https://api.video2ctx.dev/v1/videos/S4tdkSVuxZA/transcript?provider=youtube' \\
   --header "Authorization: Bearer $VIDEO2CTX_API_KEY"`,
+    link: {
+      label: 'Read the API reference',
+      href: 'https://docs.video2ctx.dev/api-reference/introduction',
+    },
   },
   node: {
     label: 'NPM Package',
-    note: 'Server-side TypeScript, no key and no hosted service in the path.',
+    note: 'A server-side TypeScript client, with no API key and no hosted service in the path.',
     code: 'npm install all-things-youtube',
+    link: {
+      label: 'all-things-youtube on npm',
+      href: 'https://www.npmjs.com/package/all-things-youtube',
+    },
   },
 };
 
@@ -69,7 +90,13 @@ export function CraftCode() {
         <CopyButton text={active.code} />
       </div>
 
-      <p className='craft-code-note'>{active.note}</p>
+      <div className='craft-code-note'>
+        <p>{active.note}</p>
+        <a href={active.link.href} target='_blank' rel='noreferrer'>
+          {active.link.label}
+          <span aria-hidden='true'>→</span>
+        </a>
+      </div>
     </div>
   );
 }

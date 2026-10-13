@@ -2252,8 +2252,31 @@ html:has(.craft) body {
 
 .craft-code-note {
   margin: var(--space-md) 0 0;
+  display: grid;
+  justify-items: start;
+  gap: var(--space-xs);
+}
+
+.craft-code-note p {
+  max-width: 68ch;
+  margin: 0;
   color: var(--ink-muted);
   font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.craft-code-note a {
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.82rem;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.craft-code-note a span {
+  transition: transform var(--control) var(--out);
 }
 
 /* The copy control belongs to the code surface it acts on. Both icons occupy
@@ -2847,7 +2870,8 @@ html:has(.craft) body {
     color: var(--ink);
   }
 
-  .craft-ways a:hover span {
+  .craft-ways a:hover span,
+  .craft-code-note a:hover span {
     transform: translateX(3px);
   }
 }
