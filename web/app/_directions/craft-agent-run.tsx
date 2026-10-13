@@ -1,15 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useReplay } from './use-replay';
 
 /* A replay of what a Video Agent run looks like, built from one real video
  * (the same one the API reference uses). Every count, timestamp, and quote
  * below comes from that video's actual transcript and comments, so the graphic
  * shows the product's shape without inventing a result.
  *
- * Motion is once-per-visit content, so it gets the slow tier: it plays when the
- * figure is half in view, then holds the finished state. The server renders the
- * finished state, so without JS (or with reduced motion) nothing is hidden. */
+ * Motion is once-per-visit content, so it gets the slow tier; useReplay plays it
+ * once when the figure is half in view, then holds the finished state. */
 
 const VIDEO = {
   title: 'Praggnanandhaa vs Vincent Keymer',
@@ -76,43 +75,9 @@ function sourceState(step: number, index: number) {
 }
 
 export function CraftAgentRun() {
-  const figure = useRef<HTMLElement>(null);
-  const timers = useRef<number[]>([]);
-  const [step, setStep] = useState(FINAL);
-
-  const play = useCallback(() => {
-    timers.current.forEach(window.clearTimeout);
-    setStep(0);
-    timers.current = TIMELINE.map((at, index) =>
-      window.setTimeout(() => setStep(index + 1), at),
-    );
-  }, []);
-
-  useEffect(() => {
-    const node = figure.current;
-    if (!node || !('IntersectionObserver' in window)) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-    // Arm the replay while the figure is still off screen, so the reset to
-    // step 0 is never visible.
-    setStep(0);
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
-        observer.disconnect();
-        play();
-      },
-      { threshold: 0.45 },
-    );
-    observer.observe(node);
-    return () => {
-      observer.disconnect();
-      timers.current.forEach(window.clearTimeout);
-    };
-  }, [play]);
+  const { figure, step, running, play } = useReplay(TIMELINE);
 
   const phase = phaseOf(step);
-  const running = step > 0 && step < FINAL;
 
   return (
     <figure
