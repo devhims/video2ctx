@@ -14,7 +14,12 @@ export const SITE_URL = 'https://www.video2ctx.dev';
  * The surfaces named here are the ones that ship: skills, the @video2ctx/cli,
  * and the hosted API. Do not call `all-things-youtube` an SDK — it is a
  * server-side TypeScript client for YouTube data with no hosted service in the
- * path, so listing it beside "hosted API" implies a client for that API. */
+ * path, so listing it beside "hosted API" implies a client for that API.
+ *
+ * The current copy leads with the outcomes nothing else delivers well (cited
+ * answers across videos, reading what is on screen, monitoring) and ends with
+ * the ways in. The title matches the social card's "Video context for agents",
+ * so the link preview and the artwork never disagree. */
 export const SITE_DESCRIPTION =
-  'Search, extract, and monitor video context with agent skills, a CLI, and a hosted API.';
-export const HOME_TITLE = 'video2ctx | video context for AI agents';
+  "Ask across videos and get cited answers, read what's shown on screen, and monitor channels. Use agent skills, a CLI, or hosted API.";
+export const HOME_TITLE = 'video2ctx | video context for agents';
