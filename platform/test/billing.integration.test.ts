@@ -15,7 +15,7 @@ import {
 const env = {
   DB: workerEnv.DB,
   POLAR_BUILDER_PRODUCT_ID: 'builder-product',
-  BUILDER_MONTHLY_CREDITS: '20000',
+  BUILDER_MONTHLY_CREDITS: '10000',
   STARTER_ONBOARDING_CREDITS: '1000',
 } satisfies PaymentWebhookEnv;
 
@@ -28,14 +28,14 @@ describe('Polar payment queries on D1', () => {
 
     await applyPaidOrder(env, payload);
 
-    await expect(balance(userId)).resolves.toBe(20_000);
+    await expect(balance(userId)).resolves.toBe(10_000);
     await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
     await expect(operationCount(userId, 'polar:order:paid-order')).resolves.toBe(1);
 
     await addCredits(userId, -500, 'test:usage');
     await applyPaidOrder(env, payload);
 
-    await expect(balance(userId)).resolves.toBe(19_500);
+    await expect(balance(userId)).resolves.toBe(9_500);
     await expect(operationCount(userId, 'polar:order:paid-order')).resolves.toBe(1);
   });
 

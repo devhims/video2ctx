@@ -745,7 +745,7 @@ test('legacy settings links preserve checkout and email confirmation parameters'
 test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/billing': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Billing unavailable' } } } } });
   try {
-    await page.route('**/api/platform/v1/billing', route => route.fulfill({ json: { plan: 'builder', creditBalance: 1200, includedCredits: 20000 } }));
+    await page.route('**/api/platform/v1/billing', route => route.fulfill({ json: { plan: 'builder', creditBalance: 1200, includedCredits: 10000 } }));
     await page.route('**/api/platform/v1/notification-preferences', route => route.fulfill({ json: { inApp: false, emailAlerts: false, emailAlertsPending: false, emailDigest: 'off' } }));
     await page.route('**/api/auth/api-key/list', route => route.fulfill({ json: { apiKeys: [], total: 0 } }));
     await page.goto('/dashboard/settings');

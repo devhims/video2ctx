@@ -34,7 +34,7 @@ const PLANS: PricingPlan[] = [
     name: 'Builder',
     price: '$20',
     cadence: 'per month',
-    credits: '20,000 credits monthly',
+    credits: '10,000 credits monthly',
     description: 'Build production applications, agents, and internal tools with recurring usage.',
     features: [
       'Everything in Starter',

@@ -85,7 +85,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
         <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
         <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
           ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
-          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 20,000 credit monthly allowance and higher workspace limits.'}</p>
+          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'}</p>
         {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
           ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
           : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}

@@ -17,7 +17,7 @@ function environment(database: CreditDatabase): Env {
   return {
     DB: database,
     STARTER_ONBOARDING_CREDITS: '1000',
-    BUILDER_MONTHLY_CREDITS: '20000',
+    BUILDER_MONTHLY_CREDITS: '10000',
     STARTER_PROJECT_LIMIT: '3',
     STARTER_MONITOR_LIMIT: '1',
     STARTER_DAILY_IMPORTS: '10',
@@ -36,10 +36,10 @@ describe('credit entitlements', () => {
     });
   });
 
-  test('describes the paid allocation as 20,000 recurring monthly credits', async () => {
+  test('describes the paid allocation as 10,000 recurring monthly credits', async () => {
     await expect(entitlements(environment(new CreditDatabase(0, 'builder')), 'user-1')).resolves.toMatchObject({
       plan: 'builder',
-      includedCredits: 20000,
+      includedCredits: 10000,
       creditGrant: 'billing-cycle',
     });
   });

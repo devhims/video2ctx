@@ -21,7 +21,7 @@ import {
 const env = {
   DB: workerEnv.DB,
   STARTER_ONBOARDING_CREDITS: '1000',
-  BUILDER_MONTHLY_CREDITS: '20000',
+  BUILDER_MONTHLY_CREDITS: '10000',
   STARTER_PROJECT_LIMIT: '3',
   STARTER_MONITOR_LIMIT: '1',
   STARTER_DAILY_IMPORTS: '10',
@@ -357,7 +357,7 @@ describe('credit queries on D1', () => {
 
     await expect(entitlements(env, userId)).resolves.toMatchObject({
       plan: 'builder',
-      includedCredits: 20_000,
+      includedCredits: 10_000,
       creditGrant: 'billing-cycle',
     });
     await expect(creditBalance(env, userId)).resolves.toBe(400);
