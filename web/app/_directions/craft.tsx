@@ -210,10 +210,10 @@ export function CraftDirection() {
         <section className='craft-parts' aria-labelledby='craft-parts-title'>
           <h2 id='craft-parts-title'>What is video2ctx?</h2>
           <p className='craft-parts-intro'>
-            video2ctx turns video into context, for the agents you work with
-            and the apps you build. Point it at a video and get what was said,
-            what was shown on screen, and how viewers reacted, each tied to the
-            moment it happened.
+            video2ctx turns video into citable context, for the agents you work
+            with and the apps you build. Point it at a video and get what was
+            said, what was shown on screen, and how viewers reacted, each tied
+            to the moment it happened.
           </p>
           <ul>
             {PILLARS.map((pillar, index) => (
