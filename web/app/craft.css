@@ -2876,6 +2876,16 @@ html:has(.craft) body {
   .craft-nav-menu {
     display: grid;
   }
+
+  .craft-nav-github {
+    display: none;
+  }
+}
+
+@media (min-width: 721px) {
+  .craft-nav-links [data-phones-only='true'] {
+    display: none;
+  }
 }
 
 @media (max-width: 900px) {

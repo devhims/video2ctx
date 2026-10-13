@@ -9,6 +9,8 @@ const LINKS = [
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: 'https://api.video2ctx.dev/docs#tag/FAQ' },
   { label: 'CLI + Skill', href: '#agent-setup' },
+  /* Phones drop the GitHub icon from the bar, so it lives in the menu there. */
+  { label: 'GitHub', href: 'https://github.com/devhims/video2ctx', phonesOnly: true },
 ];
 
 export function CraftNav() {
@@ -50,6 +52,7 @@ export function CraftNav() {
                 target={external ? '_blank' : undefined}
                 rel={external ? 'noreferrer' : undefined}
                 onClick={() => setOpen(false)}
+                data-phones-only={link.phonesOnly ? 'true' : undefined}
               >
                 {link.label}
               </a>
