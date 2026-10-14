@@ -2637,6 +2637,11 @@ html:has(.craft) {
   text-underline-offset: 0.2em;
 }
 
+/* The sign-off's heart takes the accent; screen readers hear "love". */
+.craft-heart {
+  color: var(--accent);
+}
+
 /* --------------------------------------------------------- code sample */
 
 .craft-band {

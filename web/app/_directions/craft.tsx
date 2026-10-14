@@ -428,7 +428,7 @@ export function CraftDirection() {
         <div className='craft-colophon-inner'>
           <p className='craft-colophon-lede'>
             <b>video2ctx</b>
-            Turn video into context for agents and apps. YouTube first, not
+            Make videos queryable for agents and apps. YouTube first, not
             YouTube only.
           </p>
           <nav aria-label='Footer'>
@@ -457,6 +457,16 @@ export function CraftDirection() {
         </div>
         <div className='craft-colophon-base'>
           <p>© 2026 video2ctx</p>
+          <p>
+            Built with{' '}
+            <span className='craft-heart' aria-hidden='true'>
+              ♥
+            </span>
+            <span className='craft-sr'>love</span> by{' '}
+            <a href='https://x.com/devhims' target='_blank' rel='noreferrer'>
+              Himanshu
+            </a>
+          </p>
           <p>
             Open source under{' '}
             <a href={LICENSE_HREF} target='_blank' rel='noreferrer'>
