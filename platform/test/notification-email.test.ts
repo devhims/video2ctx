@@ -19,6 +19,22 @@ describe('monitor notification email', () => {
     }
   });
 
+  test('keeps button text at WCAG AA contrast in every product template', async () => {
+    const { renderDigestEmail, renderMagicLinkEmail } = await import('../src/lib/email-templates');
+    const rendered = await Promise.all([
+      renderMagicLinkEmail({ url: 'https://x.test/verify?token=abc' }),
+      renderNotificationOptInEmail({ recipientName: 'A', confirmationUrl: 'https://x.test/c' }),
+      renderMonitorAlertEmail({ recipientName: 'A', monitorLabel: 'M', videoTitle: 'V', videoUrl: 'https://youtube.com/watch?v=1', settingsUrl: 'https://x.test/s', unsubscribeUrl: 'https://x.test/u' }),
+      renderDigestEmail({ recipientName: 'A', cadence: 'daily', notifications: [{ title: 'T', body: 'B' }], dashboardUrl: 'https://x.test/d', unsubscribeUrl: 'https://x.test/u' }),
+    ]);
+    for (const { html } of rendered) {
+      const style = html.match(/<a[^>]*style="([^"]*background-color:[^"]*)"/)?.[1] ?? '';
+      const background = style.match(/background-color:(#[0-9a-f]{6})/i)?.[1];
+      const text = style.match(/(?:^|;)color:(#[0-9a-f]{6})/i)?.[1];
+      expect(background && text ? contrast(background, text) : 0).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   test('renders the sign-in link with its expiry in HTML and text', async () => {
     const { renderMagicLinkEmail } = await import('../src/lib/email-templates');
     const message = await renderMagicLinkEmail({ url: 'https://x.test/verify?token=a&b=<c>' });
@@ -189,4 +205,15 @@ function notificationEnv(account: { email: string; name: string; email_alerts: n
       send: async (message: Record<string, unknown>) => { sent.push(message); },
     },
   } as unknown as Env;
+}
+
+/** WCAG 2 contrast ratio between two #rrggbb colours. */
+function contrast(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+  };
+  const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (high! + 0.05) / (low! + 0.05);
 }

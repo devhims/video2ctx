@@ -197,7 +197,8 @@ const bodyText: CSSProperties = { margin: '0 0 14px', color: '#55554f', fontSize
 const highlight: CSSProperties = { margin: '24px 0', padding: '20px', borderLeft: '3px solid #d84c3f', backgroundColor: '#f7f4ee' };
 const highlightLabel: CSSProperties = { margin: '0 0 8px', color: '#77766f', fontSize: '11px', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' };
 const videoTitleStyle: CSSProperties = { margin: 0, color: '#171714', fontSize: '18px', fontWeight: 700, lineHeight: '26px' };
-const primaryButton: CSSProperties = { margin: '4px 0 24px', padding: '13px 18px', borderRadius: '7px', backgroundColor: '#d84c3f', color: '#ffffff', fontSize: '14px', fontWeight: 700, textDecoration: 'none' };
+// #c43d30 keeps white button text at 5.18:1 (WCAG AA needs 4.5:1; the brand #d84c3f gave 4.18:1).
+const primaryButton: CSSProperties = { margin: '4px 0 24px', padding: '13px 18px', borderRadius: '7px', backgroundColor: '#c43d30', color: '#ffffff', fontSize: '14px', fontWeight: 700, textDecoration: 'none' };
 const supportingText: CSSProperties = { margin: '4px 0 22px', color: '#77766f', fontSize: '12px', lineHeight: '19px' };
 const rule: CSSProperties = { margin: '24px 0 16px', borderColor: '#dedbd2' };
 const footerText: CSSProperties = { margin: 0, color: '#77766f', fontSize: '12px', lineHeight: '19px' };
