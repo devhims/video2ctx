@@ -37,6 +37,8 @@ export interface BillingSummary {
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
   canManageBilling: boolean;
+  /** Whether a Builder checkout can start: needs a Polar token and a Builder product. */
+  checkoutAvailable: boolean;
 }
 
 export interface PaymentWebhookEnv {
@@ -64,6 +66,7 @@ export async function getBillingSummary(env: Env, userId: string): Promise<Billi
     currentPeriodStart: row?.current_period_start ?? null,
     currentPeriodEnd: row?.current_period_end ?? null,
     canManageBilling: Boolean(row?.provider_customer_id),
+    checkoutAvailable: Boolean(env.POLAR_ACCESS_TOKEN && env.POLAR_BUILDER_PRODUCT_ID),
   };
 }
 

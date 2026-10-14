@@ -12103,7 +12103,8 @@
           "cancelAtPeriodEnd",
           "currentPeriodStart",
           "currentPeriodEnd",
-          "canManageBilling"
+          "canManageBilling",
+          "checkoutAvailable"
         ],
         "properties": {
           "plan": {
@@ -12139,6 +12140,10 @@
           },
           "canManageBilling": {
             "type": "boolean"
+          },
+          "checkoutAvailable": {
+            "type": "boolean",
+            "description": "Whether a Builder checkout can be started. False until billing is configured."
           }
         }
       }

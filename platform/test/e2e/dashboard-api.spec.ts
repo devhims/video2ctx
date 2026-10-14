@@ -578,6 +578,19 @@ test('settings become usable without waiting for projects', async ({ page }) => 
   } finally { await scenario.clear(); }
 });
 
+test('the Upgrade action stays hidden until billing is live', async ({ page }, testInfo) => {
+  const starter = { plan: 'starter', status: 'inactive', creditBalance: 1000, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false, checkoutAvailable: false };
+  const scenario = await accountScenario(page, { responses: { '/v1/billing': { body: starter } } });
+  await page.goto('/dashboard?section=settings', { waitUntil: 'commit' });
+  try {
+    const billing = page.getByRole('article', { name: 'Starter plan' });
+    await expect(billing.getByRole('paragraph').first()).toHaveText('Includes 1,000 onboarding credits.');
+    await expect(page.getByRole('button', { name: 'Upgrade to Builder' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Manage billing' })).toHaveCount(0);
+    await billing.screenshot({ path: testInfo.outputPath('settings-billing-unavailable.png') });
+  } finally { await scenario.clear(); }
+});
+
 test('settings cards load independently and preserve their layout', async ({ page }, testInfo) => {
   const scenario = await accountScenario(page, { delays: ['/v1/billing'] });
   await page.goto('/dashboard?section=settings', { waitUntil: 'commit' });

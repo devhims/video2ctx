@@ -2616,7 +2616,7 @@ export const openApiDocument = {
       },
       BillingSummary: {
         type: 'object',
-        required: ['plan', 'status', 'creditBalance', 'includedCredits', 'cancelAtPeriodEnd', 'currentPeriodStart', 'currentPeriodEnd', 'canManageBilling'],
+        required: ['plan', 'status', 'creditBalance', 'includedCredits', 'cancelAtPeriodEnd', 'currentPeriodStart', 'currentPeriodEnd', 'canManageBilling', 'checkoutAvailable'],
         properties: {
           plan: { type: 'string', enum: ['starter', 'builder'] },
           status: { type: 'string' },
@@ -2626,6 +2626,7 @@ export const openApiDocument = {
           currentPeriodStart: { type: ['integer', 'null'] },
           currentPeriodEnd: { type: ['integer', 'null'] },
           canManageBilling: { type: 'boolean' },
+          checkoutAvailable: { type: 'boolean', description: 'Whether a Builder checkout can be started. False until billing is configured.' },
         },
       },
     },

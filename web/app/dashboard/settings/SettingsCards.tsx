@@ -16,6 +16,8 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   const email = user?.email;
   const resource = useStreamedAccountResource('billing', null, promise);
   const { data: billing, ready: billingReady, error: billingError, setData: onBillingChange } = resource;
+  // The Upgrade action appears only once billing is live; until then checkout cannot start.
+  const checkoutAvailable = billing?.checkoutAvailable === true;
   useLoadErrorToast(billingError, 'Retry billing', () => void resource.refresh());
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
   const [billingMessage, setBillingMessage] = useState('');
@@ -85,7 +87,9 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
         <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
         <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
           ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
-          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'}</p>
+          : checkoutAvailable
+            ? 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'
+            : 'Includes 1,000 onboarding credits.'}</p>
         {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
           ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
           : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}
@@ -94,8 +98,10 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
       <div className='grid gap-2'>
         {billing?.plan === 'builder' || billing?.canManageBilling
           ? <button className='button secondary min-h-11' disabled={Boolean(billingAction) || isDemo} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
-        {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
+          : checkoutAvailable
+            ? <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>
+            : null}
+        {isDemo && checkoutAvailable && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
       </div>
       </>}
     </article>;

@@ -175,7 +175,7 @@ createServer(async (req, res) => {
   }
   if (url.pathname === '/v1/monitors') return reply(200, { monitors: [] });
   if (url.pathname === '/v1/notifications') return reply(200, { notifications: [] });
-  if (url.pathname === '/v1/billing') return reply(200, { plan: 'starter', status: 'active', creditBalance: 679, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false });
+  if (url.pathname === '/v1/billing') return reply(200, { plan: 'starter', status: 'active', creditBalance: 679, includedCredits: 1000, cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false, checkoutAvailable: true });
   if (url.pathname === '/v1/notification-preferences') return reply(200, { inApp: true, emailAlerts: false, emailAlertsPending: false, emailDigest: 'off' });
   if (url.pathname === '/v1/usage') return reply(200, { creditBalance: 679 });
   return reply(200, {});

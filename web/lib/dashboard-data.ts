@@ -14,6 +14,8 @@ export interface DashboardBilling {
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
   canManageBilling: boolean;
+  /** Absent from platforms that predate it; treated as false. */
+  checkoutAvailable?: boolean;
 }
 
 export interface DashboardProject {
