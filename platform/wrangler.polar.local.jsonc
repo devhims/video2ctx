@@ -1,0 +1,73 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "video2ctx-polar-sandbox-local",
+  "main": "src/index.polar.local.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_ORIGIN": "http://localhost:3001",
+    "AUTH_BASE_URL": "http://localhost:3001",
+    "POLAR_ENVIRONMENT": "sandbox",
+    "POLAR_BUILDER_PRODUCT_ID": "",
+    "STARTER_ONBOARDING_CREDITS": "1000",
+    "BUILDER_MONTHLY_CREDITS": "10000",
+    "STARTER_PROJECT_LIMIT": "3",
+    "STARTER_MONITOR_LIMIT": "1",
+    "STARTER_DAILY_IMPORTS": "10",
+    "BUILDER_PROJECT_LIMIT": "100",
+    "BUILDER_MONITOR_LIMIT": "50",
+    "BUILDER_DAILY_IMPORTS": "200",
+    "AGENT_RUNTIME_ENABLED": "false",
+    "LOCAL_AUTH_BYPASS_ENABLED": "false"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "video2ctx-polar-sandbox-local",
+      "database_id": "00000000-0000-0000-0000-000000000002",
+      "migrations_dir": "migrations",
+      "remote": false
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "YOUTUBE_CACHE",
+      "id": "00000000000000000000000000000002",
+      "remote": false
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RESEARCH",
+      "bucket_name": "video2ctx-polar-sandbox-local",
+      "remote": false
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "EMAIL_TASKS",
+        "queue": "video2ctx-polar-sandbox-local-email"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_ACCOUNT",
+        "class_name": "UserAccountDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "UserAccountDO"
+      ]
+    }
+  ]
+}

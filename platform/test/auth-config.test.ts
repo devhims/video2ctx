@@ -52,21 +52,27 @@ vi.mock('@polar-sh/sdk', () => ({
   }),
 }));
 vi.mock('@polar-sh/better-auth', () => ({
-  checkout: vi.fn((options: Record<string, any>) => {
-    captured.checkout = options;
-    return () => ({ id: 'polar-checkout' });
-  }),
   portal: vi.fn((options: Record<string, any>) => {
     captured.portal = options;
     return () => ({ id: 'polar-portal' });
   }),
-  webhooks: vi.fn((options: Record<string, any>) => {
-    captured.webhooks = options;
-    return () => ({ id: 'polar-webhooks' });
-  }),
   polar: vi.fn((options: Record<string, any>) => {
     captured.polar = options;
     return { id: 'polar' };
+  }),
+}));
+
+vi.mock('../src/lib/polar-checkout', () => ({
+  checkout: vi.fn((options: Record<string, any>) => {
+    captured.checkout = options;
+    return () => ({ id: 'polar-checkout' });
+  }),
+}));
+
+vi.mock('../src/lib/polar-webhooks', () => ({
+  webhooks: vi.fn((options: Record<string, any>) => {
+    captured.webhooks = options;
+    return () => ({ id: 'polar-webhooks' });
   }),
 }));
 

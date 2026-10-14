@@ -46,7 +46,9 @@ export async function fetchServerSession(
 export function isLocalDashboardDemoEnabled(
   requestHeaders: Headers,
   nodeEnv = process.env.NODE_ENV,
+  authenticated = false,
 ): boolean {
+  if (authenticated) return false;
   if (nodeEnv === 'production') return false;
   const hostname = (requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? '')
     .split(':')[0]

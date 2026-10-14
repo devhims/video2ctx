@@ -20,11 +20,34 @@ const env = {
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {
+  test('rejects a paid order linked to a different checkout user before changing credits', async () => {
+    const userId = 'payment-identity-mismatch';
+    await createUser(userId);
+    const payload = paidOrder(userId, 'mismatched-customer-order');
+    payload.data.metadata = { app_user_id: 'different-checkout-user' };
+    await expect(applyPaidOrder(env, payload)).rejects.toThrow('checkout user');
+    await expect(balance(userId)).resolves.toBe(1000);
+    await expect(account(userId)).resolves.toBeNull();
+    await expect(operationCount(userId, 'polar:order:mismatched-customer-order')).resolves.toBe(0);
+  });
+
+  test('uses the current configured 10,000-credit Builder allowance', async () => {
+    const userId = 'payment-current-builder-allowance';
+    await createUser(userId);
+    const payload = paidOrder(userId, 'current-builder-order');
+    payload.data.metadata = { app_user_id: userId };
+    await applyPaidOrder({ ...env, BUILDER_MONTHLY_CREDITS: '10000' }, payload);
+    await expect(balance(userId)).resolves.toBe(10_000);
+    await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
+    await expect(operationCount(userId, 'polar:order:current-builder-order')).resolves.toBe(1);
+  });
+
   test('tops up Builder credits and makes Polar retries idempotent', async () => {
     const userId = 'payment-paid-user';
     await createUser(userId);
     await addCredits(userId, 6_500, 'test:opening-balance');
     const payload = paidOrder(userId, 'paid-order');
+    payload.data.metadata = { app_user_id: userId };
 
     await applyPaidOrder(env, payload);
 

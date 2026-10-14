@@ -1,5 +1,6 @@
+import { Webhook } from 'standardwebhooks';
 import { env, exports } from 'cloudflare:workers';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 const worker = exports.default;
 const baseUrl = 'http://auth.test';
@@ -256,3 +257,135 @@ function request(path: string, init?: RequestInit): Promise<Response> {
 function jsonHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { 'content-type': 'application/json', origin: baseUrl, ...extra };
 }
+
+describe('signed Polar webhook delivery', () => {
+  for (const scheme of ['standard', 'legacy'] as const) {
+    test(`accepts ${scheme} signatures and projects customer state without a payment`, async () => {
+      const browser = await createBrowserSession();
+      const body = customerStateBody(browser.user.id);
+      const response = await request('/api/auth/polar/webhooks', {
+        method: 'POST', headers: signedHeaders(body, scheme), body,
+      });
+      expect(response.status).toBeGreaterThanOrEqual(200);
+      expect(response.status).toBeLessThan(300);
+      const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
+      expect(await billing.json()).toMatchObject({
+        plan: 'starter', status: 'inactive', creditBalance: 1000, canManageBilling: true,
+      });
+    });
+  }
+
+  test('rejects signed invalid payloads and oversized bodies without changing billing', async () => {
+    const browser = await createBrowserSession();
+    const invalidBody = JSON.stringify({ type: 'customer.state_changed', data: {} });
+    const invalid = await request('/api/auth/polar/webhooks', {
+      method: 'POST', headers: signedHeaders(invalidBody, 'standard'), body: invalidBody,
+    });
+    expect(invalid.status).toBe(400);
+    const oversized = await request('/api/auth/polar/webhooks', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ padding: 'x'.repeat(1_048_576) }),
+    });
+    expect(oversized.status).toBe(413);
+    const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
+    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
+  });
+
+  test('returns a retryable failure when a verified event cannot be applied', async () => {
+    const payload = JSON.parse(customerStateBody('unlinked-customer'));
+    payload.data.external_id = null;
+    const body = JSON.stringify(payload);
+    const response = await request('/api/auth/polar/webhooks', {
+      method: 'POST', headers: signedHeaders(body, 'standard'), body,
+    });
+    expect(response.status).toBe(500);
+  });
+
+  test('rejects tampered bodies and stale signatures without changing billing', async () => {
+    const browser = await createBrowserSession();
+    const body = customerStateBody(browser.user.id);
+    for (const [sentBody, headers] of [
+      [body.replace('Signature Test', 'Tampered'), signedHeaders(body, 'standard')],
+      [body, signedHeaders(body, 'standard', new Date(Date.now() - 600_000))],
+      [body, { 'content-type': 'application/json' }],
+    ] as const) {
+      const response = await request('/api/auth/polar/webhooks', {
+        method: 'POST', headers, body: sentBody,
+      });
+      expect(response.status).toBe(400);
+    }
+    const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
+    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
+  });
+});
+
+function customerStateBody(userId: string): string {
+  return JSON.stringify({
+    type: 'customer.state_changed', timestamp: new Date().toISOString(),
+    data: {
+      id: `customer-${userId}`, external_id: userId, type: 'individual',
+      created_at: new Date().toISOString(), modified_at: null, metadata: {},
+      email: 'signature-test@example.test', email_verified: true, name: 'Signature Test',
+      billing_address: null, tax_id: null, organization_id: 'sandbox-test-org', deleted_at: null,
+      active_subscriptions: [], granted_benefits: [], active_meters: [], avatar_url: '',
+    },
+  });
+}
+
+function signedHeaders(body: string, scheme: 'standard' | 'legacy', timestamp = new Date()): Record<string, string> {
+  const secret = (env as Env).POLAR_WEBHOOK_SECRET;
+  const signingKey = scheme === 'standard' ? secret : Buffer.from(secret).toString('base64');
+  const id = crypto.randomUUID();
+  return {
+    'content-type': 'application/json', 'webhook-id': id,
+    'webhook-timestamp': String(Math.floor(timestamp.getTime() / 1000)),
+    'webhook-signature': new Webhook(signingKey).sign(id, timestamp, body),
+  };
+}
+
+describe('authenticated Builder checkout identity', () => {
+  test('requires a session and a configured product before contacting Polar', async () => {
+    const signedOut = await request('/api/auth/checkout', {
+      method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ slug: 'builder' }),
+    });
+    expect(signedOut.status).toBe(401);
+    const browser = await createBrowserSession();
+    const unknownProduct = await request('/api/auth/checkout', {
+      method: 'POST', headers: jsonHeaders({ cookie: browser.cookie }), body: JSON.stringify({ slug: 'unknown' }),
+    });
+    expect(unknownProduct.status).toBe(400);
+  });
+
+  test('sends the signed-in email and user ID to Polar instead of accepting a buyer identity from the browser', async () => {
+    const browser = await createBrowserSession();
+    let sent: Record<string, unknown> | undefined;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const outgoing = new Request(input, init);
+      expect(outgoing.url).toBe('https://sandbox-api.polar.sh/v1/checkouts/');
+      sent = await outgoing.json() as Record<string, unknown>;
+      // Stop at the provider boundary; no checkout or payment is created.
+      return Response.json({ detail: 'Isolated checkout request inspection' }, { status: 400 });
+    });
+    try {
+      const response = await request('/api/auth/checkout', {
+        method: 'POST', headers: jsonHeaders({ cookie: browser.cookie }),
+        body: JSON.stringify({
+          slug: 'builder', products: ['other-product'],
+          customerEmail: 'other@example.test', externalCustomerId: 'other-user',
+          metadata: { app_user_id: 'other-user' },
+          successUrl: 'https://other.example.test/success', returnUrl: 'https://other.example.test/cancel',
+        }),
+      });
+      expect(response.status).toBe(500);
+      expect(sent).toMatchObject({
+        products: ['builder-product'], external_customer_id: browser.user.id, customer_email: browser.user.email,
+        metadata: { app_user_id: browser.user.id }, customer_name: 'Auth Test User',
+        success_url: `${baseUrl}/dashboard?section=settings&checkout=success`,
+        return_url: `${baseUrl}/dashboard?section=settings&checkout=cancelled`,
+      });
+      expect(sent?.customer_email).not.toBe('other@example.test');
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});

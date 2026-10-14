@@ -79,6 +79,10 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
 
   const userId = order.customer.externalId;
   if (!userId) throw new Error(`Polar order ${order.id} is missing the Better Auth external ID.`);
+  const checkoutUserId = order.metadata?.app_user_id;
+  if (typeof checkoutUserId === 'string' && checkoutUserId !== userId) {
+    throw new Error(`Polar order ${order.id} customer does not match the checkout user.`);
+  }
   const eventId = `order.paid:${order.id}`;
   if (await processed(env.DB, eventId)) return;
 

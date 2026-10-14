@@ -10,8 +10,8 @@ import { fetchServerAgentAccess, fetchServerAdminAccess, isLocalDashboardDemoEna
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const requestHeaders = await headers();
-  const demoEnabled = isLocalDashboardDemoEnabled(requestHeaders);
   const session = await requireDashboardSession();
+  const demoEnabled = isLocalDashboardDemoEnabled(requestHeaders, process.env.NODE_ENV, Boolean(session));
 
   const seeds = startDashboardData(requestHeaders);
 

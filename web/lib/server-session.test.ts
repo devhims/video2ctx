@@ -39,6 +39,11 @@ describe('server dashboard session', () => {
     assert.equal(session?.user.email, 'user@example.com');
   });
 
+  test('keeps signed-in local accounts out of demo mode so checkout is available', () => {
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3001' }), 'development', true), false);
+    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: '127.0.0.1:3001' }), 'development', true), false);
+  });
+
   test('enables demo access only for localhost outside production', () => {
     assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3000' }), 'development'), true);
     assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: '127.0.0.1:3000' }), 'development'), true);

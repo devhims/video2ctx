@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "ENVIRONMENT": "development",
+    "POLAR_ENVIRONMENT": "sandbox",
+    "POLAR_ACCESS_TOKEN": "test-only-polar-token",
+    "POLAR_BUILDER_PRODUCT_ID": "builder-product",
+    "POLAR_WEBHOOK_SECRET": "whsec_c2FuZGJveC1zaWduYXR1cmUtdGVzdC1rZXktMzI=",
     "APP_ORIGIN": "http://auth.test",
     "AUTH_BASE_URL": "http://auth.test",
     "AUTH_PREVIEW_HOST_PATTERN": "video2ctx-web-*-devhims-projects.vercel.app",
