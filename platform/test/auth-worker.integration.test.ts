@@ -1,5 +1,6 @@
 import { env, exports } from 'cloudflare:workers';
 import { describe, expect, test } from 'vitest';
+import { closeBillingAccount } from '../src/lib/billing';
 
 const worker = exports.default;
 const baseUrl = 'http://auth.test';
@@ -89,33 +90,79 @@ describe('Agent tester access with real D1 and browser sessions', () => {
 });
 
 describe('Polar checkout on the Worker runtime', () => {
+  const configured = { 'x-test-polar': 'configured' };
+  const polarCalls = async () => ((await (await request('/__test/polar-calls')).json()) as { count: number }).count;
+  const intent = (userId: string) => env.DB.prepare('SELECT user_id FROM billing_checkout_intents WHERE user_id=?').bind(userId).first();
+  async function signIn(): Promise<{ user: { id: string }; cookie: string }> {
+    return (await request('/__test/session', { method: 'POST', body: JSON.stringify({}) })).json();
+  }
+
   test('records the checkout intent before Polar is contacted, even when Polar fails', async () => {
-    const created = await request('/__test/session', { method: 'POST', body: JSON.stringify({}) });
-    const { user, cookie } = await created.json() as { user: { id: string }; cookie: string };
+    const { user, cookie } = await signIn();
+    const callsBefore = await polarCalls();
 
     const checkout = await request('/api/auth/checkout', {
       method: 'POST',
-      headers: jsonHeaders({ cookie }),
-      body: JSON.stringify({ products: ['test-product'] }),
+      headers: jsonHeaders({ cookie, ...configured }),
+      body: JSON.stringify({ slug: 'builder' }),
     });
 
-    // The plugin's own error from its catch around polar.checkouts.create: the stubbed Polar call was reached.
+    // The stubbed Polar call was reached and failed, and the plugin reported it.
     expect(checkout.ok).toBe(false);
     await expect(checkout.json()).resolves.toMatchObject({ message: 'Checkout creation failed' });
-    await expect(env.DB.prepare('SELECT user_id FROM billing_checkout_intents WHERE user_id=?').bind(user.id).first())
-      .resolves.toEqual({ user_id: user.id });
+    await expect(polarCalls()).resolves.toBe(callsBefore + 1);
+    await expect(intent(user.id)).resolves.toEqual({ user_id: user.id });
     await expect(env.DB.prepare('SELECT 1 FROM billing_accounts WHERE user_id=?').bind(user.id).first()).resolves.toBeNull();
   });
 
-  test('records nothing for a signed-out checkout', async () => {
-    const before = await env.DB.prepare('SELECT COUNT(*) AS n FROM billing_checkout_intents').first<{ n: number }>();
+  test('Upgrade while billing is unconfigured is refused locally and leaves deletion unblocked', async () => {
+    const { user, cookie } = await signIn();
+    const callsBefore = await polarCalls();
+
+    // The Settings "Upgrade to Builder" request, with no Polar token or Builder product configured.
     const checkout = await request('/api/auth/checkout', {
       method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ products: ['test-product'] }),
+      headers: jsonHeaders({ cookie }),
+      body: JSON.stringify({ slug: 'builder' }),
     });
+
+    expect(checkout.status).toBe(503);
+    await expect(checkout.json()).resolves.toMatchObject({ message: 'Billing is not available yet.' });
+    await expect(polarCalls()).resolves.toBe(callsBefore);
+    await expect(intent(user.id)).resolves.toBeNull();
+    // The billing step of account deletion still treats this user as never billed.
+    await expect(closeBillingAccount(env as unknown as Parameters<typeof closeBillingAccount>[0], user.id)).resolves.toBeUndefined();
+  });
+
+  test('an unknown product is refused before any intent or Polar call', async () => {
+    const { user, cookie } = await signIn();
+    const callsBefore = await polarCalls();
+
+    const checkout = await request('/api/auth/checkout', {
+      method: 'POST',
+      headers: jsonHeaders({ cookie, ...configured }),
+      body: JSON.stringify({ slug: 'enterprise' }),
+    });
+
+    expect(checkout.status).toBe(400);
+    await expect(checkout.json()).resolves.toMatchObject({ message: 'Product not found' });
+    await expect(polarCalls()).resolves.toBe(callsBefore);
+    await expect(intent(user.id)).resolves.toBeNull();
+  });
+
+  test('records nothing and never contacts Polar for a signed-out checkout', async () => {
+    const callsBefore = await polarCalls();
+    const before = await env.DB.prepare('SELECT COUNT(*) AS n FROM billing_checkout_intents').first<{ n: number }>();
+
+    const checkout = await request('/api/auth/checkout', {
+      method: 'POST',
+      headers: jsonHeaders(configured),
+      body: JSON.stringify({ slug: 'builder' }),
+    });
+
     expect(checkout.status).toBe(401);
     await expect(env.DB.prepare('SELECT COUNT(*) AS n FROM billing_checkout_intents').first<{ n: number }>()).resolves.toEqual(before);
+    await expect(polarCalls()).resolves.toBe(callsBefore);
   });
 });
 

@@ -17,9 +17,7 @@
     "GOOGLE_CLIENT_SECRET": "test-google-secret",
     "AGENT_RUNTIME_ENABLED": "true",
     "AGENT_ACCESS_MODE": "allowlist",
-    "ADMIN_EMAILS_SECRET": "bootstrap-admin@example.test",
-    "POLAR_ACCESS_TOKEN": "test-only-polar-token",
-    "POLAR_ENVIRONMENT": "sandbox"
+    "ADMIN_EMAILS_SECRET": "bootstrap-admin@example.test"
   },
   "d1_databases": [
     {

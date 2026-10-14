@@ -141,7 +141,7 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
         createCustomerOnSignUp: false,
         use: [
           checkout({
-            products: [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }],
+            products: checkoutProducts(env),
             successUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=success`,
             returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=cancelled`,
             authenticatedUsersOnly: true,
@@ -166,19 +166,35 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
   } satisfies BetterAuthOptions;
 }
 
+/** Checkout products, shared by the Polar plugin and the intent hook so both resolve slugs alike. */
+function checkoutProducts(env: Env) {
+  return [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }];
+}
+
 type SessionResolver = (ctx: Parameters<typeof getSessionFromCtx>[0]) => Promise<{ user: { id: string } } | null>;
 
 /**
  * Polar checkout can create a customer before any webhook reaches us, so the
  * intent is recorded before the checkout endpoint contacts Polar. A failed write
  * aborts the checkout rather than letting a customer exist without local evidence.
+ * Requests that cannot reach Polar are rejected first and record nothing: an
+ * intent left by a locally refused checkout would block account deletion.
  */
 export function checkoutIntentHook(env: Env, resolveSession: SessionResolver = getSessionFromCtx) {
-  return async (ctx: Parameters<typeof getSessionFromCtx>[0] & { path?: string }) => {
+  return async (ctx: Parameters<typeof getSessionFromCtx>[0] & { path?: string; body?: { slug?: unknown } }) => {
     if (!ctx.path?.startsWith('/checkout')) return;
     const session = await resolveSession(ctx);
     // The checkout plugin rejects signed-out requests itself.
-    if (session?.user.id) await recordCheckoutIntent(env, session.user.id);
+    if (!session?.user.id) return;
+    if (!env.POLAR_ACCESS_TOKEN) {
+      throw new APIError('SERVICE_UNAVAILABLE', { message: 'Billing is not available yet.' });
+    }
+    const slug = ctx.body?.slug;
+    // Mirrors the plugin's own slug check, which otherwise runs after this hook.
+    if (slug !== undefined && !checkoutProducts(env).some((product) => product.slug === slug && product.productId)) {
+      throw new APIError('BAD_REQUEST', { message: 'Product not found' });
+    }
+    await recordCheckoutIntent(env, session.user.id);
   };
 }
 

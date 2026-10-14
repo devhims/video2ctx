@@ -241,33 +241,54 @@ test('queues the sign-in link through the branded template', async () => {
 });
 
 describe('checkout intent hook', () => {
-  function hookEnv(run = vi.fn(async () => ({ success: true }))) {
+  function hookEnv(overrides: Record<string, unknown> = {}, run = vi.fn(async () => ({ success: true }))) {
     const bind = vi.fn(() => ({ run }));
-    return { env: { DB: { prepare: vi.fn(() => ({ bind })) } } as unknown as Env, bind, run };
+    const env = { POLAR_ACCESS_TOKEN: 'polar-token', POLAR_BUILDER_PRODUCT_ID: 'builder-product', DB: { prepare: vi.fn(() => ({ bind })) }, ...overrides };
+    return { env: env as unknown as Env, bind };
   }
   const signedIn = async () => ({ user: { id: 'user-1' } });
+  const checkout = (body?: Record<string, unknown>) => ({ path: '/checkout', body }) as never;
 
   test('is installed as a global before hook', () => {
     createAuth(welcomeAuthEnv() as unknown as Env, { waitUntil: vi.fn() });
     expect(captured.auth?.hooks?.before).toEqual(expect.any(Function));
   });
 
-  test('records the intent before a signed-in checkout reaches Polar', async () => {
+  test('records the intent before a valid signed-in checkout reaches Polar', async () => {
     const { env, bind } = hookEnv();
-    await checkoutIntentHook(env, signedIn)({ path: '/checkout' } as never);
+    await checkoutIntentHook(env, signedIn)(checkout({ slug: 'builder' }));
+    await checkoutIntentHook(env, signedIn)(checkout({ products: ['product-id'] }));
+    expect(bind).toHaveBeenCalledTimes(2);
     expect(bind).toHaveBeenCalledWith('user-1', expect.any(Number));
   });
 
   test('ignores other auth paths and signed-out checkout requests', async () => {
     const { env, bind } = hookEnv();
     await checkoutIntentHook(env, signedIn)({ path: '/sign-in/social' } as never);
-    await checkoutIntentHook(env, async () => null)({ path: '/checkout' } as never);
+    await checkoutIntentHook(env, async () => null)(checkout({ slug: 'builder' }));
     expect(bind).not.toHaveBeenCalled();
   });
 
+  test('refuses checkout without recording anything while billing is unconfigured', async () => {
+    for (const token of ['', undefined]) {
+      const { env, bind } = hookEnv({ POLAR_ACCESS_TOKEN: token });
+      await expect(checkoutIntentHook(env, signedIn)(checkout({ slug: 'builder' }))).rejects.toMatchObject({ statusCode: 503 });
+      expect(bind).not.toHaveBeenCalled();
+    }
+  });
+
+  test('refuses an unknown or unconfigured product without recording anything', async () => {
+    const unknown = hookEnv();
+    await expect(checkoutIntentHook(unknown.env, signedIn)(checkout({ slug: 'enterprise' }))).rejects.toMatchObject({ statusCode: 400 });
+    const unconfigured = hookEnv({ POLAR_BUILDER_PRODUCT_ID: '' });
+    await expect(checkoutIntentHook(unconfigured.env, signedIn)(checkout({ slug: 'builder' }))).rejects.toMatchObject({ statusCode: 400 });
+    expect(unknown.bind).not.toHaveBeenCalled();
+    expect(unconfigured.bind).not.toHaveBeenCalled();
+  });
+
   test('aborts checkout when the intent cannot be recorded', async () => {
-    const { env } = hookEnv(vi.fn(async () => { throw new Error('D1 unavailable'); }));
-    await expect(checkoutIntentHook(env, signedIn)({ path: '/checkout' } as never)).rejects.toThrow('D1 unavailable');
+    const { env } = hookEnv({}, vi.fn(async () => { throw new Error('D1 unavailable'); }));
+    await expect(checkoutIntentHook(env, signedIn)(checkout({ slug: 'builder' }))).rejects.toThrow('D1 unavailable');
   });
 });
 
