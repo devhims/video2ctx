@@ -253,6 +253,9 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
 }
 
 export async function closeBillingAccount(env: Env, userId: string): Promise<void> {
+  // Without an access token billing has never run, so no Polar customer can
+  // exist. Calling Polar anyway fails authorization and blocks account deletion.
+  if (!env.POLAR_ACCESS_TOKEN) return;
   try {
     const { polarClient } = await import('./polar-client');
     await polarClient(env).customers.deleteExternal({ externalId: userId, anonymize: true });

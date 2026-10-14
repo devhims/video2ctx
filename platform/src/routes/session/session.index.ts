@@ -643,8 +643,10 @@ sessionRoutes.get('/billing', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
-  await deleteAgentAccountData(c.env, user.id);
+  // Billing is the external step most likely to fail, so it runs before any
+  // local data is removed. Every step tolerates a retry after a partial run.
   await closeBillingAccount(c.env, user.id);
+  await deleteAgentAccountData(c.env, user.id);
   await disconnectYoutube(c.env, user.id);
   await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
   await deleteR2Prefix(c.env.RESEARCH, await framePreviewPrefix(user.id));
