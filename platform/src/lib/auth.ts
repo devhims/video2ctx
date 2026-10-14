@@ -1,5 +1,6 @@
 import { APIError, betterAuth } from 'better-auth';
 import type { BetterAuthOptions } from 'better-auth';
+import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { apiKey } from '@better-auth/api-key';
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
 import { admin, bearer, deviceAuthorization, magicLink, oAuthProxy } from 'better-auth/plugins';
@@ -11,6 +12,7 @@ import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
 import {
   applyPaidOrder,
   applyRefundedOrder,
+  recordCheckoutIntent,
   syncCustomerState,
   syncRevokedSubscription,
 } from './billing';
@@ -58,6 +60,7 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
       },
     },
     verification: { storeIdentifier: 'hashed' },
+    hooks: { before: createAuthMiddleware(checkoutIntentHook(env)) },
     databaseHooks: {
       user: {
         create: {
@@ -161,6 +164,22 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
       },
     },
   } satisfies BetterAuthOptions;
+}
+
+type SessionResolver = (ctx: Parameters<typeof getSessionFromCtx>[0]) => Promise<{ user: { id: string } } | null>;
+
+/**
+ * Polar checkout can create a customer before any webhook reaches us, so the
+ * intent is recorded before the checkout endpoint contacts Polar. A failed write
+ * aborts the checkout rather than letting a customer exist without local evidence.
+ */
+export function checkoutIntentHook(env: Env, resolveSession: SessionResolver = getSessionFromCtx) {
+  return async (ctx: Parameters<typeof getSessionFromCtx>[0] & { path?: string }) => {
+    if (!ctx.path?.startsWith('/checkout')) return;
+    const session = await resolveSession(ctx);
+    // The checkout plugin rejects signed-out requests itself.
+    if (session?.user.id) await recordCheckoutIntent(env, session.user.id);
+  };
 }
 
 export function createAuth(env: Env, executionCtx: { waitUntil(promise: Promise<unknown>): void }, adminUserIds: string[] = []) {

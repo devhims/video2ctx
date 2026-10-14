@@ -88,6 +88,37 @@ describe('Agent tester access with real D1 and browser sessions', () => {
   });
 });
 
+describe('Polar checkout on the Worker runtime', () => {
+  test('records the checkout intent before Polar is contacted, even when Polar fails', async () => {
+    const created = await request('/__test/session', { method: 'POST', body: JSON.stringify({}) });
+    const { user, cookie } = await created.json() as { user: { id: string }; cookie: string };
+
+    const checkout = await request('/api/auth/checkout', {
+      method: 'POST',
+      headers: jsonHeaders({ cookie }),
+      body: JSON.stringify({ products: ['test-product'] }),
+    });
+
+    // The plugin's own error from its catch around polar.checkouts.create: the stubbed Polar call was reached.
+    expect(checkout.ok).toBe(false);
+    await expect(checkout.json()).resolves.toMatchObject({ message: 'Checkout creation failed' });
+    await expect(env.DB.prepare('SELECT user_id FROM billing_checkout_intents WHERE user_id=?').bind(user.id).first())
+      .resolves.toEqual({ user_id: user.id });
+    await expect(env.DB.prepare('SELECT 1 FROM billing_accounts WHERE user_id=?').bind(user.id).first()).resolves.toBeNull();
+  });
+
+  test('records nothing for a signed-out checkout', async () => {
+    const before = await env.DB.prepare('SELECT COUNT(*) AS n FROM billing_checkout_intents').first<{ n: number }>();
+    const checkout = await request('/api/auth/checkout', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ products: ['test-product'] }),
+    });
+    expect(checkout.status).toBe(401);
+    await expect(env.DB.prepare('SELECT COUNT(*) AS n FROM billing_checkout_intents').first<{ n: number }>()).resolves.toEqual(before);
+  });
+});
+
 describe('device authorization on the Worker runtime', () => {
   test('issues an isolated CLI session and enforces its route boundary', async () => {
     const browser = await createBrowserSession();

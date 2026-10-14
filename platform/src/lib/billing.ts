@@ -252,11 +252,20 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   ]);
 }
 
+/** Records that checkout is about to reach Polar, so deletion knows a Polar customer may exist. */
+export async function recordCheckoutIntent(env: Env, userId: string): Promise<void> {
+  await env.DB.prepare('INSERT INTO billing_checkout_intents (user_id,created_at) VALUES (?,?) ON CONFLICT(user_id) DO NOTHING')
+    .bind(userId, now()).run();
+}
+
 export async function closeBillingAccount(env: Env, userId: string): Promise<void> {
   if (!env.POLAR_ACCESS_TOKEN) {
-    // Only Polar webhooks write billing_accounts, so without a row Polar has never
-    // seen this user and there is nothing to clean up.
-    const billed = await env.DB.prepare('SELECT 1 FROM billing_accounts WHERE user_id=?').bind(userId).first();
+    // A Polar customer can only come from this app's checkout, which records an
+    // intent before contacting Polar, or from a webhook, which writes
+    // billing_accounts. With neither, Polar has never seen this user.
+    const billed = await env.DB.prepare(
+      'SELECT 1 FROM billing_accounts WHERE user_id=? UNION ALL SELECT 1 FROM billing_checkout_intents WHERE user_id=? LIMIT 1'
+    ).bind(userId, userId).first();
     if (!billed) return;
     // A known Polar customer must be anonymized before the account, and with it
     // this row, is deleted; afterwards nothing could retry the cleanup.

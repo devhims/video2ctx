@@ -70,7 +70,7 @@ vi.mock('@polar-sh/better-auth', () => ({
   }),
 }));
 
-import { createAuth } from '../src/lib/auth';
+import { checkoutIntentHook, createAuth } from '../src/lib/auth';
 
 describe('Better Auth API-key configuration', () => {
   test('creates permanent hashed user keys with strict rate and permission defaults', () => {
@@ -238,6 +238,37 @@ test('queues the sign-in link through the branded template', async () => {
   expect(message.idempotencyKey).toMatch(/^magic:[0-9a-f]{64}$/);
   expect(message.html).toContain('href="https://x.test/verify?token=abc"');
   expect(message.html).toContain('src="cid:video2ctx-logo"');
+});
+
+describe('checkout intent hook', () => {
+  function hookEnv(run = vi.fn(async () => ({ success: true }))) {
+    const bind = vi.fn(() => ({ run }));
+    return { env: { DB: { prepare: vi.fn(() => ({ bind })) } } as unknown as Env, bind, run };
+  }
+  const signedIn = async () => ({ user: { id: 'user-1' } });
+
+  test('is installed as a global before hook', () => {
+    createAuth(welcomeAuthEnv() as unknown as Env, { waitUntil: vi.fn() });
+    expect(captured.auth?.hooks?.before).toEqual(expect.any(Function));
+  });
+
+  test('records the intent before a signed-in checkout reaches Polar', async () => {
+    const { env, bind } = hookEnv();
+    await checkoutIntentHook(env, signedIn)({ path: '/checkout' } as never);
+    expect(bind).toHaveBeenCalledWith('user-1', expect.any(Number));
+  });
+
+  test('ignores other auth paths and signed-out checkout requests', async () => {
+    const { env, bind } = hookEnv();
+    await checkoutIntentHook(env, signedIn)({ path: '/sign-in/social' } as never);
+    await checkoutIntentHook(env, async () => null)({ path: '/checkout' } as never);
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  test('aborts checkout when the intent cannot be recorded', async () => {
+    const { env } = hookEnv(vi.fn(async () => { throw new Error('D1 unavailable'); }));
+    await expect(checkoutIntentHook(env, signedIn)({ path: '/checkout' } as never)).rejects.toThrow('D1 unavailable');
+  });
 });
 
 function welcomeAuthEnv() {

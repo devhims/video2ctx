@@ -9,6 +9,7 @@ import {
   applyPaidOrder,
   applyRefundedOrder,
   closeBillingAccount,
+  recordCheckoutIntent,
   syncCustomerState,
   type PaymentWebhookEnv,
 } from '../src/lib/billing';
@@ -92,6 +93,18 @@ describe('Polar payment queries on D1', () => {
     await expect(account(billedUser)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
 
     await expect(closeBillingAccount(unconfigured, freeUser)).resolves.toBeUndefined();
+  });
+
+  test('a started checkout blocks token-less cleanup before any webhook arrives', async () => {
+    const userId = 'payment-delete-checkout-user';
+    await createUser(userId);
+    const unconfigured = { ...env, POLAR_ACCESS_TOKEN: '' } as unknown as Env;
+
+    await recordCheckoutIntent(unconfigured, userId);
+    await recordCheckoutIntent(unconfigured, userId);
+
+    await expect(account(userId)).resolves.toBeNull();
+    await expect(closeBillingAccount(unconfigured, userId)).rejects.toMatchObject({ status: 503, code: 'BILLING_UNAVAILABLE' });
   });
 });
 
