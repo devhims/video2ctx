@@ -291,6 +291,21 @@ describe('UserAccountDO', () => {
     expect(await (await env.RESEARCH.get(subtitles.key))!.text()).not.toContain('Atomic playlist');
   });
 
+  test('follow-ups continue only sessions this account already has', async () => {
+    const account = env.USER_ACCOUNT.getByName('user:continue');
+    expect(await account.continueConversation(CONVERSATION_A)).toBe(false);
+    await account.registerConversation(CONVERSATION_A);
+    expect(await account.continueConversation(CONVERSATION_A)).toBe(true);
+    // Older sessions recorded only in the catalog stay continuable and get registered.
+    await account.recordSession({ conversationId: CONVERSATION_B,
+      runId: '0b8a9bd3-8f7a-4b8e-9d55-3c1e1f6d2a10', message: 'Older research', updatedAt: 100 });
+    expect(await account.continueConversation(CONVERSATION_B)).toBe(true);
+    await runInDurableObject(account, (_instance, state) => {
+      expect(state.storage.sql.exec('SELECT conversation_id FROM agent_conversations WHERE conversation_id = ?', CONVERSATION_B).toArray()).toHaveLength(1);
+    });
+    expect(await env.USER_ACCOUNT.getByName('user:continue-other').continueConversation(CONVERSATION_A)).toBe(false);
+  });
+
   test('deletion includes admissions without catalog entries and blocks late writes', async () => {
     const account = env.USER_ACCOUNT.getByName('user:deletion');
     await account.registerConversation(CONVERSATION_A);

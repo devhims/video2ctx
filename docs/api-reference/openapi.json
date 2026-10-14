@@ -340,7 +340,7 @@
         ],
         "operationId": "startAgentRun",
         "summary": "Start a durable agent run",
-        "description": "Starts a new session when sessionId is omitted. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.",
+        "description": "Starts a new session when sessionId is omitted; the server always generates session IDs. A supplied sessionId must be one this account already has, otherwise the request returns 404 AGENT_SESSION_NOT_FOUND. Follow-up requests reuse the Durable Object selected by the supplied sessionId and inherit bounded memory from completed ancestor turns. Without parentMessageId, the latest completed assistant turn is selected automatically. The response is an asynchronous run receipt. Each accepted POST creates a new run. Retrieve existing work using the returned sessionId and runId, or find it in the session dashboard if the receipt was lost.",
         "security": [
           {
             "bearerApiKey": []
@@ -6940,7 +6940,7 @@
           "sessionId": {
             "type": "string",
             "format": "uuid",
-            "description": "Continue an existing agent session."
+            "description": "Continue an existing session returned by a previous request on this account. Unknown IDs return 404; omit it to start a new session."
           },
           "conversationId": {
             "type": "string",

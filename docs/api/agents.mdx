@@ -25,7 +25,9 @@ Use the platform skill's data branch only for stateless provider reads, usage, a
 { "message": "Research five videos about durable agents" }
 ```
 
-For a follow-up, include the `sessionId` returned by the previous request:
+For a follow-up, include the `sessionId` returned by the previous request. The
+server always generates session IDs: a `sessionId` your account doesn't already
+have returns `404 AGENT_SESSION_NOT_FOUND`.
 
 ```json
 {
