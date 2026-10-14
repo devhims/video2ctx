@@ -105,10 +105,22 @@ describe('Polar payment queries on D1', () => {
     await expect(account(userId)).resolves.toMatchObject({ plan: 'starter', status: 'refunded' });
     const configured = { ...env, POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
 
-    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ cancelAtPeriodEnd: false }]))
+    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ status: 'active', cancelAtPeriodEnd: false }]))
       .rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
-    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ cancelAtPeriodEnd: true }])).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ status: 'active', cancelAtPeriodEnd: true }])).resolves.toBeUndefined();
     await expect(requireNoRenewingSubscription(configured, userId, async () => null)).resolves.toBeUndefined();
+  });
+
+  test('account deletion refuses a past-due subscription missing from Polar\'s active list', async () => {
+    const userId = 'payment-delete-past-due-user';
+    await createUser(userId);
+    await syncCustomerState(env, activeCustomerState(userId));
+    await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
+    const configured = { ...env, POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
+
+    // Polar's customer state would list no active subscription here; the full list shows it past due.
+    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ status: 'past_due', cancelAtPeriodEnd: false }]))
+      .rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
   });
 
   test('a started checkout blocks token-less cleanup before any webhook arrives', async () => {

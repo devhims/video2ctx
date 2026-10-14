@@ -1,6 +1,6 @@
 const deleteExternal = vi.hoisted(() => vi.fn());
-const getStateExternal = vi.hoisted(() => vi.fn());
-vi.mock('../src/lib/polar-client', () => ({ polarClient: () => ({ customers: { deleteExternal, getStateExternal } }) }));
+const listSubscriptions = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/polar-client', () => ({ polarClient: () => ({ customers: { deleteExternal }, subscriptions: { list: listSubscriptions } }) }));
 
 import { closeBillingAccount, requireNoRenewingSubscription } from '../src/lib/billing';
 
@@ -51,33 +51,47 @@ describe('closing the billing account on account deletion', () => {
 
 describe('renewing subscription guard on account deletion', () => {
   const configured = { POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
-  beforeEach(() => { getStateExternal.mockReset(); });
+  type Sub = { status: string; cancelAtPeriodEnd: boolean };
+  // Mirrors the SDK's paginated result: awaited once, then iterated page by page.
+  const pages = (...items: Sub[][]) => ({
+    async *[Symbol.asyncIterator]() { for (const page of items) yield { result: { items: page } }; },
+  });
+  beforeEach(() => { listSubscriptions.mockReset(); });
 
-  test('asks Polar and blocks a subscription that will renew', async () => {
-    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: false }] });
-    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
-    expect(getStateExternal).toHaveBeenCalledWith({ externalId: 'user-1' });
+  test('asks Polar for every subscription and blocks billable ones that will renew', async () => {
+    for (const status of ['active', 'trialing', 'past_due', 'unpaid']) {
+      listSubscriptions.mockResolvedValue(pages([{ status, cancelAtPeriodEnd: false }]));
+      await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+    }
+    expect(listSubscriptions).toHaveBeenCalledWith({ externalCustomerId: 'user-1', limit: 100 });
+  });
 
-    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: true }, { status: 'trialing', cancelAtPeriodEnd: false }] });
+  test('finds a renewing subscription on a later page', async () => {
+    listSubscriptions.mockResolvedValue(pages([{ status: 'canceled', cancelAtPeriodEnd: false }], [{ status: 'past_due', cancelAtPeriodEnd: false }]));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409 });
   });
 
-  test('allows subscriptions set to cancel, no subscriptions, and users Polar has never seen', async () => {
-    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: true }] });
+  test('allows ended, never-started and cancelling subscriptions, and users Polar has never seen', async () => {
+    listSubscriptions.mockResolvedValue(pages([
+      { status: 'canceled', cancelAtPeriodEnd: false },
+      { status: 'incomplete_expired', cancelAtPeriodEnd: false },
+      { status: 'incomplete', cancelAtPeriodEnd: false },
+      { status: 'past_due', cancelAtPeriodEnd: true },
+    ]));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
-    getStateExternal.mockResolvedValue({ activeSubscriptions: [] });
+    listSubscriptions.mockResolvedValue(pages([]));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
-    getStateExternal.mockRejectedValue(polarError(404));
+    listSubscriptions.mockRejectedValue(polarError(404));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
   });
 
   test('stops deletion when Polar cannot answer', async () => {
-    getStateExternal.mockRejectedValue(polarError(500));
+    listSubscriptions.mockRejectedValue(polarError(500));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toThrow('Status 500');
   });
 
   test('does not ask Polar without a token', async () => {
     await expect(requireNoRenewingSubscription({ POLAR_ACCESS_TOKEN: '' } as unknown as Env, 'user-1')).resolves.toBeUndefined();
-    expect(getStateExternal).not.toHaveBeenCalled();
+    expect(listSubscriptions).not.toHaveBeenCalled();
   });
 });
