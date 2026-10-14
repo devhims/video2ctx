@@ -41,7 +41,9 @@ export const saveSourceSchema = z.object({ projectId: z.string().uuid().optional
   z.object({ kind: z.literal('search'), selectedData: z.array(dataset).min(1) }),
   z.object({ kind: z.literal('inspection'), inspector: inspector.pick({ provider: true, type: true, id: true, requestedData: true, dataErrors: true })
     .extend({ loadedData: z.array(z.enum(['metadata', 'transcript', 'comments', 'channel'])),
-      commentsReceipt: z.object({ sourceId: sourceIdSchema, sourceRevision: sourceRevisionSchema }).optional() }) }),
+      commentsReceipt: z.object({ sourceId: sourceIdSchema, sourceRevision: sourceRevisionSchema }).optional() })
+    // A malformed video identity names no video, so it never becomes a successful Recent entry.
+    .refine(source => source.type !== 'video' || /^[A-Za-z0-9_-]{11}$/.test(source.id), { path: ['id'], message: 'Invalid video ID.' }) }),
 ]) });
 export type SourceSnapshot = z.infer<typeof sourceSnapshotSchema>;
 export const sourceCommentPageSchema = inspector.shape.comments.unwrap();

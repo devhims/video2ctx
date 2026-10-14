@@ -1,6 +1,6 @@
 'use client';
-import { useCallback,useEffect,useRef,useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback,useEffect,useRef,useState,type MouseEvent } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { platformRequest as api,isAbortError } from '../../lib/platform-request';
 import {useDashboardDraft} from './DashboardDataProvider';
 import {Icon} from './DashboardSidebar';
@@ -20,6 +20,20 @@ export default function TrendLab() {
   const requestController = useRef<AbortController | null>(null);
   const planController = useRef<AbortController | null>(null);
   const topicInputRef = useRef<HTMLInputElement>(null);
+  const pathname = usePathname();
+  const [chooser, setChooser] = useState<{ ids: string[]; left: number; top: number; width: number } | null>(null);
+  const chooserRef = useRef<HTMLDivElement>(null);
+  const chooserAnchor = useRef<HTMLButtonElement | null>(null);
+
+  // A chooser describes one rendered report at one size and route; any change dismisses it.
+  useEffect(() => { setChooser(null); }, [report, pathname]);
+  useEffect(() => {
+    if (!chooser) return;
+    chooserRef.current?.querySelector<HTMLButtonElement>('[data-video-id]')?.focus();
+    const dismiss = () => setChooser(null);
+    window.addEventListener('resize', dismiss);
+    return () => window.removeEventListener('resize', dismiss);
+  }, [chooser]);
 
   const runTopic = useCallback(async (value: string) => {
     const nextTopic = value.trim();
@@ -73,6 +87,34 @@ export default function TrendLab() {
   const maxVelocity = Math.max(...(report?.videos.map((video) => video.effectiveViewsPerHour) ?? [1]), 1);
   const measuredCount = report?.videos.filter((video) => video.signalSource === 'observed').length ?? 0;
   const maxDurationCount = Math.max(...(report?.durationMix.map((bucket) => bucket.videos) ?? [1]), 1);
+  const chooserVideos = chooser ? chooser.ids.flatMap(id => report?.videos.find(video => video.id === id) ?? []) : [];
+
+  /** Pointer activation chooses among every rendered point under the pointer; keyboard opens the focused point. */
+  const selectPoint = (event: MouseEvent<HTMLButtonElement>, id: string) => {
+    if (event.detail === 0) { setChooser(null); onInspect(id); return; }
+    const plot = event.currentTarget.parentElement;
+    const ids = new Set([id]);
+    plot?.querySelectorAll<HTMLElement>('.trend-dot[data-point-id]').forEach(dot => {
+      const rect = dot.getBoundingClientRect();
+      const rx = rect.width / 2, ry = rect.height / 2;
+      if (!rx || !ry) return;
+      // Hit-test the rendered ellipse, not the nominal size, so styling changes cannot hide a point.
+      const dx = (event.clientX - (rect.left + rx)) / rx, dy = (event.clientY - (rect.top + ry)) / ry;
+      if (dx * dx + dy * dy <= 1) ids.add(dot.dataset.pointId!);
+    });
+    if (ids.size === 1 || !plot) { setChooser(null); onInspect(id); return; }
+    const bounds = plot.getBoundingClientRect();
+    chooserAnchor.current = event.currentTarget;
+    // Size and clamp in viewport coordinates so the chooser stays on screen beside a narrow plot.
+    const width = Math.min(288, window.innerWidth - 16);
+    const left = Math.min(Math.max(event.clientX - width / 2, 8), window.innerWidth - 8 - width) - bounds.left;
+    setChooser({ ids: [...ids], left, width, top: Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height) });
+  };
+
+  const closeChooser = (restoreFocus: boolean) => {
+    setChooser(null);
+    if (restoreFocus) chooserAnchor.current?.focus();
+  };
 
   return <section className='trend-lab' data-report={Boolean(report)}>
     <header className='trend-command'>
@@ -107,8 +149,14 @@ export default function TrendLab() {
           <div className='scatter-plot'><span className='axis-y'>More momentum</span><span className='axis-x'>Fresher →</span>{report.videos.map((video) => {
             const freshness = video.ageHours === undefined ? 10 : Math.max(5, 96 - Math.log10(video.ageHours + 1) * 29);
             const size = Math.max(12, Math.min(28, 12 + Math.log10(video.viewCount + 1) * 2.2));
-            return <button key={video.id} aria-label={`${video.title}: ${formatNumber(video.effectiveViewsPerHour)} views per hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}, ${video.trendBand}`} className={`trend-dot ${video.trendBand.toLowerCase()}`} style={{left:`${freshness}%`,bottom:`${Math.max(8,video.trendScore * .78)}%`,width:size,height:size}} title={`${video.title} · ${formatNumber(video.effectiveViewsPerHour)} views/hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}`} onClick={() => onInspect(video.id)}><span>{video.title}</span></button>;
-          })}</div>
+            return <button key={video.id} data-point-id={video.id} aria-label={`${video.title}: ${formatNumber(video.effectiveViewsPerHour)} views per hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}, ${video.trendBand}`} className={`trend-dot ${video.trendBand.toLowerCase()}`} style={{left:`${freshness}%`,bottom:`${Math.max(8,video.trendScore * .78)}%`,width:size,height:size}} title={`${video.title} · ${formatNumber(video.effectiveViewsPerHour)} views/hour ${video.signalSource === 'observed' ? 'measured' : 'estimated'}`} onClick={(event) => selectPoint(event, video.id)}><span>{video.title}</span></button>;
+          })}{chooserVideos.length > 1 && chooser ? <div ref={chooserRef} className='trend-point-chooser' role='dialog' aria-label='Videos at this point' style={{left:chooser.left,top:chooser.top,width:chooser.width}} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); closeChooser(true); } }}>
+            <p>{chooserVideos.length} videos at this point</p>
+            <ul>{chooserVideos.map((video) => <li key={video.id}><button type='button' data-video-id={video.id} onClick={() => { closeChooser(false); onInspect(video.id); }}>
+              <strong>{video.title}</strong><small>{video.channel.name} · {formatNumber(video.effectiveViewsPerHour)} views/hour {video.signalSource === 'observed' ? 'measured' : 'estimated'} · {video.trendBand} · {video.id}</small>
+            </button></li>)}</ul>
+            <button type='button' className='trend-point-chooser-close' onClick={() => closeChooser(true)}>Close</button>
+          </div> : null}</div>
           <div className='scatter-legend'><span><i className='breakout' />Breakout</span><span><i className='rising' />Rising</span><span><i className='steady' />Steady</span></div>
         </article>
 

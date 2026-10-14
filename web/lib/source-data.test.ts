@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { loadSourceData, videoIdFromInput, CAPTIONS_UNAVAILABLE_MESSAGE, retryableSourceDatasets } from './source-data.ts';
+import { loadSourceData, videoIdFromInput, isVideoId, CAPTIONS_UNAVAILABLE_MESSAGE, retryableSourceDatasets } from './source-data.ts';
 import { platformRequest, PlatformApiError } from './platform-request.ts';
 
 for (const [status, code, message] of [
@@ -44,4 +44,9 @@ for (const input of [
   'https://vimeo.com/0oXOOlqVu5M', 'javascript:0oXOOlqVu5M',
 ]) test(`leaves ambiguous or unsupported input to the platform: ${input}`, () => {
   assert.equal(videoIdFromInput(input), undefined);
+});
+
+test('only eleven URL-safe characters form a video ID', () => {
+  for (const id of ['0oXOOlqVu5M', 'WUvTyaaNkzM', 'a_b-c_d-e_f']) assert.equal(isVideoId(id), true, id);
+  for (const id of ['invalid', '', 'abcdefghij', 'abcdefghijkl', 'abcde.ghijk', 'abc efghijk', null, undefined]) assert.equal(isVideoId(id), false, String(id));
 });

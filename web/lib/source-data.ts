@@ -23,10 +23,15 @@ export async function loadSourceData<T>(request: () => Promise<T>): Promise<Sour
   }
 }
 
+/** YouTube video IDs are exactly eleven URL-safe characters; the platform rejects anything else. */
+export function isVideoId(id: string | null | undefined): id is string {
+  return typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
+}
+
 /** Recognize only unambiguous video inputs; the platform validates the actual reads. */
 export function videoIdFromInput(input: string): string | undefined {
   const value = input.trim();
-  const valid = (id: string | null | undefined) => id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : undefined;
+  const valid = (id: string | null | undefined) => isVideoId(id) ? id : undefined;
   if (valid(value)) return value;
   try {
     const url = new URL(value);

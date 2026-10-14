@@ -3,6 +3,7 @@ import { youtubeOAuthCallback } from '../src/lib/oauth';
 import { searchPrivate } from '../src/lib/search';
 import { transcriptEvidence } from '../src/lib/evidence';
 import { getVideo, routeInput } from '../src/lib/youtube';
+import { saveSourceSchema } from '../src/lib/source-history';
 
 describe('universal input routing', () => {
   test.each([
@@ -13,6 +14,33 @@ describe('universal input routing', () => {
     ['best AI research channels', { kind: 'search', query: 'best AI research channels' }],
   ])('routes %s', (input, expected) => expect(routeInput(input)).toEqual(expected));
   test('rejects non-YouTube URLs', () => expect(() => routeInput('https://example.com/watch?v=abcdefghijk')).toThrow('Only YouTube URLs'));
+  test.each([
+    'https://www.youtube.com/watch?v=invalid', 'https://youtu.be/invalid', 'https://www.youtube.com/shorts/invalid', 'https://www.youtube.com/live/invalid',
+    'https://www.youtube.com/watch?v=abcdefghij', 'https://www.youtube.com/watch?v=abcdefghijkl', 'https://www.youtube.com/watch?v=abcde.ghijk',
+    'https://www.youtube.com/watch?v=abc%20efghijk', 'https://youtu.be/', 'https://www.youtube.com/shorts/',
+    'https://youtube.com/watch?v=', 'https://www.youtube.com/watch?v=&list=PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr',
+  ])('rejects the malformed video identity %s', input => expect(() => routeInput(input)).toThrow('Invalid video ID.'));
+  test('keeps playlist and channel identity rules', () => {
+    expect(routeInput('https://youtube.com/playlist?list=PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr')).toEqual({ kind: 'playlist', provider: 'youtube', id: 'PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr' });
+    expect(routeInput('https://www.youtube.com/watch?list=PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr')).toEqual({ kind: 'playlist', provider: 'youtube', id: 'PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr' });
+    expect(routeInput('https://www.youtube.com/watch?v=WUvTyaaNkzM&list=PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr')).toEqual({ kind: 'video', provider: 'youtube', id: 'WUvTyaaNkzM' });
+    expect(routeInput('https://www.youtube.com/channel/UC4QobU6STFB0P71PMvOGN5A')).toEqual({ kind: 'channel', provider: 'youtube', id: 'UC4QobU6STFB0P71PMvOGN5A' });
+    expect(routeInput('https://www.youtube.com/shorts/abcdefghijk')).toEqual({ kind: 'video', provider: 'youtube', id: 'abcdefghijk' });
+  });
+});
+
+describe('recent source identity', () => {
+  const save = (type: string, id: string, dataErrors: Record<string, string> = {}) => saveSourceSchema.safeParse({ input: `https://www.youtube.com/watch?v=${id}`,
+    snapshot: { kind: 'inspection', inspector: { provider: 'youtube', type, id, requestedData: ['transcript'], dataErrors, loadedData: ['metadata'] } } }).success;
+  test('rejects a malformed video ID before it can enter history', () => {
+    expect(save('video', 'invalid', { metadata: 'Invalid video ID.', transcript: 'Invalid video ID.' })).toBe(false);
+    expect(save('video', 'abcdefghij')).toBe(false);
+  });
+  test('keeps valid videos with failed datasets and other entity identities', () => {
+    expect(save('video', 'WUvTyaaNkzM', { transcript: 'YouTube is temporarily unavailable.' })).toBe(true);
+    expect(save('playlist', 'PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr')).toBe(true);
+    expect(save('channel', 'UC4QobU6STFB0P71PMvOGN5A')).toBe(true);
+  });
 });
 
 describe('public source metadata', () => {
