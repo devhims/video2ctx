@@ -578,30 +578,19 @@ test('settings become usable without waiting for projects', async ({ page }) => 
   } finally { await scenario.clear(); }
 });
 
-test('a renewing Builder plan must be cancelled before the account can be deleted', async ({ page }, testInfo) => {
-  const builder = { plan: 'builder', status: 'active', creditBalance: 9000, includedCredits: 10000, cancelAtPeriodEnd: false, currentPeriodStart: Date.UTC(2026, 9, 1), currentPeriodEnd: Date.UTC(2026, 10, 1), canManageBilling: true };
-  const scenario = await accountScenario(page, { responses: { '/v1/billing': { body: builder } } });
-  await page.goto('/dashboard?section=settings', { waitUntil: 'commit' });
-  try {
-    const danger = page.getByRole('article', { name: 'Delete account permanently' });
-    await expect(danger.getByText('Cancel your Builder plan before deleting your account.', { exact: false })).toBeVisible();
-    await expect(danger.getByRole('button', { name: 'Manage billing' })).toBeEnabled();
-    await expect(danger.getByRole('textbox')).toHaveCount(0);
-    await expect(danger.getByRole('button', { name: 'Delete account permanently' })).toHaveCount(0);
-    await danger.screenshot({ path: testInfo.outputPath('delete-blocked-by-subscription.png') });
-  } finally { await scenario.clear(); }
-});
-
-test('a cancelled Builder plan can be deleted with a warning that it ends now', async ({ page }) => {
-  const cancelled = { plan: 'builder', status: 'active', creditBalance: 9000, includedCredits: 10000, cancelAtPeriodEnd: true, currentPeriodStart: Date.UTC(2026, 9, 1), currentPeriodEnd: Date.UTC(2026, 10, 1), canManageBilling: true };
-  const scenario = await accountScenario(page, { responses: { '/v1/billing': { body: cancelled } } });
-  await page.goto('/dashboard?section=settings', { waitUntil: 'commit' });
-  try {
-    const danger = page.getByRole('article', { name: 'Delete account permanently' });
-    await expect(danger.getByText(/Your cancelled Builder plan runs until .+\. Deleting your account ends it now\./)).toBeVisible();
-    await danger.getByRole('textbox').fill('DELETE');
-    await expect(danger.getByRole('button', { name: 'Delete account permanently' })).toBeEnabled();
-  } finally { await scenario.clear(); }
+test('deleting with an active paid plan shows a toast and keeps the account', async ({ page }) => {
+  const message = 'Cancel your Builder plan before deleting your account.';
+  await page.route('**/api/platform/v1/account', route => route.request().method() === 'DELETE'
+    ? route.fulfill({ status: 409, json: { error: { code: 'SUBSCRIPTION_ACTIVE', message } } })
+    : route.fallback());
+  await page.goto('/dashboard?section=settings');
+  const danger = page.getByRole('article', { name: 'Delete account permanently' });
+  await danger.getByRole('textbox').fill('DELETE');
+  await danger.getByRole('button', { name: 'Delete account permanently' }).click();
+  await expect(page.getByText(message)).toBeVisible();
+  await expect(danger.getByRole('alert')).toHaveCount(0);
+  await expect(danger.getByRole('button', { name: 'Delete account permanently' })).toBeEnabled();
+  await expect(page).toHaveURL(/\/dashboard\/settings/);
 });
 
 test('settings cards load independently and preserve their layout', async ({ page }, testInfo) => {

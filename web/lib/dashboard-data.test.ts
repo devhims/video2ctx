@@ -7,7 +7,6 @@ import {
   emailConsentToConfirm,
   loadDashboardAccountData,
   pathWithoutEmailConsent,
-  subscriptionBlocksDeletion,
 } from './dashboard-data.ts';
 
 describe('dashboard account bootstrap', () => {
@@ -60,14 +59,6 @@ describe('account deletion confirmation', () => {
     assert.equal(canDeleteAccount('delete'), false);
     assert.equal(canDeleteAccount('DELETE '), false);
     assert.equal(canDeleteAccount(''), false);
-  });
-
-  test('requires a renewing Builder plan to be cancelled first', () => {
-    assert.equal(subscriptionBlocksDeletion({ plan: 'builder', cancelAtPeriodEnd: false }), true);
-    assert.equal(subscriptionBlocksDeletion({ plan: 'builder', cancelAtPeriodEnd: true }), false);
-    assert.equal(subscriptionBlocksDeletion({ plan: 'starter', cancelAtPeriodEnd: false }), false);
-    assert.equal(subscriptionBlocksDeletion(null), false);
-    assert.equal(subscriptionBlocksDeletion(undefined), false);
   });
 });
 

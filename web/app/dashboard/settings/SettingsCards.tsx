@@ -1,15 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { platformRequest as api } from '../../../lib/platform-request';
+import { PlatformApiError, platformRequest as api } from '../../../lib/platform-request';
 import { authClient } from '../../../lib/auth-client';
-import { canDeleteAccount, subscriptionBlocksDeletion, confirmDashboardEmailConsent, DEFAULT_NOTIFICATION_PREFERENCES, DELETE_ACCOUNT_CONFIRMATION, emailConsentToConfirm, pathWithoutEmailConsent, type DashboardBilling, type DashboardNotificationPreferences } from '../../../lib/dashboard-data';
+import { canDeleteAccount, confirmDashboardEmailConsent, DEFAULT_NOTIFICATION_PREFERENCES, DELETE_ACCOUNT_CONFIRMATION, emailConsentToConfirm, pathWithoutEmailConsent, type DashboardBilling, type DashboardNotificationPreferences } from '../../../lib/dashboard-data';
 import type { AccountSeeds } from '../../../lib/dashboard-cache';
-import { useDashboardCache, useStreamedAccountResource } from '../DashboardDataProvider';
+import { useStreamedAccountResource } from '../DashboardDataProvider';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
-import { useLoadErrorToast } from '../../../lib/use-error-toast';
+import { useErrorToast, useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['billing']> }) {
   const { user, demoEnabled: isDemo } = useDashboardSession();
@@ -207,45 +207,25 @@ export function PreferencesCard({ promise, emailConsent }: { promise: NonNullabl
     </article>;
 }
 
-/** Billing as loaded by the billing card, read without suspending or fetching again. */
-function useLoadedBilling(): DashboardBilling | null | undefined {
-  const cache = useDashboardCache();
-  return useSyncExternalStore(cache.subscribe, () => cache.read('billing'), () => cache.readServer('billing')).data;
-}
-
 export function AccountCards() {
   const { user } = useDashboardSession();
   const email = user?.email;
-  const billing = useLoadedBilling();
-  // Until billing loads the form stays usable; the platform enforces the same rule.
-  const subscriptionActive = subscriptionBlocksDeletion(billing);
-  const endsEarly = billing?.plan === 'builder' && billing.cancelAtPeriodEnd;
   const [confirmation, setConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-  const [openingPortal, setOpeningPortal] = useState(false);
+  const errorToast = useErrorToast();
   const confirmed = canDeleteAccount(confirmation);
-  const openBillingPortal = async () => {
-    if (openingPortal) return;
-    setOpeningPortal(true);
-    setDeleteError('');
-    try {
-      const result = await authClient.customer.portal();
-      if (result.error) throw new Error(result.error.message ?? 'Could not open billing management.');
-    } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : 'Could not open billing management.');
-      setOpeningPortal(false);
-    }
-  };
   const deleteAccount = async () => {
-    if (!email || !confirmed || deleting || subscriptionActive) return;
+    if (!email || !confirmed || deleting) return;
     setDeleting(true);
     setDeleteError('');
     try {
       await api<void>('/v1/account', { method: 'DELETE' });
       window.location.replace('/');
     } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
+      // An active paid plan blocks deletion; the platform explains how to proceed.
+      if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') errorToast.show(cause.message);
+      else setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
       setDeleting(false);
     }
   };
@@ -261,12 +241,7 @@ export function AccountCards() {
         <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
         <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
       </div>
-      {email && subscriptionActive ? <div className='grid gap-2'>
-        <p className='settings-danger-message m-0' role='status'>Cancel your Builder plan before deleting your account. Your plan stays active until the end of the billing period you have paid for.</p>
-        <button className='button secondary min-h-11' disabled={openingPortal} onClick={() => void openBillingPortal()}>{openingPortal ? 'Opening billing...' : 'Manage billing'}</button>
-        {deleteError && <p className='alert error' role='alert'>{deleteError}</p>}
-      </div> : email ? <div className='grid gap-2'>
-        {endsEarly && billing?.currentPeriodEnd && <p className='settings-danger-message m-0'>Your cancelled Builder plan runs until {formatBillingDate(billing.currentPeriodEnd)}. Deleting your account ends it now.</p>}
+      {email ? <div className='grid gap-2'>
         <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
         <input
           className='settings-confirm-input min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[var(--color-dashboard-ink)]'
