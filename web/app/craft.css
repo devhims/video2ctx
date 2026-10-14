@@ -20,7 +20,7 @@ html:has(.craft) body {
  * are repeated here as literals. */
 html:has(.craft) {
   scrollbar-width: thin;
-  scrollbar-color: oklch(56% 0.008 80) transparent;
+  scrollbar-color: oklch(62% 0.008 80) transparent;
 }
 
 @supports not (scrollbar-width: thin) {
@@ -36,7 +36,7 @@ html:has(.craft) {
     min-height: 3rem;
     border: 0.125rem solid transparent;
     border-radius: 999px;
-    background: oklch(56% 0.008 80);
+    background: oklch(62% 0.008 80);
     background-clip: padding-box;
   }
 
@@ -58,7 +58,10 @@ html:has(.craft) {
   --paper-raised: oklch(19% 0.007 75);
   --ink: oklch(95% 0.006 83);
   --ink-soft: oklch(72% 0.008 82);
-  --ink-muted: oklch(56% 0.008 80);
+  /* The quietest text colour, used for small secondary copy across the page.
+   * At 62% it clears WCAG AA: 5.4:1 on --paper and 5.5:1 in the darker code
+   * boxes. 56% read nicely but measured 4.2:1, below the 4.5:1 minimum. */
+  --ink-muted: oklch(62% 0.008 80);
   --rule: oklch(27% 0.008 78);
   --rule-strong: oklch(36% 0.01 78);
   --accent: oklch(66% 0.19 31);
