@@ -210,10 +210,10 @@ export function CraftDirection() {
         <section className='craft-parts' aria-labelledby='craft-parts-title'>
           <h2 id='craft-parts-title'>What is video2ctx?</h2>
           <p className='craft-parts-intro'>
-            video2ctx gives AI agents the context they need to understand
-            videos. From spoken words and on-screen visuals to viewer reactions,
-            it brings everything together with timestamped citations you can
-            trace back to the source.
+            video2ctx makes videos queryable for AI agents and the applications
+            you build. Ask about anything, from spoken words and on-screen
+            visuals to viewer reactions, and every answer comes with timestamped
+            citations you can trace to the original video.
           </p>
           <ul>
             {PILLARS.map((pillar, index) => (
