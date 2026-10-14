@@ -2695,6 +2695,35 @@ html:has(.craft) {
   white-space: pre;
 }
 
+/* A prompt for an agent rather than a command: the instructions wrap like
+ * prose and recede, and the commands inside them take the accent, the same
+ * colour as the timestamps elsewhere on the page, so what to run separates at
+ * a glance from why. */
+.craft-code-prompt-label {
+  margin: var(--space-lg) 0 0;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.craft-code-prompt-label + .craft-code-frame {
+  margin-top: var(--space-sm);
+}
+
+.craft-code-block[data-prompt='true'] {
+  color: var(--ink-muted);
+}
+
+.craft-code-block[data-prompt='true'] code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.craft-code-cmd {
+  color: var(--accent);
+}
+
 .craft-code-note {
   margin: var(--space-md) 0 0;
   display: grid;
