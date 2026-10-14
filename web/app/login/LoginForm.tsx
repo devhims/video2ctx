@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { GithubLogoIcon, GoogleLogoIcon } from '@phosphor-icons/react';
 import { loginPath } from '../../lib/login-redirect';
+import { newUserReturnPath } from '../../lib/welcome-toast';
 import styles from './login.module.css';
 
 export default function LoginForm({ returnTo, hasError }: { returnTo: string; hasError: boolean }) {
@@ -16,10 +17,11 @@ export default function LoginForm({ returnTo, hasError }: { returnTo: string; ha
     try {
       const callbackURL = new URL(returnTo, window.location.origin).href;
       const errorCallbackURL = new URL(loginPath(returnTo), window.location.origin).href;
+      const newUserCallbackURL = new URL(newUserReturnPath(returnTo), window.location.origin).href;
       const response = await fetch('/api/auth/sign-in/social', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ callbackURL, errorCallbackURL, provider: method }),
+        body: JSON.stringify({ callbackURL, errorCallbackURL, newUserCallbackURL, provider: method }),
       });
       if (!response.ok) throw new Error(response.status === 429 ? 'Too many attempts. Please wait a moment and try again.' : 'Sign-in is unavailable right now. Please try again.');
       const data = await response.json() as { url?: string };

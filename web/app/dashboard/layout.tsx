@@ -5,6 +5,7 @@ import { startDashboardData } from '../../lib/server-dashboard-data';
 import { requireDashboardSession } from '../../lib/dashboard-auth';
 import { headers } from 'next/headers';
 import { DashboardSessionProvider } from './DashboardSessionProvider';
+import { WelcomeToast } from './WelcomeToast';
 import { fetchServerAgentAccess, fetchServerAdminAccess, isLocalDashboardDemoEnabled } from '../../lib/server-session';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -41,6 +42,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Suspense fallback={null}>
           <ResearchHost />
         </Suspense>
+        <WelcomeToast name={session?.user.name} />
       </DashboardDataProvider>
     </DashboardSessionProvider>
   );
