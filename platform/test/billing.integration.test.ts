@@ -96,20 +96,19 @@ describe('Polar payment queries on D1', () => {
     await expect(closeBillingAccount(unconfigured, freeUser)).resolves.toBeUndefined();
   });
 
-  test('account deletion requires a renewing Builder plan to be cancelled first', async () => {
-    const renewing = 'payment-delete-renewing-user';
-    const cancelling = 'payment-delete-cancelling-user';
-    const starter = 'payment-delete-starter-user';
-    await createUser(renewing);
-    await createUser(cancelling);
-    await createUser(starter);
-    await syncCustomerState(env, activeCustomerState(renewing));
-    await syncCustomerState(env, activeCustomerState(cancelling, true));
-    const deletionEnv = env as unknown as Env;
+  test('account deletion asks Polar, not the refund-locked projection, about renewing subscriptions', async () => {
+    const userId = 'payment-delete-refunded-renewing-user';
+    await createUser(userId);
+    await applyRefundedOrder(env, refundedOrder(userId, 'refund-before-renewal'));
+    await syncCustomerState(env, activeCustomerState(userId));
+    // The projection stays refund-locked even though Polar reports a renewing subscription.
+    await expect(account(userId)).resolves.toMatchObject({ plan: 'starter', status: 'refunded' });
+    const configured = { ...env, POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
 
-    await expect(requireNoRenewingSubscription(deletionEnv, renewing)).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
-    await expect(requireNoRenewingSubscription(deletionEnv, cancelling)).resolves.toBeUndefined();
-    await expect(requireNoRenewingSubscription(deletionEnv, starter)).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ cancelAtPeriodEnd: false }]))
+      .rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+    await expect(requireNoRenewingSubscription(configured, userId, async () => [{ cancelAtPeriodEnd: true }])).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(configured, userId, async () => null)).resolves.toBeUndefined();
   });
 
   test('a started checkout blocks token-less cleanup before any webhook arrives', async () => {
@@ -197,7 +196,7 @@ function refundedOrder(userId: string, id: string): WebhookOrderRefundedPayload 
   } as WebhookOrderRefundedPayload;
 }
 
-function activeCustomerState(userId: string, cancelAtPeriodEnd = false): WebhookCustomerStateChangedPayload {
+function activeCustomerState(userId: string): WebhookCustomerStateChangedPayload {
   return {
     type: 'customer.state_changed',
     timestamp: new Date('2026-08-24T00:00:00.000Z'),
@@ -208,7 +207,7 @@ function activeCustomerState(userId: string, cancelAtPeriodEnd = false): Webhook
         id: `subscription-${userId}`,
         productId: 'builder-product',
         status: 'active',
-        cancelAtPeriodEnd,
+        cancelAtPeriodEnd: false,
         currentPeriodStart: new Date('2026-08-01T00:00:00.000Z'),
         currentPeriodEnd: new Date('2026-09-01T00:00:00.000Z'),
       }],

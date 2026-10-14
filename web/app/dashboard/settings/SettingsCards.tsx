@@ -9,7 +9,8 @@ import type { AccountSeeds } from '../../../lib/dashboard-cache';
 import { useStreamedAccountResource } from '../DashboardDataProvider';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
-import { useErrorToast, useLoadErrorToast } from '../../../lib/use-error-toast';
+import { toast } from 'sonner';
+import { useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['billing']> }) {
   const { user, demoEnabled: isDemo } = useDashboardSession();
@@ -213,7 +214,6 @@ export function AccountCards() {
   const [confirmation, setConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-  const errorToast = useErrorToast();
   const confirmed = canDeleteAccount(confirmation);
   const deleteAccount = async () => {
     if (!email || !confirmed || deleting) return;
@@ -224,7 +224,8 @@ export function AccountCards() {
       window.location.replace('/');
     } catch (cause) {
       // An active paid plan blocks deletion; the platform explains how to proceed.
-      if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') errorToast.show(cause.message);
+      // A standard toast keeps the dashboard's toast styling.
+      if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') toast(cause.message, { id: 'subscription-active' });
       else setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
       setDeleting(false);
     }

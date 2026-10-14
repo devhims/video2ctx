@@ -252,15 +252,37 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   ]);
 }
 
+/** The live subscriptions Polar holds for a user, or null when Polar has never seen them. */
+export type PolarSubscriptionLookup = (env: Env, userId: string) => Promise<Array<{ cancelAtPeriodEnd: boolean }> | null>;
+
+const lookupPolarSubscriptions: PolarSubscriptionLookup = async (env, userId) => {
+  try {
+    const { polarClient } = await import('./polar-client');
+    const state = await polarClient(env).customers.getStateExternal({ externalId: userId });
+    return state.activeSubscriptions;
+  } catch (cause) {
+    if (isHttpStatus(cause, 404)) return null;
+    throw cause;
+  }
+};
+
 /**
- * A Builder plan that will renew must be cancelled before the account is deleted,
- * so deletion never ends a paid subscription on the user's behalf. A plan already
- * set to cancel at period end may be deleted; the remaining period is forfeited.
+ * A subscription that will renew must be cancelled before the account is deleted,
+ * because Polar's customer deletion cancels it immediately. Polar is asked
+ * directly: the local projection can lag its webhooks and stays Starter after a
+ * refund even if a later subscription renews. A subscription already set to
+ * cancel at period end may be deleted, forfeiting the remaining period. Any
+ * Polar error stops deletion. Without a token Polar cannot be asked, and
+ * closeBillingAccount refuses for any user Polar may know.
  */
-export async function requireNoRenewingSubscription(env: Env, userId: string): Promise<void> {
-  const row = await env.DB.prepare('SELECT plan,cancel_at_period_end FROM billing_accounts WHERE user_id=?')
-    .bind(userId).first<{ plan: string; cancel_at_period_end: number }>();
-  if (row?.plan === 'builder' && row.cancel_at_period_end !== 1) {
+export async function requireNoRenewingSubscription(
+  env: Env,
+  userId: string,
+  lookup: PolarSubscriptionLookup = lookupPolarSubscriptions,
+): Promise<void> {
+  if (!env.POLAR_ACCESS_TOKEN) return;
+  const subscriptions = await lookup(env, userId);
+  if (subscriptions?.some((subscription) => !subscription.cancelAtPeriodEnd)) {
     throw new ApiError(409, 'SUBSCRIPTION_ACTIVE', 'Cancel your Builder plan before deleting your account.');
   }
 }

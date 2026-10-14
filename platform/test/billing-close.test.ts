@@ -1,5 +1,6 @@
 const deleteExternal = vi.hoisted(() => vi.fn());
-vi.mock('../src/lib/polar-client', () => ({ polarClient: () => ({ customers: { deleteExternal } }) }));
+const getStateExternal = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/polar-client', () => ({ polarClient: () => ({ customers: { deleteExternal, getStateExternal } }) }));
 
 import { closeBillingAccount, requireNoRenewingSubscription } from '../src/lib/billing';
 
@@ -49,18 +50,34 @@ describe('closing the billing account on account deletion', () => {
 });
 
 describe('renewing subscription guard on account deletion', () => {
-  const rowEnv = (row: Record<string, unknown> | null) => ({
-    DB: { prepare: () => ({ bind: () => ({ first: async () => row }) }) },
-  }) as unknown as Env;
+  const configured = { POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
+  beforeEach(() => { getStateExternal.mockReset(); });
 
-  test('blocks a Builder plan that will renew', async () => {
-    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'builder', cancel_at_period_end: 0 }), 'user-1'))
-      .rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+  test('asks Polar and blocks a subscription that will renew', async () => {
+    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: false }] });
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+    expect(getStateExternal).toHaveBeenCalledWith({ externalId: 'user-1' });
+
+    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: true }, { status: 'trialing', cancelAtPeriodEnd: false }] });
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409 });
   });
 
-  test('allows a cancelled Builder plan, a Starter plan and a never-billed user', async () => {
-    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'builder', cancel_at_period_end: 1 }), 'user-1')).resolves.toBeUndefined();
-    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'starter', cancel_at_period_end: 0 }), 'user-1')).resolves.toBeUndefined();
-    await expect(requireNoRenewingSubscription(rowEnv(null), 'user-1')).resolves.toBeUndefined();
+  test('allows subscriptions set to cancel, no subscriptions, and users Polar has never seen', async () => {
+    getStateExternal.mockResolvedValue({ activeSubscriptions: [{ status: 'active', cancelAtPeriodEnd: true }] });
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
+    getStateExternal.mockResolvedValue({ activeSubscriptions: [] });
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
+    getStateExternal.mockRejectedValue(polarError(404));
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).resolves.toBeUndefined();
+  });
+
+  test('stops deletion when Polar cannot answer', async () => {
+    getStateExternal.mockRejectedValue(polarError(500));
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toThrow('Status 500');
+  });
+
+  test('does not ask Polar without a token', async () => {
+    await expect(requireNoRenewingSubscription({ POLAR_ACCESS_TOKEN: '' } as unknown as Env, 'user-1')).resolves.toBeUndefined();
+    expect(getStateExternal).not.toHaveBeenCalled();
   });
 });

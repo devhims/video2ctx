@@ -1835,7 +1835,7 @@ export const openApiDocument = {
         tags: ['Account'],
         operationId: 'deleteAccount',
         summary: 'Permanently delete the current account',
-        description: 'Deletes private files and database records and queues private search-index deletion. This operation cannot be undone. A Builder plan that will renew must be cancelled first (`409 SUBSCRIPTION_ACTIVE`); a plan set to cancel at period end may be deleted, forfeiting the remaining period. Returns `503 BILLING_UNAVAILABLE` when billing cleanup is required but billing is not configured.',
+        description: 'Deletes private files and database records and queues private search-index deletion. This operation cannot be undone. A subscription that will renew, as reported by the billing provider, must be cancelled first (`409 SUBSCRIPTION_ACTIVE`); one set to cancel at period end may be deleted, forfeiting the remaining period. Returns `503 BILLING_UNAVAILABLE` when billing cleanup is required but billing is not configured.',
         security: privateSecurity,
         responses: {
           '204': { description: 'Account deleted.' },
