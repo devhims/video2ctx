@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { loadLandingInspection } from './landing-inspection';
 
-export const LANDING_SAMPLE_IDS = ['bAX27XRHMH8', 'eC7xzavzEKY', 'Vyb-sTrY_Y8'] as const;
+export const LANDING_SAMPLE_IDS = ['QbYBRjOaGOo', 'Fls_onRviPM', 'ejjBbaq9RmY'] as const;
 const PREFIX = 'landing-samples/v1';
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 256 * 1024;

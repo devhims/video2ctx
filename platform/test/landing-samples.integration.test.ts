@@ -10,7 +10,7 @@ const bindings = env as Env;
 afterEach(() => { vi.unstubAllGlobals(); vi.resetAllMocks(); });
 
 test('native R2 and Cache API serve a complete sample without extraction', async () => {
-  const id = 'bAX27XRHMH8';
+  const id = 'QbYBRjOaGOo';
   const key = `landing-samples/v1/${id}.json`;
   await bindings.VIDEO_ASSETS.put(key, JSON.stringify({ ...inspection(id), samplePreview: true }));
   const pending: Promise<unknown>[] = [];
@@ -24,7 +24,7 @@ test('native R2 and Cache API serve a complete sample without extraction', async
 });
 
 test('initial capture stores embedded images and native R2 conditional writes prevent replacement', async () => {
-  const id = 'eC7xzavzEKY';
+  const id = 'Fls_onRviPM';
   const live = inspection(id);
   const thumbnail = { url: 'https://i.ytimg.com/sample.jpg' };
   live.video.thumbnails = [thumbnail];
@@ -49,7 +49,7 @@ test('initial capture stores embedded images and native R2 conditional writes pr
 });
 
 test.each([301, 302, 303, 307, 308])('rejects image redirect %i without following it or saving an incomplete snapshot', async status => {
-  const id = 'Vyb-sTrY_Y8';
+  const id = 'ejjBbaq9RmY';
   const live = inspection(id);
   live.video.thumbnails = [{ url: 'https://i.ytimg.com/redirect.jpg' }];
   if (live.channel.status === 'ready') live.channel.channel.thumbnails = [];

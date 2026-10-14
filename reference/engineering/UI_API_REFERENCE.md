@@ -127,7 +127,7 @@ The quota is five distinct YouTube video IDs per HMAC-hashed IP in the trailing 
 
 #### Saved homepage samples
 
-The three sample IDs (`bAX27XRHMH8`, `eC7xzavzEKY`, `Vyb-sTrY_Y8`) use complete snapshots in the existing `VIDEO_ASSETS` R2 bucket under `landing-samples/v1/<id>.json`. URL normalization happens first, so pasted watch, short-link, and Shorts URLs use the same snapshot. Other videos retain ordinary inspection behavior.
+The three sample IDs (`QbYBRjOaGOo`, `Fls_onRviPM`, `ejjBbaq9RmY`) use complete snapshots in the existing `VIDEO_ASSETS` R2 bucket under `landing-samples/v1/<id>.json`. URL normalization happens first, so pasted watch, short-link, and Shorts URLs use the same snapshot. Other videos retain ordinary inspection behavior.
 
 Each snapshot contains video details, channel details, the transcript excerpt, comments, and the displayed thumbnail and avatars as inline image data. Only the largest displayed image variant is retained. Image capture allows HTTPS YouTube image hosts, rejects redirects and non-image content types, caps each image at 256 KiB, and shares an eight-second download deadline. The whole snapshot is capped at 4 MiB. Video playback still creates a YouTube embed only after Play is clicked.
 
@@ -135,7 +135,7 @@ Snapshots have no age-based refresh and are independent of the shared video cata
 
 A missing snapshot uses the ordinary provider path and saves the first complete inspection with a conditional create. Concurrent first visits return the saved winner. Partial data or failed image capture is returned without being saved, allowing a later visit to retry. R2 read errors or invalid snapshots use provider extraction directly, bypassing the shared catalog so the fallback does not require the failed R2 service. An edge-cache failure alone still allows an R2 read. These fallbacks require the Worker, quota service, and extraction backend to remain available.
 
-No migration, new binding, or remote seed command is required. After deployment, inspect each of the three samples once and confirm `samplePreview: true`, then repeat to verify storage reuse. Production seeding and validation remain rollout steps. To deliberately replace saved examples, bump the version prefix in `landing-samples.ts`; this also changes the edge-cache namespace. Normal API refreshes elsewhere do not modify the snapshots. A malformed existing snapshot requires repair or a version bump rather than automatic overwrite.
+No migration, new binding, or remote seed command is required. After deployment, inspect each of the three samples once and confirm `samplePreview: true`, then repeat to verify storage reuse. Production seeding and validation remain rollout steps. To select different videos, update both `LANDING_SAMPLE_IDS` in `landing-samples.ts` and `EXAMPLES` in `craft-demo.tsx`. New IDs get separate snapshot keys; existing saved objects remain untouched. To recapture snapshots for the same IDs, bump the version prefix in `landing-samples.ts`; this also changes the edge-cache namespace. Normal API refreshes elsewhere do not modify the snapshots. A malformed existing snapshot requires repair or a version bump rather than automatic overwrite.
 
 ### `POST /v1/resolve`
 

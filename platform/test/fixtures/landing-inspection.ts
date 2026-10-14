@@ -1,7 +1,7 @@
 import type { loadLandingInspection } from '../../src/lib/landing-inspection';
 const image = 'data:image/png;base64,aGVsbG8=';
 const meta = { source: 'allthingsyoutube' as const, fetchedAt: '2020-01-01T00:00:00Z', partial: false, warnings: [] };
-export function inspection(videoId = 'bAX27XRHMH8'): Awaited<ReturnType<typeof loadLandingInspection>> {
+export function inspection(videoId = 'QbYBRjOaGOo'): Awaited<ReturnType<typeof loadLandingInspection>> {
   return {
     video: {
       type: 'video', id: videoId, title: 'Sample video', channel: { id: 'channel', name: 'Channel', url: 'https://youtube.com/@channel' },

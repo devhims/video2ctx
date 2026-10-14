@@ -36,11 +36,11 @@ const INSPECTION_STEPS = [
 /* One click instead of a trip to YouTube for a link. Short, recognisable
  * names rather than URLs, each with a full transcript and a busy comment
  * section so the first result shows everything the demo can do. Phones show
- * two, so the row stays on one line; the longest label is the one that goes. */
+ * two, so the row stays on one line; the first example is hidden. */
 const EXAMPLES = [
-  { label: 'Feynman on miracles', duration: '5:20', url: 'https://youtu.be/bAX27XRHMH8', onPhones: false },
-  { label: 'This Is Water', duration: '9:23', url: 'https://youtu.be/eC7xzavzEKY' },
-  { label: 'Young Sheldon', duration: '4:40', url: 'https://youtu.be/Vyb-sTrY_Y8' },
+  { label: 'Jev explained', duration: '17:50', url: 'https://youtu.be/QbYBRjOaGOo', onPhones: false },
+  { label: 'OpenAI DevDay', duration: '53:34', url: 'https://youtu.be/Fls_onRviPM' },
+  { label: 'Opus 5.5 tips', duration: '28:41', url: 'https://youtu.be/ejjBbaq9RmY' },
 ];
 
 const INITIAL_COMMENT_COUNT = 4;
