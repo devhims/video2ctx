@@ -1685,11 +1685,15 @@ html:has(.craft) {
   text-wrap: pretty;
 }
 
+/* Subsection labels ("Why it matters", "Where video comes from"), set like the
+ * footer's group headings so they sit clearly above their bold item titles. */
 .craft-parts h3 {
   margin: var(--space-2xl) 0 0;
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .craft-parts ul {
@@ -1722,6 +1726,36 @@ html:has(.craft) {
 .craft-parts span {
   color: var(--ink-muted);
   font-size: 0.85rem;
+}
+
+/* Why it matters: four outcomes in a two-by-two grid, quieter than the pillars
+ * above so the section still reads as one idea. */
+.craft-why dl {
+  margin: var(--space-lg) 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg) clamp(var(--space-xl), 5vw, 3.5rem);
+}
+
+.craft-why dl > div {
+  min-width: 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--rule);
+}
+
+.craft-why dt {
+  font-size: 0.95rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.craft-why dd {
+  max-width: 44ch;
+  margin: var(--space-xs) 0 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 
 /* Where video comes from: the supported source lit, the next ones hollow. */
@@ -3370,6 +3404,10 @@ html:has(.craft) {
 
 @media (max-width: 640px) {
   .craft-parts > ul li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .craft-why dl {
     grid-template-columns: minmax(0, 1fr);
   }
 

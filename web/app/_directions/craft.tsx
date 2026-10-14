@@ -32,11 +32,40 @@ const PILLARS = [
   },
   {
     name: 'Ask across videos',
-    detail: 'Video Agent finds the relevant videos and answers with sources, usually in under 30 seconds.',
+    detail: 'Video Agent finds the relevant videos and answers your question across them.',
   },
   {
     name: 'Catch what’s new',
-    detail: 'Monitors tell you when a channel or topic posts.',
+    detail:
+      'Monitors watch a channel, topic, or search and tell you when something new appears.',
+  },
+];
+
+/* Why it is worth using over raw transcripts and frames. The token saving is
+ * measured, not estimated: across three real Video Agent runs, the cited answer
+ * was 96.0%, 97.4%, and 96.4% smaller than the transcripts it read (a 38-minute
+ * video, a 1:15 lecture, and three tutorials compared), 96.6% on average. The
+ * copy rounds down to 95%. Re-measure before changing it. */
+const BENEFITS = [
+  {
+    name: 'Token-efficient',
+    detail:
+      'Agents get the answer and the moments behind it, not the whole video. On average, that means about 95% fewer tokens than reading the full transcripts.',
+  },
+  {
+    name: 'Easier on limits and costs',
+    detail:
+      'Fewer tokens per question means weekly limits and API budgets go further.',
+  },
+  {
+    name: 'Accurate by design',
+    detail:
+      'Answers come from what the video actually says and shows, so claims hold up when you check them.',
+  },
+  {
+    name: 'Fast and multimodal',
+    detail:
+      'Speech, visuals, and comments are processed together, and most answers land in under 30 seconds.',
   },
 ];
 
@@ -226,6 +255,20 @@ export function CraftDirection() {
               </li>
             ))}
           </ul>
+          <div className='craft-why'>
+            <h3>Why it matters</h3>
+            <dl>
+              {BENEFITS.map((benefit, index) => (
+                <div
+                  key={benefit.name}
+                  style={{ '--i': index } as React.CSSProperties}
+                >
+                  <dt>{benefit.name}</dt>
+                  <dd>{benefit.detail}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
           <div className='craft-roadmap'>
             <h3>Where video comes from</h3>
             <ol>
