@@ -11,6 +11,11 @@ checks the timestamp with the Standard Webhooks library, and parses the four
 billing events with the pinned SDK's models before invoking a billing handler.
 Invalid signatures and payloads return 400. Processing failures return 500 so
 Polar can retry. The public proxy exposes only POST /api/auth/polar/webhooks.
+It reads the complete upstream response before sending headers. An aborted body
+or the 9-second upstream deadline returns 502 without crashing the proxy. If the
+response has already started or closed, the proxy closes it without rewriting
+headers. Loopback regression tests cover both failures and the next successful
+delivery after each failure.
 
 ## Local settings
 
