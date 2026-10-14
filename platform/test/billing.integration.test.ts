@@ -8,6 +8,7 @@ import { describe, expect, test } from 'vitest';
 import {
   applyPaidOrder,
   applyRefundedOrder,
+  closeBillingAccount,
   syncCustomerState,
   type PaymentWebhookEnv,
 } from '../src/lib/billing';
@@ -77,6 +78,20 @@ describe('Polar payment queries on D1', () => {
 
     await expect(account(userId)).resolves.toMatchObject({ plan: 'starter', status: 'refunded' });
     await expect(balance(userId)).resolves.toBe(1_000);
+  });
+
+  test('account deletion refuses to skip Polar cleanup for a known customer without a token', async () => {
+    const billedUser = 'payment-delete-billed-user';
+    const freeUser = 'payment-delete-free-user';
+    await createUser(billedUser);
+    await createUser(freeUser);
+    await syncCustomerState(env, activeCustomerState(billedUser));
+    const unconfigured = { ...env, POLAR_ACCESS_TOKEN: '' } as unknown as Env;
+
+    await expect(closeBillingAccount(unconfigured, billedUser)).rejects.toMatchObject({ status: 503, code: 'BILLING_UNAVAILABLE' });
+    await expect(account(billedUser)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
+
+    await expect(closeBillingAccount(unconfigured, freeUser)).resolves.toBeUndefined();
   });
 });
 

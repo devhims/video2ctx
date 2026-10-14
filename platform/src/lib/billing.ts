@@ -3,7 +3,7 @@ import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/we
 import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
 import type { WebhookSubscriptionRevokedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import { creditBalance } from './entitlements';
-import { now, sha256 } from './http';
+import { ApiError, now, sha256 } from './http';
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
@@ -253,9 +253,16 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
 }
 
 export async function closeBillingAccount(env: Env, userId: string): Promise<void> {
-  // Without an access token billing has never run, so no Polar customer can
-  // exist. Calling Polar anyway fails authorization and blocks account deletion.
-  if (!env.POLAR_ACCESS_TOKEN) return;
+  if (!env.POLAR_ACCESS_TOKEN) {
+    // Only Polar webhooks write billing_accounts, so without a row Polar has never
+    // seen this user and there is nothing to clean up.
+    const billed = await env.DB.prepare('SELECT 1 FROM billing_accounts WHERE user_id=?').bind(userId).first();
+    if (!billed) return;
+    // A known Polar customer must be anonymized before the account, and with it
+    // this row, is deleted; afterwards nothing could retry the cleanup.
+    console.error({ event: 'billing_cleanup_unconfigured', reason: 'missing_polar_access_token' });
+    throw new ApiError(503, 'BILLING_UNAVAILABLE', 'Account deletion is temporarily unavailable. Please try again later or contact support.');
+  }
   try {
     const { polarClient } = await import('./polar-client');
     await polarClient(env).customers.deleteExternal({ externalId: userId, anonymize: true });

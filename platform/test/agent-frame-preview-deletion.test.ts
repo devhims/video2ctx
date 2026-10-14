@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import type { App } from '../src/types';
-import { jsonError } from '../src/lib/http';
+import { ApiError, jsonError } from '../src/lib/http';
 import { framePreviewPrefix } from '../src/agents/runtime/frame-previews';
 
-vi.mock('../src/lib/billing', () => ({ closeBillingAccount: vi.fn() }));
+const closeBillingAccount = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/billing', () => ({ closeBillingAccount }));
 vi.mock('../src/lib/oauth', () => ({ disconnectYoutube: vi.fn() }));
 import { sessionRoutes } from '../src/routes/session/session.index';
 
@@ -36,4 +37,30 @@ test('account deletion drains agent work and removes only the owner frame collec
   app.onError((error, c) => jsonError(c, error));
   expect((await app.request('/account', { method: 'DELETE' }, env)).status).toBe(204);
   expect([...objects]).toEqual([other]);
+});
+
+test('account deletion closes billing first and keeps all local data when that fails', async () => {
+  const calls: string[] = [];
+  closeBillingAccount.mockImplementationOnce(async () => {
+    calls.push('billing');
+    throw new ApiError(503, 'BILLING_UNAVAILABLE', 'Account deletion is temporarily unavailable.');
+  });
+  const env = {
+    USER_ACCOUNT: { getByName: () => ({ beginDeletion: async () => { calls.push('agent'); return []; }, finishDeletion: vi.fn() }) },
+    RESEARCH: { list: async () => { calls.push('r2'); return { truncated: false, objects: [] }; }, delete: vi.fn() },
+    TASKS: { send: async () => { calls.push('search'); } },
+    DB: { prepare: (sql: string) => ({ bind: () => ({ run: async () => { calls.push(sql); } }) }) },
+  } as unknown as Env;
+  const app = new Hono<App>();
+  app.use('*', async (c, next) => {
+    const user = { id: 'owner', email: 'owner@example.test', name: 'Owner' };
+    c.set('user', user); c.set('principal', { user, method: 'session', permissions: {} }); await next();
+  });
+  app.route('/', sessionRoutes);
+  app.onError((error, c) => jsonError(c, error));
+
+  const response = await app.request('/account', { method: 'DELETE' }, env);
+  expect(response.status).toBe(503);
+  await expect(response.json()).resolves.toMatchObject({ error: { code: 'BILLING_UNAVAILABLE' } });
+  expect(calls).toEqual(['billing']);
 });
