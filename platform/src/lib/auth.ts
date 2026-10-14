@@ -135,16 +135,18 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
           await env.EMAIL_TASKS.send(message, { contentType: 'json' });
         },
       }),
+      {
+        id: 'polar-authenticated-checkout',
+        endpoints: checkout({
+          products: [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }],
+          successUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=success`,
+          returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=cancelled`,
+        })(polarClient(env)),
+      },
       polar({
         client: polarClient(env),
         createCustomerOnSignUp: false,
         use: [
-          checkout({
-            products: [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }],
-            successUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=success`,
-            returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=cancelled`,
-            authenticatedUsersOnly: true,
-          }),
           portal({ returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings` }),
           webhooks({
             secret: env.POLAR_WEBHOOK_SECRET,

@@ -18,13 +18,8 @@ import { useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export default function DeveloperSettingsClient({promise}:{promise:Promise<ResourceResult<ManagedApiKey[]>>}) {
   const router = useRouter();
-  const { user, demoEnabled, signOut } = useDashboardSession();
-  const localPreview = !user && demoEnabled;
-  const displayUser = user ?? (demoEnabled ? {
-    id: 'local-preview',
-    name: 'Local preview',
-    email: 'local@video2ctx.dev',
-  } : null);
+  const { user, signOut } = useDashboardSession();
+  const displayUser = user;
   const keysResource = useStreamedAccountResource('apiKeys', [], promise);
   const keys = keysResource.data;
   const keysState = keysResource.error ? 'error' : keysResource.ready ? 'ready' : 'loading';
@@ -45,7 +40,6 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
 
   const createKey = async (event: FormEvent) => {
     event.preventDefault();
-    if (localPreview) return;
     const keyName = name.trim();
     if (!keyName) return;
     setLoading(true); setError(''); setCreatedSecret('');
@@ -63,7 +57,6 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
   };
 
   const revoke = async (key: ManagedApiKey) => {
-    if (localPreview) return;
     if (!window.confirm(`Revoke “${key.name ?? key.start ?? 'API key'}”? Requests using it will stop immediately.`)) return;
     setLoading(true); setError('');
     try {
@@ -98,7 +91,6 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
     />
     <div className={`workspace-main ${pageStyles.pages}`} tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='API keys'>
-        {localPreview && <span className='developer-preview-badge'>Local preview</span>}
         <a className={pageStyles.headerLink} href='/api/platform/docs' target='_blank' rel='noreferrer'>API reference ↗</a>
       </DashboardHeader>
 
@@ -108,15 +100,15 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
             <h2 id='create-key-title'>Create an API key</h2>
             <p>Connect your scripts and integrations to video2ctx.</p>
           </header>
-          <form onSubmit={createKey} className={styles.form} aria-describedby={localPreview ? 'developer-preview-note' : 'key-access-note'}>
+          <form onSubmit={createKey} className={styles.form} aria-describedby='key-access-note'>
             <label htmlFor='api-key-name'>Key name</label>
             <div className={styles.inputRow}>
               <input id='api-key-name' maxLength={32} required value={name} onChange={(event) => setName(event.target.value)} placeholder='e.g. Production integration' />
-              <button disabled={localPreview || loading || !name.trim()} title={localPreview ? 'Sign in to create a real API key' : undefined}><PlusIcon size={16} aria-hidden='true' />{loading ? 'Creating…' : 'Create key'}</button>
+              <button disabled={loading || !name.trim()}><PlusIcon size={16} aria-hidden='true' />{loading ? 'Creating…' : 'Create key'}</button>
             </div>
             <p id='key-access-note' className={styles.formNote}><KeyIcon size={14} aria-hidden='true' /><span>Uses your account credits. Active until revoked.</span></p>
           </form>
-          <p className={styles.hint} id={localPreview ? 'developer-preview-note' : undefined}>{localPreview ? 'Sign in to create and manage API keys.' : 'Keep keys server-side. Never include them in browser code or source control.'}</p>
+          <p className={styles.hint}>Keep keys server-side. Never include them in browser code or source control.</p>
           {createdSecret && <div className={styles.secret} role='status'>
             <strong>Copy this key now</strong>
             <p>The full value will not be shown again.</p>
@@ -147,7 +139,7 @@ export default function DeveloperSettingsClient({promise}:{promise:Promise<Resou
             </article>)}
             {keysState === 'ready' && !keys.length && <div className={styles.empty}>
               <span className={styles.keyIcon}><KeyIcon size={21} aria-hidden='true' /></span>
-              <div><h3>{localPreview ? 'Your keys will appear here' : 'No API keys yet'}</h3><p>{localPreview ? 'Sign in to see your integrations.' : 'Create a key above to connect your first integration.'}</p></div>
+              <div><h3>No API keys yet</h3><p>Create a key above to connect your first integration.</p></div>
             </div>}
           </div>
         </section>

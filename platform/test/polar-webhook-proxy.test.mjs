@@ -60,3 +60,31 @@ describe('local Polar webhook proxy upstream failures', () => {
     });
   }
 });
+
+
+test('delivers a complete 413 for an unfinished oversized chunked upload', async () => {
+  let forwarded = false;
+  const upstream = await listen(http.createServer((_request, response) => {
+    forwarded = true;
+    response.end('{}');
+  }));
+  const proxy = await listen(createPolarWebhookProxy({ upstreamUrl: upstream }));
+  const result = await new Promise((resolve, reject) => {
+    const request = http.request(`${proxy}/api/auth/polar/webhooks`, { method: 'POST' }, (response) => {
+      response.resume();
+      response.on('end', () => {
+        resolve({ status: response.statusCode, connection: response.headers.connection, complete: response.complete });
+        request.end();
+      });
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    request.setTimeout(3000, () => request.destroy(new Error('Missing oversized response')));
+    // Leave the chunked request open, as a slow or malicious uploader might.
+    request.write(Buffer.alloc(1_048_577));
+  });
+  expect(result).toEqual({ status: 413, connection: 'close', complete: true });
+  expect(forwarded).toBe(false);
+  const next = await fetch(`${proxy}/dashboard`);
+  expect(next.status).toBe(404);
+});

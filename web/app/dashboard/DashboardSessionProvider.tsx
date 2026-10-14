@@ -8,7 +8,6 @@ import { useErrorToast, useLoadErrorToast } from '../../lib/use-error-toast';
 
 type DashboardSessionContextValue = {
   user: DashboardUser | null;
-  demoEnabled: boolean;
   agentAccess: boolean;
   adminAccess: boolean;
   accessReady: boolean;
@@ -22,12 +21,10 @@ export function DashboardSessionProvider({
   children,
   initialUser,
   accessSeed,
-  demoEnabled,
 }: {
   children: React.ReactNode;
   initialUser: DashboardUser | null;
   accessSeed: Promise<{agentAccess?: boolean; adminAccess?: boolean; error: string}>;
-  demoEnabled: boolean;
 }) {
   const [agentAccess, setAgentAccess] = useState(false);
   const [adminAccess, setAdminAccess] = useState(false);
@@ -103,7 +100,7 @@ export function DashboardSessionProvider({
   useLoadErrorToast(accessError, 'Retry', () => serverAccessFailed ? window.location.reload() : window.dispatchEvent(new Event('agent-access-changed')));
   const { show: showSignOutError, clear: clearSignOutError } = useErrorToast();
   useEffect(() => { if (signOutError) showSignOutError(signOutError); else clearSignOutError(); }, [signOutError, showSignOutError, clearSignOutError]);
-  const value = useMemo(() => ({ user, demoEnabled, isSigningOut, accessReady, agentAccess: !!user && agentAccess, adminAccess: !!user && adminAccess, signOut }), [demoEnabled, agentAccess, adminAccess, accessReady, isSigningOut, signOut, user]);
+  const value = useMemo(() => ({ user, isSigningOut, accessReady, agentAccess: !!user && agentAccess, adminAccess: !!user && adminAccess, signOut }), [agentAccess, adminAccess, accessReady, isSigningOut, signOut, user]);
   return <DashboardSessionContext.Provider value={value}>{children}</DashboardSessionContext.Provider>;
 }
 

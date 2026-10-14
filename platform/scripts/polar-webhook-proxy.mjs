@@ -14,11 +14,19 @@ export function createPolarWebhookProxy({
     try {
       const chunks = [];
       let size = 0;
+      let oversized = false;
       for await (const chunk of request) {
+        if (oversized) continue;
         size += chunk.length;
-        if (size > 1_048_576) { response.writeHead(413).end(); return; }
+        if (size > 1_048_576) {
+          oversized = true;
+          chunks.length = 0;
+          response.writeHead(413, { connection: 'close' }).end();
+          continue;
+        }
         chunks.push(chunk);
       }
+      if (oversized) return;
       const headers = Object.fromEntries(['content-type', 'webhook-id', 'webhook-timestamp', 'webhook-signature']
         .filter((key) => typeof request.headers[key] === 'string').map((key) => [key, request.headers[key]]));
       const upstream = await fetch(upstreamUrl, {

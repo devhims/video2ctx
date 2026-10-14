@@ -3,7 +3,7 @@ import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/we
 import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
 import type { WebhookSubscriptionRevokedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import { creditBalance } from './entitlements';
-import { now, sha256 } from './http';
+import { ApiError, now, sha256 } from './http';
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
@@ -75,16 +75,16 @@ export async function getBillingSummary(env: Env, userId: string): Promise<Billi
 export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrderPaidPayload): Promise<void> {
   const order = payload.data;
   if (order.productId !== env.POLAR_BUILDER_PRODUCT_ID) return;
-  if (!order.paid) throw new Error(`Polar order ${order.id} was not paid.`);
+  if (!order.paid) throw new ApiError(422, 'POLAR_ORDER_NOT_PAID', `Polar order ${order.id} was not paid.`);
 
-  const userId = order.customer.externalId;
-  if (!userId) throw new Error(`Polar order ${order.id} is missing the Better Auth external ID.`);
-  const checkoutUserId = order.metadata?.app_user_id;
-  if (typeof checkoutUserId === 'string' && checkoutUserId !== userId) {
-    throw new Error(`Polar order ${order.id} customer does not match the checkout user.`);
-  }
   const eventId = `order.paid:${order.id}`;
   if (await processed(env.DB, eventId)) return;
+  const userId = order.customer.externalId;
+  if (await quarantineIdentityConflict(env, payload, eventId, {
+    customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
+    customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
+  })) return;
+  if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar order ${order.id} is missing the Better Auth external ID.`);
 
   if (!await userExists(env.DB, userId)) {
     await recordEvent(env.DB, eventId, eventFingerprint(payload));
@@ -144,19 +144,25 @@ export async function syncCustomerState(
 ): Promise<void> {
   const customer = payload.data;
   const userId = customer.externalId;
-  if (!userId) throw new Error(`Polar customer ${customer.id} is missing the Better Auth external ID.`);
-  if (!await userExists(env.DB, userId)) return;
-
-  const current = await env.DB.prepare('SELECT status FROM billing_accounts WHERE user_id=?')
-    .bind(userId).first<{ status: string }>();
-  const matchedSubscription = customer.activeSubscriptions.find(
-    (candidate) => candidate.productId === env.POLAR_BUILDER_PRODUCT_ID,
-  );
-  const refundLocked = current?.status === 'refunded';
-  const subscription = refundLocked ? undefined : matchedSubscription;
   const eventId = `customer.state_changed:${customer.id}:${payload.timestamp.toISOString()}`;
   if (await processed(env.DB, eventId)) return;
-
+  const subscriptions = customer.activeSubscriptions.filter(
+    (candidate) => candidate.productId === env.POLAR_BUILDER_PRODUCT_ID,
+  );
+  const mismatched = subscriptions.find((candidate) => candidate.metadata?.app_user_id !== undefined
+    && candidate.metadata.app_user_id !== userId);
+  const matchedSubscription = mismatched ?? subscriptions[0];
+  if (await quarantineIdentityConflict(env, payload, eventId, {
+    customerId: customer.id, subscriptionId: matchedSubscription?.id ?? null,
+    customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, customer.metadata?.app_user_id,
+      ...subscriptions.map((candidate) => candidate.metadata?.app_user_id)),
+  })) return;
+  if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar customer ${customer.id} is missing the Better Auth external ID.`);
+  if (!await userExists(env.DB, userId)) return;
+  const current = await env.DB.prepare('SELECT status FROM billing_accounts WHERE user_id=?')
+    .bind(userId).first<{ status: string }>();
+  const refundLocked = current?.status === 'refunded';
+  const subscription = refundLocked ? undefined : matchedSubscription;
   await env.DB.batch([
     billingUpsert(env.DB, {
       userId,
@@ -180,12 +186,16 @@ export async function syncRevokedSubscription(
 ): Promise<void> {
   const subscription = payload.data;
   if (subscription.productId !== env.POLAR_BUILDER_PRODUCT_ID) return;
-  const userId = subscription.customer.externalId;
-  if (!userId) throw new Error(`Polar subscription ${subscription.id} is missing the Better Auth external ID.`);
-  if (!await userExists(env.DB, userId)) return;
-
   const eventId = `subscription.revoked:${subscription.id}:${payload.timestamp.toISOString()}`;
   if (await processed(env.DB, eventId)) return;
+  const userId = subscription.customer.externalId;
+  if (await quarantineIdentityConflict(env, payload, eventId, {
+    customerId: subscription.customerId, subscriptionId: subscription.id,
+    customerUserId: userId ?? null, checkoutUserId: subscription.metadata?.app_user_id,
+  })) return;
+  if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar subscription ${subscription.id} is missing the Better Auth external ID.`);
+  if (!await userExists(env.DB, userId)) return;
+
   await env.DB.batch([
     billingUpsert(env.DB, {
       userId,
@@ -211,7 +221,11 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   if (await processed(env.DB, eventId)) return;
 
   const userId = order.customer.externalId;
-  if (!userId) throw new Error(`Polar refund ${order.id} is missing the Better Auth external ID.`);
+  if (await quarantineIdentityConflict(env, payload, eventId, {
+    customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
+    customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
+  })) return;
+  if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar refund ${order.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) {
     await recordEvent(env.DB, eventId, eventFingerprint(payload));
     console.warn(JSON.stringify({ event: 'polar_refund_without_user', orderId: order.id, userId }));
@@ -264,6 +278,47 @@ export async function closeBillingAccount(env: Env, userId: string): Promise<voi
     if (isHttpStatus(cause, 404)) return;
     throw cause;
   }
+}
+
+function checkoutIdentity(customerUserId: string | null | undefined, ...values: unknown[]): unknown {
+  const supplied = values.filter((value) => value !== undefined);
+  const mismatch = supplied.findIndex((value) => value !== customerUserId);
+  return mismatch === -1 ? supplied[0] : supplied[mismatch];
+}
+
+type BillingEvent = WebhookOrderPaidPayload | WebhookOrderRefundedPayload
+  | WebhookCustomerStateChangedPayload | WebhookSubscriptionRevokedPayload;
+
+async function quarantineIdentityConflict(
+  env: PaymentWebhookEnv,
+  payload: BillingEvent,
+  eventId: string,
+  identity: { customerId: string; subscriptionId: string | null; customerUserId: string | null;
+    checkoutUserId: unknown; orderId?: string },
+): Promise<boolean> {
+  const pending = await env.DB.prepare(
+    'SELECT id,checkout_user_id FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL ORDER BY created_at LIMIT 1',
+  ).bind(identity.customerId).first<{ id: string; checkout_user_id: string | null }>();
+  const expected = identity.checkoutUserId;
+  const mismatch = expected !== undefined && expected !== identity.customerUserId;
+  if (!pending && !mismatch) return false;
+  const checkoutUserId = mismatch && typeof expected === 'string' ? expected : pending?.checkout_user_id ?? null;
+  const notificationId = `polar-billing:${await sha256(`${pending?.id ?? eventId}:${checkoutUserId}`)}`;
+  await env.DB.batch([
+    env.DB.prepare(`INSERT OR IGNORE INTO polar_billing_conflicts
+      (id,event_type,order_id,customer_id,subscription_id,checkout_user_id,customer_user_id,created_at)
+      VALUES (?,?,?,?,?,?,?,?)`).bind(eventId, payload.type, identity.orderId ?? null, identity.customerId,
+      identity.subscriptionId, checkoutUserId, identity.customerUserId, now()),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
+    env.DB.prepare(`INSERT OR IGNORE INTO notifications (id,user_id,type,title,body,data_json,created_at)
+      SELECT ?,id,'billing_attention','Your payment needs attention',
+        'We could not link your billing details safely. Please contact support so we can resolve this.',?,?
+      FROM user WHERE id=?`).bind(notificationId, JSON.stringify({ orderId: identity.orderId ?? null }), now(), checkoutUserId),
+  ]);
+  console.error({ event: 'polar_billing_identity_conflict', severity: 'error', eventId, eventType: payload.type,
+    orderId: identity.orderId, customerId: identity.customerId, subscriptionId: identity.subscriptionId,
+    checkoutUserId, customerUserId: identity.customerUserId });
+  return true;
 }
 
 function billingUpsert(db: D1Database, state: BillingState): D1PreparedStatement {

@@ -11,7 +11,7 @@ import styles from '../DashboardPages.module.css';
 
 export function SettingsShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user, demoEnabled, signOut } = useDashboardSession();
+  const { user, signOut } = useDashboardSession();
   const { data: projects } = useAccountResource('projects', []);
   const { data: usage } = useAccountResource('usage', null);
   const navigate = (section: DashboardSection) => router.push(section === 'settings' ? '/dashboard/settings' : `/dashboard/${section === 'discover' ? 'sources' : section}`);
@@ -20,7 +20,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
       onNewProject={() => router.push('/dashboard/projects?newProject=1')}
       onOpenProject={project => router.push(`/dashboard/projects?project=${encodeURIComponent(project.id)}`)}
       onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
-      onSignIn={() => router.push('/login')} accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
+      onSignIn={() => router.push('/login')} accountName={user?.name ?? user?.email}
       credits={usage?.creditBalance} onSignOut={() => void signOut()} />
     <div className={`workspace-main ${styles.pages}`} tabIndex={0} role='region' aria-label='Dashboard content'>
       <DashboardHeader title='Settings' />

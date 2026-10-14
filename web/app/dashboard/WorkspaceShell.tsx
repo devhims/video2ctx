@@ -19,7 +19,7 @@ export function WorkspaceShell({
   children: ReactNode;
 }) {
   const router = useRouter();
-  const { user, demoEnabled, signOut } = useDashboardSession();
+  const { user, signOut } = useDashboardSession();
   const { data: projects } = useAccountResource('projects', []);
   const { data: usage } = useAccountResource('usage', null);
   const [mobileNotificationsTarget, setMobileNotificationsTarget] = useState<HTMLDivElement | null>(null);
@@ -33,7 +33,7 @@ export function WorkspaceShell({
         onOpenProject={(p) => router.push(`/dashboard/projects?project=${encodeURIComponent(p.id)}`)}
         onOpenProjectItem={(project, item) => router.push(projectItemPath(project.id, item))}
         onSignIn={() => router.push('/login')}
-        accountName={user?.name ?? user?.email ?? (demoEnabled ? 'Local demo' : undefined)}
+        accountName={user?.name ?? user?.email}
         credits={usage?.creditBalance}
         onSignOut={() => void signOut()}
         mobileActions={section !== 'developer' ? <div ref={setMobileNotificationsTarget} /> : undefined}

@@ -12,7 +12,7 @@ import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
 import { useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['billing']> }) {
-  const { user, demoEnabled: isDemo } = useDashboardSession();
+  const { user } = useDashboardSession();
   const email = user?.email;
   const resource = useStreamedAccountResource('billing', null, promise);
   const { data: billing, ready: billingReady, error: billingError, setData: onBillingChange } = resource;
@@ -20,7 +20,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
   const [billingMessage, setBillingMessage] = useState('');
   const startCheckout = async () => {
-    if (billingAction || isDemo) return;
+    if (billingAction) return;
     setBillingAction('checkout');
     setBillingMessage('');
     try {
@@ -33,7 +33,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   };
 
   const openBillingPortal = async () => {
-    if (billingAction || isDemo) return;
+    if (billingAction) return;
     setBillingAction('portal');
     setBillingMessage('');
     try {
@@ -93,16 +93,15 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
       </div>
       <div className='grid gap-2'>
         {billing?.plan === 'builder' || billing?.canManageBilling
-          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction) || isDemo} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || isDemo || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
-        {isDemo && <small className='text-[.7rem] text-[var(--color-dashboard-muted)]'>Sign in with a real account to test checkout.</small>}
+          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
+          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
       </div>
       </>}
     </article>;
 }
 
 export function PreferencesCard({ promise, emailConsent }: { promise: NonNullable<AccountSeeds['notificationPreferences']>; emailConsent?: string }) {
-  const { user, demoEnabled: isDemo } = useDashboardSession();
+  const { user } = useDashboardSession();
   const email = user?.email;
   const resource = useStreamedAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES, promise);
   const { data: preferences, ready: preferencesReady, error: preferencesError, setData: onPreferencesChange } = resource;
@@ -200,7 +199,6 @@ export function PreferencesCard({ promise, emailConsent }: { promise: NonNullabl
           <i aria-hidden='true' />
         </label>
         {preferences.emailAlertsPending && email && <button className='settings-resend-confirmation' type='button' disabled={Boolean(preferenceSaving)} onClick={() => void savePreference('emailAlerts', true)}>Resend confirmation email</button>}
-        {isDemo && <p className='settings-demo-note'>Email delivery is unavailable in local preview.</p>}
         {preferenceMessage && <p className='settings-save-status' role='status'>{preferenceMessage}</p>}
         </>}
       </div>

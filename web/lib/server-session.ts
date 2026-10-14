@@ -43,19 +43,6 @@ export async function fetchServerSession(
   return session?.user ? session : null;
 }
 
-export function isLocalDashboardDemoEnabled(
-  requestHeaders: Headers,
-  nodeEnv = process.env.NODE_ENV,
-  authenticated = false,
-): boolean {
-  if (authenticated) return false;
-  if (nodeEnv === 'production') return false;
-  const hostname = (requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? '')
-    .split(':')[0]
-    .toLowerCase();
-  return hostname === 'localhost' || hostname === '127.0.0.1';
-}
-
 function getRequestOrigin(requestHeaders: Headers): string | undefined {
   const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
   if (!host) return requestHeaders.get('origin') ?? undefined;

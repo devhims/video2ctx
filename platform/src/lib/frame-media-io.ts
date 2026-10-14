@@ -1,3 +1,5 @@
+import { BodyTooLargeError, EmptyBodyError, readBoundedBytes } from './bounded-body';
+
 /** Errors crossing this boundary never retain provider messages or signed URLs. */
 export class FrameMediaError extends Error {
   constructor(readonly code: 'unsupported' | 'source' | 'capacity' | 'throttled' | 'decode' | 'budget') { super(code); }
@@ -15,23 +17,12 @@ export async function frameAbortable<T>(signal: AbortSignal, work: () => Promise
 }
 
 export async function frameBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new FrameMediaError('source');
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { value, done } = await frameAbortable(signal, () => reader.read());
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) throw new FrameMediaError('budget');
-      chunks.push(value);
-    }
-  } finally { void reader.cancel().catch(() => undefined); }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return bytes;
+  try { return await readBoundedBytes(response.body, maxBytes, signal); }
+  catch (error) {
+    if (error instanceof BodyTooLargeError) throw new FrameMediaError('budget');
+    if (error instanceof EmptyBodyError) throw new FrameMediaError('source');
+    throw error;
+  }
 }
 
 export async function frameWait(ms: number, signal: AbortSignal): Promise<void> {

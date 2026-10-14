@@ -2,13 +2,15 @@
 
 import type { WebhookCustomerStateChangedPayload } from '@polar-sh/sdk/models/components/webhookcustomerstatechangedpayload';
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload';
+import type { WebhookSubscriptionRevokedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
 import { env as workerEnv } from 'cloudflare:workers';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import {
   applyPaidOrder,
   applyRefundedOrder,
   syncCustomerState,
+  syncRevokedSubscription,
   type PaymentWebhookEnv,
 } from '../src/lib/billing';
 
@@ -20,15 +22,84 @@ const env = {
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {
-  test('rejects a paid order linked to a different checkout user before changing credits', async () => {
-    const userId = 'payment-identity-mismatch';
+  test('records a mismatched payment once, alerts the payer, and blocks later customer updates', async () => {
+    const customerUser = 'identity-existing-customer';
+    const payer = 'identity-checkout-payer';
+    await createUser(customerUser);
+    await createUser(payer);
+    const payload = paidOrder(customerUser, 'mismatched-customer-order');
+    payload.data.metadata = { app_user_id: payer };
+    const alerts = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await applyPaidOrder(env, payload);
+      await applyPaidOrder(env, payload);
+      // The later customer snapshot omits metadata, so the recorded conflict must still protect it.
+      await syncCustomerState(env, activeCustomerState(customerUser));
+      await expect(balance(customerUser)).resolves.toBe(1000);
+      await expect(balance(payer)).resolves.toBe(1000);
+      await expect(account(customerUser)).resolves.toBeNull();
+      await expect(account(payer)).resolves.toBeNull();
+      await expect(operationCount(customerUser, 'polar:order:mismatched-customer-order')).resolves.toBe(0);
+      const events = await env.DB.prepare("SELECT event_id FROM processed_events WHERE source='polar' AND event_id=?")
+        .bind('order.paid:mismatched-customer-order').all();
+      expect(events.results).toHaveLength(1);
+      const conflicts = await env.DB.prepare('SELECT order_id,checkout_user_id,customer_user_id FROM polar_billing_conflicts').all();
+      expect(conflicts.results).toContainEqual(expect.objectContaining({
+        order_id: 'mismatched-customer-order', checkout_user_id: payer, customer_user_id: customerUser,
+      }));
+      const notifications = await env.DB.prepare("SELECT user_id FROM notifications WHERE type='billing_attention' AND user_id=?")
+        .bind(payer).all();
+      expect(notifications.results).toHaveLength(1);
+      expect(alerts).toHaveBeenCalledWith(expect.objectContaining({ event: 'polar_billing_identity_conflict' }));
+    } finally { alerts.mockRestore(); }
+  });
+
+  test('blocks mismatched customer state even when it arrives before the paid order', async () => {
+    const customerUser = 'identity-customer-first';
+    const payer = 'identity-customer-first-payer';
+    await createUser(customerUser);
+    await createUser(payer);
+    const state = activeCustomerState(customerUser);
+    state.data.activeSubscriptions[0]!.metadata = { app_user_id: payer };
+    await syncCustomerState(env, state);
+    await expect(account(customerUser)).resolves.toBeNull();
+    const payload = paidOrder(customerUser, 'customer-first-order');
+    payload.data.metadata = { app_user_id: payer };
+    await applyPaidOrder(env, payload);
+    await expect(balance(customerUser)).resolves.toBe(1000);
+    await expect(balance(payer)).resolves.toBe(1000);
+    const conflict = await env.DB.prepare('SELECT order_id FROM polar_billing_conflicts WHERE subscription_id=? AND order_id IS NOT NULL')
+      .bind(`subscription-${customerUser}`).first();
+    expect(conflict).toMatchObject({ order_id: 'customer-first-order' });
+  });
+
+  test('protects existing credits and plans from mismatched refunds and revocations', async () => {
+    const customerUser = 'identity-refund-customer';
+    await createUser(customerUser);
+    await createUser('identity-refund-payer');
+    await applyPaidOrder(env, paidOrder(customerUser, 'identity-valid-order'));
+    const refund = refundedOrder(customerUser, 'identity-mismatched-refund');
+    refund.data.metadata = { app_user_id: 'identity-refund-payer' };
+    await applyRefundedOrder(env, refund);
+    await syncRevokedSubscription(env, {
+      type: 'subscription.revoked', timestamp: new Date('2026-08-24T00:00:00.000Z'),
+      data: { ...refund.data.subscription!, id: `subscription-${customerUser}`,
+        customerId: refund.data.customerId, customer: refund.data.customer,
+        productId: 'builder-product', metadata: { app_user_id: 'identity-refund-payer' }, status: 'canceled',
+        product: { ...refund.data.product!, prices: [], benefits: [], medias: [], attachedCustomFields: [] }, discount: null, prices: [], meters: [], pendingUpdate: null },
+    } as WebhookSubscriptionRevokedPayload);
+    await expect(balance(customerUser)).resolves.toBe(10_000);
+    await expect(account(customerUser)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
+  });
+
+  test('accepts matching subscription identity in a customer state update', async () => {
+    const userId = 'identity-matching-customer-state';
     await createUser(userId);
-    const payload = paidOrder(userId, 'mismatched-customer-order');
-    payload.data.metadata = { app_user_id: 'different-checkout-user' };
-    await expect(applyPaidOrder(env, payload)).rejects.toThrow('checkout user');
+    const state = activeCustomerState(userId);
+    state.data.activeSubscriptions[0]!.metadata = { app_user_id: userId };
+    await syncCustomerState(env, state);
+    await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
     await expect(balance(userId)).resolves.toBe(1000);
-    await expect(account(userId)).resolves.toBeNull();
-    await expect(operationCount(userId, 'polar:order:mismatched-customer-order')).resolves.toBe(0);
   });
 
   test('uses the current configured 10,000-credit Builder allowance', async () => {

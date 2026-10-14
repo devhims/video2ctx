@@ -198,7 +198,6 @@ describe('Better Auth API-key configuration', () => {
       products: [{ productId: 'builder-product', slug: 'builder' }],
       successUrl: 'http://localhost:3000/dashboard?section=settings&checkout=success',
       returnUrl: 'http://localhost:3000/dashboard?section=settings&checkout=cancelled',
-      authenticatedUsersOnly: true,
     });
     expect(captured.portal).toEqual({ returnUrl: 'http://localhost:3000/dashboard?section=settings' });
     expect(captured.webhooks).toMatchObject({ secret: 'polar-webhook-secret' });

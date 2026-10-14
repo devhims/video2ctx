@@ -63,7 +63,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const params = useSearchParams();
   const cache = useDashboardCache();
   const router = useRouter();
-  const { user, demoEnabled } = useDashboardSession();
+  const { user } = useDashboardSession();
   const [query, setQuery] = useDashboardDraft('source-query', '');
   const [selectedData, setSelectedData] = useDashboardDraft<SourceDataOption[]>('source-options', ['transcript']);
   const [items, setItems] = useDashboardDraft<SearchItem[]>('source-results', []);
@@ -97,7 +97,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const savingSource = useRef(false);
   const operationController = useRef<AbortController | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const authenticated = Boolean(user) || demoEnabled;
+  const authenticated = Boolean(user);
   const playlistInput = isPlaylistUrl(query);
 
   const loadHistory = useCallback(async (signal?: AbortSignal) => {

@@ -275,6 +275,48 @@ describe('signed Polar webhook delivery', () => {
     });
   }
 
+  test('acknowledges a terminal customer identity conflict without upgrading either account', async () => {
+    const payer = await createBrowserSession();
+    const other = await createBrowserSession();
+    const payload = JSON.parse(customerStateBody(other.user.id));
+    const at = new Date().toISOString();
+    payload.data.active_subscriptions = [{
+      id: 'conflicting-subscription', created_at: at, modified_at: null,
+      metadata: { app_user_id: payer.user.id }, status: 'active', amount: 2000, currency: 'usd',
+      recurring_interval: 'month', current_period_start: at, current_period_end: at,
+      trial_start: null, trial_end: null, cancel_at_period_end: false, canceled_at: null,
+      started_at: at, ends_at: null, product_id: 'builder-product', discount_id: null, meters: [],
+    }];
+    const body = JSON.stringify(payload);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await request('/api/auth/polar/webhooks', {
+        method: 'POST', headers: signedHeaders(body, 'standard'), body,
+      });
+      expect(response.status).toBe(200);
+    }
+    for (const browser of [payer, other]) {
+      const summary = await request('/v1/billing', { headers: { cookie: browser.cookie } });
+      expect(await summary.json()).toMatchObject({ plan: 'starter', creditBalance: 1000 });
+    }
+    const alerts = await request('/v1/notifications', { headers: { cookie: payer.cookie } });
+    expect(await alerts.json()).toMatchObject({ notifications: [expect.objectContaining({ type: 'billing_attention' })] });
+  });
+
+  test('acknowledges unhandled verified events but still rejects their invalid signatures', async () => {
+    for (const type of ['order.created', 'product.updated', 'future.event']) {
+      const body = JSON.stringify({ type, timestamp: new Date().toISOString(), data: { id: 'unhandled-resource' } });
+      const accepted = await request('/api/auth/polar/webhooks', {
+        method: 'POST', headers: signedHeaders(body, 'standard'), body,
+      });
+      expect(accepted.status).toBe(200);
+      expect(await accepted.json()).toEqual({ received: true });
+      const rejected = await request('/api/auth/polar/webhooks', {
+        method: 'POST', headers: signedHeaders(body, 'standard'), body: body.replace('unhandled-resource', 'tampered'),
+      });
+      expect(rejected.status).toBe(400);
+    }
+  });
+
   test('rejects signed invalid payloads and oversized bodies without changing billing', async () => {
     const browser = await createBrowserSession();
     const invalidBody = JSON.stringify({ type: 'customer.state_changed', data: {} });
@@ -290,14 +332,22 @@ describe('signed Polar webhook delivery', () => {
     expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
   });
 
-  test('returns a retryable failure when a verified event cannot be applied', async () => {
+  test('returns a retryable failure with safe event diagnostics when a verified event cannot be applied', async () => {
     const payload = JSON.parse(customerStateBody('unlinked-customer'));
     payload.data.external_id = null;
     const body = JSON.stringify(payload);
-    const response = await request('/api/auth/polar/webhooks', {
-      method: 'POST', headers: signedHeaders(body, 'standard'), body,
-    });
-    expect(response.status).toBe(500);
+    const headers = signedHeaders(body, 'standard');
+    const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const response = await request('/api/auth/polar/webhooks', { method: 'POST', headers, body });
+      expect(response.status).toBe(500);
+      expect(logs).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'polar_webhook_processing_failed', eventType: 'customer.state_changed',
+        resourceId: 'customer-unlinked-customer', webhookId: headers['webhook-id'], errorName: 'Error',
+        errorCode: 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID',
+      }));
+      expect(JSON.stringify(logs.mock.calls)).not.toContain('signature-test@example.test');
+    } finally { logs.mockRestore(); }
   });
 
   test('rejects tampered bodies and stale signatures without changing billing', async () => {
@@ -358,20 +408,21 @@ describe('authenticated Builder checkout identity', () => {
   test('sends the signed-in email and user ID to Polar instead of accepting a buyer identity from the browser', async () => {
     const browser = await createBrowserSession();
     let sent: Record<string, unknown> | undefined;
+    const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const outgoing = new Request(input, init);
       expect(outgoing.url).toBe('https://sandbox-api.polar.sh/v1/checkouts/');
       sent = await outgoing.json() as Record<string, unknown>;
       // Stop at the provider boundary; no checkout or payment is created.
-      return Response.json({ detail: 'Isolated checkout request inspection' }, { status: 400 });
+      return Response.json({ detail: 'private@example.test polar_private_token' }, { status: 400 });
     });
     try {
       const response = await request('/api/auth/checkout', {
         method: 'POST', headers: jsonHeaders({ cookie: browser.cookie }),
         body: JSON.stringify({
-          slug: 'builder', products: ['other-product'],
+          slug: 'builder', products: { ignored: 'invalid' }, embedOrigin: 'not-a-url', allowTrial: 'invalid',
           customerEmail: 'other@example.test', externalCustomerId: 'other-user',
-          metadata: { app_user_id: 'other-user' },
+          metadata: { app_user_id: 'other-user', ignored: { invalid: true } },
           successUrl: 'https://other.example.test/success', returnUrl: 'https://other.example.test/cancel',
         }),
       });
@@ -384,8 +435,15 @@ describe('authenticated Builder checkout identity', () => {
       });
       expect(sent?.customer_email).not.toBe('other@example.test');
       expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(logs).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'polar_checkout_failed', userId: browser.user.id, productId: 'builder-product',
+        errorName: expect.any(String), statusCode: 400,
+      }));
+      expect(JSON.stringify(logs.mock.calls)).not.toContain('private@example.test');
+      expect(JSON.stringify(logs.mock.calls)).not.toContain('polar_private_token');
     } finally {
       fetchSpy.mockRestore();
+      logs.mockRestore();
     }
   });
 });

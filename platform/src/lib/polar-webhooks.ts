@@ -5,6 +5,8 @@ import { WebhookOrderRefundedPayload$inboundSchema } from '@polar-sh/sdk/models/
 import { WebhookSubscriptionRevokedPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import { APIError, createAuthEndpoint } from 'better-auth/api';
 import { Webhook } from 'standardwebhooks';
+import { BodyTooLargeError, EmptyBodyError, readBoundedBytes } from './bounded-body';
+import { safeErrorLog } from './http';
 
 type PaymentWebhookOptions = Pick<WebhooksOptions,
   'secret' | 'onOrderPaid' | 'onOrderRefunded' | 'onCustomerStateChanged' | 'onSubscriptionRevoked'>;
@@ -17,7 +19,13 @@ export function webhooks(options: PaymentWebhookOptions) {
     }, async (ctx) => {
       const request = ctx.request;
       if (!request || !options.secret) throw new APIError('INTERNAL_SERVER_ERROR');
-      const body = await readBody(request);
+      let body: string;
+      try { body = new TextDecoder().decode(await readBoundedBytes(request.body, 1_048_576)); }
+      catch (error) {
+        if (error instanceof BodyTooLargeError) throw new APIError('PAYLOAD_TOO_LARGE');
+        if (error instanceof EmptyBodyError) throw new APIError('BAD_REQUEST');
+        throw error;
+      }
       const headers = Object.fromEntries(['webhook-id', 'webhook-timestamp', 'webhook-signature']
         .map((name) => [name, request.headers.get(name) ?? '']));
       let payload: unknown;
@@ -34,6 +42,7 @@ export function webhooks(options: PaymentWebhookOptions) {
       const type = (payload as { type?: unknown } | null)?.type;
       // Parse before calling a handler so invalid payloads cannot alter billing.
       const parsed = parsePaymentEvent(type, payload);
+      if (!parsed) return ctx.json({ received: true });
       try {
         switch (parsed.type) {
           case 'order.paid': await options.onOrderPaid?.(parsed); break;
@@ -41,8 +50,9 @@ export function webhooks(options: PaymentWebhookOptions) {
           case 'customer.state_changed': await options.onCustomerStateChanged?.(parsed); break;
           case 'subscription.revoked': await options.onSubscriptionRevoked?.(parsed); break;
         }
-      } catch {
-        ctx.context.logger.error('Polar payment webhook processing failed.');
+      } catch (error) {
+        console.error({ event: 'polar_webhook_processing_failed', eventType: parsed.type,
+          resourceId: parsed.data.id, webhookId: request.headers.get('webhook-id'), ...safeErrorLog(error) });
         throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Webhook processing failed.' });
       }
       return ctx.json({ received: true });
@@ -57,27 +67,11 @@ function parsePaymentEvent(type: unknown, payload: unknown) {
       case 'order.refunded': return WebhookOrderRefundedPayload$inboundSchema.parse(payload);
       case 'customer.state_changed': return WebhookCustomerStateChangedPayload$inboundSchema.parse(payload);
       case 'subscription.revoked': return WebhookSubscriptionRevokedPayload$inboundSchema.parse(payload);
-      default: throw new Error('Unsupported event');
+      default:
+        if (typeof type === 'string' && type) return undefined;
+        throw new Error('Missing event type');
     }
   } catch {
-    throw new APIError('BAD_REQUEST', { message: 'Invalid or unsupported payment webhook payload.' });
+    throw new APIError('BAD_REQUEST', { message: 'Invalid payment webhook payload.' });
   }
-}
-
-async function readBody(request: Request): Promise<string> {
-  if (!request.body) throw new APIError('BAD_REQUEST');
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    length += value.byteLength;
-    if (length > 1_048_576) {
-      await reader.cancel();
-      throw new APIError('PAYLOAD_TOO_LARGE');
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }

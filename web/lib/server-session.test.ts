@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { fetchServerSession, isLocalDashboardDemoEnabled } from './server-session.ts';
+import { fetchServerSession } from './server-session.ts';
 
 describe('server dashboard session', () => {
   test('skips the platform request when there is no session cookie', async () => {
@@ -39,18 +39,7 @@ describe('server dashboard session', () => {
     assert.equal(session?.user.email, 'user@example.com');
   });
 
-  test('keeps signed-in local accounts out of demo mode so checkout is available', () => {
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3001' }), 'development', true), false);
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: '127.0.0.1:3001' }), 'development', true), false);
-  });
 
-  test('enables demo access only for localhost outside production', () => {
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3000' }), 'development'), true);
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: '127.0.0.1:3000' }), 'development'), true);
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'app.video2ctx.dev' }), 'development'), false);
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ host: 'localhost:3000' }), 'production'), false);
-    assert.equal(isLocalDashboardDemoEnabled(new Headers({ 'x-forwarded-host': 'localhost:3000' }), 'production'), false);
-  });
 });
 
 describe('agent dashboard gate', () => {

@@ -1,29 +1,14 @@
+import { BodyTooLargeError, EmptyBodyError, readBoundedBytes } from './bounded-body';
+
 export async function boundedContainerJson(response: Response, signal: AbortSignal): Promise<unknown> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('Empty container response.');
-  const cancel = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener('abort', cancel, { once: true });
-  const chunks: Uint8Array[] = [];
-  let length = 0;
   try {
-    signal.throwIfAborted();
-    while (true) {
-      const { value, done } = await reader.read();
-      signal.throwIfAborted();
-      if (done) break;
-      length += value.byteLength;
-      if (length > 12 * 1024 * 1024) throw new Error('Oversized container response.');
-      chunks.push(value);
-    }
-  } finally {
-    signal.removeEventListener('abort', cancel);
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    const bytes = await readBoundedBytes(response.body, 12 * 1024 * 1024, signal);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) throw new Error('Oversized container response.');
+    if (error instanceof EmptyBodyError) throw new Error('Empty container response.');
+    throw error;
   }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 /** Bound an uncooperative binding without leaving a diagnostic attempt open forever. */

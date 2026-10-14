@@ -9,8 +9,9 @@ It does not run YouTube extraction, agent research, or email delivery.
 The webhook handler accepts Standard Webhooks and legacy Polar HMAC signatures,
 checks the timestamp with the Standard Webhooks library, and parses the four
 billing events with the pinned SDK's models before invoking a billing handler.
-Invalid signatures and payloads return 400. Processing failures return 500 so
-Polar can retry. The public proxy exposes only POST /api/auth/polar/webhooks.
+Invalid signatures and malformed handled payloads return 400. Other signed event
+types are acknowledged with 200 and skipped. Transient processing failures return
+500 so Polar can retry. The public proxy exposes only POST /api/auth/polar/webhooks.
 It reads the complete upstream response before sending headers. An aborted body
 or the 9-second upstream deadline returns 502 without crashing the proxy. If the
 response has already started or closed, the proxy closes it without rewriting
@@ -99,9 +100,9 @@ not activate the signed-in account.
 The local checkout handler now sends the authenticated email, name, external user
 ID, and server-controlled app_user_id metadata. It selects the product and return
 URLs from server configuration. The hosted email field is populated but remains
-editable in the observed sandbox UI. Paid-order handling rejects a metadata user
-ID that differs from the customer's external ID before changing local billing or
-credits. Legacy orders without this metadata remain compatible.
+editable in the observed sandbox UI. Billing lifecycle handling quarantines a metadata user ID that differs from the
+customer's external ID before changing plans or credits. Legacy events without
+this metadata remain compatible unless that customer has an unresolved conflict.
 
 The corrected checkout initially stalled at confirmed with Stripe requires_action
 and the stripe_3ds2_fingerprint action. The hosted 3-D Secure iframe contained an
@@ -133,3 +134,46 @@ The local settings page was checked after the correction and displayed
 20K credits available from a 10K monthly allowance. The 10,000-credit paid-order
 regression uses isolated test storage; the earlier real sandbox payment is still
 the only completed payment for the signed-in test account.
+
+
+## Identity conflicts and reconciliation
+
+Migration 0024 adds polar_billing_conflicts. It must be applied before deploying
+the updated handler. The normal production deployment applies migrations first;
+the local sandbox uses npm run db:migrate:polar from platform/.
+
+A mismatched paid order, refund, subscription revocation, or customer snapshot is
+recorded as a terminal event in one database batch with its conflict record and
+an in-app billing_attention notification for the known checkout user. Repeated
+delivery of that event is acknowledged without another mutation. Customer
+snapshots compare active Builder subscription metadata before projecting a plan,
+so a snapshot that arrives before the paid order cannot upgrade a different
+account. An unresolved conflict also blocks later lifecycle events for that Polar
+customer, including snapshots that omit metadata.
+
+The handler emits a structured polar_billing_identity_conflict error with the
+relevant order, customer, subscription, and application user IDs. Billing alerts
+remain visible when monitor alerts are disabled and open account settings. No
+email, payment details, signing secrets, or complete webhook payloads are logged.
+Production operator notification routing should monitor this structured event;
+this PR does not configure external alert destinations.
+
+Review unresolved records in polar_billing_conflicts and compare the Polar order,
+subscription, and checkout identities. Resolve the financial and account mismatch
+explicitly before marking the corresponding records resolved_at. A terminal
+processed_events marker does not automatically retry credit grants after
+resolution. Reconciliation or refund requires a separate, reviewed action. Never
+silently move another customer's subscription or credits.
+
+Checkout validates only slug and an optional boolean redirect. Customer identity,
+product IDs, metadata, and return URLs come from the authenticated server context.
+The authenticated dashboard no longer carries unreachable local-demo state.
+The webhook, frame, and container readers share bounded stream reading, including
+cancellation and reader-lock release on errors. Oversized proxy uploads receive a
+complete 413 with Connection: close while remaining request data is discarded.
+
+Review validation passed: platform and web builds, 56 auth/admin/billing/credit
+integration tests, 121 focused platform/media tests, and 110 web tests. Local
+unauthenticated dashboard requests still redirect to login. The existing local
+Builder account retains 20,000 credits and its configured 10,000-credit allowance.
+Production configuration and data were not changed.
