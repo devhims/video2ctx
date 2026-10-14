@@ -43,3 +43,36 @@ export async function queueMonitorAlertEmail(env: Env, input: MonitorAlertInput)
   await env.EMAIL_TASKS.send(message, { contentType: 'json' });
   return true;
 }
+
+interface NewAccount {
+  id: string;
+  email: string;
+  name: string;
+}
+
+/** Queues the one-time welcome note. The per-user key lets the email consumer drop repeats. */
+export async function queueWelcomeEmail(env: Env, account: NewAccount): Promise<boolean> {
+  if (account.email.endsWith('@example.test')) return false;
+
+  const { renderWelcomeEmail } = await import('./email-templates');
+  const content = await renderWelcomeEmail({
+    recipientName: account.name,
+    starterCredits: Number(env.STARTER_ONBOARDING_CREDITS),
+    dashboardUrl: `${env.APP_ORIGIN}/dashboard`,
+    agentUrl: `${env.APP_ORIGIN}/dashboard/sessions`,
+    assetOrigin: env.APP_ORIGIN,
+  });
+  const firstName = account.name.trim().split(/\s+/)[0];
+  const message: EmailMessage = {
+    type: 'welcome',
+    idempotencyKey: `welcome:${account.id}`,
+    userId: account.id,
+    to: account.email,
+    from: { email: env.WELCOME_EMAIL_FROM, name: 'Himanshu from video2ctx' },
+    subject: firstName ? `Welcome to video2ctx, ${firstName}` : 'Welcome to video2ctx',
+    html: content.html,
+    text: content.text,
+  };
+  await env.EMAIL_TASKS.send(message, { contentType: 'json' });
+  return true;
+}

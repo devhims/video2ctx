@@ -56,10 +56,12 @@ export interface TaskMessage {
 }
 
 export interface EmailMessage {
-  type: 'magic-link' | 'notification-opt-in' | 'monitor-alert' | 'daily-digest' | 'weekly-digest' | 'scale-inquiry';
+  type: 'magic-link' | 'notification-opt-in' | 'monitor-alert' | 'daily-digest' | 'weekly-digest' | 'scale-inquiry' | 'welcome';
   idempotencyKey: string;
   userId?: string;
   to: string;
+  /** Defaults to the product sender, video2ctx <EMAIL_FROM>. Must be listed in the EMAIL binding's allowed senders. */
+  from?: { email: string; name: string };
   replyTo?: string;
   subject: string;
   html: string;

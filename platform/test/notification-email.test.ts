@@ -104,6 +104,47 @@ describe('monitor notification email', () => {
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
   });
+
+  test('uses a per-message sender when one is set, keeping support as Reply-To', async () => {
+    const delivered: Array<Record<string, unknown>> = [];
+    const env = {
+      EMAIL_FROM: 'noreply@notify.video2ctx.dev',
+      EMAIL_REPLY_TO: 'support@video2ctx.dev',
+      DB: {
+        prepare: (sql: string) => ({
+          bind: () => sql.startsWith('SELECT')
+            ? { first: async () => null }
+            : { run: async () => ({ success: true }) },
+        }),
+      },
+      EMAIL: {
+        send: async (message: Record<string, unknown>) => {
+          delivered.push(message);
+          return { messageId: 'email-2' };
+        },
+      },
+    } as unknown as Env;
+    const body = {
+      type: 'welcome' as const,
+      idempotencyKey: 'welcome:user-1',
+      userId: 'user-1',
+      to: 'member@customer.test',
+      from: { email: 'himanshu@notify.video2ctx.dev', name: 'Himanshu from video2ctx' },
+      subject: 'Welcome to video2ctx',
+      html: '<p>Welcome</p>',
+      text: 'Welcome',
+    };
+
+    await handleQueue({
+      queue: 'all-things-youtube-email',
+      messages: [{ body, attempts: 1, ack: vi.fn(), retry: vi.fn() }],
+    } as unknown as MessageBatch<unknown>, env);
+
+    expect(delivered).toEqual([expect.objectContaining({
+      from: { email: 'himanshu@notify.video2ctx.dev', name: 'Himanshu from video2ctx' },
+      replyTo: 'support@video2ctx.dev',
+    })]);
+  });
 });
 
 function notificationEnv(account: { email: string; name: string; email_alerts: number; email_alerts_verified_at: number | null }, sent: Array<Record<string, unknown>>): Env {

@@ -4,7 +4,8 @@ import { apiKey } from '@better-auth/api-key';
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
 import { admin, bearer, deviceAuthorization, magicLink, oAuthProxy } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
-import { escapeHtml } from './http';
+import { escapeHtml, safeErrorLog } from './http';
+import { queueWelcomeEmail } from './notification-delivery';
 import { polarClient } from './polar-client';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
 import {
@@ -57,6 +58,20 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
       },
     },
     verification: { storeIdentifier: 'hashed' },
+    databaseHooks: {
+      user: {
+        create: {
+          // Runs after the user row and its signup credit grant commit. The welcome
+          // email is queued in the background so it never delays or fails signup.
+          after: async (user) => {
+            executionCtx.waitUntil(
+              queueWelcomeEmail(env, { id: user.id, email: user.email, name: user.name ?? '' })
+                .catch((error) => console.error({ event: 'welcome_email_queue_failed', ...safeErrorLog(error) })),
+            );
+          },
+        },
+      },
+    },
     plugins: [
       oAuthProxy({
         productionURL: env.AUTH_BASE_URL,

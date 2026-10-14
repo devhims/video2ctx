@@ -197,4 +197,43 @@ describe('Better Auth API-key configuration', () => {
     expect(captured.webhooks?.onCustomerStateChanged).toEqual(expect.any(Function));
     expect(captured.webhooks?.onSubscriptionRevoked).toEqual(expect.any(Function));
   });
+
+  test('queues the welcome email in the background after a user is created', async () => {
+    const send = vi.fn(async () => undefined);
+    const waitUntil = vi.fn();
+    createAuth({ ...welcomeAuthEnv(), EMAIL_TASKS: { send } } as unknown as Env, { waitUntil });
+
+    await captured.auth!.databaseHooks.user.create.after({ id: 'user-1', email: 'ari@customer.test', name: 'Ari Lee' }, null);
+
+    expect(waitUntil).toHaveBeenCalledOnce();
+    await waitUntil.mock.calls[0]?.[0];
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'welcome', idempotencyKey: 'welcome:user-1' }), { contentType: 'json' });
+  });
+
+  test('does not fail signup when the welcome email cannot be queued', async () => {
+    const send = vi.fn(async () => { throw new Error('queue unavailable'); });
+    const waitUntil = vi.fn();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createAuth({ ...welcomeAuthEnv(), EMAIL_TASKS: { send } } as unknown as Env, { waitUntil });
+
+    await expect(captured.auth!.databaseHooks.user.create.after({ id: 'user-2', email: 'ari@customer.test', name: 'Ari' }, null)).resolves.toBeUndefined();
+    await expect(waitUntil.mock.calls[0]?.[0]).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ event: 'welcome_email_queue_failed' }));
+    log.mockRestore();
+  });
 });
+
+function welcomeAuthEnv() {
+  return {
+    AUTH_BASE_URL: 'http://localhost:3000',
+    APP_ORIGIN: 'http://localhost:3000',
+    BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',
+    OAUTH_PROXY_SECRET: 'test-oauth-proxy-secret-that-is-long-enough',
+    POLAR_ACCESS_TOKEN: 'polar-token',
+    POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
+    POLAR_BUILDER_PRODUCT_ID: 'builder-product',
+    POLAR_ENVIRONMENT: 'sandbox',
+    STARTER_ONBOARDING_CREDITS: '1000',
+    WELCOME_EMAIL_FROM: 'himanshu@notify.video2ctx.dev',
+  };
+}

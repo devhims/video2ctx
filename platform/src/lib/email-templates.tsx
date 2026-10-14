@@ -14,6 +14,9 @@ import {
   render,
   toPlainText,
 } from 'react-email';
+import { WelcomeEmail, type WelcomeEmailData } from './welcome-email';
+
+export type { WelcomeEmailData };
 
 export interface MonitorAlertEmailData {
   recipientName: string;
@@ -57,6 +60,10 @@ export async function renderNotificationOptInEmail(data: NotificationOptInEmailD
 
 export async function renderDigestEmail(data: DigestEmailData): Promise<{ html: string; text: string }> {
   return renderEmail(<DigestEmail {...data} />);
+}
+
+export async function renderWelcomeEmail(data: WelcomeEmailData): Promise<{ html: string; text: string }> {
+  return renderEmail(<WelcomeEmail {...data} />);
 }
 
 export async function renderScaleInquiryEmail(data: ScaleInquiryEmailData): Promise<{ html: string; text: string }> {

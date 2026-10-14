@@ -145,7 +145,7 @@ X-Demo-User: postman
 
 The `platform/wrangler.jsonc` file binds separate preview and production D1 databases and Workers KV namespaces. Wrangler development uses the preview IDs; deployment uses the production IDs. Before production deployment:
 
-1. Enable Email Sending for the domain in `EMAIL_FROM` and update that address.
+1. Enable Email Sending for the domain in `EMAIL_FROM` and update that address. Product emails (sign-in links, monitor alerts, digests) send as `video2ctx <EMAIL_FROM>`; the welcome email sends as `Himanshu from video2ctx <WELCOME_EMAIL_FROM>`. Both addresses must be listed in the `EMAIL` binding's `allowed_sender_addresses`.
 2. Set `APP_ORIGIN`, `AUTH_BASE_URL`, `ENVIRONMENT=production`, `POLAR_ENVIRONMENT`, `POLAR_BUILDER_PRODUCT_ID`, admin emails, and plan limits per environment.
 3. Add secrets interactively: `BETTER_AUTH_SECRET`, Google client credentials, a base64 32-byte `YOUTUBE_OAUTH_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, `POLAR_ACCESS_TOKEN`, and `POLAR_WEBHOOK_SECRET`. If direct YouTube egress is unreliable, also run `wrangler secret put OUTBOUND_PROXY_URL` and enter the proxy URL interactively.
 4. Connect the platform to Cloudflare Builds and the web application to Vercel, using the repository settings in `reference/engineering/DEPLOYMENT.md`.
