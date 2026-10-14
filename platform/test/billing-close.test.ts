@@ -1,7 +1,7 @@
 const deleteExternal = vi.hoisted(() => vi.fn());
 vi.mock('../src/lib/polar-client', () => ({ polarClient: () => ({ customers: { deleteExternal } }) }));
 
-import { closeBillingAccount } from '../src/lib/billing';
+import { closeBillingAccount, requireNoRenewingSubscription } from '../src/lib/billing';
 
 const polarError = (statusCode: number) => Object.assign(new Error(`Status ${statusCode}`), { statusCode });
 
@@ -45,5 +45,22 @@ describe('closing the billing account on account deletion', () => {
   test('stops deletion when Polar rejects the request', async () => {
     deleteExternal.mockRejectedValue(polarError(401));
     await expect(closeBillingAccount(billingEnv('polar-token', true), 'user-1')).rejects.toThrow('Status 401');
+  });
+});
+
+describe('renewing subscription guard on account deletion', () => {
+  const rowEnv = (row: Record<string, unknown> | null) => ({
+    DB: { prepare: () => ({ bind: () => ({ first: async () => row }) }) },
+  }) as unknown as Env;
+
+  test('blocks a Builder plan that will renew', async () => {
+    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'builder', cancel_at_period_end: 0 }), 'user-1'))
+      .rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+  });
+
+  test('allows a cancelled Builder plan, a Starter plan and a never-billed user', async () => {
+    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'builder', cancel_at_period_end: 1 }), 'user-1')).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(rowEnv({ plan: 'starter', cancel_at_period_end: 0 }), 'user-1')).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(rowEnv(null), 'user-1')).resolves.toBeUndefined();
   });
 });

@@ -252,6 +252,19 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   ]);
 }
 
+/**
+ * A Builder plan that will renew must be cancelled before the account is deleted,
+ * so deletion never ends a paid subscription on the user's behalf. A plan already
+ * set to cancel at period end may be deleted; the remaining period is forfeited.
+ */
+export async function requireNoRenewingSubscription(env: Env, userId: string): Promise<void> {
+  const row = await env.DB.prepare('SELECT plan,cancel_at_period_end FROM billing_accounts WHERE user_id=?')
+    .bind(userId).first<{ plan: string; cancel_at_period_end: number }>();
+  if (row?.plan === 'builder' && row.cancel_at_period_end !== 1) {
+    throw new ApiError(409, 'SUBSCRIPTION_ACTIVE', 'Cancel your Builder plan before deleting your account.');
+  }
+}
+
 /** Records that checkout is about to reach Polar, so deletion knows a Polar customer may exist. */
 export async function recordCheckoutIntent(env: Env, userId: string): Promise<void> {
   await env.DB.prepare('INSERT INTO billing_checkout_intents (user_id,created_at) VALUES (?,?) ON CONFLICT(user_id) DO NOTHING')

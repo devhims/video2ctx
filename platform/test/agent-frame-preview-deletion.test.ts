@@ -4,7 +4,8 @@ import { ApiError, jsonError } from '../src/lib/http';
 import { framePreviewPrefix } from '../src/agents/runtime/frame-previews';
 
 const closeBillingAccount = vi.hoisted(() => vi.fn());
-vi.mock('../src/lib/billing', () => ({ closeBillingAccount }));
+const requireNoRenewingSubscription = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/billing', () => ({ closeBillingAccount, requireNoRenewingSubscription }));
 vi.mock('../src/lib/oauth', () => ({ disconnectYoutube: vi.fn() }));
 import { sessionRoutes } from '../src/routes/session/session.index';
 
@@ -63,4 +64,31 @@ test('account deletion closes billing first and keeps all local data when that f
   expect(response.status).toBe(503);
   await expect(response.json()).resolves.toMatchObject({ error: { code: 'BILLING_UNAVAILABLE' } });
   expect(calls).toEqual(['billing']);
+});
+
+test('account deletion refuses a renewing paid plan before touching billing or local data', async () => {
+  const calls: string[] = [];
+  requireNoRenewingSubscription.mockImplementationOnce(async () => {
+    calls.push('subscription');
+    throw new ApiError(409, 'SUBSCRIPTION_ACTIVE', 'Cancel your Builder plan before deleting your account.');
+  });
+  closeBillingAccount.mockImplementationOnce(async () => { calls.push('billing'); });
+  const env = {
+    USER_ACCOUNT: { getByName: () => ({ beginDeletion: async () => { calls.push('agent'); return []; }, finishDeletion: vi.fn() }) },
+    RESEARCH: { list: async () => { calls.push('r2'); return { truncated: false, objects: [] }; }, delete: vi.fn() },
+    TASKS: { send: async () => { calls.push('search'); } },
+    DB: { prepare: (sql: string) => ({ bind: () => ({ run: async () => { calls.push(sql); } }) }) },
+  } as unknown as Env;
+  const app = new Hono<App>();
+  app.use('*', async (c, next) => {
+    const user = { id: 'owner', email: 'owner@example.test', name: 'Owner' };
+    c.set('user', user); c.set('principal', { user, method: 'session', permissions: {} }); await next();
+  });
+  app.route('/', sessionRoutes);
+  app.onError((error, c) => jsonError(c, error));
+
+  const response = await app.request('/account', { method: 'DELETE' }, env);
+  expect(response.status).toBe(409);
+  await expect(response.json()).resolves.toMatchObject({ error: { code: 'SUBSCRIPTION_ACTIVE' } });
+  expect(calls).toEqual(['subscription']);
 });

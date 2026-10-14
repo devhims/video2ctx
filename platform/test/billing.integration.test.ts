@@ -10,6 +10,7 @@ import {
   applyRefundedOrder,
   closeBillingAccount,
   recordCheckoutIntent,
+  requireNoRenewingSubscription,
   syncCustomerState,
   type PaymentWebhookEnv,
 } from '../src/lib/billing';
@@ -93,6 +94,22 @@ describe('Polar payment queries on D1', () => {
     await expect(account(billedUser)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
 
     await expect(closeBillingAccount(unconfigured, freeUser)).resolves.toBeUndefined();
+  });
+
+  test('account deletion requires a renewing Builder plan to be cancelled first', async () => {
+    const renewing = 'payment-delete-renewing-user';
+    const cancelling = 'payment-delete-cancelling-user';
+    const starter = 'payment-delete-starter-user';
+    await createUser(renewing);
+    await createUser(cancelling);
+    await createUser(starter);
+    await syncCustomerState(env, activeCustomerState(renewing));
+    await syncCustomerState(env, activeCustomerState(cancelling, true));
+    const deletionEnv = env as unknown as Env;
+
+    await expect(requireNoRenewingSubscription(deletionEnv, renewing)).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
+    await expect(requireNoRenewingSubscription(deletionEnv, cancelling)).resolves.toBeUndefined();
+    await expect(requireNoRenewingSubscription(deletionEnv, starter)).resolves.toBeUndefined();
   });
 
   test('a started checkout blocks token-less cleanup before any webhook arrives', async () => {
@@ -180,7 +197,7 @@ function refundedOrder(userId: string, id: string): WebhookOrderRefundedPayload 
   } as WebhookOrderRefundedPayload;
 }
 
-function activeCustomerState(userId: string): WebhookCustomerStateChangedPayload {
+function activeCustomerState(userId: string, cancelAtPeriodEnd = false): WebhookCustomerStateChangedPayload {
   return {
     type: 'customer.state_changed',
     timestamp: new Date('2026-08-24T00:00:00.000Z'),
@@ -191,7 +208,7 @@ function activeCustomerState(userId: string): WebhookCustomerStateChangedPayload
         id: `subscription-${userId}`,
         productId: 'builder-product',
         status: 'active',
-        cancelAtPeriodEnd: false,
+        cancelAtPeriodEnd,
         currentPeriodStart: new Date('2026-08-01T00:00:00.000Z'),
         currentPeriodEnd: new Date('2026-09-01T00:00:00.000Z'),
       }],

@@ -136,6 +136,11 @@ export function canDeleteAccount(value: string): boolean {
   return value === DELETE_ACCOUNT_CONFIRMATION;
 }
 
+/** Mirrors the platform rule: a Builder plan that will renew must be cancelled before deletion. */
+export function subscriptionBlocksDeletion(billing: Pick<DashboardBilling, 'plan' | 'cancelAtPeriodEnd'> | null | undefined): boolean {
+  return billing?.plan === 'builder' && !billing.cancelAtPeriodEnd;
+}
+
 export function creditBalanceFromHeaders(headers: Headers): number | undefined {
   const value = headers.get('X-Credits-Remaining');
   if (!value || !/^\d+$/.test(value)) return undefined;

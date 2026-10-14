@@ -21,7 +21,7 @@ import { ApiError, asId, body, now, sha256, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
 import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
-import { closeBillingAccount, getBillingSummary } from '../../lib/billing';
+import { closeBillingAccount, getBillingSummary, requireNoRenewingSubscription } from '../../lib/billing';
 import { deleteProjectAssets, deleteR2Prefix, userSearchInstanceId } from '../../lib/research-storage';
 import { getProvider } from '../../providers';
 import {
@@ -643,8 +643,10 @@ sessionRoutes.get('/billing', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
-  // Billing is the external step most likely to fail, so it runs before any
-  // local data is removed. Every step tolerates a retry after a partial run.
+  // A renewing paid plan must be cancelled by the user first. Billing is the
+  // external step most likely to fail, so it runs before any local data is
+  // removed. Every step tolerates a retry after a partial run.
+  await requireNoRenewingSubscription(c.env, user.id);
   await closeBillingAccount(c.env, user.id);
   await deleteAgentAccountData(c.env, user.id);
   await disconnectYoutube(c.env, user.id);
