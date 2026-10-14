@@ -53,13 +53,18 @@ describe('renewing subscription guard on account deletion', () => {
   const configured = { POLAR_ACCESS_TOKEN: 'polar-token' } as unknown as Env;
   type Sub = { status: string; cancelAtPeriodEnd: boolean };
   // Mirrors the SDK's paginated result: awaited once, then iterated page by page.
-  const pages = (...items: Sub[][]) => ({
-    async *[Symbol.asyncIterator]() { for (const page of items) yield { result: { items: page } }; },
+  const pages = (...items: Array<Sub[] | Error>) => ({
+    async *[Symbol.asyncIterator]() {
+      for (const page of items) {
+        if (page instanceof Error) throw page;
+        yield { result: { items: page } };
+      }
+    },
   });
   beforeEach(() => { listSubscriptions.mockReset(); });
 
   test('asks Polar for every subscription and blocks billable ones that will renew', async () => {
-    for (const status of ['active', 'trialing', 'past_due', 'unpaid']) {
+    for (const status of ['active', 'trialing', 'past_due']) {
       listSubscriptions.mockResolvedValue(pages([{ status, cancelAtPeriodEnd: false }]));
       await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409, code: 'SUBSCRIPTION_ACTIVE' });
     }
@@ -71,9 +76,11 @@ describe('renewing subscription guard on account deletion', () => {
     await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toMatchObject({ status: 409 });
   });
 
-  test('allows ended, never-started and cancelling subscriptions, and users Polar has never seen', async () => {
+  test('allows ended, revoked, never-started and cancelling subscriptions, and users Polar has never seen', async () => {
     listSubscriptions.mockResolvedValue(pages([
       { status: 'canceled', cancelAtPeriodEnd: false },
+      // Unpaid is revoked in Polar and cannot be cancelled, so historical ones must not block forever.
+      { status: 'unpaid', cancelAtPeriodEnd: false },
       { status: 'incomplete_expired', cancelAtPeriodEnd: false },
       { status: 'incomplete', cancelAtPeriodEnd: false },
       { status: 'past_due', cancelAtPeriodEnd: true },
@@ -88,6 +95,13 @@ describe('renewing subscription guard on account deletion', () => {
   test('stops deletion when Polar cannot answer', async () => {
     listSubscriptions.mockRejectedValue(polarError(500));
     await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toThrow('Status 500');
+  });
+
+  test('a failed later page stops deletion instead of discarding what was read', async () => {
+    listSubscriptions.mockResolvedValue(pages([{ status: 'active', cancelAtPeriodEnd: false }], polarError(404)));
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toThrow('Status 404');
+    listSubscriptions.mockResolvedValue(pages([{ status: 'canceled', cancelAtPeriodEnd: false }], polarError(503)));
+    await expect(requireNoRenewingSubscription(configured, 'user-1')).rejects.toThrow('Status 503');
   });
 
   test('does not ask Polar without a token', async () => {

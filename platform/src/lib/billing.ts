@@ -255,21 +255,25 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
 /** Every subscription Polar holds for a user, or null when Polar has never seen them. */
 export type PolarSubscriptionLookup = (env: Env, userId: string) => Promise<Array<{ status: string; cancelAtPeriodEnd: boolean }> | null>;
 
-// Polar's customer state lists only active and trialing subscriptions, but past-due
-// and unpaid ones are still billable and are terminated by customer deletion.
-const BILLABLE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid']);
+// Polar's customer state lists only active and trialing subscriptions, but a
+// past-due one is still billable and is terminated by customer deletion. Unpaid
+// is revoked in Polar, not billable, and can no longer be cancelled.
+const BILLABLE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 const lookupPolarSubscriptions: PolarSubscriptionLookup = async (env, userId) => {
+  const { polarClient } = await import('./polar-client');
+  let pages;
   try {
-    const { polarClient } = await import('./polar-client');
-    const pages = await polarClient(env).subscriptions.list({ externalCustomerId: userId, limit: 100 });
-    const subscriptions: Array<{ status: string; cancelAtPeriodEnd: boolean }> = [];
-    for await (const page of pages) subscriptions.push(...page.result.items);
-    return subscriptions;
+    pages = await polarClient(env).subscriptions.list({ externalCustomerId: userId, limit: 100 });
   } catch (cause) {
+    // Only a 404 on the first request means Polar has never seen this user.
     if (isHttpStatus(cause, 404)) return null;
     throw cause;
   }
+  // A failure on any later page stops deletion rather than discarding what was read.
+  const subscriptions: Array<{ status: string; cancelAtPeriodEnd: boolean }> = [];
+  for await (const page of pages) subscriptions.push(...page.result.items);
+  return subscriptions;
 };
 
 /**
