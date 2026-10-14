@@ -87,11 +87,13 @@ const darkRules = `
 
 /* Gmail drops a whole <style> block when any rule in it is unsupported, so the
  * rules are split by who reads them. The mobile block uses only class selectors,
- * which Gmail keeps. Apple Mail, iOS Mail and Outlook for Mac honour the colour
- * scheme query; Outlook.com marks its dark mode with data-ogsc (text) and
- * data-ogsb (backgrounds). Gmail applies its own inversion to the light default. */
+ * which Gmail keeps, and sets type a step smaller: at desktop sizes Gmail on
+ * Android rendered the body noticeably larger than comparable product emails.
+ * Apple Mail, iOS Mail and Outlook for Mac honour the colour scheme query;
+ * Outlook.com marks its dark mode with data-ogsc (text) and data-ogsb
+ * (backgrounds). Gmail applies its own inversion to the light default. */
 const prefixRules = (prefix: string) => darkRules.trim().split('\n').map((rule) => `${prefix} ${rule}`).join('\n');
-const mobileStyles = '@media only screen and (max-width:620px){.v-wrap{padding:16px 6px!important}.v-pad{padding:28px 20px!important}.v-hero{font-size:34px!important;line-height:38px!important}}';
+const mobileStyles = '@media only screen and (max-width:620px){.v-wrap{padding:16px 6px!important}.v-pad{padding:28px 20px!important}.v-hero{font-size:30px!important;line-height:34px!important}.v-lede{font-size:16px!important;line-height:24px!important}.v-body{font-size:14px!important;line-height:23px!important}.v-small{font-size:13px!important;line-height:20px!important}}';
 const schemeStyles = `:root{color-scheme:light dark;supported-color-schemes:light dark}
 @media (prefers-color-scheme:dark){${darkRules}}`;
 const outlookStyles = `${prefixRules('[data-ogsc]')}
@@ -130,13 +132,13 @@ export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agen
               {/* Keeps "Context out." together, so narrow screens break after "Video in." */}
             Video in. Context{'\u00a0'}out.
             </Heading>
-            <Text className='v-soft' style={lede}>{firstName ? `Welcome to video2ctx, ${firstName}.` : 'Welcome to video2ctx.'}</Text>
+            <Text className='v-soft v-lede' style={lede}>{firstName ? `Welcome to video2ctx, ${firstName}.` : 'Welcome to video2ctx.'}</Text>
 
-            <Text className='v-ink' style={body}>{firstName ? `Hi ${firstName},` : 'Hi there,'}</Text>
-            <Text className='v-ink' style={body}>
+            <Text className='v-ink v-body' style={body}>{firstName ? `Hi ${firstName},` : 'Hi there,'}</Text>
+            <Text className='v-ink v-body' style={body}>
               I'm Himanshu, the developer behind video2ctx. Thank you for signing up. It genuinely means a lot that you're giving it a try!
             </Text>
-            <Text className='v-ink' style={body}>
+            <Text className='v-ink v-body' style={body}>
               I built video2ctx because agents are still bad at video. They either can't watch it, or burn minutes and a pile of tokens to answer one question. video2ctx gives your agent exactly what it needs to understand and answer questions from a video, using about 95% fewer tokens.
             </Text>
 
@@ -151,33 +153,33 @@ export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agen
             <Section className='v-inset' style={creditsPanel}>
               <Text className='v-accent' style={eyebrow}>Starter credits</Text>
               <Text className='v-ink' style={creditsFigure}>{credits} free credits</Text>
-              <Text className='v-soft' style={creditsNote}>Already in your account, no card needed.</Text>
+              <Text className='v-soft v-small' style={creditsNote}>Already in your account, no card needed.</Text>
             </Section>
 
             <Text className='v-ink' style={sectionTitle}>Get started your way</Text>
 
             <Step index='01' title='Video Agent' badge='New'>
-              <Text className='v-soft' style={stepText}>Ask a question and it finds and watches the videos for you.</Text>
+              <Text className='v-soft v-small' style={stepText}>Ask a question and it finds and watches the videos for you.</Text>
               <Link href={agentUrl} className='v-accent' style={actionLink}>Try Video Agent →</Link>
             </Step>
 
             <Step index='02' title='Agent Skills'>
-              <Text className='v-soft' style={stepText}>Use it with Claude Code, Codex or any agent that loads skills, free of charge.</Text>
+              <Text className='v-soft v-small' style={stepText}>Use it with Claude Code, Codex or any agent that loads skills, free of charge.</Text>
               <Code lines={['npx skills add devhims/video2ctx']} />
             </Step>
 
             <Step index='03' title='CLI + Skill' last>
-              <Text className='v-soft' style={stepText}>Anything you can do in the dashboard, you can also do from the terminal.</Text>
+              <Text className='v-soft v-small' style={stepText}>Anything you can do in the dashboard, you can also do from the terminal.</Text>
               <Link href={CLI_SETUP_URL} className='v-accent' style={actionLink}>Set up the CLI →</Link>
             </Step>
 
-            <Text className='v-soft' style={developerNote}>
+            <Text className='v-soft v-small' style={developerNote}>
               Building an app? See the <Link href={API_REFERENCE_URL} className='v-accent' style={inlineLink}>API reference</Link> or <Link href={NPM_PACKAGE_URL} className='v-accent' style={inlineLink}>all-things-youtube</Link> on npm.
             </Text>
 
             <Button href={dashboardUrl} className='v-button' style={button}>Open your dashboard</Button>
 
-            <Text className='v-ink' style={body}>
+            <Text className='v-ink v-body' style={body}>
               If you have any feedback or questions, or you're building something with video, just reply. It comes straight to me.
             </Text>
 
