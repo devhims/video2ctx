@@ -1357,7 +1357,10 @@ html:has(.craft) {
   background: var(--ink);
   color: var(--paper);
   pointer-events: none;
-  transition: clip-path var(--control) var(--in-out);
+  /* Ease-out, not ease-in-out: the click already swapped the panel, so the
+   * pill has to move at once. An ease-in start covers only a few percent of
+   * the distance in its first frames, which reads as lag. */
+  transition: clip-path var(--control) var(--out);
 }
 
 .craft-panel {
