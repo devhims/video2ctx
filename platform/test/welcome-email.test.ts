@@ -4,7 +4,6 @@ import { queueWelcomeEmail } from '../src/lib/notification-delivery';
 const urls = {
   dashboardUrl: 'https://www.video2ctx.dev/dashboard',
   agentUrl: 'https://www.video2ctx.dev/dashboard/sessions',
-  assetOrigin: 'https://www.video2ctx.dev',
 };
 
 describe('welcome email', () => {
@@ -35,6 +34,9 @@ describe('welcome email', () => {
     expect(html).toContain('name="color-scheme" content="light dark"');
     expect(html).toContain('@media (prefers-color-scheme:dark)');
     expect(html).toContain('[data-ogsc] .v-ink');
+    expect(html).toContain('src="cid:video2ctx-logo"');
+    expect(html).toMatch(/<img[^>]*alt=""[^>]*src="cid:video2ctx-logo"|<img[^>]*src="cid:video2ctx-logo"[^>]*alt=""/);
+    expect(html).not.toContain('<svg');
   });
 });
 

@@ -15,14 +15,13 @@ import {
   Section,
   Text,
 } from 'react-email';
+import { EMAIL_LOGO } from './email-logo';
 
 export interface WelcomeEmailData {
   recipientName: string;
   starterCredits: number;
   dashboardUrl: string;
   agentUrl: string;
-  /** Origin of the web app, which serves the logo. */
-  assetOrigin: string;
 }
 
 const DOCS_URL = 'https://docs.video2ctx.dev';
@@ -86,18 +85,19 @@ const darkRules = `
 .v-button{background-color:${dark.accent}!important;color:${dark.accentInk}!important}
 .v-code{background-color:${dark.page}!important}`;
 
-/* Apple Mail, iOS Mail and Outlook for Mac honour the media query. Outlook.com
- * marks its dark mode with data-ogsc (text) and data-ogsb (backgrounds). Gmail
- * ignores both and applies its own inversion to the light default. */
+/* Gmail drops a whole <style> block when any rule in it is unsupported, so the
+ * rules are split by who reads them. The mobile block uses only class selectors,
+ * which Gmail keeps. Apple Mail, iOS Mail and Outlook for Mac honour the colour
+ * scheme query; Outlook.com marks its dark mode with data-ogsc (text) and
+ * data-ogsb (backgrounds). Gmail applies its own inversion to the light default. */
 const prefixRules = (prefix: string) => darkRules.trim().split('\n').map((rule) => `${prefix} ${rule}`).join('\n');
-const headStyles = `
-:root{color-scheme:light dark;supported-color-schemes:light dark}
-@media (prefers-color-scheme:dark){${darkRules}}
-${prefixRules('[data-ogsc]')}
-${prefixRules('[data-ogsb]')}
-@media only screen and (max-width:620px){.v-card{padding:28px 22px!important}.v-hero{font-size:34px!important;line-height:38px!important}}`;
+const mobileStyles = '@media only screen and (max-width:620px){.v-wrap{padding:16px 6px!important}.v-pad{padding:28px 20px!important}.v-hero{font-size:34px!important;line-height:38px!important}}';
+const schemeStyles = `:root{color-scheme:light dark;supported-color-schemes:light dark}
+@media (prefers-color-scheme:dark){${darkRules}}`;
+const outlookStyles = `${prefixRules('[data-ogsc]')}
+${prefixRules('[data-ogsb]')}`;
 
-export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agentUrl, assetOrigin }: WelcomeEmailData) {
+export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agentUrl }: WelcomeEmailData) {
   const credits = starterCredits.toLocaleString('en-US');
   const firstName = recipientName.trim().split(/\s+/)[0];
   return <Html lang='en' dir='ltr'>
@@ -105,111 +105,122 @@ export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agen
       <meta name='color-scheme' content='light dark' />
       <meta name='supported-color-schemes' content='light dark' />
       <link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap' />
-      <style>{headStyles}</style>
+      <style>{mobileStyles}</style>
+      <style>{schemeStyles}</style>
+      <style>{outlookStyles}</style>
     </Head>
     <Preview>{`A note from Himanshu, plus ${credits} free credits to start.`}</Preview>
     {/* Body copies its style onto an inner cell the dark class cannot reach, so
         the page colour and spacing live on a classed wrapper instead. */}
     <Body className='v-page' style={{ margin: 0, backgroundColor: light.page }}>
-      <Section className='v-page' style={page}>
+      <PaddedCell className='v-page v-wrap' style={page}>
         <Container className='v-card' style={card}>
+          <PaddedCell className='v-pad' style={cardPadding}>
+            {/* Empty alt text: the wordmark beside the logo already names the product. */}
           <Row style={{ marginBottom: '40px' }}>
-            <Column style={{ width: '40px', verticalAlign: 'middle' }}>
-              <Img src={`${assetOrigin}/apple-icon.png`} width='28' height='28' alt='video2ctx' style={logo} />
-            </Column>
-            <Column style={{ verticalAlign: 'middle' }}>
-              <Text className='v-ink' style={wordmark}>video2<span className='v-soft' style={wordmarkCtx}>ctx</span></Text>
-            </Column>
-          </Row>
+              <Column style={{ width: '48px', verticalAlign: 'middle' }}>
+                <Img src={`cid:${EMAIL_LOGO.contentId}`} width='36' height='36' alt='' style={logo} />
+              </Column>
+              <Column style={{ verticalAlign: 'middle' }}>
+                <Text className='v-ink' style={wordmark}>video2<span className='v-soft' style={wordmarkCtx}>ctx</span></Text>
+              </Column>
+            </Row>
 
-          <Heading as='h1' className='v-ink v-hero' style={hero}>
-            Video in. Context out.
-          </Heading>
-          <Text className='v-soft' style={lede}>{firstName ? `Welcome to video2ctx, ${firstName}.` : 'Welcome to video2ctx.'}</Text>
+            <Heading as='h1' className='v-ink v-hero' style={hero}>
+              {/* Keeps "Context out." together, so narrow screens break after "Video in." */}
+            Video in. Context{'\u00a0'}out.
+            </Heading>
+            <Text className='v-soft' style={lede}>{firstName ? `Welcome to video2ctx, ${firstName}.` : 'Welcome to video2ctx.'}</Text>
 
-          <Text className='v-ink' style={body}>{firstName ? `Hi ${firstName},` : 'Hi there,'}</Text>
-          <Text className='v-ink' style={body}>
-            I'm Himanshu, the developer behind video2ctx. Thank you for signing up. It genuinely means a lot that you're giving it a try!
-          </Text>
-          <Text className='v-ink' style={body}>
-            I built video2ctx because agents are still bad at video. They either can't watch it, or burn minutes and a pile of tokens to answer one question. video2ctx gives your agent exactly what it needs to understand and answer questions from a video, using about 95% fewer tokens.
-          </Text>
+            <Text className='v-ink' style={body}>{firstName ? `Hi ${firstName},` : 'Hi there,'}</Text>
+            <Text className='v-ink' style={body}>
+              I'm Himanshu, the developer behind video2ctx. Thank you for signing up. It genuinely means a lot that you're giving it a try!
+            </Text>
+            <Text className='v-ink' style={body}>
+              I built video2ctx because agents are still bad at video. They either can't watch it, or burn minutes and a pile of tokens to answer one question. video2ctx gives your agent exactly what it needs to understand and answer questions from a video, using about 95% fewer tokens.
+            </Text>
 
-          {/* Parked with BENEFITS above; may return in a later version.
-          <Text className='v-ink' style={{ ...sectionTitle, margin: '30px 0 14px' }}>Context you can check</Text>
-          {BENEFITS.map((benefit) => <Section key={benefit.title} style={benefitRow}>
-            <Text className='v-ink' style={benefitTitle}><span className='v-accent' style={benefitMark}>■</span>{benefit.title}</Text>
-            <Text className='v-soft' style={benefitBody}>{benefit.body}</Text>
-          </Section>)}
-          */}
+            {/* Parked with BENEFITS above; may return in a later version.
+            <Text className='v-ink' style={{ ...sectionTitle, margin: '30px 0 14px' }}>Context you can check</Text>
+            {BENEFITS.map((benefit) => <Section key={benefit.title} style={benefitRow}>
+              <Text className='v-ink' style={benefitTitle}><span className='v-accent' style={benefitMark}>■</span>{benefit.title}</Text>
+              <Text className='v-soft' style={benefitBody}>{benefit.body}</Text>
+            </Section>)}
+            */}
 
-          <Section className='v-inset' style={creditsPanel}>
-            <Text className='v-accent' style={eyebrow}>Starter credits</Text>
-            <Text className='v-ink' style={creditsFigure}>{credits} free credits</Text>
-            <Text className='v-soft' style={creditsNote}>Already in your account, no card needed.</Text>
-          </Section>
+            <Section className='v-inset' style={creditsPanel}>
+              <Text className='v-accent' style={eyebrow}>Starter credits</Text>
+              <Text className='v-ink' style={creditsFigure}>{credits} free credits</Text>
+              <Text className='v-soft' style={creditsNote}>Already in your account, no card needed.</Text>
+            </Section>
 
-          <Text className='v-ink' style={sectionTitle}>Get started your way</Text>
+            <Text className='v-ink' style={sectionTitle}>Get started your way</Text>
 
-          <Step index='01' title='Video Agent' badge='New'>
-            <Text className='v-soft' style={stepText}>Ask a question and it finds and watches the videos for you.</Text>
-            <Link href={agentUrl} className='v-accent' style={actionLink}>Try Video Agent →</Link>
-          </Step>
+            <Step index='01' title='Video Agent' badge='New'>
+              <Text className='v-soft' style={stepText}>Ask a question and it finds and watches the videos for you.</Text>
+              <Link href={agentUrl} className='v-accent' style={actionLink}>Try Video Agent →</Link>
+            </Step>
 
-          <Step index='02' title='Agent Skills'>
-            <Text className='v-soft' style={stepText}>Use it with Claude Code, Codex or any agent that loads skills, free of charge.</Text>
-            <Code lines={['npx skills add devhims/video2ctx']} />
-          </Step>
+            <Step index='02' title='Agent Skills'>
+              <Text className='v-soft' style={stepText}>Use it with Claude Code, Codex or any agent that loads skills, free of charge.</Text>
+              <Code lines={['npx skills add devhims/video2ctx']} />
+            </Step>
 
-          <Step index='03' title='CLI + Skill' last>
-            <Text className='v-soft' style={stepText}>Anything you can do in the dashboard, you can also do from the terminal.</Text>
-            <Link href={CLI_SETUP_URL} className='v-accent' style={actionLink}>Set up the CLI →</Link>
-          </Step>
+            <Step index='03' title='CLI + Skill' last>
+              <Text className='v-soft' style={stepText}>Anything you can do in the dashboard, you can also do from the terminal.</Text>
+              <Link href={CLI_SETUP_URL} className='v-accent' style={actionLink}>Set up the CLI →</Link>
+            </Step>
 
-          <Text className='v-soft' style={developerNote}>
-            Building an app? See the <Link href={API_REFERENCE_URL} className='v-accent' style={inlineLink}>API reference</Link> or <Link href={NPM_PACKAGE_URL} className='v-accent' style={inlineLink}>all-things-youtube</Link> on npm.
-          </Text>
+            <Text className='v-soft' style={developerNote}>
+              Building an app? See the <Link href={API_REFERENCE_URL} className='v-accent' style={inlineLink}>API reference</Link> or <Link href={NPM_PACKAGE_URL} className='v-accent' style={inlineLink}>all-things-youtube</Link> on npm.
+            </Text>
 
-          <Button href={dashboardUrl} className='v-button' style={button}>Open your dashboard</Button>
+            <Button href={dashboardUrl} className='v-button' style={button}>Open your dashboard</Button>
 
-          <Text className='v-ink' style={body}>
-            If you have any feedback or questions, or you're building something with video, just reply. It comes straight to me.
-          </Text>
+            <Text className='v-ink' style={body}>
+              If you have any feedback or questions, or you're building something with video, just reply. It comes straight to me.
+            </Text>
 
-                    <Text className='v-ink' style={signature}>Himanshu Gupta</Text>
-          <Text className='v-muted' style={signatureRole}>Founder, video2ctx</Text>
+                      <Text className='v-ink' style={signature}>Himanshu Gupta</Text>
+            <Text className='v-muted' style={signatureRole}>Founder, video2ctx</Text>
 
-          <Hr className='v-rule' style={rule} />
-          <Text className='v-muted' style={footer}>
-            You're receiving this one-time email because you created a video2ctx account.
-          </Text>
-          <Text className='v-muted' style={footer}>
-            <Link href={DOCS_URL} className='v-muted' style={footerLink}>Docs</Link>{'  ·  '}
-            <Link href={GITHUB_URL} className='v-muted' style={footerLink}>GitHub</Link>{'  ·  '}
-            <Link href={dashboardUrl} className='v-muted' style={footerLink}>Dashboard</Link>{'  ·  '}
-            <Link href={LICENSE_URL} className='v-muted' style={footerLink}>Apache 2.0</Link>
-          </Text>
+            <Hr className='v-rule' style={rule} />
+            <Text className='v-muted' style={footer}>
+              You're receiving this one-time email because you created a video2ctx account.
+            </Text>
+            <Text className='v-muted' style={footer}>
+              <Link href={DOCS_URL} className='v-muted' style={footerLink}>Docs</Link>{'  ·  '}
+              <Link href={GITHUB_URL} className='v-muted' style={footerLink}>GitHub</Link>{'  ·  '}
+              <Link href={dashboardUrl} className='v-muted' style={footerLink}>Dashboard</Link>{'  ·  '}
+              <Link href={LICENSE_URL} className='v-muted' style={footerLink}>Apache 2.0</Link>
+            </Text>
+          </PaddedCell>
         </Container>
-      </Section>
+      </PaddedCell>
     </Body>
   </Html>;
 }
 
+/* The number sits on the title line rather than in its own column: a column
+ * gets squeezed by long commands on narrow screens and costs body-text width. */
 function Step({ index, title, badge, last, children }: { index: string; title: string; badge?: string; last?: boolean; children: ReactNode }) {
   return <Section className='v-rule' style={{ ...step, ...(last ? { borderBottom: `1px solid ${light.rule}` } : {}) }}>
-    <Row>
-      <Column style={{ width: '40px', verticalAlign: 'top' }}>
-        <Text className='v-muted' style={stepIndex}>{index}</Text>
-      </Column>
-      <Column style={{ verticalAlign: 'top' }}>
-        <Text className='v-ink' style={stepTitle}>
-          {title}
-          {badge ? <>{' '}<span style={badgeStyle}>{badge.toUpperCase()}</span></> : null}
-        </Text>
-        {children}
-      </Column>
-    </Row>
+    <Text className='v-ink' style={stepTitle}>
+      <span className='v-muted' style={stepIndex}>{index}</span>
+      {title}
+      {badge ? <>{' '}<span style={badgeStyle}>{badge.toUpperCase()}</span></> : null}
+    </Text>
+    {children}
   </Section>;
+}
+
+/* react-email's Section and Container move padding onto an inner cell but keep
+ * the class on the outer table, so a class-based mobile override never reaches
+ * the padding. This cell carries both. */
+function PaddedCell({ className, style, children }: { className: string; style: CSSProperties; children: ReactNode }) {
+  return <table role='presentation' width='100%' cellPadding='0' cellSpacing='0' border={0}>
+    <tbody><tr><td className={className} style={style}>{children}</td></tr></tbody>
+  </table>;
 }
 
 function Code({ lines }: { lines: string[] }) {
@@ -221,9 +232,10 @@ function Code({ lines }: { lines: string[] }) {
 const sans = "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 const mono = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-const page: CSSProperties = { padding: '40px 12px', backgroundColor: light.page, fontFamily: sans, WebkitFontSmoothing: 'antialiased' };
-const card: CSSProperties = { maxWidth: '600px', margin: '0 auto', padding: '40px 44px', border: `1px solid ${light.rule}`, borderRadius: '16px', backgroundColor: light.card };
-const logo: CSSProperties = { display: 'block', borderRadius: '7px' };
+const page: CSSProperties = { padding: '32px 8px', backgroundColor: light.page, fontFamily: sans, WebkitFontSmoothing: 'antialiased' };
+const cardPadding: CSSProperties = { padding: '36px 32px' };
+const card: CSSProperties = { maxWidth: '600px', margin: '0 auto', border: `1px solid ${light.rule}`, borderRadius: '16px', backgroundColor: light.card };
+const logo: CSSProperties = { display: 'block' };
 const wordmark: CSSProperties = { margin: 0, color: light.ink, fontSize: '18px', fontWeight: 700, letterSpacing: '-0.6px', lineHeight: '28px' };
 const wordmarkCtx: CSSProperties = { marginLeft: '1px', color: light.soft, fontFamily: mono, fontWeight: 500, letterSpacing: 0 };
 const hero: CSSProperties = { margin: '0 0 10px', color: light.ink, fontSize: '42px', fontWeight: 700, lineHeight: '46px', letterSpacing: '-1.8px' };
@@ -241,14 +253,14 @@ const creditsNote: CSSProperties = { margin: 0, color: light.soft, fontSize: '14
 const sectionTitle: CSSProperties = { margin: '0 0 6px', color: light.ink, fontSize: '20px', fontWeight: 700, lineHeight: '28px', letterSpacing: '-0.5px' };
 const developerNote: CSSProperties = { margin: '22px 0 26px', color: light.soft, fontSize: '14px', lineHeight: '22px' };
 const step: CSSProperties = { padding: '20px 0', borderTop: `1px solid ${light.rule}` };
-const stepIndex: CSSProperties = { margin: '1px 0 0', color: light.muted, fontFamily: mono, fontSize: '12px', lineHeight: '22px' };
+const stepIndex: CSSProperties = { display: 'inline-block', width: '30px', color: light.muted, fontFamily: mono, fontSize: '12px', fontWeight: 400, letterSpacing: 0 };
 const stepTitle: CSSProperties = { margin: '0 0 6px', color: light.ink, fontSize: '16px', fontWeight: 600, lineHeight: '22px', letterSpacing: '-0.2px' };
 const stepText: CSSProperties = { margin: '0 0 12px', color: light.soft, fontSize: '14px', lineHeight: '22px' };
 const badgeStyle: CSSProperties = { display: 'inline-block', marginLeft: '4px', padding: '1px 5px', borderRadius: '4px', backgroundColor: light.accent, color: light.accentInk, fontSize: '10px', fontWeight: 800, letterSpacing: '0.4px', lineHeight: '15px', verticalAlign: '2px' };
 const actionLink: CSSProperties = { color: light.accentText, fontSize: '14px', fontWeight: 600, lineHeight: '22px', textDecoration: 'none' };
 const inlineLink: CSSProperties = { color: light.accentText, textDecoration: 'underline' };
-const codeBlock: CSSProperties = { margin: '0 0 12px', padding: '12px 14px', border: `1px solid ${codeSurface.border}`, borderRadius: '8px', backgroundColor: codeSurface.background };
-const codeLine: CSSProperties = { margin: 0, color: codeSurface.ink, fontFamily: mono, fontSize: '13px', lineHeight: '22px', overflowWrap: 'anywhere' };
+const codeBlock: CSSProperties = { margin: 0, padding: '12px 14px', border: `1px solid ${codeSurface.border}`, borderRadius: '8px', backgroundColor: codeSurface.background };
+const codeLine: CSSProperties = { margin: 0, color: codeSurface.ink, fontFamily: mono, fontSize: '13px', lineHeight: '22px', overflowWrap: 'anywhere', wordBreak: 'break-word' };
 const codePrompt: CSSProperties = { color: codeSurface.prompt, userSelect: 'none' };
 const button: CSSProperties = { margin: '6px 0 34px', padding: '13px 20px', borderRadius: '8px', backgroundColor: light.accent, color: light.accentInk, fontSize: '14px', fontWeight: 700, lineHeight: '20px', textDecoration: 'none' };
 const signature: CSSProperties = { margin: '28px 0 0', color: light.ink, fontSize: '16px', fontWeight: 700, lineHeight: '24px' };

@@ -8,6 +8,7 @@ const captured = vi.hoisted(() => ({
   webhooks: undefined as Record<string, any> | undefined,
   polar: undefined as Record<string, any> | undefined,
   oauthProxy: undefined as Record<string, any> | undefined,
+  magicLink: undefined as Record<string, any> | undefined,
 }));
 
 vi.mock('@better-auth/api-key', () => ({
@@ -36,7 +37,10 @@ vi.mock('better-auth/plugins', () => ({
     captured.deviceAuthorization = options;
     return { id: 'device-authorization' };
   }),
-  magicLink: vi.fn(() => ({ id: 'magic-link' })),
+  magicLink: vi.fn((options: Record<string, any>) => {
+    captured.magicLink = options;
+    return { id: 'magic-link' };
+  }),
   oAuthProxy: vi.fn((options: Record<string, any>) => {
     captured.oauthProxy = options;
     return { id: 'oauth-proxy' };
@@ -221,6 +225,19 @@ describe('Better Auth API-key configuration', () => {
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ event: 'welcome_email_queue_failed' }));
     log.mockRestore();
   });
+});
+
+test('queues the sign-in link through the branded template', async () => {
+  const send = vi.fn(async () => undefined);
+  createAuth({ ...welcomeAuthEnv(), EMAIL_TASKS: { send } } as unknown as Env, { waitUntil: vi.fn() });
+
+  await captured.magicLink!.sendMagicLink({ email: 'ari@customer.test', url: 'https://x.test/verify?token=abc' });
+
+  const [message] = send.mock.calls[0] as unknown as [Record<string, any>];
+  expect(message).toMatchObject({ type: 'magic-link', to: 'ari@customer.test', subject: 'Sign in to video2ctx' });
+  expect(message.idempotencyKey).toMatch(/^magic:[0-9a-f]{64}$/);
+  expect(message.html).toContain('href="https://x.test/verify?token=abc"');
+  expect(message.html).toContain('src="cid:video2ctx-logo"');
 });
 
 function welcomeAuthEnv() {

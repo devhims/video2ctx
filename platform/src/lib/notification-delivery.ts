@@ -60,7 +60,6 @@ export async function queueWelcomeEmail(env: Env, account: NewAccount): Promise<
     starterCredits: Number(env.STARTER_ONBOARDING_CREDITS),
     dashboardUrl: `${env.APP_ORIGIN}/dashboard`,
     agentUrl: `${env.APP_ORIGIN}/dashboard/sessions`,
-    assetOrigin: env.APP_ORIGIN,
   });
   const firstName = account.name.trim().split(/\s+/)[0];
   const message: EmailMessage = {

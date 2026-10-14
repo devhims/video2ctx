@@ -2,6 +2,13 @@ import type { EmailMessage, TaskMessage } from './types';
 import { indexPrivateDocument } from './lib/search';
 import { now, safeErrorLog, sha256 } from './lib/http';
 import { checkMonitor } from './lib/monitor-check';
+import { EMAIL_LOGO } from './lib/email-logo';
+
+let logoBytes: Uint8Array | undefined;
+function logoAttachment() {
+  logoBytes ??= Uint8Array.from(atob(EMAIL_LOGO.base64), (char) => char.charCodeAt(0));
+  return { disposition: 'inline' as const, contentId: EMAIL_LOGO.contentId, filename: EMAIL_LOGO.filename, type: EMAIL_LOGO.type, content: logoBytes };
+}
 
 const PERMANENT_EMAIL_ERRORS = new Set([
   'E_VALIDATION_ERROR', 'E_FIELD_MISSING', 'E_SENDER_NOT_VERIFIED',
@@ -48,6 +55,9 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
       subject: input.subject,
       html: input.html,
       text: input.text,
+      // Templates show the logo as cid:video2ctx-logo; it travels inside the
+      // message so mail clients never fetch a remote image.
+      ...(input.html.includes(`cid:${EMAIL_LOGO.contentId}`) ? { attachments: [logoAttachment()] } : {}),
       ...(input.unsubscribeUrl ? {
         headers: {
           'List-Unsubscribe': `<${input.unsubscribeUrl}>`,

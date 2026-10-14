@@ -3,6 +3,31 @@ import { queueMonitorAlertEmail } from '../src/lib/notification-delivery';
 import { handleQueue } from '../src/queues';
 
 describe('monitor notification email', () => {
+  test('every product template shows the embedded logo', async () => {
+    const { renderDigestEmail, renderMagicLinkEmail, renderScaleInquiryEmail } = await import('../src/lib/email-templates');
+    const rendered = await Promise.all([
+      renderMonitorAlertEmail({ recipientName: 'A', monitorLabel: 'M', videoTitle: 'V', videoUrl: 'https://youtube.com/watch?v=1', settingsUrl: 'https://x.test/s', unsubscribeUrl: 'https://x.test/u' }),
+      renderNotificationOptInEmail({ recipientName: 'A', confirmationUrl: 'https://x.test/c' }),
+      renderDigestEmail({ recipientName: 'A', cadence: 'daily', notifications: [{ title: 'T', body: 'B' }], dashboardUrl: 'https://x.test/d', unsubscribeUrl: 'https://x.test/u' }),
+      renderScaleInquiryEmail({ fullName: 'A', role: 'R', companyName: 'C', email: 'a@c.test', companySize: '10', monthlyUsage: 'under-10000', useCase: 'U' }),
+      renderMagicLinkEmail({ url: 'https://x.test/verify?token=abc' }),
+    ]);
+    for (const { html } of rendered) {
+      expect(html).toContain('src="cid:video2ctx-logo"');
+      // Decorative: the wordmark beside the logo already names the product.
+      expect(html).toMatch(/<img[^>]*alt=""[^>]*src="cid:video2ctx-logo"|<img[^>]*src="cid:video2ctx-logo"[^>]*alt=""/);
+    }
+  });
+
+  test('renders the sign-in link with its expiry in HTML and text', async () => {
+    const { renderMagicLinkEmail } = await import('../src/lib/email-templates');
+    const message = await renderMagicLinkEmail({ url: 'https://x.test/verify?token=a&b=<c>' });
+    expect(message.html).toContain('Sign in to video2ctx');
+    expect(message.html).toContain('href="https://x.test/verify?token=a&amp;b=&lt;c&gt;"');
+    expect(message.text).toContain('https://x.test/verify?token=a&b=<c>');
+    expect(message.text).toContain('This link expires in 15 minutes and can be used once.');
+  });
+
   test('renders a consent message that makes the pending state explicit', async () => {
     const message = await renderNotificationOptInEmail({
       recipientName: 'Member',
@@ -101,11 +126,12 @@ describe('monitor notification email', () => {
       replyTo: 'support@video2ctx.dev',
       to: 'founder@video2ctx.dev',
     })]);
+    expect(delivered[0]).not.toHaveProperty('attachments');
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
   });
 
-  test('uses a per-message sender when one is set, keeping support as Reply-To', async () => {
+  test('uses a per-message sender and attaches the logo the HTML references, keeping support as Reply-To', async () => {
     const delivered: Array<Record<string, unknown>> = [];
     const env = {
       EMAIL_FROM: 'noreply@notify.video2ctx.dev',
@@ -131,7 +157,7 @@ describe('monitor notification email', () => {
       to: 'member@customer.test',
       from: { email: 'himanshu@notify.video2ctx.dev', name: 'Himanshu from video2ctx' },
       subject: 'Welcome to video2ctx',
-      html: '<p>Welcome</p>',
+      html: '<img src="cid:video2ctx-logo" alt="video2ctx"><p>Welcome</p>',
       text: 'Welcome',
     };
 
@@ -143,7 +169,10 @@ describe('monitor notification email', () => {
     expect(delivered).toEqual([expect.objectContaining({
       from: { email: 'himanshu@notify.video2ctx.dev', name: 'Himanshu from video2ctx' },
       replyTo: 'support@video2ctx.dev',
+      attachments: [expect.objectContaining({ disposition: 'inline', contentId: 'video2ctx-logo', filename: 'video2ctx-logo.png', type: 'image/png' })],
     })]);
+    const logo = (delivered[0]?.attachments as Array<{ content: Uint8Array }>)[0]!.content;
+    expect([...logo.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG signature
   });
 });
 

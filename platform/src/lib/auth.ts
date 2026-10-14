@@ -4,7 +4,7 @@ import { apiKey } from '@better-auth/api-key';
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth';
 import { admin, bearer, deviceAuthorization, magicLink, oAuthProxy } from 'better-auth/plugins';
 import type { EmailMessage } from '../types';
-import { escapeHtml, safeErrorLog } from './http';
+import { safeErrorLog } from './http';
 import { queueWelcomeEmail } from './notification-delivery';
 import { polarClient } from './polar-client';
 import { DEFAULT_API_KEY_PERMISSIONS } from './api-key-permissions';
@@ -120,14 +120,15 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
         expiresIn: 900,
         storeToken: 'hashed',
         sendMagicLink: async ({ email, url }) => {
-          const safeUrl = escapeHtml(url);
+          const { renderMagicLinkEmail } = await import('./email-templates');
+          const content = await renderMagicLinkEmail({ url });
           const message: EmailMessage = {
             type: 'magic-link',
             idempotencyKey: `magic:${await digest(url)}`,
             to: email,
             subject: 'Sign in to video2ctx',
-            html: `<p>Use this secure link to sign in:</p><p><a href="${safeUrl}">Sign in</a></p><p>This link expires in 15 minutes and can be used once.</p>`,
-            text: `Sign in to video2ctx: ${url}\n\nThis link expires in 15 minutes and can be used once.`,
+            html: content.html,
+            text: content.text,
           };
           await env.EMAIL_TASKS.send(message, { contentType: 'json' });
         },
