@@ -46,7 +46,7 @@ the Worker on port 8787. Port 8788 is the webhook-only proxy.
 
 Use the video2ctx sandbox organization. Set Raw format, API version 2026-04,
 and these events: order.paid, order.refunded, customer.state_changed,
-subscription.revoked. The URL is the tunnel's HTTPS origin plus
+subscription.revoked, subscription.created, subscription.updated. The URL is the tunnel's HTTPS origin plus
 /api/auth/polar/webhooks. Keep the endpoint enabled. Copy its signing secret into
 platform/.dev.vars and restart the local Worker after changing that file.
 The generated Standard Webhooks secret must be used as-is.
@@ -61,6 +61,38 @@ Create a local verification user, then a sandbox customer whose external ID matc
 that local user ID. Creating the customer triggers customer.state_changed. Verify a
 2xx delivery in Polar, an inactive Starter billing projection in local D1, and an
 unchanged credit balance. Creating a customer is not a checkout or payment.
+
+## Billing navigation rollout
+
+Settings shows Upgrade to Builder for Starter accounts that have no subscription
+needing payment attention. A Polar customer created during abandoned checkout does
+not expose the portal. Former paying customers retain a secondary Billing history
+button, backed by a permanent payment-history flag set by verified paid/refunded
+orders. Events older than the current billing snapshot still set this flag even
+when they cannot change credits. Active Builder accounts and subscriptions
+with incomplete, past_due, or unpaid status use Manage billing.
+
+Migration 0024 creates `billing_subscription_states` and seeds it from existing
+subscription IDs in `billing_accounts`. Signed subscription.created and
+subscription.updated events maintain this separate status projection. Paid orders,
+active customer snapshots, and revocations update it too. Empty customer snapshots
+cannot erase payment problems. The projection never grants credits or product
+access, and deleting the user cascades to its subscription rows.
+
+Migration 0025 adds the payment-history flag and backfills it from existing payment
+ledger entries, including zero-credit top-ups. Previously acknowledged events that
+produced no ledger entry cannot be recovered from the stored payload hash. Replay
+those paid/refunded events after deployment to repair history only. A replay still
+checks ownership and the existing customer, and never reapplies credits or plans.
+
+For deployment, apply migrations 0024 and 0025 before the Worker, then deploy the dashboard.
+Keep Raw format and API version 2026-04. Enable the two additional subscription
+events alongside the four existing events. Token permissions do not change.
+Deliveries acknowledged by the old Worker do not populate the new projection.
+After deploying, replay the latest subscription.created or
+subscription.updated event for existing subscriptions with payment problems.
+These events can restore billing navigation without granting credits.
+Verify the four navigation states in the deployed dashboard after rollout.
 
 The initial verification fixture uses external ID polar-webhook-verification.
 It starts with 1,000 signup credits. No order, subscription, or payment is needed.

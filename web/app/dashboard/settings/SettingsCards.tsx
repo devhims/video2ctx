@@ -6,7 +6,8 @@ import { platformRequest as api } from '../../../lib/platform-request';
 import { authClient } from '../../../lib/auth-client';
 import { canDeleteAccount, confirmDashboardEmailConsent, DEFAULT_NOTIFICATION_PREFERENCES, DELETE_ACCOUNT_CONFIRMATION, emailConsentToConfirm, pathWithoutEmailConsent, type DashboardBilling, type DashboardNotificationPreferences } from '../../../lib/dashboard-data';
 import type { AccountSeeds } from '../../../lib/dashboard-cache';
-import { useStreamedAccountResource } from '../DashboardDataProvider';
+import { useDashboardCache, useStreamedAccountResource } from '../DashboardDataProvider';
+import { BuilderConfirmation } from './BuilderConfirmation';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
 import { useLoadErrorToast } from '../../../lib/use-error-toast';
@@ -15,10 +16,16 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   const { user } = useDashboardSession();
   const email = user?.email;
   const resource = useStreamedAccountResource('billing', null, promise);
-  const { data: billing, ready: billingReady, error: billingError, setData: onBillingChange } = resource;
+  const { data: billing, ready: billingReady, error: billingError } = resource;
+  const cache = useDashboardCache();
+  const [confirmation, setConfirmation] = useState<DashboardBilling | null>(null);
+  const [confirmationAttempt, setConfirmationAttempt] = useState(0);
+  const [canRetryConfirmation, setCanRetryConfirmation] = useState(false);
+  const closeConfirmation = useCallback(() => setConfirmation(null), []);
   useLoadErrorToast(billingError, 'Retry billing', () => void resource.refresh());
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
   const [billingMessage, setBillingMessage] = useState('');
+  const manageSubscription = billing?.plan === 'builder' || billing?.needsBillingAttention;
   const startCheckout = async () => {
     if (billingAction) return;
     setBillingAction('checkout');
@@ -53,29 +60,39 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
     }
     if (checkout !== 'success') return;
 
-    let cancelled = false;
+    const controller = new AbortController();
+    let timer: number | undefined;
     let attempts = 0;
-    setBillingMessage('Payment received. Confirming your Builder plan and credits...');
+    setCanRetryConfirmation(false);
+    setBillingMessage('Confirming your Builder plan and credits...');
     const reconcile = async () => {
       attempts += 1;
+      let failure = '';
       try {
-        const next = await api<DashboardBilling>('/v1/billing', { cache: 'no-store' });
-        if (cancelled) return;
-        onBillingChange(next);
-        if (next.plan === 'builder') {
+        const next = await api<DashboardBilling>('/v1/billing', { cache: 'no-store', signal: controller.signal });
+        if (controller.signal.aborted) return;
+        cache.setBilling(next);
+        if (next.plan === 'builder' && next.creditsReady === true) {
           setBillingMessage('Builder is active and your credit balance is ready.');
+          const url = new URL(window.location.href);
+          url.searchParams.delete('checkout');
+          window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+          setConfirmation(next);
           return;
         }
       } catch (cause) {
-        if (!cancelled) setBillingMessage(cause instanceof Error ? cause.message : 'Could not confirm billing status.');
-        return;
+        if (controller.signal.aborted) return;
+        failure = cause instanceof Error ? cause.message : 'Could not confirm billing status.';
       }
-      if (!cancelled && attempts < 8) window.setTimeout(() => void reconcile(), 1_500);
-      else if (!cancelled) setBillingMessage('Payment is still syncing. Refresh in a moment if Builder does not appear.');
+      if (attempts < 8) timer = window.setTimeout(() => void reconcile(), 1_500);
+      else {
+        setBillingMessage(failure || 'Your upgrade is still syncing. Try confirming again in a moment.');
+        setCanRetryConfirmation(true);
+      }
     };
     void reconcile();
-    return () => { cancelled = true; };
-  }, [onBillingChange]);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [cache, confirmationAttempt]);
 
   return <article className='mb-6 grid grid-cols-[minmax(0,1fr)_minmax(15rem,22rem)] items-center gap-10 rounded-[var(--radius-dashboard-md)] border border-[var(--color-dashboard-rule)] bg-[var(--color-dashboard-surface)] p-6 max-[43.75rem]:grid-cols-1' aria-labelledby='billing-settings-heading'>
       {!billingReady && billingError ? <p className='settings-card-copy'>Billing details are unavailable.</p> : !billingReady ? <BillingSkeleton contentsOnly /> : <>
@@ -83,20 +100,23 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
       <div>
         <span className='panel-label'>Billing</span>
         <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
+        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.needsBillingAttention
+          ? 'Your subscription needs payment attention. Open Manage billing to review it or update your payment details.'
+          : billing?.plan === 'builder'
           ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
           : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'}</p>
         {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
           ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
           : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}
         {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
+        {canRetryConfirmation && <button className='button secondary mt-3' onClick={() => setConfirmationAttempt(attempt => attempt + 1)}>Retry confirmation</button>}
       </div>
       <div className='grid gap-2'>
-        {billing?.plan === 'builder' || billing?.canManageBilling
-          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {!manageSubscription && <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {(manageSubscription || billing?.canManageBilling) && <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : manageSubscription ? 'Manage billing' : 'Billing history'}</button>}
       </div>
       </>}
+      {confirmation && <BuilderConfirmation billing={confirmation} onClose={closeConfirmation} />}
     </article>;
 }
 

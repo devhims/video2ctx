@@ -4,6 +4,7 @@ import type { WebhookCustomerStateChangedPayload } from '@polar-sh/sdk/models/co
 import type { WebhookOrderPaidPayload } from '@polar-sh/sdk/models/components/webhookorderpaidpayload';
 import type { WebhookSubscriptionRevokedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
+import type { WebhookSubscriptionUpdatedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload';
 import { env as workerEnv } from 'cloudflare:workers';
 import { describe, expect, test, vi } from 'vitest';
 import {
@@ -11,6 +12,8 @@ import {
   applyRefundedOrder,
   syncCustomerState,
   syncRevokedSubscription,
+  syncSubscriptionState,
+  getBillingSummary,
   type PaymentWebhookEnv,
 } from '../src/lib/billing';
 import { queueDigests } from '../src/lib/digests';
@@ -24,6 +27,235 @@ const env = {
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {
+  test('checkout confirmation waits for paid-order credits, including a zero-credit top-up', async () => {
+    const userId = 'checkout-credit-confirmation';
+    await createUser(userId);
+    await addCredits(userId, 20_000, 'admin:checkout-balance');
+    await syncCustomerState(env, activeCustomerState(userId));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', creditsReady: false, creditBalance: 21_000,
+    });
+    await applyPaidOrder(env, paidOrder(userId, 'checkout-confirmed-order', new Date('2026-08-25T00:00:00Z')));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', creditsReady: true, creditBalance: 21_000,
+    });
+    await env.DB.prepare("UPDATE credit_ledger SET created_at=? WHERE user_id=? AND operation_id GLOB 'polar:order:*'")
+      .bind(new Date('2026-07-20T00:00:00Z').getTime(), userId).run();
+    // Recording time does not change which subscription period was fulfilled.
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: true });
+    const nextPeriod = activeCustomerState(userId);
+    nextPeriod.timestamp = new Date('2026-09-01T00:00:00Z');
+    nextPeriod.data.activeSubscriptions[0]!.currentPeriodStart = new Date('2026-09-01T00:00:00Z');
+    nextPeriod.data.activeSubscriptions[0]!.currentPeriodEnd = new Date('2026-10-01T00:00:00Z');
+    await syncCustomerState(env, nextPeriod);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+  });
+
+  test.each(['renewal', 'replacement', 'replacement in the same period'] as const)(
+    'delayed paid orders do not confirm an unfulfilled %s', async (scenario) => {
+      const userId = `confirmation-${scenario.replaceAll(' ', '-')}`;
+      await createUser(userId);
+      const oldOrder = paidOrder(userId, `${userId}-old`, new Date('2026-10-02T00:00:00Z'));
+      const oldStart = scenario === 'replacement in the same period' ? '2026-10-01' : '2026-09-01';
+      const oldEnd = scenario === 'replacement in the same period' ? '2026-11-01' : '2026-10-01';
+      oldOrder.data.subscription!.currentPeriodStart = new Date(oldStart);
+      oldOrder.data.subscription!.currentPeriodEnd = new Date(oldEnd);
+      // A September order can arrive in October. Its insertion time is not its billing period.
+      await applyPaidOrder(env, oldOrder);
+      await addCredits(userId, -9500, `${userId}-consumed`);
+      await expect(balance(userId)).resolves.toBe(500);
+
+      const current = activeCustomerState(userId);
+      current.timestamp = new Date('2026-10-03T00:00:00Z');
+      const subscription = current.data.activeSubscriptions[0]!;
+      if (scenario !== 'renewal') subscription.id = `replacement-${userId}`;
+      subscription.currentPeriodStart = new Date('2026-10-01T00:00:00Z');
+      subscription.currentPeriodEnd = new Date('2026-11-01T00:00:00Z');
+      await syncCustomerState(env, current);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditsReady: false, creditBalance: 500,
+      });
+
+      const paid = paidOrder(userId, `${userId}-current`, new Date('2026-10-04T00:00:00Z'));
+      paid.data.subscriptionId = subscription.id;
+      paid.data.subscription!.currentPeriodStart = subscription.currentPeriodStart;
+      paid.data.subscription!.currentPeriodEnd = subscription.currentPeriodEnd;
+      await applyPaidOrder(env, paid);
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditsReady: true, creditBalance: 10_000,
+      });
+      await expect(operationCount(userId, `polar:order:${paid.data.id}`)).resolves.toBe(1);
+    },
+  );
+
+  test.each(['subscriptionId', 'currentPeriodStart', 'currentPeriodEnd'] as const)(
+    'legacy grants without %s cannot confirm checkout', async (field) => {
+      const userId = `confirmation-missing-${field}`;
+      await createUser(userId);
+      const paid = paidOrder(userId, `${userId}-order`);
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: true });
+      await env.DB.prepare('UPDATE credit_ledger SET metadata_json=json_remove(metadata_json,?) WHERE user_id=? AND operation_id=?')
+        .bind(`$.${field}`, userId, `polar:order:${paid.data.id}`).run();
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditBalance: 10_000, creditsReady: false,
+      });
+      // A replay must not grant again or invent the missing historical identity.
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+      await expect(operationCount(userId, `polar:order:${paid.data.id}`)).resolves.toBe(1);
+    },
+  );
+
+  test('a grant cannot confirm a different period end with the same start', async () => {
+    const userId = 'confirmation-period-end';
+    await createUser(userId);
+    await applyPaidOrder(env, paidOrder(userId, `${userId}-order`));
+    const current = activeCustomerState(userId);
+    current.data.activeSubscriptions[0]!.currentPeriodEnd = new Date('2026-09-02T00:00:00Z');
+    await syncCustomerState(env, current);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+  });
+
+  test('customer creation and non-payment credits do not expose the billing portal', async () => {
+    const userId = 'portal-abandoned';
+    await createUser(userId);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', canManageBilling: false, needsBillingAttention: false,
+    });
+    await addCredits(userId, 500, 'admin:grant');
+    const customer = activeCustomerState(userId);
+    customer.data.activeSubscriptions = [];
+    await syncCustomerState(env, customer);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', canManageBilling: false, needsBillingAttention: false,
+    });
+  });
+
+  test('paid history survives revocation and a later empty customer snapshot', async () => {
+    const userId = 'portal-former-subscriber';
+    await createUser(userId);
+    // A paid renewal at the credit cap still produces an invoice and a zero-credit ledger entry.
+    await addCredits(userId, 20_000, 'test:above-cap');
+    await applyPaidOrder(env, paidOrder(userId, 'portal-paid-order'));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', canManageBilling: true, needsBillingAttention: false,
+    });
+    await syncRevokedSubscription(env, revokedSubscription(userId));
+    const customer = activeCustomerState(userId);
+    customer.timestamp = new Date('2026-08-26T00:00:00Z');
+    customer.data.activeSubscriptions = [];
+    await syncCustomerState(env, customer);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', status: 'inactive', canManageBilling: true, needsBillingAttention: false,
+    });
+  });
+
+  test('refunded orders preserve billing history', async () => {
+    const userId = 'portal-refunded';
+    await createUser(userId);
+    await applyRefundedOrder(env, refundedOrder(userId, 'portal-refund'));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', canManageBilling: true, needsBillingAttention: false,
+    });
+  });
+
+  test.each(['paid', 'refund', 'paid and refund'])('preserves history when a newer customer snapshot arrives before %s', async (kind) => {
+    const userId = `portal-out-of-order-${kind.replaceAll(' ', '-')}`;
+    await createUser(userId);
+    const customer = activeCustomerState(userId);
+    customer.timestamp = new Date('2026-08-26T00:00:00Z');
+    customer.data.activeSubscriptions = [];
+    await syncCustomerState(env, customer);
+    const orderId = `${userId}-order`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (kind.includes('paid')) await applyPaidOrder(env, paidOrder(userId, orderId));
+      if (kind.includes('refund')) await applyRefundedOrder(env, refundedOrder(userId, orderId));
+      await expect(operationCount(userId, `polar:order:${orderId}`)).resolves.toBe(0);
+      await expect(operationCount(userId, `polar:refund:${orderId}`)).resolves.toBe(0);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'starter', status: 'inactive', creditBalance: 1000,
+        canManageBilling: true, needsBillingAttention: false,
+      });
+    }
+    customer.timestamp = new Date('2026-08-27T00:00:00Z');
+    await syncCustomerState(env, customer);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ canManageBilling: true });
+  });
+
+  for (const kind of ['paid', 'refund'] as const) test.each(['valid', 'ownership mismatch', 'different customer'])(
+    `repairs only history on an already acknowledged ${kind} replay: %s`, async (scenario) => {
+      const userId = `portal-replay-${kind}-${scenario.replaceAll(' ', '-')}`;
+      await createUser(userId);
+      const customer = activeCustomerState(userId);
+      customer.timestamp = new Date('2026-08-26T00:00:00Z');
+      customer.data.activeSubscriptions = [];
+      await syncCustomerState(env, customer);
+      const orderId = `${userId}-order`;
+      const event = kind === 'paid' ? paidOrder(userId, orderId) : refundedOrder(userId, orderId);
+      if (scenario === 'ownership mismatch') event.data.metadata = { app_user_id: 'another-user' };
+      if (scenario === 'different customer') event.data.customerId = 'another-customer';
+      // An older deployment acknowledged the event without creating a ledger entry.
+      await env.DB.prepare('INSERT INTO processed_events(source,event_id,processed_at,payload_hash) VALUES (\'polar\',?,?,?)')
+        .bind(`order.${kind === 'paid' ? 'paid' : 'refunded'}:${orderId}`, Date.now(), 'legacy-fingerprint').run();
+      if (event.type === 'order.paid') await applyPaidOrder(env, event);
+      else await applyRefundedOrder(env, event);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'starter', status: 'inactive', creditBalance: 1000,
+        canManageBilling: scenario === 'valid', needsBillingAttention: false,
+      });
+      await expect(operationCount(userId, `polar:order:${orderId}`)).resolves.toBe(0);
+      await expect(operationCount(userId, `polar:refund:${orderId}`)).resolves.toBe(0);
+    },
+  );
+
+  test.each(['incomplete', 'past_due', 'unpaid'] as const)('preserves %s through empty customer snapshots and clears it on resolution', async (status) => {
+    const userId = `portal-${status}`;
+    await createUser(userId);
+    const event = subscriptionUpdate(userId, status, '2026-08-24T00:00:00Z');
+    await syncSubscriptionState(env, event);
+    await syncSubscriptionState(env, event);
+    const customer = activeCustomerState(userId);
+    customer.timestamp = new Date('2026-08-26T00:00:00Z');
+    customer.data.activeSubscriptions = [];
+    await syncCustomerState(env, customer);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', canManageBilling: true, needsBillingAttention: true, creditBalance: 1000,
+    });
+    await syncSubscriptionState(env, subscriptionUpdate(userId, 'canceled', '2026-08-25T00:00:00Z'));
+    await syncSubscriptionState(env, subscriptionUpdate(userId, status, '2026-08-24T12:00:00Z'));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'starter', canManageBilling: false, needsBillingAttention: false, creditBalance: 1000,
+    });
+  });
+
+  test('a paid order resolves payment attention without waiting for another subscription event', async () => {
+    const userId = 'portal-recovered-payment';
+    await createUser(userId);
+    await syncSubscriptionState(env, subscriptionUpdate(userId, 'past_due', '2026-08-21T00:00:00Z'));
+    await applyPaidOrder(env, paidOrder(userId, 'portal-recovery-order'));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', canManageBilling: true, needsBillingAttention: false,
+    });
+  });
+
+  test('subscription updates reject mismatched ownership and unrelated products', async () => {
+    const userId = 'portal-rejected-subscription';
+    await createUser(userId);
+    const event = subscriptionUpdate(userId, 'past_due', '2026-08-24T00:00:00Z');
+    event.data.metadata = { app_user_id: 'another-user' };
+    const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try { await syncSubscriptionState(env, event); } finally { logs.mockRestore(); }
+    event.timestamp = new Date('2026-08-25T00:00:00Z');
+    event.data.metadata = {};
+    event.data.productId = 'another-product';
+    await syncSubscriptionState(env, event);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      canManageBilling: false, needsBillingAttention: false,
+    });
+  });
+
   test.each(['paid', 'customer state', 'refund', 'revocation'])(
     'skips a mismatched %s event once without changing either account', async (kind) => {
       const userId = `identity-rejected-${kind.replaceAll(' ', '-')}`;
@@ -172,6 +404,11 @@ describe('Polar payment queries on D1', () => {
     await expect(balance(userId)).resolves.toBe(1_000);
   });
 });
+
+function subscriptionUpdate(userId: string, status: WebhookSubscriptionUpdatedPayload['data']['status'], timestamp: string): WebhookSubscriptionUpdatedPayload {
+  const event = revokedSubscription(userId);
+  return { ...event, type: 'subscription.updated', timestamp: new Date(timestamp), data: { ...event.data, status } };
+}
 
 async function createUser(userId: string): Promise<void> {
   const timestamp = Date.now();

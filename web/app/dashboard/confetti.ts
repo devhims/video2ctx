@@ -13,14 +13,15 @@ const DRAG = 3; // per second; with gravity this caps the fall at a gentle 200 p
 const STEPS = 16;
 
 /** Bursts confetti upward from a viewport point. Skipped when reduced motion is preferred. */
-export function burstConfetti(originX: number, originY: number): void {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+export function burstConfetti(originX: number, originY: number, parent: HTMLElement = document.body): () => void {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return () => {};
 
   const layer = document.createElement('div');
   layer.setAttribute('aria-hidden', 'true');
+  layer.setAttribute('data-confetti', '');
   // One below Sonner's toaster, so pieces rise from behind the toast and fall behind it.
   Object.assign(layer.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '999999998', overflow: 'hidden' });
-  document.body.append(layer);
+  parent.append(layer);
 
   const animations = Array.from({ length: PIECES }, (_, index) => {
     const piece = document.createElement('span');
@@ -65,23 +66,26 @@ export function burstConfetti(originX: number, originY: number): void {
   });
 
   void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => layer.remove());
+  return () => { animations.forEach(animation => animation.cancel()); layer.remove(); };
 }
 
 /** Calls back with the element's box once it exists and its entrance transition has come to rest. */
-export function whenSettled(selector: string, callback: (rect: DOMRect) => void): void {
+export function whenSettled(selector: string, callback: (rect: DOMRect) => void): () => void {
+  let frame: number;
   let lastTop = Number.NaN;
   let still = 0;
   let frames = 0;
   const tick = () => {
     const element = document.querySelector(selector);
     if (++frames > 120) return; // About two seconds: the toast never appeared or kept moving.
-    if (!element) { requestAnimationFrame(tick); return; }
+    if (!element) { frame = requestAnimationFrame(tick); return; }
     const rect = element.getBoundingClientRect();
     const mounted = element.getAttribute('data-mounted') !== 'false';
     still = mounted && Math.abs(rect.top - lastTop) < 0.5 ? still + 1 : 0;
     lastTop = rect.top;
     if (still >= 3) callback(rect);
-    else requestAnimationFrame(tick);
+    else frame = requestAnimationFrame(tick);
   };
-  requestAnimationFrame(tick);
+  frame = requestAnimationFrame(tick);
+  return () => cancelAnimationFrame(frame);
 }

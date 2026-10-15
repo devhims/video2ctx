@@ -259,6 +259,26 @@ function jsonHeaders(extra: Record<string, string> = {}): Record<string, string>
 }
 
 describe('signed Polar webhook delivery', () => {
+  test.each(['subscription.created', 'subscription.updated'] as const)('projects signed %s events without granting credits', async (type) => {
+    const browser = await createBrowserSession();
+    const body = subscriptionBody(browser.user, type);
+    const response = await request('/api/auth/polar/webhooks', {
+      method: 'POST', headers: signedHeaders(body, 'standard'), body,
+    });
+    expect(response.status).toBe(200);
+    const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
+    expect(await billing.json()).toMatchObject({
+      plan: 'starter', creditBalance: 1000, canManageBilling: true, needsBillingAttention: true,
+    });
+    const invalid = JSON.parse(body);
+    delete invalid.data.customer;
+    const invalidBody = JSON.stringify(invalid);
+    const rejected = await request('/api/auth/polar/webhooks', {
+      method: 'POST', headers: signedHeaders(invalidBody, 'standard'), body: invalidBody,
+    });
+    expect(rejected.status).toBe(400);
+  });
+
   for (const scheme of ['standard', 'legacy'] as const) {
     test(`accepts ${scheme} signatures and projects customer state without a payment`, async () => {
       const browser = await createBrowserSession();
@@ -270,7 +290,7 @@ describe('signed Polar webhook delivery', () => {
       expect(response.status).toBeLessThan(300);
       const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
       expect(await billing.json()).toMatchObject({
-        plan: 'starter', status: 'inactive', creditBalance: 1000, canManageBilling: true,
+        plan: 'starter', status: 'inactive', creditBalance: 1000, canManageBilling: false, needsBillingAttention: false,
       });
     });
   }
@@ -367,6 +387,31 @@ describe('signed Polar webhook delivery', () => {
     expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
   });
 });
+
+function subscriptionBody(user: { id: string; email: string }, type: 'subscription.created' | 'subscription.updated'): string {
+  const at = new Date().toISOString();
+  const customer = polarCustomer(user);
+  return JSON.stringify({
+    type, timestamp: at,
+    data: {
+      id: `subscription-${user.id}`, created_at: at, modified_at: null,
+      amount: 2000, currency: 'usd', recurring_interval: 'month', recurring_interval_count: 1,
+      status: type === 'subscription.created' ? 'incomplete' : 'past_due',
+      current_period_start: at, current_period_end: at, trial_start: null, trial_end: null,
+      cancel_at_period_end: false, canceled_at: null, started_at: at, ends_at: null, ended_at: null,
+      customer_id: customer.id, product_id: 'builder-product', discount_id: null, checkout_id: null,
+      customer_cancellation_reason: null, customer_cancellation_comment: null,
+      metadata: { app_user_id: user.id }, customer,
+      product: {
+        id: 'builder-product', created_at: at, modified_at: null, trial_interval: null, trial_interval_count: null,
+        name: 'Builder', description: null, visibility: 'public', recurring_interval: 'month', recurring_interval_count: 1,
+        is_recurring: true, is_archived: false, organization_id: 'sandbox-organization',
+        metadata: {}, prices: [], benefits: [], medias: [], attached_custom_fields: [],
+      },
+      discount: null, prices: [], meters: [], pending_update: null,
+    },
+  });
+}
 
 function customerStateBody(userId: string): string {
   return JSON.stringify({
