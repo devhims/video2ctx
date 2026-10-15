@@ -1655,16 +1655,19 @@ export const openApiDocument = {
     },
     '/v1/admin/users': {
       get: {
-        tags: ['Administration'], operationId: 'searchAdminUsers', summary: 'Find users by ID or email',
-        description: 'Requires a live verified admin browser session. Matches an exact user ID or a literal case-insensitive email substring. Returns up to 25 users per page. Responses are never cached. Plan labels reflect the local billing projection; deletion checks Polar directly.',
+        tags: ['Administration'], operationId: 'searchAdminUsers', summary: 'Find active and deleted users by ID or email',
+        description: 'Requires a live verified admin browser session. Matches an exact user ID or a literal case-insensitive email substring. Returns active accounts and one historical row per deleted account, up to 25 results per page. Deleted rows are read-only and retain identity, billing reference, dates, deletion actor and credit snapshot. Responses are never cached. Plan labels reflect the local billing projection; deletion checks Polar directly.',
         security: [{ sessionCookie: [] }],
         parameters: [
           { name: 'q', in: 'query', required: true, schema: { type: 'string', minLength: 1, maxLength: 320 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, maximum: 1000000, default: 0 } },
         ],
         responses: { '200': jsonResponse('Matching users and the next page offset.', { type: 'object', required: ['users','nextOffset'], properties: {
-          users: { type: 'array', maxItems: 25, items: { type: 'object', required: ['id','name','email','plan','isAdmin'], properties: {
+          users: { type: 'array', maxItems: 25, items: { type: 'object', required: ['id','name','email','plan','isAdmin','status','signedUpAt','deletedAt','polarCustomerId','creditBalance','deletionSource','deletedByUserId'], properties: {
             id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string', format: 'email' }, plan: { type: 'string', enum: ['starter','builder'] }, isAdmin: { type: 'boolean', description: 'Protected admin role or bootstrap operator account.' },
+            status: { type: 'string', enum: ['active','deleted'] }, signedUpAt: { type: 'integer' }, deletedAt: { type: ['integer','null'] },
+            polarCustomerId: { type: ['string','null'] }, creditBalance: { type: 'integer', description: 'Current balance for active accounts; spendable balance at deletion for historical accounts.' },
+            deletionSource: { type: ['string','null'], enum: ['self','admin','database',null] }, deletedByUserId: { type: ['string','null'] },
           } } }, nextOffset: { type: ['integer','null'] },
         } }), ...standardErrors },
       },
@@ -1672,7 +1675,7 @@ export const openApiDocument = {
     '/v1/admin/users/{userId}': {
       delete: {
         tags: ['Administration'], operationId: 'deleteAdminUser', summary: 'Delete another user account',
-        description: 'Requires a live verified admin browser session and the dashboard Origin. The email must still match the selected user ID. Uses the same cancellation guard, Polar customer anonymization and private cleanup as self-service deletion. Shared video assets remain intact. Admin accounts cannot be deleted through either admin or self-service endpoints. Retrying a completed deletion returns 204. The admin session remains signed in.',
+        description: 'Requires a live verified admin browser session and the dashboard Origin. The email must still match the selected user ID. Uses the same cancellation guard, Polar customer anonymization and private cleanup as self-service deletion. A permanent deletion ledger preserves identity, billing references and the remaining credit balance for same-email re-registration. Shared video assets remain intact. Admin accounts cannot be deleted through either admin or self-service endpoints. Retrying a completed deletion returns 204. The admin session remains signed in.',
         security: [{ sessionCookie: [] }],
         parameters: [{ name: 'userId', in: 'path', required: true, schema: { type: 'string', minLength: 1, maxLength: 128 } }],
         requestBody: jsonBody({ type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email', maxLength: 320 } } }),
@@ -1865,7 +1868,7 @@ export const openApiDocument = {
         tags: ['Account'],
         operationId: 'deleteAccount',
         summary: 'Permanently delete the current account',
-        description: 'Admin accounts cannot be deleted. Cancel any renewing Builder subscription before deleting a regular account. Polar is checked before cleanup starts. Removes private sessions, sources, files and database records, clears browser session cookies, and queues private search-index deletion. Shared YouTube assets are retained. This operation cannot be undone; deleting after cancellation forfeits the remaining paid period.',
+        description: 'Admin accounts cannot be deleted. Cancel any renewing Builder subscription before deleting a regular account. Polar is checked before cleanup starts. Removes private sessions, sources, files and database records, clears browser session cookies, and queues private search-index deletion. Shared YouTube assets are retained. A permanent deletion ledger retains email, account and billing references, dates, deletion actor and remaining credits for same-email re-registration without another free grant. This operation cannot be undone; deleting after cancellation forfeits the remaining paid period.',
         security: privateSecurity,
         responses: {
           '204': { description: 'Account deleted. Private search-index cleanup is queued.' },

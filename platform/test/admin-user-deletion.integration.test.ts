@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { Hono } from 'hono';
 import { adminRoutes } from '../src/routes/admin/admin.index';
 import { createAuth } from '../src/lib/auth';
-import { deleteAccount } from '../src/lib/account-deletion';
+import { deleteAccount, deleteAccountRecords } from '../src/lib/account-deletion';
 import { billingAccount } from '../src/lib/billing-coordination';
 import { BillingGate } from '../src/durable-objects/billing-gate';
 import { jsonError } from '../src/lib/http';
@@ -85,6 +85,7 @@ test('admin deletion anonymizes the target customer, clears its sources and priv
   expect(await env.RESEARCH.get(owned)).toBeNull(); expect(await env.RESEARCH.get(other)).not.toBeNull();
   await runInDurableObject(account, async (_instance, state) => { expect(state.storage.sql.exec('SELECT * FROM recent_sources').toArray()).toEqual([]); });
   expect(configured.TASKS.send).toHaveBeenCalledOnce();
+  expect(await env.DB.prepare('SELECT deletion_source,deleted_by_user_id FROM deleted_accounts WHERE user_id=?').bind(target.user.id).first()).toEqual({deletion_source:'admin',deleted_by_user_id:admin.user.id});
   expect(await auth.api.getSession({ headers: new Headers({ cookie: admin.cookie }), query: { disableCookieCache: true } })).not.toBeNull();
   expect(await auth.api.getSession({ headers: new Headers({ cookie: target.cookie }), query: { disableCookieCache: true } })).toBeNull();
   expect((await remove()).status).toBe(204);
@@ -281,4 +282,24 @@ test('an ambiguous checkout-create response also retains its write marker', asyn
     expect(state.storage.sql.exec('SELECT operation,state FROM billing_checkout_writes').toArray())
       .toEqual([{ operation: 'checkout-create', state: 'uncertain' }]);
   });
+});
+
+
+test('admin search returns each deleted signup separately alongside the active account, with stable mixed pagination', async () => {
+  const { request,admin }=await setup();const email='repeat-history@example.test';
+  for(let i=0;i<26;i++) {
+    const id=`history-${String(i).padStart(2,'0')}`;
+    await env.DB.prepare(`INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?, 'Returning', ?,123,123)`).bind(id,email).run();
+    await deleteAccountRecords(env.DB,{id,email},{source:'admin',userId:admin.user.id});
+  }
+  await env.DB.prepare(`INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES ('history-active','Returning',?,456,456)`).bind(email).run();
+  const first=await (await request(`/admin/users?q=${email.toUpperCase()}`)).json() as {users:Array<{id:string;status:string;isAdmin:boolean}>;nextOffset:number};
+  expect(first.users).toHaveLength(25);expect(first.users[0]).toMatchObject({id:'history-active',status:'active'});expect(first.nextOffset).toBe(25);
+  const next=await (await request(`/admin/users?q=${email}&offset=25`)).json() as {users:Array<{id:string;status:string;isAdmin:boolean}>;nextOffset:null};
+  expect(next.users).toHaveLength(2);expect(next.nextOffset).toBeNull();
+  const all=[...first.users,...next.users];expect(new Set(all.map(u=>u.id)).size).toBe(27);
+  expect(all.filter(u=>u.status==='deleted')).toHaveLength(26);
+  expect(all.filter(u=>u.status==='deleted').every(u=>u.isAdmin===false)).toBe(true);
+  const history=await (await request('/admin/users?q=history-00')).json();
+  expect(history).toMatchObject({users:[{id:'history-00',status:'deleted',signedUpAt:123,deletedAt:expect.any(Number),creditBalance:1000,deletionSource:'admin',deletedByUserId:admin.user.id}],nextOffset:null});
 });

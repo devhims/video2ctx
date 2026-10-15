@@ -12,6 +12,7 @@ export default defineConfig({
       'test/admin-access.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',
+      'test/deletion-ledger.integration.test.ts',
       'test/user-account-do.integration.test.ts',
       'test/project-item-open.integration.test.ts',
       'test/agent-runtime-do.integration.test.ts', 'test/agent-evidence-billing.integration.test.ts',

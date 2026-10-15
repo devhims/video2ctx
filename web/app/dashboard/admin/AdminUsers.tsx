@@ -37,14 +37,14 @@ export default function AdminUsers({ adminUserId }: { adminUserId: string }) {
   }
   function submit(event: FormEvent) { event.preventDefault(); void search(query); }
   async function remove() {
-    if (lock.current || !selected || confirmation.trim().toLowerCase() !== selected.email.toLowerCase()) return;
+    if (lock.current || !selected || selected.status === 'deleted' || confirmation.trim().toLowerCase() !== selected.email.toLowerCase()) return;
     const target = selected;
     lock.current = true; setBusy(true); setError(''); setNotice(''); toast.clear();
     try {
       await deleteAdminUser(target);
       if (!mounted.current) return;
       setResults(current => current ? { ...current, users: current.users.filter(user => user.id !== target.id) } : null);
-      setSelected(null); setConfirmation(''); setNotice(`Account deleted for ${target.email}. Private search cleanup is queued.`);
+      setSelected(null); setConfirmation(''); setNotice(`Account deleted for ${target.email}. Its deletion record is retained. Search again to view the history.`);
     } catch (cause) {
       if (!mounted.current) return;
       if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') toast.show(cause.message);
@@ -53,7 +53,7 @@ export default function AdminUsers({ adminUserId }: { adminUserId: string }) {
   }
 
   return <section className={styles.panel} aria-labelledby="admin-users-title">
-    <header><h2 id="admin-users-title">Users</h2><p>Find an account by user ID or email address to review and delete it.</p></header>
+    <header><h2 id="admin-users-title">Users</h2><p>Find active and deleted accounts by user ID or email address. Each deleted signup has its own history record.</p></header>
     <form onSubmit={submit} className={styles.search}>
       <label htmlFor="admin-user-search">User ID or email</label>
       <div><input id="admin-user-search" type="search" autoComplete="off" maxLength={320} value={query} onChange={event => setQuery(event.target.value)} disabled={busy} placeholder="User ID or name@example.com" />
@@ -63,12 +63,21 @@ export default function AdminUsers({ adminUserId }: { adminUserId: string }) {
     <p role="status" aria-live="polite" className={styles.notice}>{notice}</p>
     {results && <div aria-label="User search results" aria-busy={busy}>
       {results.users.map(user => <article key={user.id} className={styles.user} aria-label={user.email}>
-        <div><h3>{user.name || user.email}</h3><p>{user.email}</p><code>{user.id}</code><p>{user.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</p></div>
-        {(user.isAdmin || user.id === adminUserId) ? <span className={styles.hint}>Admin account. Deletion is disabled.</span> : selected?.id !== user.id ?
+        <div><h3>{user.name || user.email}</h3><p>{user.email}</p><code>{user.id}</code>
+          <p>{user.status === 'deleted' ? 'Deleted account' : 'Active account'} · {user.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</p>
+          {user.signedUpAt !== undefined && <p>Signed up: {new Date(user.signedUpAt).toLocaleString()}</p>}
+          {user.status === 'deleted' && <>
+            <p>Deleted: {new Date(user.deletedAt!).toLocaleString()}</p>
+            <p>Credits at deletion: {user.creditBalance.toLocaleString()}</p>
+            <p>Deleted by: {user.deletionSource === 'admin' ? `Admin (${user.deletedByUserId})` : user.deletionSource === 'self' ? 'Account owner' : 'Database operation'}</p>
+            {user.polarCustomerId && <p>Polar customer: <code>{user.polarCustomerId}</code></p>}
+          </>}
+        </div>
+        {user.status === 'deleted' ? <span className={styles.hint}>Historical record. Deletion recorded.</span> : (user.isAdmin || user.id === adminUserId) ? <span className={styles.hint}>Admin account. Deletion is disabled.</span> : selected?.id !== user.id ?
           <button type="button" className={styles.danger} disabled={busy || !!selected} onClick={() => { setSelected(user); setConfirmation(''); setError(''); setNotice(''); toast.clear(); }}>Delete account</button> :
           <form className={styles.confirm} onSubmit={event => { event.preventDefault(); void remove(); }}>
             <h4>Delete this account permanently?</h4>
-            <p>Removes the Polar customer, sessions, sources, projects and private files. Shared video assets stay available. Renewing subscriptions must be cancelled first. Deletion forfeits any remaining paid period.</p>
+            <p>Removes the Polar customer, sessions, sources, projects and private files. Shared video assets stay available. Renewing subscriptions must be cancelled first. Deletion forfeits any remaining paid period. We retain an account deletion record and remaining credits to prevent repeat signup grants.</p>
             <label htmlFor="admin-delete-confirm">Type {user.email} to confirm</label>
             <input id="admin-delete-confirm" ref={confirmInput} type="text" autoComplete="off" value={confirmation} onChange={event => setConfirmation(event.target.value)} disabled={busy} />
             <div><button className={styles.danger} type="submit" disabled={busy || confirmation.trim().toLowerCase() !== user.email.toLowerCase()}>{busy ? 'Deleting…' : 'Delete permanently'}</button>

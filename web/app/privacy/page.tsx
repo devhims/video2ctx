@@ -13,7 +13,7 @@ export default function PrivacyPage() {
     <LegalPage
       eyebrow='Your information'
       title='Privacy policy'
-      effectiveDate='August 14, 2026'
+      effectiveDate='October 15, 2026'
       summary='This policy explains what video2ctx collects, why we use it, who processes it, and the controls available to you.'
     >
       <section>
@@ -151,8 +151,13 @@ export default function PrivacyPage() {
           business records, fraud prevention, or legal obligations. You may ask us to delete an inquiry unless we must retain it.
         </p>
         <p>
-          When an account is deleted, video2ctx deletes the account’s database records, private stored objects, connected-account
-          authorization, and private search index through its deletion workflow. Limited records may remain temporarily in
+          When an account is deleted, video2ctx removes login credentials, workspace records, private stored objects,
+          connected-account authorization, and the private search index through its deletion workflow. We permanently retain
+          a limited deletion ledger containing the email address, original user and billing customer identifiers, signup and
+          deletion dates, plan, remaining credit balance, and deletion actor. Only authorized administrators can search this
+          history for support and abuse prevention. A new account using the same email receives its previous remaining
+          credits rather than another free signup allowance. Deleted workspace content is not restored. Polar anonymizes
+          the deleted customer while retaining historical payment records. Limited records may remain temporarily in
           backups, security logs, delivery records, or where retention is required by law. We retain such residual information
           only for the applicable operational or legal period and do not use it for unrelated purposes.
         </p>

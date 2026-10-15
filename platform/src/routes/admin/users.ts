@@ -12,11 +12,29 @@ adminUserRoutes.get('/', async c => {
   const parsed = searchSchema.safeParse(c.req.query());
   if (!parsed.success) throw new ApiError(422, 'INVALID_USER_QUERY', 'Enter a user ID or email address.');
   const { q, offset } = parsed.data;
-  const rows = await c.env.DB.prepare(`SELECT u.id,u.name,u.email,u.role,COALESCE(b.plan,'starter') AS plan
+  const rows = await c.env.DB.prepare(`SELECT * FROM (
+    SELECT u.id,u.name,u.email,u.role,COALESCE(b.plan,'starter') AS plan,
+      'active' AS status,u.createdAt AS signedUpAt,NULL AS deletedAt,
+      b.provider_customer_id AS polarCustomerId,COALESCE(a.available_credits,0) AS creditBalance,
+      NULL AS deletionSource,NULL AS deletedByUserId
     FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
-    WHERE u.id=? OR instr(lower(u.email),?)>0 ORDER BY u.email,u.id LIMIT 26 OFFSET ?`)
-    .bind(q, q.toLowerCase(), offset).all<{ id: string; name: string; email: string; role: string | null; plan: string }>();
-  return c.json({ users: rows.results.slice(0,25).map(({ role, ...user }) => ({ ...user, isAdmin: isAdminAccount(c.env, { ...user, role }) })), nextOffset: rows.results.length>25 ? offset+25 : null });
+      LEFT JOIN credit_accounts a ON a.user_id=u.id
+    UNION ALL
+    SELECT user_id AS id,'' AS name,email,NULL AS role,plan,'deleted' AS status,
+      signed_up_at AS signedUpAt,deleted_at AS deletedAt,polar_customer_id AS polarCustomerId,
+      remaining_credits AS creditBalance,deletion_source AS deletionSource,deleted_by_user_id AS deletedByUserId
+    FROM deleted_accounts
+    ) WHERE id=? OR instr(lower(email),?)>0
+    ORDER BY lower(email),status,deletedAt DESC,id LIMIT 26 OFFSET ?`)
+    .bind(q, q.toLowerCase(), offset).all<{
+      id: string; name: string; email: string; role: string | null; plan: string;
+      status: 'active' | 'deleted'; signedUpAt: number; deletedAt: number | null;
+      polarCustomerId: string | null; creditBalance: number;
+      deletionSource: 'self' | 'admin' | 'database' | null; deletedByUserId: string | null;
+    }>();
+  return c.json({ users: rows.results.slice(0,25).map(({ role, ...user }) => ({ ...user,
+    isAdmin: user.status === 'active' && isAdminAccount(c.env, { ...user, role }),
+  })), nextOffset: rows.results.length>25 ? offset+25 : null });
 });
 adminUserRoutes.delete('/:userId', async c => {
   const id = z.string().min(1).max(128).safeParse(c.req.param('userId'));
@@ -28,7 +46,9 @@ adminUserRoutes.delete('/:userId', async c => {
   if (user.email.trim().toLowerCase() !== confirmation.data.email) {
     throw new ApiError(409, 'USER_IDENTITY_CHANGED', 'The account email changed. Search for the user again before deleting.');
   }
-  await deleteAccount(c.env, user);
+  const adminUserId = c.get('adminUserId');
+  if (!adminUserId) throw new ApiError(401, 'UNAUTHORIZED', 'Admin authentication is required.');
+  await deleteAccount(c.env, user, { source: 'admin', userId: adminUserId });
   console.info({ event: 'admin_account_deleted', adminUserId: c.get('adminUserId'), userId: user.id });
   return c.body(null, 204);
 });

@@ -22,6 +22,7 @@ export default defineConfig({
       'test/admin-access.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',
+      'test/deletion-ledger.integration.test.ts',
     ],
     setupFiles: ['./test/apply-auth-migrations.ts'],
   },

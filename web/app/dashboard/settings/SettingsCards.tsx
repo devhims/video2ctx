@@ -257,7 +257,7 @@ export function AccountCards() {
       <div>
         <span className='panel-label !text-[var(--color-dashboard-danger)]'>Danger zone</span>
         <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
+        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone. We retain your email, account and billing identifiers, signup and deletion dates, and remaining credit balance for support and abuse prevention. Signing up again with the same email restores that balance without another free credit grant.</p>
       </div>
       {adminAccess ? <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Admin accounts cannot be deleted.</p> : email ? <div className='grid gap-2'>
         <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>

@@ -537,3 +537,29 @@ test('admin accounts have no deletion controls in user search or their own setti
   await expect(page.getByRole('button', { name: 'Delete account permanently', exact: true })).toHaveCount(0);
   expect(deletes).toBe(0);
 });
+
+for (const width of [1280,390]) {
+  test(`admin email lookup shows separate deleted accounts without deletion controls at ${width}px`, async ({page,context},testInfo) => {
+    await page.setViewportSize({width,height:900});
+    await context.addCookies([{name:'agent-ui',value:'allowed',url:'http://127.0.0.1:3021'},{name:'admin-ui',value:'allowed',url:'http://127.0.0.1:3021'}]);
+    const email='returning@example.test';
+    const users=[
+      {id:'fresh-account',name:'Returning',email,plan:'starter',isAdmin:false,status:'active',signedUpAt:1792060000000},
+      ...['previous-account-1','previous-account-2'].map((id,i)=>({id,name:'',email,plan:'starter',isAdmin:false,status:'deleted',signedUpAt:1792000000000+i,deletedAt:1792050000000+i,creditBalance:i===0?340:0,polarCustomerId:`polar-${i}`,deletionSource:i===0?'self':'admin',deletedByUserId:i===0?id:'fixture-user'})),
+    ];
+    await page.route('**/api/platform/v1/admin/users?*',route=>route.fulfill({json:{users,nextOffset:null}}));
+    await page.goto('/dashboard/admin');await page.getByRole('button',{name:'Users',exact:true}).click();
+    await page.getByLabel('User ID or email',{exact:true}).fill(email);await page.getByRole('button',{name:'Search users',exact:true}).click();
+    const rows=page.getByRole('article',{name:email,exact:true});await expect(rows).toHaveCount(3);
+    for(const id of ['previous-account-1','previous-account-2']) {
+      const row=rows.filter({hasText:id});await expect(row.getByText('Deleted account · Starter plan')).toBeVisible();
+      await expect(row.getByText('Historical record. Deletion recorded.')).toBeVisible();
+      await expect(row.getByRole('button')).toHaveCount(0);
+    }
+    await expect(rows.filter({hasText:'previous-account-1'}).getByText('Credits at deletion: 340')).toBeVisible();
+    await expect(rows.filter({hasText:'previous-account-2'}).getByText('Deleted by: Admin (fixture-user)')).toBeVisible();
+    await expect(rows.filter({hasText:'fresh-account'}).getByRole('button',{name:'Delete account',exact:true})).toBeVisible();
+    expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('deleted-user-history.png'),fullPage:true,animations:'disabled'});
+  });
+}

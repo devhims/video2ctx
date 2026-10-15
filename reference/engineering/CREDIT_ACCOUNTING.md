@@ -175,3 +175,63 @@ Investigate any discrepancy before repairing the projection. Application
 corrections should append ledger adjustments to preserve the audit trail.
 Maintenance edits/deletes also update the projection, and deleting a user
 cascades to both their account and ledger.
+
+## Deleted-account credit continuity
+
+Migration `0026_deleted_accounts.sql` replaces the signup grant trigger. A new
+email receives the one-time 1,000-credit grant. A returning email receives an
+`adjustment` with operation ID `returning-account:v1`, equal to the most recent
+recorded deletion's spendable balance. Database insertion order, rather than
+wall-clock timestamps, determines the latest record using a monotonic sequence. Zero, negative and balances above 1,000 are
+preserved. Signup, the opening ledger entry and the projected account balance
+remain one atomic D1 operation. Ordinary balance reads and reservations keep
+their existing round trips. Builder subscription state is not restored.
+
+`deleted_accounts` has one permanent row per original user ID. The final cleanup
+batch snapshots the original email, signup time, Polar customer reference, plan,
+remaining balance and self-service/admin actor before deleting the user. Both
+commit or roll back together. A BEFORE DELETE trigger provides the same snapshot
+for older Workers and direct D1 deletes, labelled `database`. Direct D1 deletion
+still bypasses the subscription guard and private-storage cleanup and is not a
+supported account deletion workflow. Retry after success cannot overwrite a row.
+
+The credit snapshot is taken before cascading deletion changes the balance.
+Outstanding reservations remain deducted; deletion does not manufacture a refund
+for work whose final charge is unknown. Per-operation ledger rows and private
+content still cascade or are cleaned normally. A stale settlement for a deleted
+user cannot credit a new user with a different ID.
+
+Email matching uses `lower(trim(email))`. It does not combine aliases, strip plus
+suffixes, or remove dots. A database guard rejects simultaneous active accounts
+with the same normalized email and rejects reuse of any deleted user ID. The
+latter preserves the existing Durable Object deletion fences.
+
+Apply the migration before the Worker. It changes no active balances and invents
+no historical records. Previously deleted accounts whose balance and email
+mapping were already erased cannot be reconstructed automatically. The pre-ledger Worker
+remains compatible with these triggers; keep the migration on rollback.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "sequenceNumber": "#ffffff", "signalColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant User
+    participant Worker
+    participant DB as D1
+    User->>Worker: Delete account with 340 credits remaining
+    Worker->>Worker: Existing billing guard and private cleanup
+    Worker->>DB: Record deletion and remove user atomically
+    Note over DB: Retain email lookup, references and 340-credit snapshot
+    User->>Worker: Sign up again with the same email
+    Worker->>DB: Create a fresh user
+    DB->>DB: Restore 340 credits through the ledger trigger
+    DB-->>Worker: Fresh account, no new free grant
+```
+
+Admin user search returns active and deleted rows together with stable pagination.
+Historical balances are snapshots, not a live total after subsequent signups.
+Only live verified admin browser sessions can read them. The table stores the
+normalized email in readable form; it is retained identifying data, not an
+anonymous record. The privacy page and both deletion confirmations disclose this
+retention. Repeated deletion history is evidence of repeated accounts, not proof
+of abuse by itself.
