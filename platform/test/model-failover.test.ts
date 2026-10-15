@@ -481,7 +481,7 @@ it('reserves fallback time when tools have consumed most of the research phase',
 
 it.each([
   ['classifier', 5_000, 5_000], ['agent_core', 10_000, 30_000], ['transcript_analyst', 10_000, 30_000],
-  ['visual_analyst', 8_000, 8_000], ['memory_updater', 8_000, 8_000], ['finalizer', 10_000, 30_000],
+  ['visual_analyst', 10_000, 30_000], ['memory_updater', 8_000, 8_000], ['finalizer', 10_000, 30_000],
 ] as const)('applies the %s role limits to a model without a fallback', async (role, firstContentMs, totalMs) => {
   const source = new MockLanguageModelV4({ modelId: 'future-model', doStream: hanging });
   const diagnostics: ModelAttemptDiagnostic[] = [];

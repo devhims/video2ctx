@@ -43,8 +43,7 @@ const DEFAULT_ROLE_LIMITS: ModelRoleLimits = { firstContentMs: 10_000, totalMs: 
 const ROLE_LIMITS: Record<string, ModelRoleLimits> = {
   // Leave most of the 20-second classification phase for its backup and validation.
   classifier: { firstContentMs: 5_000, totalMs: 5_000 },
-  // Visual analysis and memory have an outer 20-second deadline for all attempts.
-  visual_analyst: { firstContentMs: 8_000, totalMs: 8_000 },
+  // Memory has an outer 20-second deadline for all attempts.
   memory_updater: { firstContentMs: 8_000, totalMs: 8_000 },
 };
 

@@ -65,11 +65,11 @@ test('allows a frame retrieval within the service limit to finish before visual 
 });
 
 test('reports an interrupted frame call to the finalizer before cancellation acknowledgement', async () => {
-  const { options, context, finalizer } = setup(60_000);
-  const run = runResearchAgentWithModel({ ...options, researchDeadlineAt: Date.now() + 40_000,
+  const { options, context, finalizer } = setup(120_000);
+  const run = runResearchAgentWithModel({ ...options, researchDeadlineAt: Date.now() + 80_000,
     recoveredEvidence: [metadata], recoveredToolFailures: [{ toolCallId: 'storyboard', toolName: 'get_video_storyboard',
       operation: 'storyboard', message: 'No storyboard is available for this video.' }] });
-  await vi.advanceTimersByTimeAsync(40_000);
+  await vi.advanceTimersByTimeAsync(80_000);
   expect(context.provider.frames).toHaveBeenCalledOnce();
   await run;
   const prompt = JSON.stringify(finalizer.doGenerateCalls.at(-1)?.prompt);
@@ -83,7 +83,7 @@ test('reports an interrupted frame call to the finalizer before cancellation ack
 
 test('removes frame extraction from the next model step when only completion time remains', async () => {
   const { options, context } = setup(30_000);
-  const run = runResearchAgentWithModel({ ...options, researchDeadlineAt: Date.now() + 60_000 });
+  const run = runResearchAgentWithModel({ ...options, researchDeadlineAt: Date.now() + 100_000 });
   await vi.advanceTimersByTimeAsync(30_000);
   await run;
   expect(context.provider.frames).toHaveBeenCalledOnce();

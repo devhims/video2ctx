@@ -1,3 +1,7 @@
+import { MockLanguageModelV4 } from 'ai/test';
+import { withModelFailover } from '../src/agents/runtime/model-failover';
+import { withRunDeadline } from '../src/agents/runtime/deadline';
+import { streamOf } from './fixtures/model-streams';
 import { generateText } from 'ai';
 import { createAgentModel, FIREWORKS_GLM_MODEL_ID } from '../src/agents/model';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
@@ -41,7 +45,7 @@ it.each([['frames', false], ['frames', true], ['storyboard', false], ['storyboar
         sheets: images.map((imageBase64, index) => ({ imageBase64, firstFrameIndex: index ? 10 : 0,
           frameCount: 1, tileWidth: 200, tileHeight: 100, rows: 1, columns: 1, intervalMs: 1000 })), meta: { partial: true, warnings: [] } } });
   const task = analyze();
-  await vi.advanceTimersByTimeAsync(8_001);
+  await vi.advanceTimersByTimeAsync(10_001);
   expect(await task).toEqual(output);
   expect(requests.map(request => request.model)).toEqual(priorFallback ? [FIREWORKS_GLM_MODEL_ID, deepseek, deepseek] : [FIREWORKS_GLM_MODEL_ID, deepseek]);
   if (!priorFallback) expect(requests[1]!.messages).toEqual(requests[0]!.messages);
@@ -56,4 +60,53 @@ it.each([['frames', false], ['frames', true], ['storyboard', false], ['storyboar
   }
   expect(requests.slice(1).every(request => request.model === deepseek)).toBe(true);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+// Exercise both analyst wrappers, including their outer budget, with real SDK streaming.
+it.each(['frames', 'storyboard'] as const)('%s allows active output, fallback and research cancellation', async kind => {
+  vi.useFakeTimers();
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  const output = { findings: [], warnings: [] };
+  const completed = () => streamOf({ content: [{ type: 'text', text: JSON.stringify(output) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, warnings: [],
+    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 } } });
+  const active = (finishMs?: number) => new MockLanguageModelV4({ doStream: async () => ({
+    stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: 'reasoning-start', id: 'r' });
+      controller.enqueue({ type: 'reasoning-delta', id: 'r', delta: 'Inspecting images' });
+      if (finishMs !== undefined) {
+        const timer = setTimeout(async () => {
+          controller.enqueue({ type: 'reasoning-end', id: 'r' });
+          const reader = completed().stream.getReader();
+          while (true) { const next = await reader.read(); if (next.done) break; controller.enqueue(next.value); }
+          controller.close();
+        }, finishMs);
+        this.cancel = () => clearTimeout(timer);
+      }
+    } }),
+  }) });
+  const analyze = async (model: ReturnType<typeof withModelFailover>, signal: AbortSignal) => kind === 'frames'
+    ? createFrameAnalyst(model)({ signal, modelCallId: 'frames', focus: 'Inspect', frames: {
+      videoId: 'abcdefghijk', frames: [{ imageBase64: images[0]!, timestampMs: 1000,
+        mimeType: 'image/jpeg', width: 200, height: 100 }], failures: [], meta: { partial: false, warnings: [] } } })
+    : createVisualAnalyst(model)({ signal, modelCallId: 'storyboard', focus: 'Inspect', storyboard: {
+      videoId: 'abcdefghijk', frameCount: 1, intervalMs: 1000, sheets: [{ imageBase64: images[0]!,
+        firstFrameIndex: 0, frameCount: 1, tileWidth: 200, tileHeight: 100, rows: 1, columns: 1,
+        intervalMs: 1000 }], meta: { partial: false, warnings: [] } } });
+  for (const scenario of ['success', 'fallback', 'deadline'] as const) {
+    const primary = active(scenario === 'success' ? 25_000 : undefined);
+    const fallback = active(scenario === 'deadline' ? undefined : 15_000);
+    const deadlineAt = Date.now() + (scenario === 'deadline' ? 35_000 : 120_000);
+    const model = withModelFailover({ primary, fallback, role: 'visual_analyst', state: { fallback: false, deadlineAt } });
+    const pending = withRunDeadline(deadlineAt, new AbortController().signal,
+      signal => analyze(model, signal), 'Research deadline reached').catch(error => error);
+    await vi.advanceTimersByTimeAsync(scenario === 'success' ? 25_001 : scenario === 'fallback' ? 45_001 : 35_001);
+    const result = await pending;
+    if (scenario === 'deadline') expect(result).toBeInstanceOf(Error);
+    else expect(result).toEqual(output);
+    expect(primary.doStreamCalls).toHaveLength(1);
+    expect(fallback.doStreamCalls).toHaveLength(scenario === 'success' ? 0 : 1);
+    expect(vi.getTimerCount()).toBe(0);
+  }
 });

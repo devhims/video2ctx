@@ -279,10 +279,10 @@ test('storyboard tool sends its retrieval deadline to direct recovery and preser
     .rejects.toThrow('Storyboard retrieval exceeded its budget');
   await vi.waitFor(() => expect(directRequest).toBeDefined());
   const retrievalDeadline = Number(directRequest!.headers.get('x-extraction-deadline-at'));
-  expect(retrievalDeadline).toBe(researchDeadlineAt - 35_000);
+  expect(retrievalDeadline).toBe(researchDeadlineAt - 75_000);
   await vi.advanceTimersByTimeAsync(retrievalDeadline - Date.now());
   await rejected;
   expect(directRequest!.signal.aborted).toBe(true);
-  expect(researchDeadlineAt - Date.now()).toBe(35_000);
+  expect(researchDeadlineAt - Date.now()).toBe(75_000);
   expect(requests).toHaveLength(4);
 });

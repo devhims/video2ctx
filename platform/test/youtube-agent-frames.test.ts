@@ -51,7 +51,7 @@ describe('agent frame tool', () => {
   });
   test('reserves analysis time and forwards a bounded extraction budget', async () => {
     const ctx = context();
-    ctx.researchDeadlineAt = Date.now() + 50_000;
+    ctx.researchDeadlineAt = Date.now() + 90_000;
     ctx.researchQuestion = 'Confirm names from any visible text, including scoreboards.';
     ctx.analyzeFrames = vi.fn(async () => ({ findings: [], warnings: [] }));
     await executeGetVideoFrames(input, ctx, 'budgeted');

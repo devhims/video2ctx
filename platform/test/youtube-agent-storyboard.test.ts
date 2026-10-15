@@ -297,13 +297,13 @@ describe('storyboard agent tool', () => {
         ? { uncachedInputUsdPerMillionTokens: .1875, cachedInputUsdPerMillionTokens: .0375, outputUsdPerMillionTokens: .625 }
         : { uncachedInputUsdPerMillionTokens: .15, cachedInputUsdPerMillionTokens: .03, outputUsdPerMillionTokens: .5 }) }));
   });
-  it('bounds a non-cooperative visual model to 20 seconds', async () => {
+  it('bounds a non-cooperative visual model to 60 seconds', async () => {
     vi.useFakeTimers();
     try {
       const analyze = createVisualAnalyst(new MockLanguageModelV4({ doGenerate: () => new Promise(() => {}) }));
       const pending = analyze({ storyboard, focus: 'Diagram', signal: new AbortController().signal, modelCallId: 'timeout' });
-      const check = expect(pending).rejects.toThrow('20-second deadline');
-      await vi.advanceTimersByTimeAsync(20_001);
+      const check = expect(pending).rejects.toThrow('Visual analysis exceeded its deadline');
+      await vi.advanceTimersByTimeAsync(60_001);
       await check;
     } finally { vi.useRealTimers(); }
   });
@@ -357,11 +357,11 @@ it('declines storyboard retrieval when it cannot reserve analysis time', async (
   expect(ctx.provider.storyboard).not.toHaveBeenCalled();
 });
 
-it('bounds a hanging retrieval and preserves 35 seconds for analysis', async () => {
+it('bounds a hanging retrieval and preserves 75 seconds for analysis', async () => {
   vi.useFakeTimers();
   try {
     const ctx = context();
-    ctx.researchDeadlineAt = Date.now() + 60_000;
+    ctx.researchDeadlineAt = Date.now() + 100_000;
     let signal: AbortSignal | undefined;
     ctx.provider.storyboard = vi.fn(async (_id, _times, options) => {
       signal = options?.signal;
@@ -371,7 +371,7 @@ it('bounds a hanging retrieval and preserves 35 seconds for analysis', async () 
     const rejected = expect(request).rejects.toThrow('Storyboard retrieval exceeded its budget');
     await vi.advanceTimersByTimeAsync(25_000);
     await rejected;
-    expect(ctx.researchDeadlineAt - Date.now()).toBe(35_000);
+    expect(ctx.researchDeadlineAt - Date.now()).toBe(75_000);
     expect(ctx.signal.aborted).toBe(false);
     expect(signal?.aborted).toBe(true);
   } finally { vi.useRealTimers(); }
@@ -461,10 +461,10 @@ it('retrieves and analyzes a slow storyboard within the reserved research time',
   vi.useFakeTimers();
   try {
     const ctx = context();
-    ctx.researchDeadlineAt = Date.now() + 60_000;
+    ctx.researchDeadlineAt = Date.now() + 100_000;
     const fetchStoryboard = ctx.provider.storyboard!;
     ctx.provider.storyboard = vi.fn(async (...args: Parameters<typeof fetchStoryboard>) => {
-      expect(args[2]?.deadlineAt).toBe(ctx.researchDeadlineAt! - 35_000);
+      expect(args[2]?.deadlineAt).toBe(ctx.researchDeadlineAt! - 75_000);
       await new Promise(resolve => setTimeout(resolve, 20_000));
       return fetchStoryboard(...args);
     });
@@ -473,6 +473,6 @@ it('retrieves and analyzes a slow storyboard within the reserved research time',
     await vi.advanceTimersByTimeAsync(20_000);
     const packet = await pending;
     expect(packet.excerpts.length).toBeGreaterThan(0);
-    expect(ctx.researchDeadlineAt - Date.now()).toBeGreaterThanOrEqual(35_000);
+    expect(ctx.researchDeadlineAt - Date.now()).toBeGreaterThanOrEqual(75_000);
   } finally { vi.useRealTimers(); }
 });

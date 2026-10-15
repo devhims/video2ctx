@@ -3,6 +3,8 @@ export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
 // Visual runs include source selection, bounded frame extraction and analysis.
 // Individual frame calls allocate from this shared window before starting.
 export const AGENT_VISUAL_RESEARCH_TIMEOUT_MS = 120_000;
+// Allows a full visual attempt and fallback; the parent research deadline still wins.
+export const AGENT_VISUAL_ANALYSIS_TIMEOUT_MS = 60_000;
 export const AGENT_FINALIZATION_TIMEOUT_MS = 60_000;
 // Retry time is additional to the main phase, never withheld from its answer.
 export const AGENT_FINALIZATION_RETRY_TIMEOUT_MS = 20_000;
