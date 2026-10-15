@@ -28,7 +28,7 @@
     "BUILDER_MONITOR_LIMIT": "50",
     "BUILDER_DAILY_IMPORTS": "200",
     "POLAR_ENVIRONMENT": "production",
-    "POLAR_BUILDER_PRODUCT_ID": "",
+    "POLAR_BUILDER_PRODUCT_ID": "4be3f9a0-030f-4a12-b87c-a2dd7c52a958",
     "LANDING_DEMO_RATE_LIMIT_MODE": "enforced",
     // Core extraction runs in Workers. Set to container to roll back.
     "YOUTUBE_EXTRACTION_BACKEND": "worker",
