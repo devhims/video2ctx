@@ -64,10 +64,11 @@ unchanged credit balance. Creating a customer is not a checkout or payment.
 
 The initial verification fixture uses external ID polar-webhook-verification.
 It starts with 1,000 signup credits. No order, subscription, or payment is needed.
-The existing organization token can read products, orders and checkouts, but its
-customer-create and webhook-management API calls returned insufficient_scope.
-Use the sandbox dashboard for those actions. This does not require expanding the
-application token's permissions.
+The original organization token can read products, orders, checkouts, and
+customers, but its customer-create and webhook-management API calls returned
+insufficient_scope. The dashboard was sufficient for this initial webhook-only
+verification. The customer-bound checkout flow below additionally requires
+customers:write on the application token. Webhook management can remain dashboard-only.
 
 Run regression checks from platform/:
 
@@ -97,12 +98,52 @@ paid checkout to the earlier verification fixture instead of the signed-in user.
 That order activated Builder and topped the fixture up to 20,000 credits. It did
 not activate the signed-in account.
 
-The local checkout handler now sends the authenticated email, name, external user
-ID, and server-controlled app_user_id metadata. It selects the product and return
-URLs from server configuration. The hosted email field is populated but remains
-editable in the observed sandbox UI. Billing lifecycle handling quarantines a metadata user ID that differs from the
-customer's external ID before changing plans or credits. Legacy events without
-this metadata remain compatible unless that customer has an unresolved conflict.
+The local checkout handler now looks up the Polar customer by the authenticated
+app user ID. For a first-time buyer, it creates the customer using the signed-in
+email, name, and app user ID. It verifies that the returned customer is not deleted
+and that its external ID and email match the signed-in account before creating a
+checkout with customer_id and server-controlled app_user_id metadata. Product and
+return URLs also come from server configuration. Browser-supplied buyer identities
+are ignored.
+
+If an old customer already owns the email after account deletion and re-signup,
+the handler stops checkout with a reconciliation error. It never adopts a customer
+by email or changes another customer's external ID. A concurrent customer-create
+conflict can recover only by looking up the same app user ID again and verifying
+the returned customer. Customer lookup or creation permission failures stop checkout.
+The runtime Polar token now requires customers:write for first-time buyers. That
+scope also permits the existing-customer lookup.
+
+Billing lifecycle handling quarantines a metadata user ID that differs from the
+customer's external ID before changing plans or credits. Migration 0024 remains
+a backup for older checkouts and unexpected provider mismatches. Legacy events
+without this metadata remain compatible unless that customer has an unresolved conflict.
+
+### Email-lock re-test on October 15, 2026
+
+Polar's [Checkout API documentation](https://polar.sh/docs/features/checkout/session)
+says customer_id and external_customer_id disable the email field. The sandbox
+re-test reproduced a narrower behavior:
+
+- A fresh checkout through the authenticated local app route for the existing
+  test customer had a disabled email field. A temporary local verification page
+  invoked the route because the Builder settings page offers only the billing portal.
+- A separate checkout with the same previous server payload and a fresh synthetic
+  external ID had customer_id = null. Its pre-filled email was enabled, and changing
+  the email in the browser succeeded. This was an API fixture, not a new app login.
+- After binding checkout to the server-verified customer_id, the authenticated
+  local app route opened a checkout with the email disabled. Polar returns a null
+  checkout external_customer_id when only customer_id is supplied. The handler
+  verifies customer_id against the customer record whose external ID it already checked.
+- First-time customer provisioning currently returns 403 insufficient_scope with
+  the existing sandbox token. It requires a sandbox token with customers:write
+  before this path can be verified against the real API. Regression tests cover
+  provisioning, old-email collisions, customer mismatch, races, and permission failures.
+
+No payment was submitted during this re-test. The earlier local 20,000-credit
+balance was retained. The sandbox product's hosted description still says 20,000
+monthly credits, while the application's configured monthly allowance is 10,000.
+That sandbox dashboard copy needs alignment before the next payment test.
 
 The corrected checkout initially stalled at confirmed with Stripe requires_action
 and the stripe_3ds2_fingerprint action. The hosted 3-D Secure iframe contained an

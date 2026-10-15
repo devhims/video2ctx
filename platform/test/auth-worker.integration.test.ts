@@ -405,12 +405,16 @@ describe('authenticated Builder checkout identity', () => {
     expect(unknownProduct.status).toBe(400);
   });
 
-  test('sends the signed-in email and user ID to Polar instead of accepting a buyer identity from the browser', async () => {
+  test('binds checkout to the signed-in customer instead of accepting a buyer identity from the browser', async () => {
     const browser = await createBrowserSession();
     let sent: Record<string, unknown> | undefined;
     const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const outgoing = new Request(input, init);
+      if (outgoing.method === 'GET') {
+        expect(outgoing.url).toBe(`https://sandbox-api.polar.sh/v1/customers/external/${browser.user.id}`);
+        return Response.json(polarCustomer(browser.user));
+      }
       expect(outgoing.url).toBe('https://sandbox-api.polar.sh/v1/checkouts/');
       sent = await outgoing.json() as Record<string, unknown>;
       // Stop at the provider boundary; no checkout or payment is created.
@@ -428,13 +432,14 @@ describe('authenticated Builder checkout identity', () => {
       });
       expect(response.status).toBe(500);
       expect(sent).toMatchObject({
-        products: ['builder-product'], external_customer_id: browser.user.id, customer_email: browser.user.email,
-        metadata: { app_user_id: browser.user.id }, customer_name: 'Auth Test User',
+        products: ['builder-product'], customer_id: 'customer-for-signed-in-user',
+        metadata: { app_user_id: browser.user.id },
         success_url: `${baseUrl}/dashboard?section=settings&checkout=success`,
         return_url: `${baseUrl}/dashboard?section=settings&checkout=cancelled`,
       });
-      expect(sent?.customer_email).not.toBe('other@example.test');
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(sent).not.toHaveProperty('customer_email');
+      expect(sent).not.toHaveProperty('external_customer_id');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(logs).toHaveBeenCalledWith(expect.objectContaining({
         event: 'polar_checkout_failed', userId: browser.user.id, productId: 'builder-product',
         errorName: expect.any(String), statusCode: 400,
@@ -446,4 +451,62 @@ describe('authenticated Builder checkout identity', () => {
       logs.mockRestore();
     }
   });
+
+  test.each(['new customer', 'creation race', 'old email', 'wrong external ID', 'different email', 'deleted customer', 'forbidden lookup', 'forbidden creation', 'lookup outage'])(
+    'verifies customer ownership before checkout: %s', async (scenario) => {
+      const browser = await createBrowserSession();
+      const customer = polarCustomer(browser.user);
+      if (scenario === 'wrong external ID') customer.external_id = 'deleted-old-account';
+      if (scenario === 'different email') customer.email = 'other@example.test';
+      if (scenario === 'deleted customer') customer.deleted_at = new Date().toISOString();
+      const calls: string[] = [];
+      let lookups = 0;
+      const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const outgoing = new Request(input, init);
+        calls.push(`${outgoing.method} ${new URL(outgoing.url).pathname}`);
+        if (outgoing.method === 'GET') {
+          expect(outgoing.url).toBe(`https://sandbox-api.polar.sh/v1/customers/external/${browser.user.id}`);
+          lookups++;
+          if (scenario === 'forbidden lookup' || scenario === 'lookup outage') {
+            return Response.json({ detail: 'Lookup failed' }, { status: scenario === 'forbidden lookup' ? 403 : 503 });
+          }
+          if (scenario === 'old email' || scenario === 'forbidden creation'
+            || (lookups === 1 && ['new customer', 'creation race'].includes(scenario))) {
+            return Response.json({ error: 'ResourceNotFound', detail: 'Customer not found' }, { status: 404 });
+          }
+          return Response.json(customer);
+        }
+        const data = await outgoing.json();
+        if (outgoing.url.endsWith('/customers/')) {
+          expect(data).toMatchObject({ external_id: browser.user.id, email: browser.user.email, name: 'Auth Test User' });
+          if (scenario === 'forbidden creation') return Response.json({ error: 'insufficient_scope', detail: 'Denied' }, { status: 403 });
+          if (scenario === 'old email' || scenario === 'creation race') {
+            return Response.json({ detail: 'Customer already exists' }, { status: 422 });
+          }
+          return Response.json(customer, { status: 201 });
+        }
+        expect(data).toMatchObject({ customer_id: customer.id, metadata: { app_user_id: browser.user.id } });
+        expect(data).not.toHaveProperty('customer_email');
+        return Response.json({ detail: 'stop before checkout creation' }, { status: 400 });
+      });
+      try {
+        const response = await request('/api/auth/checkout', { method: 'POST', headers: jsonHeaders({ cookie: browser.cookie }),
+          body: JSON.stringify({ slug: 'builder', customerId: 'spoof-customer', customerEmail: 'spoof@example.test' }) });
+        const conflict = ['old email', 'wrong external ID', 'different email', 'deleted customer'].includes(scenario);
+        expect(response.status).toBe(conflict ? 409 : 500);
+        expect(calls.some(call => call.endsWith('/checkouts/'))).toBe(['new customer', 'creation race'].includes(scenario));
+        expect(calls).toHaveLength(scenario === 'creation race' ? 4 : ['new customer', 'old email'].includes(scenario) ? 3 : scenario === 'forbidden creation' ? 2 : 1);
+        if (conflict) expect(logs).toHaveBeenCalledWith(expect.objectContaining({ errorCode: expect.stringMatching(/^POLAR_CUSTOMER_IDENTITY_/) }));
+      } finally { fetchSpy.mockRestore(); logs.mockRestore(); }
+    });
 });
+
+function polarCustomer(user: { id: string; email: string }) {
+  return {
+    id: 'customer-for-signed-in-user', created_at: '2026-10-14T00:00:00Z', modified_at: null, metadata: {},
+    external_id: user.id, email: user.email, email_verified: false, type: 'individual', name: 'Auth Test User',
+    billing_address: null, tax_id: null, organization_id: 'sandbox-organization', deleted_at: null as string | null,
+    avatar_url: 'https://example.test/avatar',
+  };
+}
