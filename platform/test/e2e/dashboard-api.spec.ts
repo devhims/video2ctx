@@ -742,6 +742,45 @@ test('legacy settings links preserve checkout and email confirmation parameters'
   await expect(page.getByText('Email alerts enabled', { exact: true })).toBeVisible();
 });
 
+for (const scenario of [
+  { name: 'a new Starter account', plan: 'starter', status: 'inactive', canManageBilling: false, upgrade: true },
+  { name: 'an abandoned Builder checkout', plan: 'starter', status: 'inactive', canManageBilling: true, upgrade: true },
+  { name: 'an ended Builder subscription', plan: 'starter', status: 'canceled', canManageBilling: true, upgrade: true },
+  { name: 'an active Builder subscription', plan: 'builder', status: 'active', canManageBilling: true, upgrade: false },
+] as const) test(`billing actions follow the plan after ${scenario.name}`, async ({ page }) => {
+  const account = await accountScenario(page, { responses: { '/v1/billing': { body: {
+    plan: scenario.plan, status: scenario.status, canManageBilling: scenario.canManageBilling,
+    creditBalance: 1000, includedCredits: scenario.upgrade ? 1000 : 10000,
+    cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null,
+  } } } });
+  let checkoutRequests = 0;
+  await page.route('**/api/auth/checkout', async route => {
+    checkoutRequests++;
+    expect(route.request().postDataJSON()).toEqual({ slug: 'builder' });
+    await route.fulfill({ json: { url: 'http://127.0.0.1:3021/__test__/builder-checkout', redirect: true } });
+  });
+  await page.route('**/__test__/builder-checkout', route => route.fulfill({ contentType: 'text/html', body: '<h1>Checkout fixture</h1>' }));
+  try {
+    await page.goto('/dashboard/settings?checkout=cancelled');
+    await expect(page.getByRole('heading', { name: scenario.upgrade ? 'Starter plan' : 'Builder plan', exact: true })).toBeVisible();
+    await expect(page.getByText('Checkout was cancelled. Your current plan has not changed.')).toBeVisible();
+    const upgrade = page.getByRole('button', { name: 'Upgrade to Builder', exact: true });
+    const portal = page.getByRole('button', { name: 'Manage billing', exact: true });
+    await expect(upgrade).toHaveCount(scenario.upgrade ? 1 : 0);
+    await expect(portal).toHaveCount(scenario.canManageBilling ? 1 : 0);
+    if (scenario.upgrade) {
+      await expect(upgrade).toBeEnabled();
+      await expect(upgrade).toHaveClass(/primary/);
+      await upgrade.click();
+      await expect(page).toHaveURL(/\/__test__\/builder-checkout$/);
+      expect(checkoutRequests).toBe(1);
+      await page.goto('/dashboard/settings');
+      await expect(page.getByRole('heading', { name: 'Starter plan', exact: true })).toBeVisible();
+      await expect(upgrade).toBeEnabled();
+    }
+  } finally { await account.clear(); }
+});
+
 test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/billing': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Billing unavailable' } } } } });
   try {

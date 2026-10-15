@@ -92,9 +92,9 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
         {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
       </div>
       <div className='grid gap-2'>
-        {billing?.plan === 'builder' || billing?.canManageBilling
-          ? <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>
-          : <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {billing?.plan !== 'builder' && <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {/* Portal access can exist before a customer's first payment. */}
+        {(billing?.plan === 'builder' || billing?.canManageBilling) && <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>}
       </div>
       </>}
     </article>;
