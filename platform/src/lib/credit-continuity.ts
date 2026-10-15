@@ -85,5 +85,17 @@ export function refundReconciliationStatements(db: D1Database, input: {
         )) ON CONFLICT(order_id) DO NOTHING`)
       .bind(...bindDecision,orderId,userId,customerId,`polar:refund:${orderId}`,eventAt,eventAt,
         `polar:refund:${orderId}`,eventAt,starterCredits),
+    // Access follows the applied credit decision, including replay repair.
+    // Newer customer metadata cannot retain Builder after an applied refund.
+    // Re-evaluate the credit fence so an old receipt cannot revoke a later
+    // fulfilled payment. Preserve customer details and their metadata watermark.
+    db.prepare(`${decision}
+      UPDATE billing_accounts SET plan='starter',status='refunded',
+        provider_updated_at=MAX(provider_updated_at,?),updated_at=?
+      WHERE user_id=(SELECT user_id FROM owner) AND (SELECT outcome FROM decision)='apply'
+        AND EXISTS (SELECT 1 FROM account_credit_refunds r WHERE r.order_id=?
+          AND r.original_user_id=? AND r.customer_id=? AND r.owner_user_id=billing_accounts.user_id
+          AND (r.outcome='applied' OR (r.outcome='unfunded' AND billing_accounts.plan='builder')))`)
+      .bind(...bindDecision,eventAt,Date.now(),orderId,userId,customerId),
   ];
 }

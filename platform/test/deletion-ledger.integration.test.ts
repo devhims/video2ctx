@@ -1,9 +1,10 @@
+import type { WebhookCustomerStateChangedPayload } from '@polar-sh/sdk/models/components/webhookcustomerstatechangedpayload';
 import { WebhookOrderPaidPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhookorderpaidpayload';
 import { env as workerEnv, SELF, applyD1Migrations } from 'cloudflare:test';
 import type { D1Migration } from '@cloudflare/vitest-pool-workers';
 import { expect, test } from 'vitest';
 import { deleteAccountRecords } from '../src/lib/account-deletion';
-import { creditBalance, reserveCredits, type CreditEnv } from '../src/lib/entitlements';
+import { creditBalance, enforceImportLimit, entitlements, reserveCredits, type CreditEnv } from '../src/lib/entitlements';
 
 const env = workerEnv as Env;
 const credits = { DB: env.DB } as CreditEnv;
@@ -517,4 +518,99 @@ test('refund follows a live user deletion that commits before its credit transac
   await refund;
   expect(await creditBalance(credits,`${id}-second`)).toBe(1000);
   expect(await env.DB.prepare('SELECT user_id FROM billing_accounts WHERE user_id IN (?,?)').bind(id,`${id}-second`).first()).toBeNull();
+});
+
+
+function octoberActiveState(userId:string):WebhookCustomerStateChangedPayload {
+  return {
+    type:'customer.state_changed',timestamp:new Date('2026-10-03T10:00:00Z'),
+    data:{id:`customer-${userId}`,externalId:userId,activeSubscriptions:[{
+      id:`subscription-${userId}`,productId:'builder-product',status:'active',cancelAtPeriodEnd:true,
+      currentPeriodStart:new Date('2026-10-01T00:00:00Z'),currentPeriodEnd:new Date('2026-11-01T00:00:00Z'),
+    }]},
+  } as WebhookCustomerStateChangedPayload;
+}
+async function octoberSignedRefund(userId:string) {
+  const data=reviewOrderBody(userId);data.status='refunded';data.refunded_amount=2000;
+  return deliverSignedEvent('order.refunded',data,'2026-10-02T10:00:00Z');
+}
+const accessEnv:Env={...env,STARTER_DAILY_IMPORTS:'10',BUILDER_DAILY_IMPORTS:'200'};
+
+test.each(['fresh','replay repair'] as const)('applied signed refund revokes Builder access despite newer cancellation metadata: %s', async mode => {
+  const {applyPaidOrder,syncCustomerState,getBillingSummary}=await import('../src/lib/billing');
+  const id=`refund-access-${mode.replace(' ','-')}`,email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);await syncCustomerState(reviewBillingEnv,octoberActiveState(id));
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).resolves.toBeUndefined();
+  if(mode==='replay repair') {
+    // The previous Worker committed the reset/receipt but left plan=builder.
+    await env.DB.prepare("INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at) VALUES (?,?,?,'adjustment',-9000,0)")
+      .bind(crypto.randomUUID(),id,`polar:refund:order-${id}`).run();
+    await env.DB.prepare("INSERT INTO account_credit_refunds (order_id,original_user_id,customer_id,owner_user_id,outcome,event_at) VALUES (?,?,?,?,'applied',?)")
+      .bind(`order-${id}`,id,`customer-${id}`,id,new Date('2026-10-02T10:00:00Z').getTime()).run();
+    await env.DB.prepare("INSERT INTO processed_events (source,event_id,processed_at,payload_hash) VALUES ('polar',?,0,'prior-worker')")
+      .bind(`order.refunded:order-${id}`).run();
+  }
+  expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(1000);
+  expect(await env.DB.prepare('SELECT outcome FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first('outcome')).toBe('applied');
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).rejects.toMatchObject({status:403,code:'BUILDER_REQUIRED'});
+  expect(await getBillingSummary(accessEnv,id)).toMatchObject({plan:'starter',status:'refunded',cancelAtPeriodEnd:true});
+  expect(await env.DB.prepare('SELECT provider_updated_at FROM billing_accounts WHERE user_id=?').bind(id).first('provider_updated_at'))
+    .toBe(octoberActiveState(id).timestamp.getTime());
+  await adjust(id,-100);expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(900);
+  // A later active snapshot must not re-enable refunded access.
+  const later=octoberActiveState(id);later.timestamp=new Date('2026-10-04T10:00:00Z');
+  await syncCustomerState(reviewBillingEnv,later);
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).rejects.toMatchObject({status:403,code:'BUILDER_REQUIRED'});
+});
+
+
+test('a newer fulfilled payment keeps Builder access when an older refund follows newer metadata', async () => {
+  const {applyPaidOrder,syncCustomerState,getBillingSummary}=await import('../src/lib/billing');
+  const id='refund-access-newer-payment',email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);
+  const newer=reviewPaidOrder(id);newer.data.id=`newer-${id}`;newer.timestamp=new Date('2026-10-02T12:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,newer);await syncCustomerState(reviewBillingEnv,octoberActiveState(id));
+  expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(10000);
+  expect(await env.DB.prepare('SELECT outcome FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first('outcome')).toBe('superseded');
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).resolves.toBeUndefined();
+  expect(await getBillingSummary(accessEnv,id)).toMatchObject({plan:'builder',status:'active'});
+});
+
+test('replaying an applied refund preserves a later fulfilled payment and subsequent spending', async () => {
+  const {applyPaidOrder,syncCustomerState,getBillingSummary}=await import('../src/lib/billing');
+  const id='refund-access-later-payment',email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);await syncCustomerState(reviewBillingEnv,octoberActiveState(id));
+  expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await entitlements(accessEnv,id)).toMatchObject({plan:'starter'});
+  const newer=reviewPaidOrder(id);newer.data.id=`newer-${id}`;newer.timestamp=new Date('2026-10-04T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,newer);await adjust(id,-100);
+  expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(9900);
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).resolves.toBeUndefined();
+  expect(await getBillingSummary(accessEnv,id)).toMatchObject({plan:'builder',status:'active'});
+});
+
+test('failed refund access reconciliation rolls back credits, receipts and acknowledgement together', async () => {
+  const {applyPaidOrder,syncCustomerState}=await import('../src/lib/billing');
+  const id='refund-access-rollback',email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);await syncCustomerState(reviewBillingEnv,octoberActiveState(id));
+  await env.DB.prepare(`CREATE TRIGGER test_fail_refund_access BEFORE UPDATE ON billing_accounts
+    WHEN NEW.user_id='refund-access-rollback' AND NEW.status='refunded'
+    BEGIN SELECT RAISE(ABORT,'access unavailable'); END`).run();
+  try {
+    expect((await octoberSignedRefund(id)).status).toBe(500);
+    expect(await creditBalance(credits,id)).toBe(10000);
+    expect(await env.DB.prepare('SELECT order_id FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first()).toBeNull();
+    expect(await env.DB.prepare('SELECT event_id FROM processed_events WHERE event_id=?').bind(`order.refunded:order-${id}`).first()).toBeNull();
+  } finally {await env.DB.prepare('DROP TRIGGER test_fail_refund_access').run();}
+  expect((await octoberSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(1000);
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).rejects.toMatchObject({status:403,code:'BUILDER_REQUIRED'});
 });

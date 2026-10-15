@@ -267,6 +267,15 @@ record whether the reset was applied, superseded by newer credits, or unnecessar
 because no paid credits were granted. A skipped write is never recorded as applied.
 Only a verified receipt allows a refund's processed-event marker to commit.
 
+An applied refund also revokes Builder access in that same transaction. Later
+active or cancel-at-period-end metadata cannot preserve paid access after the
+credit reset. The update preserves customer/subscription details and the latest
+metadata timestamp. Before downgrading, it rechecks the credit decision so a
+replayed receipt cannot revoke a genuinely newer fulfilled payment. Replaying an
+already applied refund repairs access left enabled by an older Worker without
+resetting credits again. Builder-only deep imports use the resulting Starter
+entitlements and return `BUILDER_REQUIRED`.
+
 Migration 0026 preserves existing paid grants and applied refund entries before
 user deletion can cascade their ledger away. A trigger also captures grants from
 an old Worker during rollout. New grants retain Polar's event timestamp. Legacy
