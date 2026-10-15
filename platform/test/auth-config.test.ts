@@ -205,6 +205,8 @@ describe('Better Auth API-key configuration', () => {
     expect(captured.webhooks?.onOrderRefunded).toEqual(expect.any(Function));
     expect(captured.webhooks?.onCustomerStateChanged).toEqual(expect.any(Function));
     expect(captured.webhooks?.onSubscriptionRevoked).toEqual(expect.any(Function));
+    expect(captured.webhooks?.onSubscriptionCreated).toEqual(expect.any(Function));
+    expect(captured.webhooks?.onSubscriptionUpdated).toEqual(expect.any(Function));
   });
 
   test('queues the welcome email in the background after a user is created', async () => {

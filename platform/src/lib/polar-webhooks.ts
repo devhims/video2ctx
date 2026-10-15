@@ -3,13 +3,16 @@ import { WebhookCustomerStateChangedPayload$inboundSchema } from '@polar-sh/sdk/
 import { WebhookOrderPaidPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhookorderpaidpayload';
 import { WebhookOrderRefundedPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhookorderrefundedpayload';
 import { WebhookSubscriptionRevokedPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
+import { WebhookSubscriptionCreatedPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhooksubscriptioncreatedpayload';
+import { WebhookSubscriptionUpdatedPayload$inboundSchema } from '@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload';
 import { APIError, createAuthEndpoint } from 'better-auth/api';
 import { Webhook } from 'standardwebhooks';
 import { BodyTooLargeError, EmptyBodyError, readBoundedBytes } from './bounded-body';
 import { safeErrorLog } from './http';
 
 type PaymentWebhookOptions = Pick<WebhooksOptions,
-  'secret' | 'onOrderPaid' | 'onOrderRefunded' | 'onCustomerStateChanged' | 'onSubscriptionRevoked'>;
+  'secret' | 'onOrderPaid' | 'onOrderRefunded' | 'onCustomerStateChanged' | 'onSubscriptionRevoked'
+  | 'onSubscriptionCreated' | 'onSubscriptionUpdated'>;
 
 /** Keep the pinned SDK's typed payloads while accepting both Polar signing schemes. */
 export function webhooks(options: PaymentWebhookOptions) {
@@ -49,6 +52,8 @@ export function webhooks(options: PaymentWebhookOptions) {
           case 'order.refunded': await options.onOrderRefunded?.(parsed); break;
           case 'customer.state_changed': await options.onCustomerStateChanged?.(parsed); break;
           case 'subscription.revoked': await options.onSubscriptionRevoked?.(parsed); break;
+          case 'subscription.created': await options.onSubscriptionCreated?.(parsed); break;
+          case 'subscription.updated': await options.onSubscriptionUpdated?.(parsed); break;
         }
       } catch (error) {
         console.error({ event: 'polar_webhook_processing_failed', eventType: parsed.type,
@@ -67,6 +72,8 @@ function parsePaymentEvent(type: unknown, payload: unknown) {
       case 'order.refunded': return WebhookOrderRefundedPayload$inboundSchema.parse(payload);
       case 'customer.state_changed': return WebhookCustomerStateChangedPayload$inboundSchema.parse(payload);
       case 'subscription.revoked': return WebhookSubscriptionRevokedPayload$inboundSchema.parse(payload);
+      case 'subscription.created': return WebhookSubscriptionCreatedPayload$inboundSchema.parse(payload);
+      case 'subscription.updated': return WebhookSubscriptionUpdatedPayload$inboundSchema.parse(payload);
       default:
         if (typeof type === 'string' && type) return undefined;
         throw new Error('Missing event type');

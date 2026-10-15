@@ -14,6 +14,7 @@ export interface DashboardBilling {
   currentPeriodStart: number | null;
   currentPeriodEnd: number | null;
   canManageBilling: boolean;
+  needsBillingAttention?: boolean; // Optional while older platform deployments are still serving requests.
 }
 
 export interface DashboardProject {

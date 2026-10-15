@@ -15,6 +15,7 @@ import {
   applyRefundedOrder,
   syncCustomerState,
   syncRevokedSubscription,
+  syncSubscriptionState,
 } from './billing';
 
 export const DEVICE_AUTH_CLIENT_ID = 'video2ctx-cli';
@@ -154,6 +155,8 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
             onOrderRefunded: (payload) => applyRefundedOrder(env, payload),
             onCustomerStateChanged: (payload) => syncCustomerState(env, payload),
             onSubscriptionRevoked: (payload) => syncRevokedSubscription(env, payload),
+            onSubscriptionCreated: (payload) => syncSubscriptionState(env, payload),
+            onSubscriptionUpdated: (payload) => syncSubscriptionState(env, payload),
           }),
         ],
       }),

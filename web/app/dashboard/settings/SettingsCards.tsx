@@ -19,6 +19,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
   useLoadErrorToast(billingError, 'Retry billing', () => void resource.refresh());
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal'>();
   const [billingMessage, setBillingMessage] = useState('');
+  const manageSubscription = billing?.plan === 'builder' || billing?.needsBillingAttention;
   const startCheckout = async () => {
     if (billingAction) return;
     setBillingAction('checkout');
@@ -83,7 +84,9 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
       <div>
         <span className='panel-label'>Billing</span>
         <h3 className='settings-card-title mt-2 mb-0' id='billing-settings-heading'>{billing?.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</h3>
-        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.plan === 'builder'
+        <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>{billing?.needsBillingAttention
+          ? 'Your subscription needs payment attention. Open Manage billing to review it or update your payment details.'
+          : billing?.plan === 'builder'
           ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
           : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'}</p>
         {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
@@ -92,9 +95,8 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
         {billingMessage && <p className='settings-save-status mt-3' role='status' aria-live='polite'>{billingMessage}</p>}
       </div>
       <div className='grid gap-2'>
-        {billing?.plan !== 'builder' && <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
-        {/* Portal access can exist before a customer's first payment. */}
-        {(billing?.plan === 'builder' || billing?.canManageBilling) && <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : 'Manage billing'}</button>}
+        {!manageSubscription && <button className='button primary min-h-11' disabled={Boolean(billingAction) || !email} onClick={() => void startCheckout()}>{billingAction === 'checkout' ? 'Opening checkout...' : 'Upgrade to Builder'}</button>}
+        {(manageSubscription || billing?.canManageBilling) && <button className='button secondary min-h-11' disabled={Boolean(billingAction)} onClick={() => void openBillingPortal()}>{billingAction === 'portal' ? 'Opening billing...' : manageSubscription ? 'Manage billing' : 'Billing history'}</button>}
       </div>
       </>}
     </article>;

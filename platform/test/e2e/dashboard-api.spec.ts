@@ -743,31 +743,39 @@ test('legacy settings links preserve checkout and email confirmation parameters'
 });
 
 for (const scenario of [
-  { name: 'a new Starter account', plan: 'starter', status: 'inactive', canManageBilling: false, upgrade: true },
-  { name: 'an abandoned Builder checkout', plan: 'starter', status: 'inactive', canManageBilling: true, upgrade: true },
-  { name: 'an ended Builder subscription', plan: 'starter', status: 'canceled', canManageBilling: true, upgrade: true },
-  { name: 'an active Builder subscription', plan: 'builder', status: 'active', canManageBilling: true, upgrade: false },
+  { name: 'a new Starter account', plan: 'starter', status: 'inactive', canManageBilling: false, needsBillingAttention: false, upgrade: true, portal: null },
+  { name: 'an abandoned Builder checkout', plan: 'starter', status: 'inactive', canManageBilling: false, needsBillingAttention: false, upgrade: true, portal: null },
+  { name: 'an ended Builder subscription', plan: 'starter', status: 'inactive', canManageBilling: true, needsBillingAttention: false, upgrade: true, portal: 'Billing history' },
+  { name: 'a refunded Builder subscription', plan: 'starter', status: 'refunded', canManageBilling: true, needsBillingAttention: false, upgrade: true, portal: 'Billing history' },
+  { name: 'an active Builder subscription', plan: 'builder', status: 'active', canManageBilling: true, needsBillingAttention: false, upgrade: false, portal: 'Manage billing' },
+  { name: 'a subscription with a payment problem', plan: 'starter', status: 'inactive', canManageBilling: true, needsBillingAttention: true, upgrade: false, portal: 'Manage billing' },
 ] as const) test(`billing actions follow the plan after ${scenario.name}`, async ({ page }) => {
   const account = await accountScenario(page, { responses: { '/v1/billing': { body: {
-    plan: scenario.plan, status: scenario.status, canManageBilling: scenario.canManageBilling,
+    plan: scenario.plan, status: scenario.status, canManageBilling: scenario.canManageBilling, needsBillingAttention: scenario.needsBillingAttention,
     creditBalance: 1000, includedCredits: scenario.upgrade ? 1000 : 10000,
     cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null,
   } } } });
   let checkoutRequests = 0;
+  let portalRequests = 0;
   await page.route('**/api/auth/checkout', async route => {
     checkoutRequests++;
     expect(route.request().postDataJSON()).toEqual({ slug: 'builder' });
     await route.fulfill({ json: { url: 'http://127.0.0.1:3021/__test__/builder-checkout', redirect: true } });
   });
   await page.route('**/__test__/builder-checkout', route => route.fulfill({ contentType: 'text/html', body: '<h1>Checkout fixture</h1>' }));
+  await page.route('**/api/auth/customer/portal', async route => {
+    portalRequests++;
+    await route.fulfill({ json: { url: 'http://127.0.0.1:3021/__test__/billing-portal', redirect: true } });
+  });
+  await page.route('**/__test__/billing-portal', route => route.fulfill({ contentType: 'text/html', body: '<h1>Billing portal fixture</h1>' }));
   try {
     await page.goto('/dashboard/settings?checkout=cancelled');
-    await expect(page.getByRole('heading', { name: scenario.upgrade ? 'Starter plan' : 'Builder plan', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: scenario.plan === 'starter' ? 'Starter plan' : 'Builder plan', exact: true })).toBeVisible();
     await expect(page.getByText('Checkout was cancelled. Your current plan has not changed.')).toBeVisible();
     const upgrade = page.getByRole('button', { name: 'Upgrade to Builder', exact: true });
-    const portal = page.getByRole('button', { name: 'Manage billing', exact: true });
     await expect(upgrade).toHaveCount(scenario.upgrade ? 1 : 0);
-    await expect(portal).toHaveCount(scenario.canManageBilling ? 1 : 0);
+    await expect(page.getByRole('button', { name: 'Manage billing', exact: true })).toHaveCount(scenario.portal === 'Manage billing' ? 1 : 0);
+    await expect(page.getByRole('button', { name: 'Billing history', exact: true })).toHaveCount(scenario.portal === 'Billing history' ? 1 : 0);
     if (scenario.upgrade) {
       await expect(upgrade).toBeEnabled();
       await expect(upgrade).toHaveClass(/primary/);
@@ -777,6 +785,14 @@ for (const scenario of [
       await page.goto('/dashboard/settings');
       await expect(page.getByRole('heading', { name: 'Starter plan', exact: true })).toBeVisible();
       await expect(upgrade).toBeEnabled();
+    }
+    if (scenario.portal) {
+      const portal = page.getByRole('button', { name: scenario.portal, exact: true });
+      await expect(portal).toBeEnabled();
+      await expect(portal).toHaveClass(/secondary/);
+      await portal.click();
+      await expect(page).toHaveURL(/\/__test__\/billing-portal$/);
+      expect(portalRequests).toBe(1);
     }
   } finally { await account.clear(); }
 });
