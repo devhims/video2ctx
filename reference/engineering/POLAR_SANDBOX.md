@@ -114,10 +114,12 @@ the returned customer. Customer lookup or creation permission failures stop chec
 The runtime Polar token now requires customers:write for first-time buyers. That
 scope also permits the existing-customer lookup.
 
-Billing lifecycle handling quarantines a metadata user ID that differs from the
-customer's external ID before changing plans or credits. Migration 0024 remains
-a backup for older checkouts and unexpected provider mismatches. Legacy events
-without this metadata remain compatible unless that customer has an unresolved conflict.
+Billing lifecycle handling rejects an individual event if its application user
+metadata differs from the customer's external ID. It records a replay marker and
+logs safe event and account identifiers before returning a successful acknowledgement.
+It does not change plans or credits for that event, create billing alerts, or freeze
+the customer. The product has no paying users, so this PR does not introduce a
+conflict table, migration, or historical-payment reconciliation system.
 
 ### Email-lock re-test on October 15, 2026
 
@@ -186,47 +188,26 @@ regression uses isolated test storage; the earlier real sandbox payment is still
 the only completed payment for the signed-in test account.
 
 
-## Identity conflicts and reconciliation
+## Checkout ownership and webhook safeguards
 
-Migration 0024 adds polar_billing_conflicts. It must be applied before deploying
-the updated handler. The normal production deployment applies migrations first;
-the local sandbox uses npm run db:migrate:polar from platform/.
+The application binds checkout to a server-verified Polar customer before payment.
+The customer external ID and email must match the signed-in user. Browser-supplied
+identity fields are ignored, and an email collision prevents checkout creation.
+The sandbox browser verification confirmed that the resulting email field is disabled.
 
-A mismatched paid order, refund, subscription revocation, or customer snapshot is
-recorded as a terminal event in one database batch with its conflict record and
-an in-app billing_attention notification for the known checkout user. Repeated
-delivery of that event is acknowledged without another mutation. Customer
-snapshots compare active Builder subscription metadata before projecting a plan,
-so a snapshot that arrives before the paid order cannot upgrade a different
-account. An unresolved conflict also blocks later lifecycle events for that Polar
-customer, including snapshots that omit metadata. Conflict classification is
-rechecked inside the same D1 transaction as every plan and credit write. If another
-event commits quarantine after the initial lookup, the waiting event is recorded
-as terminal without changing the account. Paid and refunded credit entries each
-have their own database guard, including when the billing row already matches the
-incoming timestamp and status.
+Paid orders, refunds, subscription revocations, and customer snapshots compare
+available app_user_id metadata with the customer's external ID. A mismatch changes
+neither account. The existing processed_events table records the event so repeated
+delivery can be acknowledged without repeatedly processing it. A structured
+polar_billing_identity_mismatch error includes event, customer, subscription, and
+application user IDs. No email, payment data, signing secrets, or complete webhook
+payloads are logged. Later correctly owned events continue normally.
 
-Alert eligibility is selected inside that transaction for each payer/customer pair.
-Notifications link to their conflict record. Concurrent initial conflicts therefore
-produce one alert, while unrelated payers or customers keep their own alerts. A
-new conflict after reconciliation can produce a new alert. Daily and weekly email
-digests select only monitor_match notifications before applying the 30-item limit;
-billing_attention notifications remain in the dashboard inbox.
-
-The handler emits a structured polar_billing_identity_conflict error with the
-relevant order, customer, subscription, and application user IDs. Billing alerts
-remain visible when monitor alerts are disabled and open account settings. No
-email, payment details, signing secrets, or complete webhook payloads are logged.
-Production operator notification routing should monitor this structured event;
-this PR does not configure external alert destinations.
-
-Review unresolved records in polar_billing_conflicts and compare the Polar order,
-subscription, and checkout identities. Resolve the financial and account mismatch
-explicitly before marking all corresponding records resolved_at in one database
-transaction. A terminal
-processed_events marker does not automatically retry credit grants after
-resolution. Reconciliation or refund requires a separate, reviewed action. Never
-silently move another customer's subscription or credits.
+There is no persistent customer quarantine, conflict-table migration, or dedicated
+billing-alert inbox workflow. These were removed before launch because the product
+has no paying users or legacy payments to reconcile. Normal successful billing and
+credit writes remain atomic and idempotent. Daily and weekly digests select only
+monitor_match notifications before the 30-item limit.
 
 Checkout validates only slug and an optional boolean redirect. Customer identity,
 product IDs, metadata, and return URLs come from the authenticated server context.
@@ -235,18 +216,9 @@ The webhook, frame, and container readers share bounded stream reading, includin
 cancellation and reader-lock release on errors. Oversized proxy uploads receive a
 complete 413 with Connection: close while remaining request data is discarded.
 
-Review validation passed: platform and web builds, 56 auth/admin/billing/credit
-integration tests, 121 focused platform/media tests, and 110 web tests. Local
-unauthenticated dashboard requests still redirect to login. The existing local
-Builder account retains 20,000 credits and its configured 10,000-credit allowance.
-Production configuration and data were not changed.
-
-### Concurrent-event review follow-up
-
-All three findings in review 5527715490 were reproduced on the previous head
-using isolated D1 and a mocked email queue. The failing cases covered plan upgrades,
-refund and revocation changes after quarantine, duplicate initial payer alerts,
-and billing-only or mixed monitor digests. The fixes passed 79 auth/admin/billing/
-credit integration tests, including 14 new cases, plus platform type checking.
-These checks did not call Polar or send email, change production, or adjust the
-existing local test balance. No additional migration is required beyond 0024.
+The pre-launch simplification is verified against fresh isolated databases without
+the removed migration. Tests cover event-level ownership rejection, repeated
+delivery, subsequent correctly owned events, checkout customer binding, credit
+accounting, and monitor-only digests. The existing local Builder account retains
+its historical 20,000 credits and configured 10,000-credit allowance. Production
+configuration and data were not changed.

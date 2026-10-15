@@ -84,7 +84,7 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
     customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
   };
-  if (await quarantineIdentityConflict(env, payload, eventId, identity)) return;
+  if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar order ${order.id} is missing the Better Auth external ID.`);
 
   if (!await userExists(env.DB, userId)) {
@@ -117,7 +117,7 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
     eventAt,
   };
 
-  await commitBillingEvent(env, payload, eventId, identity, [
+  await env.DB.batch([
     billingUpsert(env.DB, state),
     env.DB.prepare(
       `INSERT OR IGNORE INTO credit_ledger
@@ -130,13 +130,12 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
        WHERE EXISTS (
          SELECT 1 FROM billing_accounts
          WHERE user_id=? AND provider_updated_at=? AND plan='builder' AND status=?
-       ) AND NOT EXISTS (
-         SELECT 1 FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL
        )`
     ).bind(
       crypto.randomUUID(), userId, `polar:order:${order.id}`, allowance, allowance,
-      metadata, now(), userId, userId, eventAt, status, identity.customerId,
+      metadata, now(), userId, userId, eventAt, status,
     ),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
 
@@ -159,14 +158,14 @@ export async function syncCustomerState(
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, customer.metadata?.app_user_id,
       ...subscriptions.map((candidate) => candidate.metadata?.app_user_id)),
   };
-  if (await quarantineIdentityConflict(env, payload, eventId, identity)) return;
+  if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar customer ${customer.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) return;
   const current = await env.DB.prepare('SELECT status FROM billing_accounts WHERE user_id=?')
     .bind(userId).first<{ status: string }>();
   const refundLocked = current?.status === 'refunded';
   const subscription = refundLocked ? undefined : matchedSubscription;
-  await commitBillingEvent(env, payload, eventId, identity, [
+  await env.DB.batch([
     billingUpsert(env.DB, {
       userId,
       customerId: customer.id,
@@ -179,6 +178,7 @@ export async function syncCustomerState(
       currentPeriodEnd: dateMillis(matchedSubscription?.currentPeriodEnd),
       eventAt: payload.timestamp.getTime(),
     }),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
 
@@ -195,11 +195,11 @@ export async function syncRevokedSubscription(
     customerId: subscription.customerId, subscriptionId: subscription.id,
     customerUserId: userId ?? null, checkoutUserId: subscription.metadata?.app_user_id,
   };
-  if (await quarantineIdentityConflict(env, payload, eventId, identity)) return;
+  if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar subscription ${subscription.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) return;
 
-  await commitBillingEvent(env, payload, eventId, identity, [
+  await env.DB.batch([
     billingUpsert(env.DB, {
       userId,
       customerId: subscription.customerId,
@@ -212,6 +212,7 @@ export async function syncRevokedSubscription(
       currentPeriodEnd: dateMillis(subscription.currentPeriodEnd),
       eventAt: payload.timestamp.getTime(),
     }),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
 
@@ -227,7 +228,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
     customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
   };
-  if (await quarantineIdentityConflict(env, payload, eventId, identity)) return;
+  if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar refund ${order.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) {
     await recordEvent(env.DB, eventId, eventFingerprint(payload));
@@ -250,7 +251,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
     currentPeriodEnd: dateMillis(subscription?.currentPeriodEnd),
     eventAt,
   };
-  await commitBillingEvent(env, payload, eventId, identity, [
+  await env.DB.batch([
     billingUpsert(env.DB, state),
     env.DB.prepare(
       `INSERT OR IGNORE INTO credit_ledger
@@ -263,14 +264,13 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
        WHERE EXISTS (
          SELECT 1 FROM billing_accounts
          WHERE user_id=? AND provider_updated_at=? AND plan='starter' AND status='refunded'
-       ) AND NOT EXISTS (
-         SELECT 1 FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL
        )`
     ).bind(
       crypto.randomUUID(), userId, `polar:refund:${order.id}`, starterCredits,
       JSON.stringify({ provider: 'polar', kind: 'refund-reset', orderId: order.id, balance: starterCredits }),
-      now(), userId, userId, eventAt, identity.customerId,
+      now(), userId, userId, eventAt,
     ),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
 
@@ -301,70 +301,20 @@ interface BillingIdentity {
   orderId?: string;
 }
 
-async function quarantineIdentityConflict(
+/** Invalid ownership is terminal for this event, never a freeze on the customer. */
+async function rejectMismatchedIdentity(
   env: PaymentWebhookEnv,
   payload: BillingEvent,
   eventId: string,
   identity: BillingIdentity,
-): Promise<boolean> {
-  const pending = await env.DB.prepare(
-    'SELECT 1 FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL LIMIT 1',
-  ).bind(identity.customerId).first();
-  const mismatch = identity.checkoutUserId !== undefined && identity.checkoutUserId !== identity.customerUserId;
-  if (!pending && !mismatch) return false;
-  return commitBillingEvent(env, payload, eventId, identity, [], true);
-}
-
-/** Quarantine, alert selection, billing mutations, and the replay marker share one D1 transaction. */
-async function commitBillingEvent(
-  env: PaymentWebhookEnv,
-  payload: BillingEvent,
-  eventId: string,
-  identity: BillingIdentity,
-  mutations: D1PreparedStatement[],
-  conflictOnly = false,
 ): Promise<boolean> {
   const expected = identity.checkoutUserId;
-  const mismatch = expected !== undefined && expected !== identity.customerUserId;
-  const payer = mismatch && typeof expected === 'string' ? expected : null;
-  const [fingerprint, notificationKey] = await Promise.all([eventFingerprint(payload), sha256(eventId)]);
-  const results = await env.DB.batch<{ checkout_user_id: string | null }>([
-    env.DB.prepare(`INSERT OR IGNORE INTO polar_billing_conflicts
-      (id,event_type,order_id,customer_id,subscription_id,checkout_user_id,customer_user_id,created_at)
-      SELECT ?,?,?,?,?,COALESCE(?,(
-        SELECT checkout_user_id FROM polar_billing_conflicts
-        WHERE customer_id=? AND resolved_at IS NULL ORDER BY created_at,id LIMIT 1
-      )),?,?
-      WHERE ? OR EXISTS (
-        SELECT 1 FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL
-      )`).bind(eventId, payload.type, identity.orderId ?? null, identity.customerId,
-      identity.subscriptionId, payer, identity.customerId, identity.customerUserId, now(),
-      mismatch ? 1 : 0, identity.customerId),
-    env.DB.prepare('SELECT checkout_user_id FROM polar_billing_conflicts WHERE id=?').bind(eventId),
-    // Select alert eligibility inside the transaction. Existing alerts point to
-    // their conflict record, so resolution permits a new alert for a later incident.
-    env.DB.prepare(`INSERT OR IGNORE INTO notifications (id,user_id,type,title,body,data_json,created_at)
-      SELECT ?,u.id,'billing_attention','Your payment needs attention',
-        'We could not link your billing details safely. Please contact support so we can resolve this.',
-        json_object('orderId',c.order_id,'conflictId',c.id),?
-      FROM polar_billing_conflicts c JOIN user u ON u.id=c.checkout_user_id
-      WHERE c.id=? AND c.resolved_at IS NULL AND NOT EXISTS (
-        SELECT 1 FROM notifications n JOIN polar_billing_conflicts pending
-          ON pending.id=json_extract(n.data_json,'$.conflictId')
-        WHERE n.user_id=u.id AND n.type='billing_attention'
-          AND pending.customer_id=c.customer_id AND pending.checkout_user_id=c.checkout_user_id
-          AND pending.resolved_at IS NULL
-      )`).bind(`polar-billing:${notificationKey}`, now(), eventId),
-    ...mutations,
-    eventStatement(env.DB, eventId, fingerprint, conflictOnly),
-  ]);
-  const conflict = results[1]!.results[0];
-  if (conflict && results[0]!.meta.changes > 0) {
-    console.error({ event: 'polar_billing_identity_conflict', severity: 'error', eventId, eventType: payload.type,
-      orderId: identity.orderId, customerId: identity.customerId, subscriptionId: identity.subscriptionId,
-      checkoutUserId: conflict.checkout_user_id, customerUserId: identity.customerUserId });
-  }
-  return Boolean(conflict);
+  if (expected === undefined || expected === identity.customerUserId) return false;
+  await recordEvent(env.DB, eventId, eventFingerprint(payload));
+  console.error({ event: 'polar_billing_identity_mismatch', severity: 'error', eventId, eventType: payload.type,
+    orderId: identity.orderId, customerId: identity.customerId, subscriptionId: identity.subscriptionId,
+    checkoutUserId: typeof expected === 'string' ? expected : null, customerUserId: identity.customerUserId });
+  return true;
 }
 
 function billingUpsert(db: D1Database, state: BillingState): D1PreparedStatement {
@@ -372,10 +322,7 @@ function billingUpsert(db: D1Database, state: BillingState): D1PreparedStatement
     `INSERT INTO billing_accounts
       (user_id,provider,provider_customer_id,provider_subscription_id,provider_product_id,plan,status,
        cancel_at_period_end,current_period_start,current_period_end,provider_updated_at,updated_at)
-     SELECT ?,'polar',?,?,?,?,?,?,?,?,?,?
-     WHERE NOT EXISTS (
-       SELECT 1 FROM polar_billing_conflicts WHERE customer_id=? AND resolved_at IS NULL
-     )
+     VALUES (?,'polar',?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET
        provider_customer_id=excluded.provider_customer_id,
        provider_subscription_id=excluded.provider_subscription_id,
@@ -390,15 +337,14 @@ function billingUpsert(db: D1Database, state: BillingState): D1PreparedStatement
      WHERE excluded.provider_updated_at >= billing_accounts.provider_updated_at`
   ).bind(
     state.userId, state.customerId, state.subscriptionId, state.productId, state.plan, state.status,
-    state.cancelAtPeriodEnd ? 1 : 0, state.currentPeriodStart, state.currentPeriodEnd, state.eventAt, now(), state.customerId,
+    state.cancelAtPeriodEnd ? 1 : 0, state.currentPeriodStart, state.currentPeriodEnd, state.eventAt, now(),
   );
 }
 
-function eventStatement(db: D1Database, eventId: string, fingerprint: string, conflictOnly = false): D1PreparedStatement {
+function eventStatement(db: D1Database, eventId: string, fingerprint: string): D1PreparedStatement {
   return db.prepare(
-    `INSERT OR IGNORE INTO processed_events (source,event_id,processed_at,payload_hash)
-     SELECT 'polar',?,?,? WHERE ?=0 OR EXISTS (SELECT 1 FROM polar_billing_conflicts WHERE id=?)`
-  ).bind(eventId, now(), fingerprint, conflictOnly ? 1 : 0, eventId);
+    `INSERT OR IGNORE INTO processed_events (source,event_id,processed_at,payload_hash) VALUES ('polar',?,?,?)`
+  ).bind(eventId, now(), fingerprint);
 }
 
 async function recordEvent(db: D1Database, eventId: string, fingerprint: Promise<string>): Promise<void> {

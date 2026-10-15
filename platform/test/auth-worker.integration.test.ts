@@ -299,7 +299,7 @@ describe('signed Polar webhook delivery', () => {
       expect(await summary.json()).toMatchObject({ plan: 'starter', creditBalance: 1000 });
     }
     const alerts = await request('/v1/notifications', { headers: { cookie: payer.cookie } });
-    expect(await alerts.json()).toMatchObject({ notifications: [expect.objectContaining({ type: 'billing_attention' })] });
+    expect(await alerts.json()).toMatchObject({ notifications: [] });
   });
 
   test('acknowledges unhandled verified events but still rejects their invalid signatures', async () => {

@@ -24,189 +24,71 @@ const env = {
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {
-  test.each(['paid', 'paid existing projection', 'customer state', 'refund', 'refund existing projection', 'revocation'])(
-    'quarantine committed during a %s event prevents its later billing mutations', async (kind) => {
-      const userId = `quarantine-race-${kind.replaceAll(' ', '-')}`;
+  test.each(['paid', 'customer state', 'refund', 'revocation'])(
+    'skips a mismatched %s event once without changing either account', async (kind) => {
+      const userId = `identity-rejected-${kind.replaceAll(' ', '-')}`;
       const payer = `${userId}-payer`;
       await createUser(userId);
       await createUser(payer);
       if (kind === 'refund' || kind === 'revocation') await applyPaidOrder(env, paidOrder(userId, `${userId}-opening`));
-      if (kind === 'paid existing projection') {
-        await applyPaidOrder(env, paidOrder(userId, `${userId}-opening`));
-        await addCredits(userId, -500, `${userId}-usage`);
-      }
-      if (kind === 'refund existing projection') {
-        await applyRefundedOrder(env, refundedOrder(userId, `${userId}-opening`));
-        await addCredits(userId, 9000, `${userId}-adjustment`);
-      }
       const before = await account(userId);
       const beforeBalance = await balance(userId);
-      const conflict = paidOrder(userId, `${userId}-conflict`);
-      conflict.data.metadata = { app_user_id: payer };
-      const realBatch = env.DB.batch.bind(env.DB);
+      const order = paidOrder(userId, `${userId}-mismatched`);
+      order.data.metadata = { app_user_id: payer };
+      const customer = activeCustomerState(userId);
+      customer.data.activeSubscriptions[0]!.metadata = { app_user_id: payer };
+      const refund = refundedOrder(userId, order.data.id);
+      refund.data.metadata = { app_user_id: payer };
+      const revoked = revokedSubscription(userId);
+      revoked.data.metadata = { app_user_id: payer };
       const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      const batch = vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
-        // The original event has finished its reads. Commit another event's
-        // quarantine before allowing its previously prepared writes to execute.
-        await applyPaidOrder(env, conflict);
-        return realBatch(statements);
-      });
       try {
-        if (kind.startsWith('paid')) await applyPaidOrder(env, paidOrder(userId, `${userId}-valid`));
-        if (kind === 'customer state') await syncCustomerState(env, activeCustomerState(userId));
-        if (kind.startsWith('refund')) await applyRefundedOrder(env, refundedOrder(userId, `${userId}-valid`));
-        if (kind === 'revocation') await syncRevokedSubscription(env, revokedSubscription(userId));
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (kind === 'paid') await applyPaidOrder(env, order);
+          if (kind === 'customer state') await syncCustomerState(env, customer);
+          if (kind === 'refund') await applyRefundedOrder(env, refund);
+          if (kind === 'revocation') await syncRevokedSubscription(env, revoked);
+        }
         await expect(account(userId)).resolves.toEqual(before);
         await expect(balance(userId)).resolves.toBe(beforeBalance);
-        await expect(operationCount(userId, `polar:order:${userId}-valid`)).resolves.toBe(0);
-        await expect(operationCount(userId, `polar:refund:${userId}-valid`)).resolves.toBe(0);
-        const conflicts = await env.DB.prepare('SELECT checkout_user_id FROM polar_billing_conflicts WHERE customer_id=?')
-          .bind(conflict.data.customerId).all();
-        expect(conflicts.results).toHaveLength(2);
-        expect(conflicts.results.every(row => row.checkout_user_id === payer)).toBe(true);
-      } finally { batch.mockRestore(); logs.mockRestore(); }
+        await expect(account(payer)).resolves.toBeNull();
+        await expect(balance(payer)).resolves.toBe(1000);
+        await expect(operationCount(userId, `polar:order:${order.data.id}`)).resolves.toBe(0);
+        await expect(operationCount(userId, `polar:refund:${order.data.id}`)).resolves.toBe(0);
+        expect(logs).toHaveBeenCalledOnce();
+        expect(logs).toHaveBeenCalledWith(expect.objectContaining({
+          event: 'polar_billing_identity_mismatch', customerId: order.data.customerId,
+          checkoutUserId: payer, customerUserId: userId,
+        }));
+        const markers = await env.DB.prepare("SELECT event_id FROM processed_events WHERE source='polar'").all();
+        expect(markers.results.filter(row => String(row.event_id).includes(kind === 'customer state' ? customer.data.id
+          : kind === 'revocation' ? revoked.data.id : order.data.id))).toHaveLength(1);
+        const notifications = await env.DB.prepare('SELECT id FROM notifications WHERE user_id IN (?,?)').bind(userId, payer).all();
+        expect(notifications.results).toHaveLength(0);
+      } finally { logs.mockRestore(); }
     });
 
-  test('concurrent initial conflicts create one alert for the same payer and customer', async () => {
-    const userId = 'concurrent-conflict-customer';
-    const payer = 'concurrent-conflict-payer';
+  test('a rejected event does not freeze later correctly owned billing events', async () => {
+    const userId = 'identity-no-persistent-freeze';
+    const payer = 'identity-other-account';
     await createUser(userId);
     await createUser(payer);
-    const first = paidOrder(userId, 'concurrent-conflict-first');
-    const second = paidOrder(userId, 'concurrent-conflict-second');
-    first.data.metadata = second.data.metadata = { app_user_id: payer };
-    const realBatch = env.DB.batch.bind(env.DB);
-    let arrivals = 0;
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
+    const mismatched = paidOrder(userId, 'identity-rejected-order');
+    mismatched.data.metadata = { app_user_id: payer };
     const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const batch = vi.spyOn(env.DB, 'batch').mockImplementation(async (statements) => {
-      if (++arrivals <= 2) {
-        if (arrivals === 2) release();
-        await gate;
-      }
-      return realBatch(statements);
-    });
     try {
-      await Promise.all([applyPaidOrder(env, first), applyPaidOrder(env, second)]);
-      const alerts = await env.DB.prepare("SELECT id FROM notifications WHERE user_id=? AND type='billing_attention'").bind(payer).all();
-      expect(alerts.results).toHaveLength(1);
-      const conflicts = await env.DB.prepare('SELECT id FROM polar_billing_conflicts WHERE customer_id=?').bind(first.data.customerId).all();
-      expect(conflicts.results).toHaveLength(2);
+      await applyPaidOrder(env, mismatched);
+      const customer = activeCustomerState(userId);
+      customer.data.activeSubscriptions[0]!.metadata = { app_user_id: userId };
+      await syncCustomerState(env, customer);
+      await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
       await expect(balance(userId)).resolves.toBe(1000);
+      const paid = paidOrder(userId, 'identity-correct-order', new Date('2026-08-25T00:00:00.000Z'));
+      paid.data.metadata = { app_user_id: userId };
+      await applyPaidOrder(env, paid);
+      await expect(balance(userId)).resolves.toBe(10_000);
       await expect(balance(payer)).resolves.toBe(1000);
-    } finally { batch.mockRestore(); logs.mockRestore(); }
-  });
-
-  test.each(['different payers', 'different customers'])('alert deduplication preserves alerts for %s', async (scope) => {
-    const suffix = scope.replaceAll(' ', '-');
-    const firstCustomer = `alert-scope-customer-${suffix}`;
-    const secondCustomer = scope === 'different customers' ? `${firstCustomer}-second` : firstCustomer;
-    const firstPayer = `alert-scope-payer-${suffix}`;
-    const secondPayer = scope === 'different payers' ? `${firstPayer}-second` : firstPayer;
-    for (const userId of new Set([firstCustomer, secondCustomer, firstPayer, secondPayer])) await createUser(userId);
-    const first = paidOrder(firstCustomer, `alert-scope-first-${suffix}`);
-    const second = paidOrder(secondCustomer, `alert-scope-second-${suffix}`);
-    first.data.metadata = { app_user_id: firstPayer };
-    second.data.metadata = { app_user_id: secondPayer };
-    const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      await Promise.all([applyPaidOrder(env, first), applyPaidOrder(env, second)]);
-      const alerts = await env.DB.prepare("SELECT user_id FROM notifications WHERE type='billing_attention' AND user_id IN (?,?)")
-        .bind(firstPayer, secondPayer).all();
-      expect(alerts.results).toHaveLength(2);
-      expect(alerts.results).toContainEqual({ user_id: firstPayer });
-      expect(alerts.results).toContainEqual({ user_id: secondPayer });
     } finally { logs.mockRestore(); }
-  });
-
-  test('a new conflict after reconciliation gets a new alert', async () => {
-    const userId = 'reconciled-conflict-customer';
-    const payer = 'reconciled-conflict-payer';
-    await createUser(userId);
-    await createUser(payer);
-    const first = paidOrder(userId, 'reconciled-conflict-first');
-    first.data.metadata = { app_user_id: payer };
-    const logs = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      await applyPaidOrder(env, first);
-      await env.DB.prepare('UPDATE polar_billing_conflicts SET resolved_at=? WHERE customer_id=?').bind(Date.now(), first.data.customerId).run();
-      const second = paidOrder(userId, 'reconciled-conflict-second');
-      second.data.metadata = { app_user_id: payer };
-      await applyPaidOrder(env, second);
-      const alerts = await env.DB.prepare("SELECT id FROM notifications WHERE user_id=? AND type='billing_attention'").bind(payer).all();
-      expect(alerts.results).toHaveLength(2);
-    } finally { logs.mockRestore(); }
-  });
-
-  test('records a mismatched payment once, alerts the payer, and blocks later customer updates', async () => {
-    const customerUser = 'identity-existing-customer';
-    const payer = 'identity-checkout-payer';
-    await createUser(customerUser);
-    await createUser(payer);
-    const payload = paidOrder(customerUser, 'mismatched-customer-order');
-    payload.data.metadata = { app_user_id: payer };
-    const alerts = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      await applyPaidOrder(env, payload);
-      await applyPaidOrder(env, payload);
-      // The later customer snapshot omits metadata, so the recorded conflict must still protect it.
-      await syncCustomerState(env, activeCustomerState(customerUser));
-      await expect(balance(customerUser)).resolves.toBe(1000);
-      await expect(balance(payer)).resolves.toBe(1000);
-      await expect(account(customerUser)).resolves.toBeNull();
-      await expect(account(payer)).resolves.toBeNull();
-      await expect(operationCount(customerUser, 'polar:order:mismatched-customer-order')).resolves.toBe(0);
-      const events = await env.DB.prepare("SELECT event_id FROM processed_events WHERE source='polar' AND event_id=?")
-        .bind('order.paid:mismatched-customer-order').all();
-      expect(events.results).toHaveLength(1);
-      const conflicts = await env.DB.prepare('SELECT order_id,checkout_user_id,customer_user_id FROM polar_billing_conflicts').all();
-      expect(conflicts.results).toContainEqual(expect.objectContaining({
-        order_id: 'mismatched-customer-order', checkout_user_id: payer, customer_user_id: customerUser,
-      }));
-      const notifications = await env.DB.prepare("SELECT user_id FROM notifications WHERE type='billing_attention' AND user_id=?")
-        .bind(payer).all();
-      expect(notifications.results).toHaveLength(1);
-      expect(alerts).toHaveBeenCalledWith(expect.objectContaining({ event: 'polar_billing_identity_conflict' }));
-    } finally { alerts.mockRestore(); }
-  });
-
-  test('blocks mismatched customer state even when it arrives before the paid order', async () => {
-    const customerUser = 'identity-customer-first';
-    const payer = 'identity-customer-first-payer';
-    await createUser(customerUser);
-    await createUser(payer);
-    const state = activeCustomerState(customerUser);
-    state.data.activeSubscriptions[0]!.metadata = { app_user_id: payer };
-    await syncCustomerState(env, state);
-    await expect(account(customerUser)).resolves.toBeNull();
-    const payload = paidOrder(customerUser, 'customer-first-order');
-    payload.data.metadata = { app_user_id: payer };
-    await applyPaidOrder(env, payload);
-    await expect(balance(customerUser)).resolves.toBe(1000);
-    await expect(balance(payer)).resolves.toBe(1000);
-    const conflict = await env.DB.prepare('SELECT order_id FROM polar_billing_conflicts WHERE subscription_id=? AND order_id IS NOT NULL')
-      .bind(`subscription-${customerUser}`).first();
-    expect(conflict).toMatchObject({ order_id: 'customer-first-order' });
-  });
-
-  test('protects existing credits and plans from mismatched refunds and revocations', async () => {
-    const customerUser = 'identity-refund-customer';
-    await createUser(customerUser);
-    await createUser('identity-refund-payer');
-    await applyPaidOrder(env, paidOrder(customerUser, 'identity-valid-order'));
-    const refund = refundedOrder(customerUser, 'identity-mismatched-refund');
-    refund.data.metadata = { app_user_id: 'identity-refund-payer' };
-    await applyRefundedOrder(env, refund);
-    await syncRevokedSubscription(env, {
-      type: 'subscription.revoked', timestamp: new Date('2026-08-24T00:00:00.000Z'),
-      data: { ...refund.data.subscription!, id: `subscription-${customerUser}`,
-        customerId: refund.data.customerId, customer: refund.data.customer,
-        productId: 'builder-product', metadata: { app_user_id: 'identity-refund-payer' }, status: 'canceled',
-        product: { ...refund.data.product!, prices: [], benefits: [], medias: [], attachedCustomFields: [] }, discount: null, prices: [], meters: [], pendingUpdate: null },
-    } as WebhookSubscriptionRevokedPayload);
-    await expect(balance(customerUser)).resolves.toBe(10_000);
-    await expect(account(customerUser)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
   });
 
   test('accepts matching subscription identity in a customer state update', async () => {
@@ -392,10 +274,10 @@ function revokedSubscription(userId: string): WebhookSubscriptionRevokedPayload 
 }
 
 describe('Monitor digest notification selection on D1', () => {
-  test.each(['daily', 'weekly'] as const)('does not queue a %s digest for billing-only alerts', async (cadence) => {
-    const userId = `billing-only-digest-${cadence}`;
+  test.each(['daily', 'weekly'] as const)('does not queue a %s digest for non-monitor alerts', async (cadence) => {
+    const userId = `non-monitor-digest-${cadence}`;
     await digestUser(userId, cadence);
-    await digestNotification(userId, 'billing_attention', 'Billing-only title');
+    await digestNotification(userId, 'account_notice', 'Account-only title');
     const send = vi.fn<Queue<EmailMessage>['send']>().mockResolvedValue({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } });
     try {
       await queueDigests({ DB: env.DB, APP_ORIGIN: 'http://auth.test',
@@ -408,8 +290,8 @@ describe('Monitor digest notification selection on D1', () => {
     const userId = `mixed-digest-${cadence}`;
     await digestUser(userId, cadence);
     await digestNotification(userId, 'monitor_match', 'New monitor match title', Date.now() - 1000);
-    // Newer billing alerts must not crowd the monitor out of the 30-item digest.
-    for (let index = 0; index < 35; index++) await digestNotification(userId, 'billing_attention', 'Private billing title');
+    // Newer non-monitor alerts must not crowd the monitor out of the 30-item digest.
+    for (let index = 0; index < 35; index++) await digestNotification(userId, 'account_notice', 'Account notice title');
     const send = vi.fn<Queue<EmailMessage>['send']>().mockResolvedValue({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } });
     try {
       await queueDigests({ DB: env.DB, APP_ORIGIN: 'http://auth.test',
@@ -418,8 +300,8 @@ describe('Monitor digest notification selection on D1', () => {
       expect(messages).toHaveLength(1);
       expect(messages[0]!.text).toContain('New monitor match title');
       expect(messages[0]!.html).toContain('New monitor match title');
-      expect(messages[0]!.text.includes('Private billing title')).toBe(false);
-      expect(messages[0]!.html.includes('Private billing title')).toBe(false);
+      expect(messages[0]!.text.includes('Account notice title')).toBe(false);
+      expect(messages[0]!.html.includes('Account notice title')).toBe(false);
     } finally { send.mockRestore(); }
   });
 });

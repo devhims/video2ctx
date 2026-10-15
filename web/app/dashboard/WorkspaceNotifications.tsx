@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAccountResource } from './DashboardDataProvider';
 import { DEFAULT_NOTIFICATION_PREFERENCES, type DashboardNotification } from '../../lib/dashboard-data';
 import { platformRequest as api } from '../../lib/platform-request';
-import { visibleWorkspaceNotifications, workspaceNotificationPath } from '../../lib/workspace-notifications';
 import { Icon } from './DashboardSidebar';
 function subscribeToMobileNavigation(onChange: () => void) {
   const query = window.matchMedia('(max-width: 700px)');
@@ -20,7 +19,6 @@ export function WorkspaceNotifications({ mobileContainer }: { mobileContainer?: 
   const mobile = useSyncExternalStore(subscribeToMobileNavigation, isMobileNavigation, serverMobileNavigation);
   const { data: notifications, setData: setNotifications } = useAccountResource('notifications', []);
   const { data: preferences } = useAccountResource('notificationPreferences', DEFAULT_NOTIFICATION_PREFERENCES);
-  const visible = visibleWorkspaceNotifications(notifications, preferences.inApp);
   const read = async (id: string) => {
     const before = notifications.find((n) => n.id === id)?.read_at;
     setNotifications((items) => items.map((n) => (n.id === id ? { ...n, read_at: Date.now() } : n)));
@@ -32,13 +30,19 @@ export function WorkspaceNotifications({ mobileContainer }: { mobileContainer?: 
   };
   const menu = (
     <NotificationMenu
-      notifications={visible}
-      enabled={preferences.inApp || visible.length > 0}
+      notifications={notifications}
+      enabled={preferences.inApp}
       onSettings={() => router.push('/dashboard/settings')}
-      onMarkAll={() => void Promise.all(visible.filter((n) => !n.read_at).map((n) => read(n.id)))}
+      onMarkAll={() => void Promise.all(notifications.filter((n) => !n.read_at).map((n) => read(n.id)))}
       onOpen={(n) => {
         if (!n.read_at) void read(n.id);
-        router.push(workspaceNotificationPath(n));
+        let data: { videoId?: string } = {};
+        try {
+          data = JSON.parse(n.data_json);
+        } catch {}
+        router.push(
+          data.videoId ? `/dashboard/sources?type=video&id=${encodeURIComponent(data.videoId)}` : '/dashboard/monitors',
+        );
       }}
     />
   );
