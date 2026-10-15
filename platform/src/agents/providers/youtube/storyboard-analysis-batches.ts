@@ -1,4 +1,5 @@
-import { canAnalyzeStoryboard } from '../../runtime/storyboard-budget';
+import { withRunDeadline, AGENT_VISUAL_ANALYSIS_TIMEOUT_MS } from '../../runtime/deadline';
+import { canAnalyzeStoryboard, STORYBOARD_ANALYSIS_HANDOFF_MS } from '../../runtime/storyboard-budget';
 import type { Storyboard } from './storyboard';
 import type { VisualAnalyst, VisualAnalystInput, VisualAnalysis } from './visual-analyst';
 
@@ -26,9 +27,15 @@ export async function analyzeStoryboardBatches(
       break;
     }
     const wave = batches.slice(offset, offset + ANALYSIS_CONCURRENCY);
+    // A local timeout settles stalled batches while the research signal is still live.
+    // Race each batch separately so already-completed findings survive, even when a
+    // provider ignores abort. Parent cancellation still propagates after settlement.
+    const batchDeadlineAt = Math.min(Date.now() + AGENT_VISUAL_ANALYSIS_TIMEOUT_MS,
+      (deadlineAt ?? Infinity) - STORYBOARD_ANALYSIS_HANDOFF_MS);
     const results = await Promise.allSettled(wave.map(async (storyboard, index) => {
-      const result = await analyze({ ...input, storyboard,
-        modelCallId: batches.length === 1 ? input.modelCallId : `${input.modelCallId}:batch:${offset + index}` });
+      const result = await withRunDeadline(batchDeadlineAt, input.signal, signal => analyze({ ...input, storyboard, signal,
+        modelCallId: batches.length === 1 ? input.modelCallId : `${input.modelCallId}:batch:${offset + index}` }),
+      'Storyboard batch analysis exceeded its deadline before research handoff.');
       for (const finding of result.findings) for (const frame of finding.frameIndexes) {
         if (!storyboard.sheets.some(sheet => frame >= sheet.firstFrameIndex && frame < sheet.firstFrameIndex + sheet.frameCount))
           throw new Error(`Visual analyst referenced unavailable frame ${frame}.`);
