@@ -202,10 +202,6 @@ export async function syncCustomerState(
   if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar customer ${customer.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) return;
-  const current = await env.DB.prepare('SELECT status FROM billing_accounts WHERE user_id=?')
-    .bind(userId).first<{ status: string }>();
-  const refundLocked = current?.status === 'refunded';
-  const subscription = refundLocked ? undefined : matchedSubscription;
   await env.DB.batch([
     ...subscriptions.map((candidate) => subscriptionStateStatement(env.DB, {
       userId, customerId: customer.id, subscriptionId: candidate.id,
@@ -216,13 +212,13 @@ export async function syncCustomerState(
       customerId: customer.id,
       subscriptionId: matchedSubscription?.id ?? null,
       productId: matchedSubscription?.productId ?? null,
-      plan: subscription ? 'builder' : 'starter',
-      status: refundLocked ? 'refunded' : subscription?.status ?? 'inactive',
+      plan: matchedSubscription ? 'builder' : 'starter',
+      status: matchedSubscription?.status ?? 'inactive',
       cancelAtPeriodEnd: matchedSubscription?.cancelAtPeriodEnd ?? false,
       currentPeriodStart: dateMillis(matchedSubscription?.currentPeriodStart),
       currentPeriodEnd: dateMillis(matchedSubscription?.currentPeriodEnd),
       eventAt: payload.timestamp.getTime(),
-    }),
+    }, { preserveRefund: true }),
     eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
@@ -347,7 +343,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
     ...refundReconciliationStatements(env.DB, {
       orderId: order.id, userId, customerId: order.customerId, eventAt, starterCredits,
     }),
-    billingUpsert(env.DB, state, order.id),
+    billingUpsert(env.DB, state, { refundOrderId: order.id }),
     paymentHistoryStatement(env.DB, userId, order.customerId),
     refundEventStatement(env.DB, eventId, order.id, await eventFingerprint(payload)),
   ]);
@@ -504,7 +500,14 @@ function subscriptionStateStatement(db: D1Database, state: {
   ).bind(state.subscriptionId, state.userId, state.customerId, state.status, state.eventAt);
 }
 
-function billingUpsert(db: D1Database, state: BillingState, refundOrderId?: string): D1PreparedStatement {
+function billingUpsert(db: D1Database, state: BillingState, options: {
+  refundOrderId?: string;
+  preserveRefund?: boolean;
+} = {}): D1PreparedStatement {
+  const { refundOrderId, preserveRefund } = options;
+  // Customer snapshots must inspect the refund lock inside their write. A
+  // preflight read can become stale after either a refund or a paid order.
+  // Fulfilled payments use the normal update and can restore Builder access.
   return db.prepare(
     `INSERT INTO billing_accounts
       (user_id,provider,provider_customer_id,provider_subscription_id,provider_product_id,plan,status,
@@ -516,8 +519,8 @@ function billingUpsert(db: D1Database, state: BillingState, refundOrderId?: stri
        provider_customer_id=excluded.provider_customer_id,
        provider_subscription_id=excluded.provider_subscription_id,
        provider_product_id=excluded.provider_product_id,
-       plan=excluded.plan,
-       status=excluded.status,
+       plan=${preserveRefund ? "CASE WHEN billing_accounts.status='refunded' THEN 'starter' ELSE excluded.plan END" : 'excluded.plan'},
+       status=${preserveRefund ? "CASE WHEN billing_accounts.status='refunded' THEN 'refunded' ELSE excluded.status END" : 'excluded.status'},
        cancel_at_period_end=excluded.cancel_at_period_end,
        current_period_start=excluded.current_period_start,
        current_period_end=excluded.current_period_end,

@@ -276,6 +276,13 @@ already applied refund repairs access left enabled by an older Worker without
 resetting credits again. Builder-only deep imports use the resulting Starter
 entitlements and return `BUILDER_REQUIRED`.
 
+Customer snapshots preserve the refund lock inside their billing upsert, under
+D1's write lock. There is no earlier refund-state read to go stale. A snapshot
+prepared before a refund cannot restore Builder after that refund commits. A
+snapshot prepared before a newer payment cannot reapply an obsolete refund lock
+after that payment commits. Paid-order writes can restore Builder normally;
+metadata timestamps and subscription details retain their existing ordering.
+
 Migration 0026 preserves existing paid grants and applied refund entries before
 user deletion can cascade their ledger away. A trigger also captures grants from
 an old Worker during rollout. New grants retain Polar's event timestamp. Legacy

@@ -614,3 +614,54 @@ test('failed refund access reconciliation rolls back credits, receipts and ackno
   expect(await creditBalance(credits,id)).toBe(1000);
   await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).rejects.toMatchObject({status:403,code:'BUILDER_REQUIRED'});
 });
+
+
+function holdBillingBatch() {
+  let enter!:()=>void,release!:()=>void;
+  const ready=new Promise<void>(resolve=>{enter=resolve;});
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  const batch:D1Database['batch']=async <T>(statements:D1PreparedStatement[])=>{enter();await held;return env.DB.batch<T>(statements);};
+  const db=new Proxy(env.DB,{get(target,key){
+    if(key==='batch') return batch;
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  return {db,ready,release:()=>release()};
+}
+
+test.each([false,true])('an in-flight snapshot cannot restore Builder after refund, cancel-at-period-end=%s', async cancelAtPeriodEnd => {
+  const {applyPaidOrder,syncCustomerState,getBillingSummary}=await import('../src/lib/billing');
+  const id=`refund-snapshot-race-${cancelAtPeriodEnd}`,email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);
+  const state=octoberActiveState(id);state.data.activeSubscriptions[0]!.cancelAtPeriodEnd=cancelAtPeriodEnd;
+  const held=holdBillingBatch();
+  const snapshot=syncCustomerState({...reviewBillingEnv,DB:held.db},state);
+  await held.ready;
+  let response!:Response;
+  try {response=await octoberSignedRefund(id);} finally {held.release();}
+  await snapshot;
+  expect(response.status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(1000);
+  expect(await env.DB.prepare('SELECT outcome FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first('outcome')).toBe('applied');
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).rejects.toMatchObject({status:403,code:'BUILDER_REQUIRED'});
+  expect(await getBillingSummary(accessEnv,id)).toMatchObject({plan:'starter',status:'refunded',cancelAtPeriodEnd});
+  expect(await env.DB.prepare('SELECT event_id FROM processed_events WHERE event_id=?')
+    .bind(`customer.state_changed:customer-${id}:${state.timestamp.toISOString()}`).first()).not.toBeNull();
+});
+
+test.each([false,true])('an in-flight snapshot cannot undo a newer fulfilled payment after refund, cancel-at-period-end=%s', async cancelAtPeriodEnd => {
+  const {applyPaidOrder,syncCustomerState,getBillingSummary}=await import('../src/lib/billing');
+  const id=`payment-snapshot-race-${cancelAtPeriodEnd}`,email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);paid.timestamp=new Date('2026-10-01T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,paid);expect((await octoberSignedRefund(id)).status).toBe(200);
+  const state=octoberActiveState(id);state.data.activeSubscriptions[0]!.cancelAtPeriodEnd=cancelAtPeriodEnd;
+  const held=holdBillingBatch();
+  const snapshot=syncCustomerState({...reviewBillingEnv,DB:held.db},state);
+  await held.ready;
+  const newer=reviewPaidOrder(id);newer.data.id=`newer-${id}`;newer.timestamp=new Date('2026-10-02T12:00:00Z');
+  try {await applyPaidOrder(reviewBillingEnv,newer);} finally {held.release();}
+  await snapshot;
+  expect(await creditBalance(credits,id)).toBe(10000);
+  await expect(enforceImportLimit(accessEnv,id,await entitlements(accessEnv,id),true)).resolves.toBeUndefined();
+  expect(await getBillingSummary(accessEnv,id)).toMatchObject({plan:'builder',status:'active',cancelAtPeriodEnd});
+});
