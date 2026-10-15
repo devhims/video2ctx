@@ -15,6 +15,7 @@ export interface DashboardBilling {
   currentPeriodEnd: number | null;
   canManageBilling: boolean;
   needsBillingAttention?: boolean; // Optional while older platform deployments are still serving requests.
+  creditsReady?: boolean; // Missing on older Workers; never celebrate until fulfillment is confirmed.
 }
 
 export interface DashboardProject {

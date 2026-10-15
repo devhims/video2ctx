@@ -4,7 +4,7 @@ import type { WebhookOrderRefundedPayload } from '@polar-sh/sdk/models/component
 import type { WebhookSubscriptionRevokedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionrevokedpayload';
 import type { WebhookSubscriptionCreatedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptioncreatedpayload';
 import type { WebhookSubscriptionUpdatedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload';
-import { creditBalance, type CreditEnv } from './entitlements';
+import type { CreditEnv } from './entitlements';
 import { ApiError, now, sha256 } from './http';
 
 interface BillingAccountRow {
@@ -41,6 +41,7 @@ export interface BillingSummary {
   currentPeriodEnd: number | null;
   canManageBilling: boolean;
   needsBillingAttention: boolean;
+  creditsReady: boolean;
 }
 
 export interface PaymentWebhookEnv {
@@ -51,25 +52,28 @@ export interface PaymentWebhookEnv {
 }
 
 export async function getBillingSummary(env: CreditEnv, userId: string): Promise<BillingSummary> {
-  const [row, balance, navigation] = await Promise.all([
-    env.DB.prepare(
-      `SELECT plan,status,has_payment_history,provider_customer_id,provider_subscription_id,cancel_at_period_end,
-        current_period_start,current_period_end FROM billing_accounts WHERE user_id=?`
-    ).bind(userId).first<BillingAccountRow>(),
-    creditBalance(env, userId),
-    env.DB.prepare(
-      `SELECT EXISTS (
-        SELECT 1 FROM billing_subscription_states WHERE user_id=?
-          AND status IN ('incomplete','past_due','unpaid')
-      ) AS needs_attention`
-    ).bind(userId).first<{ needs_attention: number }>(),
-  ]);
+  // Read fulfillment and balance in one snapshot so a concurrent webhook cannot
+  // report ready credits alongside a balance read before the grant committed.
+  const row = await env.DB.prepare(`
+    SELECT b.plan,b.status,b.has_payment_history,b.provider_customer_id,
+      b.provider_subscription_id,b.cancel_at_period_end,b.current_period_start,b.current_period_end,
+      COALESCE(c.available_credits,0) AS credit_balance,
+      EXISTS (SELECT 1 FROM billing_subscription_states WHERE user_id=u.id
+        AND status IN ('incomplete','past_due','unpaid')) AS needs_attention,
+      EXISTS (SELECT 1 FROM credit_ledger WHERE user_id=u.id
+        AND entry_type='grant' AND operation_id GLOB 'polar:order:*'
+        AND created_at >= COALESCE(b.current_period_start,0)) AS credits_ready
+    FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
+      LEFT JOIN credit_accounts c ON c.user_id=u.id WHERE u.id=?
+  `).bind(userId).first<BillingAccountRow & {
+    credit_balance: number; needs_attention: number; credits_ready: number;
+  }>();
   const plan = row?.plan === 'builder' ? 'builder' : 'starter';
-  const needsBillingAttention = navigation?.needs_attention === 1;
+  const needsBillingAttention = row?.needs_attention === 1;
   return {
     plan,
     status: row?.status ?? 'inactive',
-    creditBalance: balance,
+    creditBalance: row?.credit_balance ?? 0,
     includedCredits: Number(plan === 'builder' ? env.BUILDER_MONTHLY_CREDITS : env.STARTER_ONBOARDING_CREDITS),
     cancelAtPeriodEnd: row?.cancel_at_period_end === 1,
     currentPeriodStart: row?.current_period_start ?? null,
@@ -78,6 +82,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     canManageBilling: needsBillingAttention || Boolean(row?.provider_customer_id
       && (plan === 'builder' || row.has_payment_history === 1)),
     needsBillingAttention,
+    creditsReady: plan === 'builder' && row?.credits_ready === 1,
   };
 }
 

@@ -137,3 +137,18 @@ test('API key cache keeps only display metadata and rejects a malformed list', a
   assert.equal(invalid.read('apiKeys').data, undefined);
   assert.match(invalid.read('apiKeys').error, /invalid API keys/);
 });
+
+test('confirmed billing updates sidebar usage and supersedes both pending server snapshots', async () => {
+  const usage = deferred<unknown>();
+  const billing = deferred<unknown>();
+  const cache = createDashboardCache(path => path === '/v1/usage' ? usage.promise : billing.promise);
+  const oldUsage = cache.load('usage');
+  const oldBilling = cache.load('billing');
+  cache.setBilling({ plan: 'builder', status: 'active', creditBalance: 10000, includedCredits: 10000,
+    cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: true, creditsReady: true });
+  usage.resolve({ plan: 'starter', creditBalance: 1000, includedCredits: 1000, creditGrant: 'onboarding' });
+  billing.resolve({ plan: 'starter', creditBalance: 1000 });
+  await Promise.all([oldUsage, oldBilling]);
+  assert.equal(cache.read('billing').data?.creditBalance, 10000);
+  assert.deepEqual(cache.read('usage').data, { plan: 'builder', includedCredits: 10000, creditBalance: 10000, creditGrant: 'billing-cycle' });
+});

@@ -27,6 +27,23 @@ const env = {
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {
+  test('checkout confirmation waits for paid-order credits, including a zero-credit top-up', async () => {
+    const userId = 'checkout-credit-confirmation';
+    await createUser(userId);
+    await addCredits(userId, 20_000, 'admin:checkout-balance');
+    await syncCustomerState(env, activeCustomerState(userId));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', creditsReady: false, creditBalance: 21_000,
+    });
+    await applyPaidOrder(env, paidOrder(userId, 'checkout-confirmed-order', new Date('2026-08-25T00:00:00Z')));
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+      plan: 'builder', creditsReady: true, creditBalance: 21_000,
+    });
+    await env.DB.prepare("UPDATE credit_ledger SET created_at=? WHERE user_id=? AND operation_id GLOB 'polar:order:*'")
+      .bind(new Date('2026-07-20T00:00:00Z').getTime(), userId).run();
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+  });
+
   test('customer creation and non-payment credits do not expose the billing portal', async () => {
     const userId = 'portal-abandoned';
     await createUser(userId);

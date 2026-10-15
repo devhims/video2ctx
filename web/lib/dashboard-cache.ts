@@ -1,5 +1,5 @@
 import { createProjectDetailCache } from './project-detail-cache.ts';
-import type { DashboardAccountData } from './dashboard-data.ts';
+import type { DashboardAccountData, DashboardBilling } from './dashboard-data.ts';
 
 export type AccountResource = keyof DashboardAccountData;
 export const ACCOUNT_PATHS: Record<AccountResource, string> = {
@@ -71,6 +71,14 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
     snapshots.set(key, { data, error: '', loading: false, updatedAt: Date.now() });
     emit();
   }
+  function setBilling(billing: DashboardBilling) {
+    set('billing', billing);
+    set('usage', {
+      plan: billing.plan, includedCredits: billing.includedCredits,
+      creditBalance: billing.creditBalance,
+      creditGrant: billing.plan === 'builder' ? 'billing-cycle' : 'onboarding',
+    });
+  }
   function initialize<K extends AccountResource>(key: K, result: ResourceResult<DashboardAccountData[K]>) {
     // A streamed page must never replace a mutation or an existing browser read.
     if (snapshots.has(key) || pending.has(key)) return;
@@ -80,5 +88,5 @@ export function createDashboardCache(request: (path: string) => Promise<unknown>
   }
   // Hydration always starts from the same empty snapshot as the server render.
   function readServer<K extends AccountResource>(_key: K): ResourceSnapshot<DashboardAccountData[K]> { return initial; }
-  return { projectDetails, read, readServer, load, set, initialize, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { projectDetails, read, readServer, load, set, setBilling, initialize, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }

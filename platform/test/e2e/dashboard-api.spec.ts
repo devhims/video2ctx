@@ -797,6 +797,118 @@ for (const scenario of [
   } finally { await account.clear(); }
 });
 
+const starterCheckoutBilling = { plan: 'starter', status: 'inactive', creditBalance: 1000, includedCredits: 1000,
+  cancelAtPeriodEnd: false, currentPeriodStart: null, currentPeriodEnd: null, canManageBilling: false,
+  needsBillingAttention: false, creditsReady: false };
+const confirmedCheckoutBilling = { ...starterCheckoutBilling, plan: 'builder', status: 'active', creditBalance: 10000,
+  includedCredits: 10000, canManageBilling: true, creditsReady: true };
+
+for (const mode of ['immediate', 'delayed', 'transient error'] as const) test(`checkout confirmation updates shared credits automatically (${mode})`, async ({ page }, testInfo) => {
+  if (mode === 'immediate') await page.emulateMedia({ colorScheme: 'dark' });
+  const account = await accountScenario(page, { responses: {
+    '/v1/billing': { body: starterCheckoutBilling },
+    '/v1/usage': { body: { plan: 'starter', creditBalance: 1000, includedCredits: 1000, creditGrant: 'onboarding' } },
+  } });
+  let polls = 0;
+  let release!: () => void;
+  const paid = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/billing', async route => {
+    polls++;
+    if (mode === 'transient error' && polls === 1) return route.fulfill({ status: 503, json: { error: { message: 'Temporary billing error' } } });
+    if (mode === 'delayed') {
+      if (polls === 1) return route.fulfill({ json: starterCheckoutBilling });
+      if (polls === 2) return route.fulfill({ json: { ...confirmedCheckoutBilling, creditBalance: 1000, creditsReady: false } });
+      await paid;
+    }
+    return route.fulfill({ json: confirmedCheckoutBilling });
+  });
+  try {
+    await page.goto('/dashboard/settings?checkout=success&keep=1#billing-settings-heading');
+    if (mode === 'delayed') {
+      await expect.poll(() => polls).toBeGreaterThanOrEqual(2);
+      await expect(page.getByRole('heading', { name: 'Builder plan', exact: true })).toBeVisible();
+      await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '1,000 credits remaining', exact: true })).toBeVisible();
+      release();
+    }
+    // The sidebar must update without a reload or a second /v1/usage response.
+    await expect(page.getByRole('complementary', { name: 'Workspace sidebar', includeHidden: true }).getByRole('button', { name: '10,000 credits remaining', exact: true, includeHidden: true })).toHaveCount(1);
+    const dialog = page.getByRole('dialog', { name: 'Welcome to Builder!' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('10,000', { exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Continue building' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Close Builder confirmation' })).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(dialog.getByRole('button', { name: 'Continue building' })).toBeFocused();
+    await expect(page.locator('[data-confetti]')).toHaveCount(1);
+    await expect(page).toHaveURL(/\/dashboard\/settings\?keep=1#billing-settings-heading$/);
+    if (mode === 'immediate') await page.screenshot({ path: testInfo.outputPath('builder-confirmation-desktop.png'), fullPage: false });
+    await dialog.getByRole('button', { name: 'Continue building' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('[data-confetti]')).toHaveCount(0);
+    await page.getByRole('link', { name: 'API keys', exact: true }).click();
+    await expect(page.getByRole('button', { name: '10,000 credits remaining', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  } finally { release(); await account.clear(); }
+});
+
+test('checkout confirmation respects reduced motion and fits a mobile viewport', async ({ page }, testInfo) => {
+  const account = await accountScenario(page, { responses: { '/v1/billing': { body: confirmedCheckoutBilling } } });
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/platform/v1/billing', route => route.fulfill({ json: confirmedCheckoutBilling }));
+  try {
+    await page.goto('/dashboard/settings?checkout=success');
+    const dialog = page.getByRole('dialog', { name: 'Welcome to Builder!' });
+    await expect(dialog).toBeVisible();
+    await expect(page.locator('[data-confetti]')).toHaveCount(0);
+    expect(await page.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('builder-confirmation-mobile.png'), fullPage: false });
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard\/settings$/);
+  } finally { await account.clear(); }
+});
+
+test('checkout confirmation can retry slow fulfillment without reloading', async ({ page }) => {
+  const account = await accountScenario(page, { responses: { '/v1/billing': { body: starterCheckoutBilling } } });
+  let ready = false, polls = 0;
+  await page.route('**/api/platform/v1/billing', route => { polls++; return route.fulfill({ json: ready ? confirmedCheckoutBilling : starterCheckoutBilling }); });
+  try {
+    await page.goto('/dashboard/settings?checkout=success');
+    await expect(page.getByRole('button', { name: 'Retry confirmation' })).toBeVisible({ timeout: 20000 });
+    expect(polls).toBe(8);
+    await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+    ready = true;
+    await page.getByRole('button', { name: 'Retry confirmation' }).click();
+    await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Workspace sidebar', includeHidden: true }).getByRole('button', { name: '10,000 credits remaining', exact: true, includeHidden: true })).toHaveCount(1);
+  } finally { await account.clear(); }
+});
+
+for (const search of ['', '?checkout=cancelled']) test(`checkout confirmation does not celebrate ordinary or cancelled visits (${search || 'ordinary'})`, async ({ page }) => {
+  const account = await accountScenario(page, { responses: { '/v1/billing': { body: confirmedCheckoutBilling } } });
+  let polls = 0;
+  await page.route('**/api/platform/v1/billing', route => { polls++; return route.fulfill({ json: confirmedCheckoutBilling }); });
+  try {
+    await page.goto(`/dashboard/settings${search}`);
+    await expect(page.getByRole('heading', { name: 'Builder plan', exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+    await expect(page.locator('[data-confetti]')).toHaveCount(0);
+    expect(polls).toBe(0);
+  } finally { await account.clear(); }
+});
+
+test('signup welcome celebration still works after sharing confetti with checkout', async ({ page }) => {
+  await page.goto('/dashboard/settings?welcome=1');
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Welcome to video2ctx, Fixture!' })).toBeVisible();
+  await expect(page.locator('body > [data-confetti]')).toHaveCount(1);
+  await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/dashboard\/settings$/);
+});
+
 test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {
   const scenario = await accountScenario(page, { responses: { '/v1/billing': { status: 503, body: { error: { code: 'TEMPORARY', message: 'Billing unavailable' } } } } });
   try {

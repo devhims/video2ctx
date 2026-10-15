@@ -2616,7 +2616,7 @@ export const openApiDocument = {
       },
       BillingSummary: {
         type: 'object',
-        required: ['plan', 'status', 'creditBalance', 'includedCredits', 'cancelAtPeriodEnd', 'currentPeriodStart', 'currentPeriodEnd', 'canManageBilling', 'needsBillingAttention'],
+        required: ['plan', 'status', 'creditBalance', 'includedCredits', 'cancelAtPeriodEnd', 'currentPeriodStart', 'currentPeriodEnd', 'canManageBilling', 'needsBillingAttention', 'creditsReady'],
         properties: {
           plan: { type: 'string', enum: ['starter', 'builder'] },
           status: { type: 'string' },
@@ -2627,6 +2627,7 @@ export const openApiDocument = {
           currentPeriodEnd: { type: ['integer', 'null'] },
           canManageBilling: { type: 'boolean', description: 'Portal access for a Builder subscription, a subscription needing payment attention, or recorded paid/refunded orders. A customer record alone is insufficient.' },
           needsBillingAttention: { type: 'boolean', description: 'An incomplete, past-due, or unpaid subscription needs management instead of another checkout.' },
+          creditsReady: { type: 'boolean', description: 'Builder has a recorded paid-order credit grant in its current billing period, including a zero-credit top-up.' },
         },
       },
     },
