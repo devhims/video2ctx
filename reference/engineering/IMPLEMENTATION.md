@@ -76,6 +76,37 @@ Polar checkout, customer portal, and the signed `/api/auth/polar/webhooks` callb
 
 Long-running imports return `202` with a stable job ID. Reusing an idempotency key returns the existing job. Jobs expose `queued`, `running`, `partial`, `succeeded`, `failed`, or `cancelled`, plus progress, partial result, retry time, and permanent failure information.
 
+## Account deletion
+
+The application removes private account data. Polar owns subscription renewal and customer anonymization. Deletion first checks all Polar subscription pages. Active, trialing and past-due subscriptions must be cancelled before deletion; a cancellation scheduled for period end permits deletion immediately, forfeiting the remaining paid period. Settings shows `SUBSCRIPTION_ACTIVE` as an error toast. The Polar token needs `subscriptions:read` and the existing customer write permissions. Missing credentials or failed Polar calls stop deletion before local data changes.
+
+For example, a user with two sessions and a renewing Builder plan receives the cancellation toast with both sessions intact. After cancelling in Polar, retrying deletion anonymizes the customer, fences the account against new sessions, and clears both session runtimes. Runtime cleanup initializes the current schema first, including for sessions created before memory tables existed or sessions that never started.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumber": "#ffffff", "signalColor": "#4b5563"}}}%%
+sequenceDiagram
+    autonumber
+    actor User
+    participant App
+    participant Polar
+    participant Private as Private storage
+    participant D1
+    User->>App: Delete account
+    App->>Polar: Check subscriptions
+    alt Subscription still renews
+        Polar-->>App: Renewal active
+        App-->>User: Cancellation error toast
+    else Cancelled or no subscription
+        App->>Polar: Anonymize customer
+        App->>Private: Fence account and delete sessions, sources, files
+        App->>App: Queue private search deletion
+        App->>D1: Delete email metadata, sign-in tokens and user
+        App-->>User: Clear browser cookies and return success
+    end
+```
+
+Shared transcripts, storyboards and other video catalog assets remain available. Private cleanup failures return `503 ACCOUNT_DELETION_INCOMPLETE` while retaining the D1 user so deletion can be retried. Successful deletion clears the current browser's token and cached-session cookies. D1 foreign-key cascades revoke stored login sessions and remove related account records. Private search deletion remains asynchronous; failures retry through the task queue, while an already absent index counts as success. Emails queued for a deleted user cannot recreate delivery records.
+
 ## Postman quick start
 
 Run the platform locally:
@@ -162,7 +193,7 @@ Never commit `.dev.vars`. The web Worker does not receive provider secrets; it r
 - Public transcript imports grow the shared hybrid corpus. Channel and playlist workflows eagerly fan out recent videos, with lazy access still supported.
 - Queue tasks and Polar payment events have deterministic replay records. Credit reservation is a single conditional D1 mutation, followed by settlement or release.
 - Prompt evidence is delimited as untrusted content; synthesis without aligned citations returns `INSUFFICIENT_EVIDENCE`.
-- Account deletion cancels and anonymizes the Polar customer, revokes YouTube OAuth, removes private R2 objects and D1 rows, and queues private AI Search instance removal.
+- Account deletion requires cancellation of renewing subscriptions before anonymizing the Polar customer, revoking YouTube OAuth, removing private data, and queuing private AI Search instance removal.
 
 ## Verification
 

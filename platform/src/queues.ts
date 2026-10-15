@@ -1,4 +1,5 @@
 import type { EmailMessage, TaskMessage } from './types';
+import { isSearchNotFound } from './lib/research-storage';
 import { indexPrivateDocument } from './lib/search';
 import { now, safeErrorLog, sha256 } from './lib/http';
 import { checkMonitor } from './lib/monitor-check';
@@ -41,12 +42,15 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
     .bind(input.idempotencyKey).first<{ status: string }>();
   if (existing?.status === 'sent' || existing?.status === 'suppressed') return;
   const recipientHash = await sha256(input.to.toLowerCase());
-  await env.DB.prepare(
+  const recorded = await env.DB.prepare(
     `INSERT INTO email_deliveries
      (idempotency_key,user_id,recipient_hash,template,status,attempt_count,updated_at)
-     VALUES (?,?,?,?, 'sending',1,?)
+     SELECT ?,?,?,?, 'sending',1,?
+     WHERE ? IS NULL OR EXISTS (SELECT 1 FROM user WHERE id=?)
      ON CONFLICT(idempotency_key) DO UPDATE SET attempt_count=attempt_count+1,status='sending',updated_at=excluded.updated_at`
-  ).bind(input.idempotencyKey, input.userId ?? null, recipientHash, input.type, now()).run();
+  ).bind(input.idempotencyKey, input.userId ?? null, recipientHash, input.type, now(), input.userId ?? null, input.userId ?? null).run();
+  // An email queued before account deletion must not recreate its delivery log.
+  if (recorded.meta?.changes === 0) return;
   try {
     const response = await env.EMAIL.send({
       to: input.to,
@@ -96,7 +100,7 @@ async function runTask(task: TaskMessage, env: Env): Promise<void> {
     try {
       await env.AI_SEARCH.delete(instanceId);
     } catch (error) {
-      console.warn({ event: 'search_instance_delete', ...safeErrorLog(error) });
+      if (!isSearchNotFound(error)) throw error;
     }
   } else if (task.type === 'run-monitor') {
     await checkMonitor(env, String(task.payload.monitorId), String(task.payload.userId));

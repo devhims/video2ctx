@@ -1322,6 +1322,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   async deleteAccountData(): Promise<void> {
+    // Deletion can be the first RPC after a deploy, or for a registered conversation
+    // that never started. Upgrade its schema before reading any runtime tables.
+    this.ensureAgentRuntimeSchema();
     this.#deleted = true;
     await this.ctx.storage.put('account-deleted', true);
     const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;

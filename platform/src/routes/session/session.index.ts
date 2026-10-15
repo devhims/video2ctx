@@ -17,11 +17,12 @@ import {
   requireSessionPrincipal,
   requireUser,
 } from '../../middlewares/authentication';
-import { ApiError, asId, body, now, sha256, text } from '../../lib/http';
+import { deleteAccountRecords } from '../../lib/account-deletion';
+import { ApiError, asId, body, now, safeErrorLog, sha256, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
 import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
-import { closeBillingAccount, getBillingSummary } from '../../lib/billing';
+import { closeBillingAccount, getBillingSummary, requireNoRenewingSubscription } from '../../lib/billing';
 import { deleteProjectAssets, deleteR2Prefix, userSearchInstanceId } from '../../lib/research-storage';
 import { getProvider } from '../../providers';
 import {
@@ -643,18 +644,31 @@ sessionRoutes.get('/billing', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
-  await deleteAgentAccountData(c.env, user.id);
+  // Resolve external billing failures before fencing or removing local data.
+  await requireNoRenewingSubscription(c.env, user.id);
   await closeBillingAccount(c.env, user.id);
-  await disconnectYoutube(c.env, user.id);
-  await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
-  await deleteR2Prefix(c.env.RESEARCH, await framePreviewPrefix(user.id));
-  const instanceId = userSearchInstanceId(user.id);
-  await c.env.TASKS.send({
-    type: 'delete-user-search',
-    idempotencyKey: `delete-search:${user.id}`,
-    payload: { instanceId },
-  }, { contentType: 'json' });
-  await c.env.DB.prepare('DELETE FROM user WHERE id=?').bind(user.id).run();
+  try {
+    await deleteAgentAccountData(c.env, user.id);
+    await disconnectYoutube(c.env, user.id);
+    await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
+    await deleteR2Prefix(c.env.RESEARCH, await framePreviewPrefix(user.id));
+    const instanceId = userSearchInstanceId(user.id);
+    await c.env.TASKS.send({
+      type: 'delete-user-search',
+      idempotencyKey: `delete-search:${user.id}`,
+      payload: { instanceId },
+    }, { contentType: 'json' });
+    await deleteAccountRecords(c.env.DB, user);
+  } catch (cause) {
+    console.error({ event: 'account_cleanup_failed', ...safeErrorLog(cause) });
+    throw new ApiError(503, 'ACCOUNT_DELETION_INCOMPLETE', 'Account deletion could not finish. Please retry.');
+  }
+  // D1 revokes every login session. Clear this browser's cached session as well.
+  const auth = c.get('auth');
+  if (auth) {
+    const signedOut = await auth.api.signOut({ headers: c.req.raw.headers, returnHeaders: true });
+    for (const cookie of signedOut.headers.getSetCookie()) c.header('set-cookie', cookie, { append: true });
+  }
   return c.body(null, 204);
 });
 

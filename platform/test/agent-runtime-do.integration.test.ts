@@ -1891,3 +1891,20 @@ test('deleting memory removes its persisted research handoff copy before recover
     expect(rows[0]!.research_context_json).not.toContain('Private remembered budget');
   });
 });
+
+
+test('account deletion upgrades a legacy runtime before reading newer memory tables', async () => {
+  const { runtime, runId } = await seed('agent-delete-legacy-runtime');
+  await runInDurableObject(runtime, async (instance, state) => {
+    state.storage.sql.exec('DROP TABLE agent_memory_jobs');
+    state.storage.sql.exec('DROP TABLE agent_memory_cost_reports');
+    await instance.deleteAccountData();
+    expect(instance.sql`SELECT * FROM agent_runs WHERE id=${runId}`).toEqual([]);
+    expect(instance.sql`SELECT * FROM agent_memory_jobs`).toEqual([]);
+  });
+});
+
+test('account deletion initializes a never-started registered conversation', async () => {
+  const runtime = env.AGENT_RUNTIME.getByName('agent-delete-never-started-runtime');
+  await expect(runtime.deleteAccountData()).resolves.toBeUndefined();
+});

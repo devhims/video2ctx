@@ -343,6 +343,51 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   ]);
 }
 
+/** Every subscription Polar holds for a user, or null when Polar has never seen them. */
+export type PolarSubscriptionLookup = (env: Env, userId: string) => Promise<Array<{ status: string; cancelAtPeriodEnd: boolean }> | null>;
+
+// Polar's customer state lists only active and trialing subscriptions, but a
+// past-due one is still billable and is terminated by customer deletion. Unpaid
+// is revoked in Polar, not billable, and can no longer be cancelled.
+const BILLABLE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'past_due']);
+
+const lookupPolarSubscriptions: PolarSubscriptionLookup = async (env, userId) => {
+  const { polarClient } = await import('./polar-client');
+  let pages;
+  try {
+    pages = await polarClient(env).subscriptions.list({ externalCustomerId: userId, limit: 100 });
+  } catch (cause) {
+    // Only a 404 on the first request means Polar has never seen this user.
+    if (isHttpStatus(cause, 404)) return null;
+    throw cause;
+  }
+  // A failure on any later page stops deletion rather than discarding what was read.
+  const subscriptions: Array<{ status: string; cancelAtPeriodEnd: boolean }> = [];
+  for await (const page of pages) subscriptions.push(...page.result.items);
+  return subscriptions;
+};
+
+/**
+ * A billable subscription that will renew must be cancelled before the account is
+ * deleted, because Polar's customer deletion terminates it immediately and voids
+ * pending orders. Polar is asked directly, across every subscription: the local
+ * projection can lag its webhooks and stays Starter after a refund even if a later
+ * subscription renews. A subscription already set to cancel at period end may be
+ * deleted, forfeiting the remaining period. Any Polar error stops deletion.
+ * Missing billing credentials fail closed before local cleanup starts.
+ */
+export async function requireNoRenewingSubscription(
+  env: Env,
+  userId: string,
+  lookup: PolarSubscriptionLookup = lookupPolarSubscriptions,
+): Promise<void> {
+  if (!env.POLAR_ACCESS_TOKEN) throw new ApiError(503, 'BILLING_UNAVAILABLE', 'Account deletion is temporarily unavailable. Please try again later.');
+  const subscriptions = await lookup(env, userId);
+  if (subscriptions?.some((subscription) => BILLABLE_SUBSCRIPTION_STATUSES.has(subscription.status) && !subscription.cancelAtPeriodEnd)) {
+    throw new ApiError(409, 'SUBSCRIPTION_ACTIVE', 'Cancel your Builder plan before deleting your account.');
+  }
+}
+
 export async function closeBillingAccount(env: Env, userId: string): Promise<void> {
   try {
     const { polarClient } = await import('./polar-client');

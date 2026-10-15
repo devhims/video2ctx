@@ -1358,3 +1358,22 @@ test.each(['cancel', 'delete'] as const)('a verified text save cannot restore ev
     expect(store.brief().assets).toEqual([]);
   });
 });
+
+
+test('account deletion removes session references while retaining the shared transcript', async () => {
+  const id = videoId(), data = await source(id);
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('catalog-account-deletion'), async (instance, state) => {
+    instance.getRun('missing');
+    const store = new SessionEvidenceStore(
+      state.storage.sql, env.RESEARCH, 'private/catalog-account-deletion/', undefined,
+      new SessionCatalog(env), fn => state.storage.transactionSync(fn),
+    );
+    const saved = await sessionProvider(provider(data), store).transcript(id);
+    expect(await store.read(saved.assetVersions![0]!)).toEqual(data.value);
+    await instance.deleteAccountData();
+    expect(state.storage.sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
+    expect(state.storage.sql.exec('SELECT * FROM session_assets').toArray()).toEqual([]);
+  });
+  expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(1);
+  expect(await catalog().readVersion(data.catalogVersions[0]!)).toMatchObject({ value: transcript(id) });
+});

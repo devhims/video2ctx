@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { platformRequest as api } from '../../../lib/platform-request';
+import { PlatformApiError, platformRequest as api } from '../../../lib/platform-request';
 import { authClient } from '../../../lib/auth-client';
 import { canDeleteAccount, confirmDashboardEmailConsent, DEFAULT_NOTIFICATION_PREFERENCES, DELETE_ACCOUNT_CONFIRMATION, emailConsentToConfirm, pathWithoutEmailConsent, type DashboardBilling, type DashboardNotificationPreferences } from '../../../lib/dashboard-data';
 import type { AccountSeeds } from '../../../lib/dashboard-cache';
@@ -10,7 +10,7 @@ import { useDashboardCache, useStreamedAccountResource } from '../DashboardDataP
 import { BuilderConfirmation } from './BuilderConfirmation';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
-import { useLoadErrorToast } from '../../../lib/use-error-toast';
+import { useErrorToast, useLoadErrorToast } from '../../../lib/use-error-toast';
 
 export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['billing']> }) {
   const { user } = useDashboardSession();
@@ -231,16 +231,19 @@ export function AccountCards() {
   const [confirmation, setConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const deletionToast = useErrorToast();
   const confirmed = canDeleteAccount(confirmation);
   const deleteAccount = async () => {
     if (!email || !confirmed || deleting) return;
     setDeleting(true);
     setDeleteError('');
+    deletionToast.clear();
     try {
       await api<void>('/v1/account', { method: 'DELETE' });
       window.location.replace('/');
     } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
+      if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') deletionToast.show(cause.message);
+      else setDeleteError(cause instanceof Error ? cause.message : 'Could not delete your account.');
       setDeleting(false);
     }
   };

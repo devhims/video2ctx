@@ -24,14 +24,14 @@ export async function deleteProjectAssets(env: Env, userId: string, projectId: s
     try {
       await instance.items.delete(document.search_item_id);
     } catch (error) {
-      if (!isNotFound(error)) throw error;
+      if (!isSearchNotFound(error)) throw error;
     }
   }
 }
 
-function isNotFound(error: unknown): boolean {
+export function isSearchNotFound(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  if (error.name === 'AiSearchNotFoundError') return true;
+  if (error.name === 'AiSearchNotFoundError' || error.message === 'ai_search_not_found') return true;
   const record = error as Error & { code?: unknown; status?: unknown };
   return record.status === 404 || record.code === 404 || record.code === 'NOT_FOUND';
 }

@@ -2068,3 +2068,20 @@ for (const kind of ['search', 'playlist'] as const) test(`saved ${kind} members 
     expect(counts.writes).toEqual([]);
   } finally { await scenario.clear(); }
 });
+
+
+test('active subscription blocks account deletion with an error toast and a usable retry button', async ({ page }, testInfo) => {
+  const message = 'Cancel your Builder plan before deleting your account.';
+  await page.route('**/api/platform/v1/account', route => route.request().method() === 'DELETE'
+    ? route.fulfill({ status: 409, json: { error: { code: 'SUBSCRIPTION_ACTIVE', message } } })
+    : route.fallback());
+  await page.goto('/dashboard/settings');
+  const danger = page.getByRole('article', { name: 'Delete account permanently' });
+  await danger.getByRole('textbox').fill('DELETE');
+  await danger.getByRole('button', { name: 'Delete account permanently' }).click();
+  await expect(page.locator('[data-sonner-toast][data-type="error"]').getByText(message)).toBeVisible();
+  await expect(danger.getByRole('alert')).toHaveCount(0);
+  await expect(danger.getByRole('button', { name: 'Delete account permanently' })).toBeEnabled();
+  await expect(page).toHaveURL(/dashboard\/settings/);
+  await page.screenshot({ path: testInfo.outputPath('subscription-active-error.png'), fullPage: true });
+});
