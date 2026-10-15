@@ -161,6 +161,30 @@ it('does not let an SDK provider-error retry renew an exhausted timeout retry', 
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it.each(['direct', 'new fallback', 'selected fallback'] as const)(
+  'preserves consumed timeout exhaustion after HTTP 409 for %s through generate and stream', async path => {
+    for (const mode of ['generate', 'stream'] as const) {
+      let calls = 0;
+      const conflict = new APICallError({ message: 'conflict', url: 'https://example.test', requestBodyValues: {},
+        statusCode: 409, isRetryable: true });
+      const source = new MockLanguageModelV4({ doStream: async () => {
+        if (calls++ === 1) throw conflict;
+        return hanging();
+      } });
+      const state = { fallback: path === 'selected fallback', deadlineAt: Date.now() + 60_000 };
+      const model = path === 'direct' ? withModelTimeouts({ model: source, state, role: 'finalizer' })
+        : withModelFailover({ primary: new MockLanguageModelV4({ doStream: hanging }), fallback: source, state, role: 'finalizer' });
+      const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence', maxRetries: 1 }) : consume(model)).catch(error => error);
+      await vi.advanceTimersByTimeAsync(60_001);
+      const error = await task;
+      expect(source.doStreamCalls).toHaveLength(2);
+      expect(error).toBeInstanceOf(ModelRequestExhaustedError);
+      expect(error.failures).toHaveLength(path === 'new fallback' ? 3 : 2);
+      expect(error.failures.at(-1)).toBe(conflict);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
 it.each(['generate', 'stream'] as const)('retries an overall timeout through %s without mixing partial text', async mode => {
   let calls = 0;
   const source = new MockLanguageModelV4({ doStream: async () => calls++ === 0 ? chunks([

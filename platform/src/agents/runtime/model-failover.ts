@@ -309,6 +309,11 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
       finish(error);
       request.failures.push(error);
       params.abortSignal?.throwIfAborted();
+      // Once the timeout retry is spent, even SDK-retryable errors such as 409
+      // must stay terminal instead of creating a new request with a fresh allowance.
+      if (request.timeoutRetries > 0) {
+        throw fallback ? new ModelFallbackExhaustedError(request.failures) : new ModelRequestExhaustedError(request.failures);
+      }
       if (!eligible(error)) throw error;
       const timeAvailable = state.deadlineAt === undefined || Date.now() < state.deadlineAt;
       if (fallback && model === primary && timeAvailable) {
@@ -327,7 +332,7 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
       }
       // Exhaustion is terminal to SDK retries and finalizer timeout repair alike.
       if (fallback) throw new ModelFallbackExhaustedError(request.failures);
-      if (request.timeoutRetries > 0 || (error instanceof ModelAttemptTimeout && error.reason !== 'phase_budget'))
+      if (error instanceof ModelAttemptTimeout && error.reason !== 'phase_budget')
         throw new ModelRequestExhaustedError(request.failures);
       throw error;
     };
