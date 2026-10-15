@@ -135,10 +135,19 @@ re-test reproduced a narrower behavior:
   local app route opened a checkout with the email disabled. Polar returns a null
   checkout external_customer_id when only customer_id is supplied. The handler
   verifies customer_id against the customer record whose external ID it already checked.
-- First-time customer provisioning currently returns 403 insufficient_scope with
-  the existing sandbox token. It requires a sandbox token with customers:write
-  before this path can be verified against the real API. Regression tests cover
-  provisioning, old-email collisions, customer mismatch, races, and permission failures.
+- The original token returned 403 insufficient_scope for first-time provisioning.
+  After replacing it with a sandbox token containing customers:write,
+  checkouts:write, customer_sessions:write, products:read, orders:read, and
+  subscriptions:read, the real first-time application flow passed in an isolated
+  Worker integration test. The authenticated route looked up a fresh external ID
+  with 404, created its customer with 201, and created the bound checkout with 201.
+  Browser-supplied customer identity fields were ignored. Reading back the customer
+  and checkout confirmed matching external user ID, customer ID, email, and metadata.
+  Chrome confirmed that this first-time checkout's email field was disabled.
+  Billing portal creation and product, order, and subscription reads also passed.
+  No payment was submitted, and the isolated app account remained Starter with
+  1,000 onboarding credits. Regression tests additionally cover old-email
+  collisions, customer mismatch, races, and permission failures.
 
 No payment was submitted during this re-test. The earlier local 20,000-credit
 balance was retained. The sandbox product's hosted description still says 20,000
