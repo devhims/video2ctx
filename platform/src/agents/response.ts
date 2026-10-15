@@ -1,4 +1,5 @@
 import { mapCitationProse } from './markdown-citations';
+import { clockTime } from './runtime/clock-time';
 import { storedExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research/research-plan';
@@ -23,7 +24,7 @@ export const agentResponseOptionsSchema = z.object({
 export type AgentResponseOptions = z.infer<typeof agentResponseOptionsSchema>;
 
 export const compactAgentSourceSchema = z.object({
-  id: z.string().describe('Source number used by [1] references in this answer.'),
+  id: z.string().describe('Source number used by [1] references in this answer. A reference to a moment in a video adds its start time, as in [1 · 4:52].'),
   videoId: z.string().optional(),
   channelId: z.string().optional(),
   playlistId: z.string().optional(),
@@ -82,7 +83,8 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   const displayAnswer = mapCitationProse(result.answer, prose => prose.replace(/\(source marker:([^\]]+)\]/g,
     (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]'));
   const answer = mapCitationProse(displayAnswer, prose => prose.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
-    const refs = new Set<string>();
+    // A video reference names the earliest moment its excerpts in this group cite.
+    const refs = new Map<string, number | undefined>();
     for (const match of group.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)) {
       const citation = citations.get(match[1]!);
       if (!citation) throw new ApiError(500, 'INVALID_AGENT_RESULT', 'A stored answer references missing evidence.');
@@ -99,9 +101,11 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
         });
       }
       evidenceIds.set(citation.id, id);
-      refs.add(id);
+      const moment = citation.videoId && typeof citation.startMs === 'number' ? citation.startMs : undefined;
+      const earliest = refs.get(id);
+      refs.set(id, moment === undefined ? earliest : Math.min(moment, earliest ?? moment));
     }
-    return [...refs].map(id => `[${id}]`).join('');
+    return [...refs].map(([id, startMs]) => startMs === undefined ? `[${id}]` : `[${id} · ${clockTime(startMs)}]`).join('');
   }));
   const codes = new Set(result.warnings.map(warning => warning.code));
   const outcome = result.intent === 'rejected' ? 'rejected'

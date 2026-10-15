@@ -284,3 +284,13 @@ describe('transcript grounding', () => {
   });
 });
 
+describe('transcript passages found by session search', () => {
+  it('reach the answer whole, so a matched caption at the end of a window is not cut', async () => {
+    // Run 63ece937: the 922-character window was cut at 800 characters, just before
+    // "a sixteen to one water to coffee brew ratio", and the answer retracted the ratio.
+    const { default: found } = await import('./fixtures/coffee-ratio-search-packet.json');
+    const packet = found as unknown as EvidencePacket;
+    expect(JSON.stringify(evidencePacketForModel(packet))).toContain('sixteen to one water to coffee brew ratio');
+    expect(JSON.stringify(finalizationEvidenceForModel([packet], 40000).evidence)).toContain('sixteen to one water to coffee brew ratio');
+  });
+});

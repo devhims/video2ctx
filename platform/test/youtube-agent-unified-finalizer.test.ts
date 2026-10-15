@@ -486,7 +486,7 @@ it.each(['generate', 'stream'] as const)('QA 012: %s keeps a misplaced inline ci
   const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
   const compact = compactAgentResult(result);
   // The second row cites real evidence its block never declared; it stays where the model put it.
-  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1]').replace('[cite:ref_2]', '[2]'));
+  expect(compact.answer).toBe(table.replace('[cite:ref_1]', '[1 · 1:00]').replace('[cite:ref_2]', '[2 · 0:30]'));
   expect(compact.sources.map(source => source.videoId)).toEqual(['zzzzzzzzzzz', 'abcdefghijk']);
   expect(result.citations.map(citation => [citation.id, citation.startMs])).toEqual([
     ['other-observation', 60000], ['frame-observation', 30000],

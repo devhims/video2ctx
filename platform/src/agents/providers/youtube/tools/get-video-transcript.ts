@@ -14,8 +14,16 @@ export const getVideoTranscriptInputSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   focus: z.string().trim().min(1).max(500).optional(),
   language: z.string().trim().min(2).max(20).optional(),
-  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional()
+    .describe('Only to continue a long transcript, using the offset its previous page names.'),
 });
+
+/** Captions per transcript page. Offsets continue long transcripts; they never select a passage. */
+export const TRANSCRIPT_PAGE_SIZE = 5_000;
+/** A model-chosen offset inside a page returns that whole page, so earlier captions are never cut. */
+function pageStart(offset = 0): number {
+  return Math.floor(offset / TRANSCRIPT_PAGE_SIZE) * TRANSCRIPT_PAGE_SIZE;
+}
 
 export type GetVideoTranscriptInput = z.infer<typeof getVideoTranscriptInputSchema>;
 
@@ -39,11 +47,12 @@ export function executeGetVideoTranscript(
   context: AgentToolContext,
   toolCallId: string,
 ): Promise<EvidencePacket> {
-  const parsed = getVideoTranscriptInputSchema.parse(input);
+  const requested = getVideoTranscriptInputSchema.parse(input);
+  const parsed = { ...requested, offset: pageStart(requested.offset) || undefined };
   const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
 
   return context.executeEvidenceTool({
-    input: parsed,
+    input: requested,
     toolCallId,
     toolName: 'get_video_transcript',
     semanticKey,
@@ -105,7 +114,7 @@ export function executeGetVideoTranscript(
       const sourceId = `youtube:${parsed.videoId}:transcript`;
       const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       const offset = parsed.offset ?? 0;
-      const excerpts = evidence.excerpts.slice(offset, offset + 5_000);
+      const excerpts = evidence.excerpts.slice(offset, offset + TRANSCRIPT_PAGE_SIZE);
       const nextOffset = offset + excerpts.length < evidence.excerpts.length ? offset + excerpts.length : undefined;
       const paged = offset > 0 || nextOffset !== undefined;
       context.signal.throwIfAborted();

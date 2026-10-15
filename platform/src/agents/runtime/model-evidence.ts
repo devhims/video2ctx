@@ -12,6 +12,9 @@ import { isCollectionKind, modelCollection, modelCollectionSchema, readCollectio
 
 const MODEL_EXCERPTS_PER_PACKET = 8;
 const MODEL_EXCERPT_CHARACTERS = 800;
+/** A transcript analysis window holds up to 2,000 characters. Shorter bounds cut the very
+ * caption a session search matched, which may sit at the end of its window. */
+const MODEL_TRANSCRIPT_EXCERPT_CHARACTERS = 2_000;
 /** Entry text lengths tried before showing fewer list entries under a budget. */
 const COLLECTION_TEXT_LIMITS = [MODEL_EXCERPT_CHARACTERS, 300, 120] as const;
 const MODEL_WARNINGS = 50;
@@ -160,7 +163,7 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
     : undefined;
   const excerpts = ordered.slice(0, MODEL_EXCERPTS_PER_PACKET).map((excerpt) => ({
     ...excerpt,
-    text: boundedText(excerpt.text, MODEL_EXCERPT_CHARACTERS),
+    text: boundedText(excerpt.text, packet.kind === 'youtube_transcript' ? MODEL_TRANSCRIPT_EXCERPT_CHARACTERS : MODEL_EXCERPT_CHARACTERS),
   }));
   const sourceIds = new Set(excerpts.map((excerpt) => excerpt.sourceId));
   const sources = packet.sources.filter((source) => sourceIds.has(source.id));

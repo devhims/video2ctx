@@ -1,0 +1,33 @@
+{
+ "assetVersions": [
+  "2a72a4da233fec65a2fc98bcf0144f1f5ed02c68a1ce37c4c1fd70938dddda51"
+ ],
+ "packetId": "search:evidence:dae29dda1ff23528265f93592bad7b9e3d459bf6055f7ddeb2d2084fd843bf4e:0",
+ "kind": "youtube_transcript",
+ "sources": [
+  {
+   "id": "youtube:QMf_1Y5JGI8:transcript",
+   "provider": "youtube",
+   "kind": "transcript",
+   "videoId": "QMf_1Y5JGI8",
+   "url": "https://www.youtube.com/watch?v=QMf_1Y5JGI8"
+  }
+ ],
+ "excerpts": [
+  {
+   "id": "evidence:dae29dda1ff23528265f93592bad7b9e3d459bf6055f7ddeb2d2084fd843bf4e:0",
+   "sourceId": "youtube:QMf_1Y5JGI8:transcript",
+   "text": "hey I'm Rob McGee and this is a no frills guide \nto brewing great coffee with the French press\nokay this is a 34 ounce French press that I \nbought at the grocery store have pre warmed\nit with tap water I also have a full kettle \nof filtered water it's about a minute or so\noff the boil and that's gonna be about two \nhundred to two hundred and five degrees which\nis the brewing temperature we want we're gonna \nuse ten level tablespoons of ground coffee the\ngrind size here is coarse and your local coffee \nshop can grind that coffee or if you're using\nthe grinder of the grocery store it'll have a \nFrench press setting on it go ahead and start\nyour timer now go ahead and start to pour your \nwater in we're pouring this halfway up and then\nwe're gonna let it sit for thirty seconds to \nlet any gas escape this is going to be about\na sixteen to one water to coffee brew ratio \nwhen your timer hits thirty seconds go ahead",
+   "startMs": 0,
+   "endMs": 59850
+  }
+ ],
+ "artifacts": [],
+ "warnings": [
+  {
+   "code": "TRANSCRIPT_ANALYST_WARNING",
+   "message": "Some figures in 1 transcript finding could not be matched to the transcript and are marked unverified."
+  }
+ ],
+ "usage": []
+}

@@ -20,6 +20,31 @@ function finalize(evidenceIds: string[], text = 'Supported finding without manua
   renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }), [packet], 1);
 }
 describe('structured answer citations', () => {
+  it('names the earliest cited moment of each video in its reference', () => {
+    const video = (id: string, videoId: string) => ({ id, provider: 'youtube' as const, kind: 'transcript' as const, videoId, url: `https://www.youtube.com/watch?v=${videoId}` });
+    const evidence: EvidencePacket = { ...packet,
+      sources: [video('source:1', 'HSRmfNDk87s'), video('source:2', 'jNQXAC9IVRw')],
+      excerpts: [
+        { id: 'e1', sourceId: 'source:1', text: 'When the wind blows from the north to the south,', startMs: 293_100, endMs: 295_000 },
+        { id: 'e2', sourceId: 'source:1', text: 'the tower directs pilots to approach from the south,', startMs: 295_000, endMs: 297_000 },
+        { id: 'e3', sourceId: 'source:2', text: 'and that\'s pretty much all there is to say', startMs: 16_881, endMs: 18_881 },
+        { id: 'e4', sourceId: 'source:1', text: 'Long video moment.', startMs: 3_725_000, endMs: 3_726_000 },
+        { id: 'e5', sourceId: 'source:2', text: 'Title: Me at the zoo' },
+      ],
+    };
+    const input = renderStructuredAnswer({ ...base, blocks: [
+      { text: 'Land into the wind.', evidenceIds: ['e2', 'e1'] },
+      { text: 'Two videos.', evidenceIds: ['e1', 'e3'] },
+      { text: 'Late.', evidenceIds: ['e4'] },
+      { text: 'Untimed.', evidenceIds: ['e5'] },
+    ] });
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 }, input, [evidence], 1);
+    const compact = compactAgentResult(result);
+    expect(compact.answer).toBe('Land into the wind. [1 · 4:53]\n\nTwo videos. [1 · 4:53][2 · 0:16]\n\nLate. [1 · 1:02:05]\n\nUntimed. [2]');
+    expect(compact.sources.map(source => source.url)).toEqual(['https://www.youtube.com/watch?v=HSRmfNDk87s', 'https://www.youtube.com/watch?v=jNQXAC9IVRw']);
+  });
   it('preserves the same reference group in inline and fenced code while citing prose', () => {
     const marker = '[ref_2405, ref_2406]';
     const code = `Inline: \`${marker}\`.\n\n\`\`\`js\nconst refs = ${marker};\n\`\`\``;
@@ -38,7 +63,7 @@ describe('structured answer citations', () => {
     const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
     { userId: 'test', creditsRemaining: 10 }, input, [evidence], 1);
-    expect(compactAgentResult(result).answer).toBe(`Claim [1][2].\n\n${code}`);
+    expect(compactAgentResult(result).answer).toBe(`Claim [1 · 0:01][2].\n\n${code}`);
     expect(renderPartialAnswer({ blocks: [block] })).toBe(`Claim .\n\n${code}`);
   });
   it.each([
@@ -91,7 +116,7 @@ describe('structured answer citations', () => {
     { userId: 'test', creditsRemaining: 10 },
     renderStructuredAnswer({ ...base, blocks: [block] }, aliases), [evidence], 1);
     const compact = compactAgentResult(result);
-    expect(compact.answer).toBe('Claim [1][2].');
+    expect(compact.answer).toBe('Claim [1 · 0:01][2 · 0:03].');
     expect(compact.sources.map(source => source.url)).toEqual([
       'https://www.youtube.com/watch?v=video000001',
       'https://www.youtube.com/watch?v=video000002',

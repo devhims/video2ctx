@@ -7900,7 +7900,7 @@
                       "properties": {
                         "id": {
                           "type": "string",
-                          "description": "Source number used by [1] references in this answer."
+                          "description": "Source number used by [1] references in this answer. A reference to a moment in a video adds its start time, as in [1 · 4:52]."
                         },
                         "videoId": {
                           "type": "string"
@@ -9480,7 +9480,7 @@
                   "properties": {
                     "id": {
                       "type": "string",
-                      "description": "Source number used by [1] references in this answer."
+                      "description": "Source number used by [1] references in this answer. A reference to a moment in a video adds its start time, as in [1 · 4:52]."
                     },
                     "videoId": {
                       "type": "string"

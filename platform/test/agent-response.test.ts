@@ -62,7 +62,7 @@ describe('compact agent response', () => {
     const run=completedRun();
     run.result!.answer='| Test | Source |\n| --- | --- |\n| Coding | (source marker:a](source marker:b] |\n| Unknown | (source marker:evidence:unknown:ref_9] |';
     const before=structuredClone(run);
-    expect(compactAgentRun(run).result?.answer).toBe('| Test | Source |\n| --- | --- |\n| Coding | [1] |\n| Unknown | [source unavailable] |');
+    expect(compactAgentRun(run).result?.answer).toBe('| Test | Source |\n| --- | --- |\n| Coding | [1 · 0:00] |\n| Unknown | [source unavailable] |');
     expect(compactAgentRun(run).result?.sources).toHaveLength(1);
     expect(run).toEqual(before);
   });
@@ -91,7 +91,7 @@ describe('compact agent response', () => {
     const run = completedRun();
     const before = structuredClone(run);
     const response = compactAgentRun(run);
-    expect(response.result?.answer).toBe('First [1][2]. Again [1].');
+    expect(response.result?.answer).toBe('First [1 · 0:00][2]. Again [1 · 0:00].');
     expect(response.result?.sources.map(s => s.videoId)).toEqual(['video000001', 'video000002']);
     expect(response.result?.sources[0]?.url).toBe('https://www.youtube.com/watch?v=video000001');
     expect(response.billing).toEqual(run.result?.billing);

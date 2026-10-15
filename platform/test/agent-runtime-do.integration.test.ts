@@ -8,7 +8,7 @@ import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinato
 import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
 import { createWorkerExtractionRunner } from '../src/lib/youtube-worker-extraction';
-import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import { executeGetVideoTranscript, TRANSCRIPT_PAGE_SIZE } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
@@ -881,17 +881,19 @@ test('keeps successful transcript pages separate while reusing each page', async
     const persisted = instance as unknown as { executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> };
     const transcript = vi.fn(async () => ({ cacheStatus: 'hit' as const, value: {
       videoId: 'abcdefghijk', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
-      segments: ['First passage', 'Second passage'].map((text, index) => ({ text, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 })),
-      text: 'First passage Second passage', meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+      // One caption past the first page, so offset TRANSCRIPT_PAGE_SIZE is a genuine second page.
+      segments: Array.from({ length: TRANSCRIPT_PAGE_SIZE + 1 }, (_, index) => ({ text: `Passage ${index}`, startMs: index * 1000, endMs: (index + 1) * 1000, durationMs: 1000 })),
+      text: 'Passages', meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
     } }));
     const context: AgentToolContext = {
       runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
       provider: { transcript } as unknown as AgentToolContext['provider'], finalize: vi.fn(),
       executeEvidenceTool: execution => persisted.executeEvidenceTool(runId, execution),
     };
-    for (const [index, offset] of [0, 1, 0, 1].entries()) {
+    for (const [index, offset] of [0, TRANSCRIPT_PAGE_SIZE, 0, TRANSCRIPT_PAGE_SIZE].entries()) {
       const packet = await executeGetVideoTranscript({ videoId: 'abcdefghijk', offset }, context, `page-${index}`);
-      expect(packet.excerpts.map(excerpt => excerpt.text)).toEqual(offset ? ['Second passage'] : ['First passage', 'Second passage']);
+      expect(packet.excerpts.map(excerpt => excerpt.text)).toEqual(offset ? [`Passage ${TRANSCRIPT_PAGE_SIZE}`]
+        : Array.from({ length: TRANSCRIPT_PAGE_SIZE }, (_, caption) => `Passage ${caption}`));
     }
     expect(transcript).toHaveBeenCalledTimes(2);
   });
