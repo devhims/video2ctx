@@ -1678,7 +1678,7 @@ export const openApiDocument = {
         requestBody: jsonBody({ type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email', maxLength: 320 } } }),
         responses: { ...standardErrors,
           '204': { description: 'Account deleted or already absent. Private search cleanup is queued for deleted accounts.' },
-          '409': jsonResponse('Subscription still renews, another billing operation is in flight, account identity changed, or the target is a protected admin account.', schemaRef('Error')),
+          '409': jsonResponse('Subscription still renews, another billing operation is in flight or has an unconfirmed outcome, account identity changed, or the target is a protected admin account.', schemaRef('Error')),
           '503': jsonResponse('Billing or private cleanup is unavailable. Retry deletion.', schemaRef('Error')),
         },
       },
@@ -1870,7 +1870,7 @@ export const openApiDocument = {
         responses: {
           '204': { description: 'Account deleted. Private search-index cleanup is queued.' },
           '401': responseRef('Unauthorized'),
-          '409': jsonResponse('An admin account is protected, a subscription still renews, or another billing operation is in flight.', schemaRef('Error')),
+          '409': jsonResponse('An admin account is protected, a subscription still renews, or another billing operation is in flight or has an unconfirmed outcome.', schemaRef('Error')),
           '503': jsonResponse('Billing verification is unavailable or private cleanup is incomplete. Retry account deletion.', schemaRef('Error')),
           '500': responseRef('ServerError'),
         },

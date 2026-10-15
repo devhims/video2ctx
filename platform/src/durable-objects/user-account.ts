@@ -145,6 +145,9 @@ export class UserAccountDO extends DurableObject<Env> {
     if (this.ctx.storage.sql.exec('SELECT id FROM account_deletion LIMIT 1').toArray().length) return false;
     return this.#billing.beginCheckout(id);
   }
+  beginBillingCheckoutWrite(id: string, operation: 'customer-create' | 'checkout-create'): void { this.#billing.beginWrite(id, operation); }
+  finishBillingCheckoutWrite(id: string): void { this.#billing.finishWrite(id); }
+  markBillingCheckoutUncertain(id: string): void { this.#billing.markUncertain(id); }
   endBillingCheckout(id: string): void { this.#billing.endCheckout(id); }
   beginBillingDeletion(id: string): boolean { return this.#billing.beginDeletion(id); }
   commitBillingDeletion(id: string): void { this.#billing.commitDeletion(id); }

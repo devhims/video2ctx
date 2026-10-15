@@ -5,6 +5,7 @@ import { adminRoutes } from '../src/routes/admin/admin.index';
 import { createAuth } from '../src/lib/auth';
 import { deleteAccount } from '../src/lib/account-deletion';
 import { billingAccount } from '../src/lib/billing-coordination';
+import { BillingGate } from '../src/durable-objects/billing-gate';
 import { jsonError } from '../src/lib/http';
 import type { App } from '../src/types';
 
@@ -186,4 +187,98 @@ test.each(['admin', 'user, admin', 'operator-email'])('admin accounts cannot be 
   await account.endBillingCheckout('protected-check');
   const found = await (await request(`/admin/users?q=${encodeURIComponent(target.user.id)}`)).json() as { users: { isAdmin: boolean }[] };
   expect(found.users[0]?.isAdmin).toBe(true);
+});
+
+test.each(['ECONNRESET', 504, 408, 'invalid-response'] as const)('ambiguous customer creation retains its billing fence until reconciliation: %s', async failure => {
+  const { target, auth, remove, configured } = await setup();
+  let acceptedCreates = 0, customerCommitted = false;
+  const requests: Request[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const request = new Request(input, init); requests.push(request);
+    if (request.method === 'POST' && request.url.endsWith('/customers/')) {
+      acceptedCreates++;
+      if (failure === 'ECONNRESET') throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+      if (failure === 'invalid-response') return Response.json({}, { status: 201 });
+      return Response.json({ detail: 'Gateway timeout' }, { status: failure });
+    }
+    if (request.method === 'DELETE') { customerCommitted = false; return new Response(null, { status: 204 }); }
+    return Response.json({ detail: 'Not found' }, { status: 404 });
+  });
+  await expect(auth.api.checkout({ body: { slug: 'builder' }, headers: new Headers({ cookie: target.cookie }) })).rejects.toMatchObject({ status: 'CONFLICT' });
+  expect(acceptedCreates).toBe(1);
+  const response = await remove();
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: { code: 'BILLING_OPERATION_PENDING' } });
+  expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(target.user.id).first()).not.toBeNull();
+  expect(requests.some(request => request.method === 'DELETE')).toBe(false);
+  await auth.api.checkout({ body: { slug: 'builder' }, headers: new Headers({ cookie: target.cookie }) }).catch(() => {});
+  expect(acceptedCreates).toBe(1);
+  const account = await billingAccount(env, target.user.id);
+  let claim = '';
+  await runInDurableObject(account, async (_instance, state) => {
+    const claims = state.storage.sql.exec<{ id: string }>('SELECT id FROM billing_checkouts').toArray();
+    expect(claims).toHaveLength(1); claim = claims[0]!.id;
+    expect(state.storage.sql.exec('SELECT id,operation,state FROM billing_checkout_writes').toArray())
+      .toEqual([{ id: claim, operation: 'customer-create', state: 'uncertain' }]);
+    const reopened = new BillingGate(state.storage.sql);
+    expect(reopened.beginCheckout('after-reopen')).toBe(false);
+    expect(reopened.beginDeletion('after-reopen')).toBe(false);
+  });
+  const sent = await requests.find(request => request.method === 'POST')!.clone().json() as { metadata: { billing_checkout_claim: string } };
+  expect(sent.metadata.billing_checkout_claim).toBe(claim);
+  await account.endBillingCheckout(claim);
+  expect((await remove()).status).toBe(409);
+  // Simulate the previously accepted POST completing only after the failed deletion.
+  customerCommitted = true;
+  expect(configured.TASKS.send).not.toHaveBeenCalled();
+  // Only after this specific write is confirmed terminal may an operator resolve
+  // its marker and release the claim. An earlier 404 is not that confirmation.
+  expect((await remove()).status).toBe(409);
+  await account.finishBillingCheckoutWrite(claim); await account.endBillingCheckout(claim);
+  expect((await remove()).status).toBe(204);
+  expect(customerCommitted).toBe(false);
+  expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(target.user.id).first()).toBeNull();
+});
+
+
+test.each([400, 401, 403, 409, 422, 429])('a definitive customer-create rejection releases the fence: %s', async status => {
+  const { target, auth, remove } = await setup();
+  let posts = 0;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method === 'POST') { posts++; return Response.json(status === 422 ? { detail: [] } : { detail: 'Rejected' }, { status }); }
+    return Response.json({ detail: 'Not found' }, { status: 404 });
+  });
+  await auth.api.checkout({ body: { slug: 'builder' }, headers: new Headers({ cookie: target.cookie }) }).catch(() => {});
+  expect(posts).toBe(1);
+  const account = await billingAccount(env, target.user.id);
+  await runInDurableObject(account, async (_instance, state) => {
+    expect(state.storage.sql.exec('SELECT * FROM billing_checkout_writes').toArray()).toEqual([]);
+    expect(state.storage.sql.exec('SELECT * FROM billing_checkouts').toArray()).toEqual([]);
+  });
+  expect((await remove()).status).toBe(204);
+});
+
+test('an ambiguous checkout-create response also retains its write marker', async () => {
+  const { target, auth, remove } = await setup();
+  const customer = {
+    id: 'known-customer', created_at: '2026-10-14T00:00:00Z', modified_at: null, metadata: {},
+    external_id: target.user.id, email: target.user.email, email_verified: true, type: 'individual', name: 'Auth Test User',
+    billing_address: null, tax_id: null, organization_id: 'sandbox-organization', deleted_at: null, avatar_url: 'https://example.test/avatar',
+  };
+  let posts = 0;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method === 'GET') return Response.json(customer);
+    expect(request.url).toBe('https://sandbox-api.polar.sh/v1/checkouts/');
+    posts++; return Response.json({ detail: 'Gateway timeout' }, { status: 504 });
+  });
+  await expect(auth.api.checkout({ body: { slug: 'builder' }, headers: new Headers({ cookie: target.cookie }) })).rejects.toMatchObject({ status: 'CONFLICT' });
+  expect((await remove()).status).toBe(409);
+  expect(posts).toBe(1);
+  const account = await billingAccount(env, target.user.id);
+  await runInDurableObject(account, async (_instance, state) => {
+    expect(state.storage.sql.exec('SELECT operation,state FROM billing_checkout_writes').toArray())
+      .toEqual([{ operation: 'checkout-create', state: 'uncertain' }]);
+  });
 });

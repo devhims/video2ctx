@@ -13,7 +13,7 @@ export async function deleteAccount(env: Env, user: { id: string; email: string 
   const account = await billingAccount(env, user.id);
   const claim = crypto.randomUUID();
   if (!await account.beginBillingDeletion(claim)) {
-    throw new ApiError(409, 'BILLING_OPERATION_PENDING', 'A billing operation is in progress. Please retry account deletion shortly.');
+    throw new ApiError(409, 'BILLING_OPERATION_PENDING', 'A previous billing operation must finish or be reviewed before this account can be deleted.');
   }
   try {
     await requireNoRenewingSubscription(env, user.id);

@@ -114,6 +114,14 @@ The admin Users panel searches exact user IDs or email fragments, with 25 result
 
 Checkout and deletion share durable claims in the user's account Durable Object. A checkout already in flight prevents deletion from starting. A deletion claim blocks new checkouts before checking subscriptions or closing Polar. If the cancellation check fails, that claim is released. Once Polar customer deletion may have started, the checkout fence persists through cleanup failures and completed deletion. Claims do not expire automatically, because a provider request may still be running. A Worker termination before releasing a claim fails closed; inspect the account's billing claims and Polar state before operator recovery. No network call runs inside `blockConcurrencyWhile`.
 
+### Uncertain Polar writes
+
+Before sending a customer-create or checkout-create POST, the account Durable Object records its claim, operation and start time in `billing_checkout_writes`. A valid successful response or a definitive HTTP 4xx rejection, excluding 408, clears that marker. A connection error, timeout, HTTP 5xx or invalid success response retains the marker and checkout claim. The SDK does not automatically retry either POST. Both another checkout and account deletion remain blocked, including after a Worker restart. A failed read before any write releases its claim normally.
+
+Recovery requires confirming the outcome of the specific accepted write. The `billing_write_uncertain` log includes the user ID, claim and operation. Customer and checkout creation metadata include `billing_checkout_claim` for correlation with Polar records. Inspect the account's durable claim and the matching Polar operation. Confirm that the original request has completed or definitively failed and that no accepted attempt can still commit. A temporary 404, a customer found without matching correlation, or elapsed time alone is not confirmation. If the outcome cannot be established, keep the fence and investigate with Polar.
+
+Once the outcome is confirmed, an operator with trusted Worker/DO access can call `finishBillingCheckoutWrite(claim)` and then `endBillingCheckout(claim)` for that exact claim. No public HTTP endpoint exposes these recovery methods. A committed customer is then handled by the normal subscription guard and deletion flow. This recovery is deliberately manual; the application never guesses that an ambiguous POST failed.
+
 Queued magic-link emails reference the exact Better Auth verification row. The delivery insert checks that row, its recipient and expiry atomically. Deleting or consuming the token suppresses the queued email without recreating delivery metadata. A fresh signup link works without an existing user row. Old queued messages without a verification reference are suppressed; request a new sign-in link after deployment if necessary.
 
 ## Postman quick start
