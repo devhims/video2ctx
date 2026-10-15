@@ -154,3 +154,36 @@ test('billing claims persist across coordinator instances and a failed preflight
   await another.endBillingDeletion('deletion-retry');
   expect(await account.beginBillingCheckout('still-fenced')).toBe(false);
 });
+
+test.each(['admin', 'user, admin', 'operator-email'])('admin accounts cannot be deleted through either endpoint: %s', async identity => {
+  const { target, configured, auth, request, remove } = await setup();
+  const before = await (await request(`/admin/users?q=${target.user.id}`)).json() as { users: { isAdmin: boolean }[] };
+  expect(before.users[0]?.isAdmin).toBe(false);
+  if (identity === 'operator-email') {
+    await env.DB.prepare('UPDATE user SET email=? WHERE id=?').bind('BOOTSTRAP-ADMIN@example.test', target.user.id).run();
+    target.user.email = 'BOOTSTRAP-ADMIN@example.test';
+  } else await env.DB.prepare('UPDATE user SET role=? WHERE id=?').bind(identity, target.user.id).run();
+  const polar = noPolarCustomer();
+  const response = await remove();
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: { code: 'ADMIN_ACCOUNT_PROTECTED' } });
+  const app = new Hono<App>();
+  app.use('*', async (c, next) => {
+    const user = { ...target.user, name: 'Protected admin' };
+    c.set('auth', auth); c.set('user', user); c.set('principal', { user, method: 'session', permissions: {} }); await next();
+  });
+  const { sessionRoutes } = await import('../src/routes/session/session.index');
+  app.route('/', sessionRoutes); app.onError((error, c) => jsonError(c, error));
+  const self = await app.request('/account', { method: 'DELETE', headers: { cookie: target.cookie } }, configured);
+  expect(self.status).toBe(409);
+  expect(await self.json()).toMatchObject({ error: { code: 'ADMIN_ACCOUNT_PROTECTED' } });
+  expect(polar.mock.calls.length).toBe(0);
+  expect(configured.TASKS.send).not.toHaveBeenCalled();
+  expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(target.user.id).first()).not.toBeNull();
+  // A rejected attempt must not even fence normal checkout or clear sources.
+  const account = await billingAccount(env, target.user.id);
+  expect(await account.beginBillingCheckout('protected-check')).toBe(true);
+  await account.endBillingCheckout('protected-check');
+  const found = await (await request(`/admin/users?q=${encodeURIComponent(target.user.id)}`)).json() as { users: { isAdmin: boolean }[] };
+  expect(found.users[0]?.isAdmin).toBe(true);
+});

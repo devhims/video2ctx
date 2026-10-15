@@ -1,4 +1,5 @@
 import { ApiError, safeErrorLog, sha256 } from './http';
+import { assertAccountDeletable } from './admin-identity';
 import { billingAccount } from './billing-coordination';
 import { closeBillingAccount, requireNoRenewingSubscription } from './billing';
 import { deleteAgentAccountData } from '../agents/runtime/account-deletion';
@@ -8,6 +9,7 @@ import { deleteR2Prefix, userSearchInstanceId } from './research-storage';
 
 /** Both admin and self-service deletion use the same billing gate and cleanup. */
 export async function deleteAccount(env: Env, user: { id: string; email: string }): Promise<void> {
+  await assertAccountDeletable(env, user.id);
   const account = await billingAccount(env, user.id);
   const claim = crypto.randomUUID();
   if (!await account.beginBillingDeletion(claim)) {

@@ -64,7 +64,7 @@ export default function AdminUsers({ adminUserId }: { adminUserId: string }) {
     {results && <div aria-label="User search results" aria-busy={busy}>
       {results.users.map(user => <article key={user.id} className={styles.user} aria-label={user.email}>
         <div><h3>{user.name || user.email}</h3><p>{user.email}</p><code>{user.id}</code><p>{user.plan === 'builder' ? 'Builder plan' : 'Starter plan'}</p></div>
-        {user.id === adminUserId ? <span className={styles.hint}>Your account. Use account settings to delete it.</span> : selected?.id !== user.id ?
+        {(user.isAdmin || user.id === adminUserId) ? <span className={styles.hint}>Admin account. Deletion is disabled.</span> : selected?.id !== user.id ?
           <button type="button" className={styles.danger} disabled={busy || !!selected} onClick={() => { setSelected(user); setConfirmation(''); setError(''); setNotice(''); toast.clear(); }}>Delete account</button> :
           <form className={styles.confirm} onSubmit={event => { event.preventDefault(); void remove(); }}>
             <h4>Delete this account permanently?</h4>

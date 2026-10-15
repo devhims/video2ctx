@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { App, AppUser } from '../../types';
 import { ApiError, body } from '../../lib/http';
+import { isAdminAccount } from '../../lib/admin-identity';
 import { deleteAccount } from '../../lib/account-deletion';
 
 // Mounted beneath live admin authentication and mutation Origin verification.
@@ -11,17 +12,17 @@ adminUserRoutes.get('/', async c => {
   const parsed = searchSchema.safeParse(c.req.query());
   if (!parsed.success) throw new ApiError(422, 'INVALID_USER_QUERY', 'Enter a user ID or email address.');
   const { q, offset } = parsed.data;
-  const rows = await c.env.DB.prepare(`SELECT u.id,u.name,u.email,COALESCE(b.plan,'starter') AS plan
+  const rows = await c.env.DB.prepare(`SELECT u.id,u.name,u.email,u.role,COALESCE(b.plan,'starter') AS plan
     FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
     WHERE u.id=? OR instr(lower(u.email),?)>0 ORDER BY u.email,u.id LIMIT 26 OFFSET ?`)
-    .bind(q, q.toLowerCase(), offset).all();
-  return c.json({ users: rows.results.slice(0,25), nextOffset: rows.results.length>25 ? offset+25 : null });
+    .bind(q, q.toLowerCase(), offset).all<{ id: string; name: string; email: string; role: string | null; plan: string }>();
+  return c.json({ users: rows.results.slice(0,25).map(({ role, ...user }) => ({ ...user, isAdmin: isAdminAccount(c.env, { ...user, role }) })), nextOffset: rows.results.length>25 ? offset+25 : null });
 });
 adminUserRoutes.delete('/:userId', async c => {
   const id = z.string().min(1).max(128).safeParse(c.req.param('userId'));
   const confirmation = z.object({ email: z.string().trim().toLowerCase().email().max(320) }).safeParse(await body(c.req.raw));
   if (!id.success || !confirmation.success) throw new ApiError(422, 'INVALID_USER_DELETION', 'Confirm the account email before deleting.');
-  if (id.data === c.get('adminUserId')) throw new ApiError(409, 'ADMIN_SELF_DELETE', 'Use account settings to delete your own account.');
+  if (id.data === c.get('adminUserId')) throw new ApiError(409, 'ADMIN_ACCOUNT_PROTECTED', 'Admin accounts cannot be deleted.');
   const user = await c.env.DB.prepare('SELECT id,name,email FROM user WHERE id=?').bind(id.data).first<AppUser>();
   if (!user) return c.body(null, 204);
   if (user.email.trim().toLowerCase() !== confirmation.data.email) {

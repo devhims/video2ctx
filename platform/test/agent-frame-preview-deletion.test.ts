@@ -3,6 +3,7 @@ import type { App } from '../src/types';
 import { ApiError, jsonError } from '../src/lib/http';
 import { framePreviewPrefix } from '../src/agents/runtime/frame-previews';
 
+vi.mock('../src/lib/admin-identity', () => ({ assertAccountDeletable: vi.fn() }));
 const closeBillingAccount = vi.hoisted(() => vi.fn());
 const requireNoRenewingSubscription = vi.hoisted(() => vi.fn());
 vi.mock('../src/lib/billing-coordination', () => ({ billingAccount: async () => ({ beginBillingDeletion: async () => true, commitBillingDeletion: vi.fn(), endBillingDeletion: vi.fn() }) }));

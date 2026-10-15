@@ -226,7 +226,7 @@ export function PreferencesCard({ promise, emailConsent }: { promise: NonNullabl
 }
 
 export function AccountCards() {
-  const { user } = useDashboardSession();
+  const { user, adminAccess } = useDashboardSession();
   const email = user?.email;
   const [confirmation, setConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -234,7 +234,7 @@ export function AccountCards() {
   const deletionToast = useErrorToast();
   const confirmed = canDeleteAccount(confirmation);
   const deleteAccount = async () => {
-    if (!email || !confirmed || deleting) return;
+    if (adminAccess || !email || !confirmed || deleting) return;
     setDeleting(true);
     setDeleteError('');
     deletionToast.clear();
@@ -259,7 +259,7 @@ export function AccountCards() {
         <h3 className='settings-card-title mt-2 mb-0' id='delete-account-heading'>Delete account permanently</h3>
         <p className='settings-card-copy mt-2 mb-0 max-w-[65ch]'>This removes your projects, saved research, monitors, API keys, credit history, and connected accounts. This action cannot be undone.</p>
       </div>
-      {email ? <div className='grid gap-2'>
+      {adminAccess ? <p className='settings-danger-message mt-2 mb-0 max-w-[65ch]'>Admin accounts cannot be deleted.</p> : email ? <div className='grid gap-2'>
         <label className='settings-confirm-label' htmlFor='delete-account-confirmation'>Type <strong>{DELETE_ACCOUNT_CONFIRMATION}</strong> to confirm</label>
         <input
           className='settings-confirm-input min-h-11 rounded-[var(--radius-dashboard-sm)] border border-[var(--color-dashboard-rule-strong)] bg-[var(--color-dashboard-surface)] px-3 text-[var(--color-dashboard-ink)]'

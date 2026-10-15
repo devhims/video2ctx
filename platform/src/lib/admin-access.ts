@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import type { App } from '../types';
 import { createRequestAuth } from './request-auth';
+import { isAdminAccount } from './admin-identity';
 import { ApiError } from './http';
 
 /** Administrative operations always use a live browser session, never cached roles. */
@@ -26,9 +27,7 @@ export async function requireAdminSession(c: Context<App>): Promise<string> {
   if (!user.emailVerified || banned || session.session.impersonatedBy) {
     throw new ApiError(403, 'ADMIN_REQUIRED', 'Admin access required.');
   }
-  const hasAdminRole = user.role?.split(',').map(role => role.trim()).includes('admin');
-  const existingOperators = String(c.env.ADMIN_EMAILS_SECRET ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean);
-  if (!hasAdminRole && !existingOperators.includes(user.email.trim().toLowerCase())) {
+  if (!isAdminAccount(c.env, user)) {
     throw new ApiError(403, 'ADMIN_REQUIRED', 'Admin access required.');
   }
   return user.id;

@@ -514,3 +514,26 @@ test('admin account cleanup errors preserve the selected identity for a single r
   await row.getByRole('button', { name: 'Delete permanently', exact: true }).click();
   await expect(row).toHaveCount(0); expect(deletes).toBe(2);
 });
+
+
+test('admin accounts have no deletion controls in user search or their own settings', async ({ page, context }) => {
+  await context.addCookies([{ name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' }, { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' }]);
+  const users = [
+    { id: 'fixture-user', name: 'Current admin', email: 'fixture@example.test', plan: 'starter', isAdmin: true },
+    { id: '10495ef1-84c9-4a12-89ea-964e95ebe050', name: 'Another admin', email: 'operator@example.test', plan: 'starter', isAdmin: true },
+  ];
+  let deletes = 0;
+  await page.route('**/api/platform/v1/admin/users?*', route => route.fulfill({ json: { users, nextOffset: null } }));
+  await page.route('**/api/platform/v1/account', route => { if (route.request().method() === 'DELETE') deletes++; return route.fallback(); });
+  await page.goto('/dashboard/admin'); await page.getByRole('button', { name: 'Users', exact: true }).click();
+  await page.getByLabel('User ID or email', { exact: true }).fill('example.test'); await page.getByRole('button', { name: 'Search users', exact: true }).click();
+  for (const user of users) {
+    const row = page.getByRole('article', { name: user.email, exact: true });
+    await expect(row).toContainText('Admin account. Deletion is disabled.');
+    await expect(row.getByRole('button', { name: 'Delete account', exact: true })).toHaveCount(0);
+  }
+  await page.goto('/dashboard/settings');
+  await expect(page.getByText('Admin accounts cannot be deleted.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete account permanently', exact: true })).toHaveCount(0);
+  expect(deletes).toBe(0);
+});
