@@ -262,12 +262,33 @@ Ownership is resolved inside that transaction, eliminating a lookup/delete/signu
 race. Permanent `account_credit_payments` receipts and previous refund receipts order
 credit decisions. A stale refund cannot overwrite a newer recorded payment, while
 a later cancellation or customer-state update cannot shield paid credits from a
-refund. Legacy refund ledger entries become permanent receipts before cascading
-deletion. Unknown legacy provider timestamps are not used as ordering fences. A refund
-already reflected before deletion is not applied again. Replaying a refund that
-an older Worker acknowledged without reconciliation repairs matching retained
-history once. Deploy the updated Worker immediately after migration; replay any
-refunds acknowledged by the old Worker during a staged rollout.
+refund. Live and deleted accounts use the same credit decision. Refund receipts
+record whether the reset was applied, superseded by newer credits, or unnecessary
+because no paid credits were granted. A skipped write is never recorded as applied.
+Only a verified receipt allows a refund's processed-event marker to commit.
+
+Migration 0026 preserves existing paid grants and applied refund entries before
+user deletion can cascade their ledger away. A trigger also captures grants from
+an old Worker during rollout. New grants retain Polar's event timestamp. Legacy
+grants retain their local observation time, which is an upper bound rather than
+an exact provider timestamp. They never inherit cancellation timestamps.
+
+If a different legacy grant was observed after a refund's provider timestamp,
+its order relative to that refund is unknown. The handler leaves credits and
+billing state unchanged and returns a retryable error without a refund receipt
+or new processed-event marker. The Polar webhook adapter currently returns HTTP
+500 for handler errors. Replay the signed `order.paid` events for those grants,
+then replay the refund. This fills in exact timestamps without granting credits
+again, including after deletion and Polar anonymization. The refunded order's own
+grant needs no ordering repair because payment precedes its refund. Legacy grants
+observed before the refund are already known to precede it.
+
+An already applied refund is not applied again after spending or transfer. An old
+processed-event marker alone does not prevent recovery: replay repairs a matching
+refund that an older Worker skipped while the user was live or deleted. Apply
+migration 0026 before deploying the Worker, deploy promptly, and replay any
+refunds acknowledged by the old Worker during the rollout. Unknown legacy event
+timestamps are never silently replaced with billing-state timestamps.
 
 ```mermaid
 %%{init: {"themeVariables": {"sequenceNumber": "#ffffff", "sequenceNumberColor": "#ffffff", "signalColor": "#475569"}}}%%

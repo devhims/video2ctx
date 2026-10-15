@@ -28,6 +28,7 @@ CREATE TABLE account_credit_refunds (
   original_user_id TEXT NOT NULL,
   customer_id TEXT NOT NULL,
   owner_user_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('applied','superseded','unfunded')),
   event_at INTEGER NOT NULL
 );
 CREATE INDEX account_credit_refunds_owner ON account_credit_refunds (owner_user_id, event_at);
@@ -35,22 +36,65 @@ CREATE TABLE account_credit_payments (
   order_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   customer_id TEXT NOT NULL,
-  event_at INTEGER NOT NULL
+  event_at INTEGER NOT NULL,
+  event_exact INTEGER NOT NULL CHECK (event_exact IN (0,1)),
+  observed_at INTEGER NOT NULL
 );
 CREATE INDEX account_credit_payments_user ON account_credit_payments (user_id, event_at);
 CREATE INDEX deleted_accounts_polar_customer ON deleted_accounts (polar_customer_id);
 
+-- Old grants did not retain Polar's event timestamp. Keep the actual grant
+-- and its observation time, not a later cancellation's provider_updated_at.
+-- A signed order.paid replay can fill in the exact timestamp even after deletion.
+INSERT INTO account_credit_payments (order_id,user_id,customer_id,event_at,event_exact,observed_at)
+SELECT substr(l.operation_id,13),l.user_id,b.provider_customer_id,
+  COALESCE(json_extract(l.metadata_json,'$.providerEventAt'),0),
+  CASE WHEN json_extract(l.metadata_json,'$.providerEventAt') IS NULL THEN 0 ELSE 1 END,l.created_at
+FROM credit_ledger l JOIN billing_accounts b ON b.user_id=l.user_id
+WHERE l.entry_type='grant' AND l.operation_id GLOB 'polar:order:*'
+  AND b.provider_customer_id IS NOT NULL;
+
+-- Applied legacy refunds must also survive a subsequent deletion.
+INSERT INTO account_credit_refunds (order_id,original_user_id,customer_id,owner_user_id,outcome,event_at)
+SELECT substr(l.operation_id,14),l.user_id,b.provider_customer_id,l.user_id,'applied',0
+FROM credit_ledger l JOIN billing_accounts b ON b.user_id=l.user_id
+WHERE l.entry_type='adjustment'
+  AND l.operation_id GLOB 'polar:refund:*' AND b.provider_customer_id IS NOT NULL
+ON CONFLICT(order_id) DO NOTHING;
+
+-- Also capture writes by the old Worker between migration and deployment.
+CREATE TRIGGER account_credit_payments_capture_grant
+AFTER INSERT ON credit_ledger
+WHEN NEW.entry_type='grant' AND NEW.operation_id GLOB 'polar:order:*'
+BEGIN
+  INSERT INTO account_credit_payments (order_id,user_id,customer_id,event_at,event_exact,observed_at)
+  SELECT substr(NEW.operation_id,13),NEW.user_id,b.provider_customer_id,
+    COALESCE(json_extract(NEW.metadata_json,'$.providerEventAt'),0),
+    CASE WHEN json_extract(NEW.metadata_json,'$.providerEventAt') IS NULL THEN 0 ELSE 1 END,NEW.created_at
+  FROM billing_accounts b WHERE b.user_id=NEW.user_id AND b.provider_customer_id IS NOT NULL
+  ON CONFLICT(order_id) DO NOTHING;
+END;
+
 CREATE TRIGGER deleted_accounts_create_carryover
 AFTER INSERT ON deleted_accounts
 BEGIN
+  -- Preserve any legacy grant still present when this account is deleted.
+  INSERT INTO account_credit_payments (order_id,user_id,customer_id,event_at,event_exact,observed_at)
+  SELECT substr(l.operation_id,13),l.user_id,b.provider_customer_id,
+    COALESCE(json_extract(l.metadata_json,'$.providerEventAt'),0),
+    CASE WHEN json_extract(l.metadata_json,'$.providerEventAt') IS NULL THEN 0 ELSE 1 END,l.created_at
+  FROM credit_ledger l JOIN billing_accounts b ON b.user_id=l.user_id
+  WHERE l.entry_type='grant' AND l.operation_id GLOB 'polar:order:*'
+    AND b.provider_customer_id IS NOT NULL AND l.user_id=NEW.user_id
+  ON CONFLICT(order_id) DO NOTHING;
   INSERT INTO account_credit_carryovers (user_id,available_credits,billing_status,credit_updated_at)
   SELECT NEW.user_id,NEW.remaining_credits,COALESCE(b.status,'inactive'),
-    COALESCE((SELECT MAX(event_at) FROM account_credit_payments WHERE user_id=NEW.user_id),0)
+    COALESCE((SELECT MAX(event_at) FROM account_credit_payments WHERE user_id=NEW.user_id AND event_exact=1),0)
   FROM (SELECT 1) LEFT JOIN billing_accounts b ON b.user_id=NEW.user_id;
   -- Preserve refund idempotency from pre-ledger Workers before the ledger
   -- cascades away. Unknown provider timestamps are not ordering fences.
-  INSERT INTO account_credit_refunds (order_id,original_user_id,customer_id,owner_user_id,event_at)
-  SELECT substr(l.operation_id,14),NEW.user_id,b.provider_customer_id,NEW.user_id,0
+  INSERT INTO account_credit_refunds (order_id,original_user_id,customer_id,owner_user_id,outcome,event_at)
+  SELECT substr(l.operation_id,14),NEW.user_id,b.provider_customer_id,NEW.user_id,'applied',0
   FROM credit_ledger l JOIN billing_accounts b ON b.user_id=l.user_id
   WHERE l.user_id=NEW.user_id AND l.entry_type='adjustment'
     AND l.operation_id GLOB 'polar:refund:*' AND b.provider_customer_id IS NOT NULL

@@ -199,17 +199,20 @@ function reviewRefund(paid:ReturnType<typeof reviewPaidOrder>) {
   return {...paid,type:'order.refunded' as const,timestamp:new Date('2026-10-15T12:00:00Z'),data:{...paid.data,status:'refunded' as const,refundedAmount:paid.data.totalAmount}};
 }
 
-async function deliverSignedRefund(userId:string,externalId:string|null=userId) {
+async function deliverSignedEvent(type:string,data:ReturnType<typeof reviewOrderBody>,at:string) {
   const {Webhook}=await import('standardwebhooks');
-  const at='2026-10-15T12:00:00Z';
-  const data=reviewOrderBody(userId,externalId);
-  data.status='refunded';data.refunded_amount=2000;data.customer.deleted_at=at;
-  const body=JSON.stringify({type:'order.refunded',timestamp:at,data});
+  const body=JSON.stringify({type,timestamp:at,data});
   const timestamp=new Date(),id=crypto.randomUUID();
   return SELF.fetch('http://auth.test/api/auth/polar/webhooks',{method:'POST',body,headers:{
     'content-type':'application/json','webhook-id':id,'webhook-timestamp':String(Math.floor(timestamp.getTime()/1000)),
     'webhook-signature':new Webhook(env.POLAR_WEBHOOK_SECRET).sign(id,timestamp,body),
   }});
+}
+async function deliverSignedRefund(userId:string,externalId:string|null=userId) {
+  const at='2026-10-15T12:00:00Z';
+  const data=reviewOrderBody(userId,externalId);
+  data.status='refunded';data.refunded_amount=2000;data.customer.deleted_at=at;
+  return deliverSignedEvent('order.refunded',data,at);
 }
 
 test.each(['before signup','after signup','after two transfers'] as const)('signed delayed refund reconciles %s, retains audit history, and is replay safe', async timing => {
@@ -363,4 +366,155 @@ test('refund resolves ownership inside the transaction when another deletion and
   await refund;
   expect(await creditBalance(credits,'refund-race-third')).toBe(1000);
   expect(await env.DB.prepare('SELECT owner_user_id FROM account_credit_refunds WHERE order_id=?').bind(paid.data.id).first('owner_user_id')).toBe('refund-race-third');
+});
+
+
+test.each(['newer','older'] as const)('review 298b945: legacy %s payment ordering stays recoverable until signed replay', async ordering => {
+  const {applyPaidOrder}=await import('../src/lib/billing');
+  const id=`legacy-${ordering}-payment`,email=`${id}@example.test`;
+  await create(id,email);
+  const earlier=reviewPaidOrder(id);earlier.timestamp=new Date('2026-10-14T10:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,earlier);
+  const newer=reviewPaidOrder(id);newer.data.id=`newer-${id}`;newer.timestamp=new Date(ordering==='newer'?'2026-10-16T10:00:00Z':'2026-10-15T11:00:00Z');
+  await applyPaidOrder(reviewBillingEnv,newer);
+  // Reproduce pre-0026 storage: local receipt time, no provider event timestamp.
+  await env.DB.prepare("UPDATE credit_ledger SET metadata_json=json_remove(metadata_json,'$.providerEventAt'),created_at=? WHERE user_id=? AND operation_id GLOB 'polar:order:*'")
+    .bind(new Date('2026-10-16T10:01:00Z').getTime(),id).run();
+  await env.DB.prepare('DELETE FROM account_credit_payments WHERE user_id=?').bind(id).run();
+  await deleteAccountRecords(env.DB,{id,email});await create(`${id}-second`,email);
+  expect((await deliverSignedRefund(id)).status).toBe(500);
+  expect(await creditBalance(credits,`${id}-second`)).toBe(10000);
+  expect(await env.DB.prepare('SELECT * FROM account_credit_refunds WHERE order_id=?').bind(earlier.data.id).first()).toBeNull();
+  expect(await env.DB.prepare('SELECT * FROM processed_events WHERE event_id=?').bind(`order.refunded:${earlier.data.id}`).first()).toBeNull();
+  // A replay enriches the saved grant after its user/ledger have cascaded away.
+  const replay=reviewOrderBody(id,null);replay.id=newer.data.id;
+  expect((await deliverSignedEvent('order.paid',replay,newer.timestamp.toISOString())).status).toBe(200);
+  expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(id).first()).toBeNull();
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,`${id}-second`)).toBe(ordering==='newer'?10000:1000);
+  expect(await env.DB.prepare('SELECT outcome FROM account_credit_refunds WHERE order_id=?').bind(earlier.data.id).first('outcome')).toBe(ordering==='newer'?'superseded':'applied');
+});
+
+test('review 298b945: a skipped live refund cannot poison recovery after deletion', async () => {
+  const {applyPaidOrder}=await import('../src/lib/billing');
+  const id='skipped-live-refund',email=`${id}@example.test`;await create(id,email);
+  await applyPaidOrder(reviewBillingEnv,reviewPaidOrder(id));
+  // A later cancellation is not a newer credit grant.
+  await env.DB.prepare("UPDATE billing_accounts SET plan='starter',status='inactive',provider_updated_at=? WHERE user_id=?")
+    .bind(new Date('2026-10-15T13:00:00Z').getTime(),id).run();
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  await deleteAccountRecords(env.DB,{id,email});await create(`${id}-second`,email);
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,`${id}-second`)).toBe(1000);
+  await expect(reserveCredits(credits,`${id}-second`,'review-block-refunded-spend',5000,{})).rejects.toMatchObject({status:402});
+});
+
+
+test.each(['unclaimed','transferred'] as const)('real migration retains legacy paid grants for %s refund recovery', async timing => {
+  const {applyPaidOrder,applyRefundedOrder}=await import('../src/lib/billing');
+  const migrationEnv=workerEnv as typeof workerEnv & {CREDIT_MIGRATION_DB:D1Database;TEST_MIGRATIONS:D1Migration[]};
+  const db=migrationEnv.CREDIT_MIGRATION_DB;
+  const index=migrationEnv.TEST_MIGRATIONS.findIndex(m=>m.name==='0026_deleted_accounts.sql');
+  await applyD1Migrations(db,migrationEnv.TEST_MIGRATIONS.slice(0,index));
+  const id=`upgrade-${timing}`,email=`${id}@example.test`;
+  const newerAt=new Date('2026-10-16T10:00:00Z').getTime();
+  await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?,'Legacy',?,0,0)").bind(id,email).run();
+  await db.prepare("INSERT INTO billing_accounts (user_id,provider_customer_id,plan,status,provider_updated_at,updated_at) VALUES (?,?,'builder','active',?,?)")
+    .bind(id,`customer-${id}`,newerAt,newerAt).run();
+  for(const [orderId,amount,at] of [[`order-${id}`,9000,new Date('2026-10-14T10:01:00Z').getTime()],[`newer-${id}`,0,newerAt+60000]] as const) {
+    await db.prepare("INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,metadata_json,created_at) VALUES (?,?,?,'grant',?,'{\"kind\":\"billing-cycle\"}',?)")
+      .bind(orderId,id,`polar:order:${orderId}`,amount,at).run();
+    await db.prepare("INSERT INTO processed_events (source,event_id,processed_at,payload_hash) VALUES ('polar',?,?,'legacy')")
+      .bind(`order.paid:${orderId}`,at).run();
+  }
+  await applyD1Migrations(db,migrationEnv.TEST_MIGRATIONS);
+  expect(await db.prepare('SELECT COUNT(*) AS n FROM account_credit_payments WHERE user_id=? AND event_exact=0').bind(id).first('n')).toBe(2);
+  const billingEnv={...reviewBillingEnv,DB:db};
+  await db.prepare('DELETE FROM user WHERE id=?').bind(id).run();
+  const signup=()=>db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?,'Returning',?,0,0)").bind(`${id}-second`,email).run();
+  if(timing==='transferred') await signup();
+  await expect(applyRefundedOrder(billingEnv,reviewRefund(reviewPaidOrder(id)))).rejects.toMatchObject({status:503});
+  expect(await db.prepare('SELECT order_id FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first()).toBeNull();
+  const newer=reviewPaidOrder(id);newer.data.id=`newer-${id}`;newer.timestamp=new Date(newerAt);
+  await applyPaidOrder(billingEnv,newer);
+  await applyRefundedOrder(billingEnv,reviewRefund(reviewPaidOrder(id)));
+  if(timing==='unclaimed') await signup();
+  expect(await creditBalance({...credits,DB:db},`${id}-second`)).toBe(10000);
+});
+
+test('a refund ignored by an old Worker while live is repaired before and after deletion', async () => {
+  const {applyPaidOrder}=await import('../src/lib/billing');
+  const id='old-live-ack',email=`${id}@example.test`;await create(id,email);
+  await applyPaidOrder(reviewBillingEnv,reviewPaidOrder(id));
+  await env.DB.prepare("INSERT INTO processed_events (source,event_id,processed_at,payload_hash) VALUES ('polar',?,0,'old-worker')")
+    .bind(`order.refunded:order-${id}`).run();
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(1000);
+  await adjust(id,-100);await deleteAccountRecords(env.DB,{id,email});await create(`${id}-second`,email);
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,`${id}-second`)).toBe(900);
+});
+
+test('refunded billing metadata alone cannot falsely prove a carryover was reconciled', async () => {
+  const id='false-refunded-state',email=`${id}@example.test`;await paidDeleted(id,email);
+  await env.DB.prepare("UPDATE account_credit_carryovers SET billing_status='refunded' WHERE user_id=?").bind(id).run();
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  await create(`${id}-second`,email);
+  expect(await creditBalance(credits,`${id}-second`)).toBe(1000);
+});
+
+
+test('an ignored refund ledger insert stays retryable instead of writing a false handled receipt', async () => {
+  const id='ignored-refund-write',email=`${id}@example.test`;
+  const {applyPaidOrder}=await import('../src/lib/billing');await create(id,email);
+  await applyPaidOrder(reviewBillingEnv,reviewPaidOrder(id));
+  await env.DB.prepare(`CREATE TRIGGER test_skip_refund_write BEFORE INSERT ON credit_ledger
+    WHEN NEW.user_id='ignored-refund-write' AND NEW.operation_id GLOB 'polar:refund:*'
+    BEGIN SELECT RAISE(IGNORE); END`).run();
+  try {
+    expect((await deliverSignedRefund(id)).status).toBe(500);
+    expect(await creditBalance(credits,id)).toBe(10000);
+    expect(await env.DB.prepare('SELECT * FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first()).toBeNull();
+    expect(await env.DB.prepare('SELECT * FROM processed_events WHERE event_id=?').bind(`order.refunded:order-${id}`).first()).toBeNull();
+    expect(await env.DB.prepare('SELECT plan FROM billing_accounts WHERE user_id=?').bind(id).first('plan')).toBe('builder');
+  } finally {await env.DB.prepare('DROP TRIGGER test_skip_refund_write').run();}
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  expect(await creditBalance(credits,id)).toBe(1000);
+});
+
+
+test('a skipped carryover update cannot be mistaken for a completed refund', async () => {
+  const id='ignored-carryover-write',email=`${id}@example.test`;await paidDeleted(id,email);
+  await env.DB.prepare("UPDATE account_credit_carryovers SET billing_status='refunded',credit_updated_at=? WHERE user_id=?")
+    .bind(new Date('2026-10-15T12:00:00Z').getTime(),id).run();
+  await env.DB.prepare(`CREATE TRIGGER test_skip_carryover_refund BEFORE UPDATE ON account_credit_carryovers
+    WHEN NEW.user_id='ignored-carryover-write' BEGIN SELECT RAISE(IGNORE); END`).run();
+  try {
+    expect((await deliverSignedRefund(id)).status).toBe(500);
+    expect(await env.DB.prepare('SELECT available_credits FROM account_credit_carryovers WHERE user_id=?').bind(id).first('available_credits')).toBe(10000);
+    expect(await env.DB.prepare('SELECT order_id FROM account_credit_refunds WHERE order_id=?').bind(`order-${id}`).first()).toBeNull();
+    expect(await env.DB.prepare('SELECT event_id FROM processed_events WHERE event_id=?').bind(`order.refunded:order-${id}`).first()).toBeNull();
+  } finally {await env.DB.prepare('DROP TRIGGER test_skip_carryover_refund').run();}
+  expect((await deliverSignedRefund(id)).status).toBe(200);
+  await create(`${id}-second`,email);expect(await creditBalance(credits,`${id}-second`)).toBe(1000);
+});
+
+test('refund follows a live user deletion that commits before its credit transaction', async () => {
+  const {applyPaidOrder,applyRefundedOrder}=await import('../src/lib/billing');
+  const id='live-refund-delete-race',email=`${id}@example.test`;await create(id,email);
+  const paid=reviewPaidOrder(id);await applyPaidOrder(reviewBillingEnv,paid);
+  let entered!:()=>void,release!:()=>void;
+  const ready=new Promise<void>(resolve=>{entered=resolve;});const held=new Promise<void>(resolve=>{release=resolve;});
+  const batch:D1Database['batch']=async <T>(statements:D1PreparedStatement[])=>{entered();await held;return env.DB.batch<T>(statements);};
+  const db=new Proxy(env.DB,{get(target,key){
+    if(key==='batch') return batch;
+    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  const refund=applyRefundedOrder({...reviewBillingEnv,DB:db},reviewRefund(paid));
+  await ready;
+  try {await deleteAccountRecords(env.DB,{id,email});await create(`${id}-second`,email);}
+  finally {release();}
+  await refund;
+  expect(await creditBalance(credits,`${id}-second`)).toBe(1000);
+  expect(await env.DB.prepare('SELECT user_id FROM billing_accounts WHERE user_id IN (?,?)').bind(id,`${id}-second`).first()).toBeNull();
 });
