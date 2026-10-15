@@ -180,10 +180,13 @@ cascades to both their account and ledger.
 
 Migration `0026_deleted_accounts.sql` replaces the signup grant trigger. A new
 email receives the one-time 1,000-credit grant. A returning email receives an
-`adjustment` with operation ID `returning-account:v1`, equal to the most recent
-recorded deletion's spendable balance. Database insertion order, rather than
-wall-clock timestamps, determines the latest record using a monotonic sequence. Zero, negative and balances above 1,000 are
-preserved. Signup, the opening ledger entry and the projected account balance
+`adjustment` with operation ID `returning-account:v1`, equal to the newest
+recorded deletion's unclaimed carryover balance. Database insertion order, rather
+than wall-clock timestamps, determines the latest record using a monotonic
+sequence. Signup claims that snapshot for the new user ID in the same transaction.
+The claim survives admin email changes. A signup using an already claimed email
+snapshot starts at zero and cannot claim an older snapshot or another free grant.
+Zero, negative and balances above 1,000 are preserved. Signup, the opening ledger entry and the projected account balance
 remain one atomic D1 operation. Ordinary balance reads and reservations keep
 their existing round trips. Builder subscription state is not restored.
 
@@ -208,8 +211,8 @@ latter preserves the existing Durable Object deletion fences.
 
 Apply the migration before the Worker. It changes no active balances and invents
 no historical records. Previously deleted accounts whose balance and email
-mapping were already erased cannot be reconstructed automatically. The pre-ledger Worker
-remains compatible with these triggers; keep the migration on rollback.
+mapping were already erased cannot be reconstructed automatically. The pre-ledger
+Worker remains compatible with these triggers; keep the migration on rollback.
 
 ```mermaid
 %%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "sequenceNumber": "#ffffff", "signalColor": "#475569"}}}%%
@@ -235,3 +238,50 @@ normalized email in readable form; it is retained identifying data, not an
 anonymous record. The privacy page and both deletion confirmations disclose this
 retention. Repeated deletion history is evidence of repeated accounts, not proof
 of abuse by itself.
+
+### Refunds after a credit transfer
+
+`deleted_accounts.remaining_credits` is the immutable audit snapshot. The separate
+`account_credit_carryovers` table holds the reconciled balance and the one-time
+`transferred_to_user_id` claim. A successor's deletion creates the next node.
+Refund ownership follows those user IDs, never the successor's current email.
+
+A verified Builder refund matches the original Polar customer reference and user
+identity. If no successor exists yet, it resets the unclaimed carryover to the
+Starter allowance. If credits were transferred, it follows the chain and writes
+an ordinary credit-ledger adjustment for the current live owner, or updates the
+last unclaimed carryover if that owner has also been deleted. It never adopts the
+old Polar customer or subscription into the successor account. Missing external
+IDs on anonymized historic customers can resolve through the retained Polar ID;
+conflicting checkout identity metadata remains rejected.
+
+The reset, resolved owner, durable `account_credit_refunds` receipt and processed
+event commit in one D1 batch. A receipt is keyed by order ID and survives user
+cleanup, so replay cannot refill credits after spending or another transfer.
+Ownership is resolved inside that transaction, eliminating a lookup/delete/signup
+race. Permanent `account_credit_payments` receipts and previous refund receipts order
+credit decisions. A stale refund cannot overwrite a newer recorded payment, while
+a later cancellation or customer-state update cannot shield paid credits from a
+refund. Legacy refund ledger entries become permanent receipts before cascading
+deletion. Unknown legacy provider timestamps are not used as ordering fences. A refund
+already reflected before deletion is not applied again. Replaying a refund that
+an older Worker acknowledged without reconciliation repairs matching retained
+history once. Deploy the updated Worker immediately after migration; replay any
+refunds acknowledged by the old Worker during a staged rollout.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumber": "#ffffff", "sequenceNumberColor": "#ffffff", "signalColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant Polar
+    participant Worker
+    participant D1
+    Note over Worker,D1: Deleted account A transferred 10,000 credits to account B
+    Polar->>Worker: Signed refund for account A
+    Worker->>D1: Match customer, resolve current credit owner
+    Note over D1: Reset B to 1,000 and record refund receipt atomically
+    D1-->>Worker: Reconciled
+    Polar->>Worker: Replay the same refund
+    Worker->>D1: Check permanent receipt
+    D1-->>Worker: Already applied, preserve subsequent spending
+```

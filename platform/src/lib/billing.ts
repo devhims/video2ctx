@@ -6,6 +6,7 @@ import type { WebhookSubscriptionCreatedPayload } from '@polar-sh/sdk/models/com
 import type { WebhookSubscriptionUpdatedPayload } from '@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload';
 import type { CreditEnv } from './entitlements';
 import { ApiError, now, sha256 } from './http';
+import { paymentReceipt, refundReceipt, transferredRefundStatements } from './credit-continuity';
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
@@ -106,6 +107,9 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
   };
   if (await processed(env.DB, eventId)) {
     await repairPaymentHistory(env.DB, identity);
+    if (userId && (identity.checkoutUserId === undefined || identity.checkoutUserId === userId)) {
+      await paymentReceipt(env.DB, order.id, userId, order.customerId, payload.timestamp.getTime()).run();
+    }
     return;
   }
   if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
@@ -167,6 +171,7 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
       crypto.randomUUID(), userId, `polar:order:${order.id}`, allowance, allowance,
       metadata, now(), userId, userId, eventAt, status,
     ),
+    paymentReceipt(env.DB, order.id, userId, order.customerId, eventAt),
     eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
 }
@@ -287,18 +292,27 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   if (order.productId !== env.POLAR_BUILDER_PRODUCT_ID) return;
   const eventId = `order.refunded:${order.id}`;
 
-  const userId = order.customer.externalId;
+  // Historic orders may omit external_id after Polar anonymizes the customer.
+  const userId = order.customer.externalId ?? await env.DB.prepare(
+    'SELECT user_id FROM deleted_accounts WHERE polar_customer_id=? ORDER BY sequence DESC LIMIT 1'
+  ).bind(order.customerId).first<string>('user_id');
   const identity: BillingIdentity = {
     customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
   };
   if (await processed(env.DB, eventId)) {
     await repairPaymentHistory(env.DB, identity);
+    // Repair a refund acknowledged by an older Worker after deletion, provided
+    // the immutable billing identity matches and no refund receipt exists.
+    if (userId && (identity.checkoutUserId === undefined || identity.checkoutUserId === userId)) {
+      await reconcileDeletedRefund(env, payload, userId, eventId);
+    }
     return;
   }
   if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar refund ${order.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) {
+    if (await reconcileDeletedRefund(env, payload, userId, eventId)) return;
     await recordEvent(env.DB, eventId, eventFingerprint(payload));
     console.warn(JSON.stringify({ event: 'polar_refund_without_user', orderId: order.id, userId }));
     return;
@@ -339,8 +353,26 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
       JSON.stringify({ provider: 'polar', kind: 'refund-reset', orderId: order.id, balance: starterCredits }),
       now(), userId, userId, eventAt,
     ),
+    refundReceipt(env.DB, order.id, userId, order.customerId, eventAt),
     eventStatement(env.DB, eventId, await eventFingerprint(payload)),
   ]);
+}
+
+async function reconcileDeletedRefund(
+  env: PaymentWebhookEnv, payload: WebhookOrderRefundedPayload, userId: string, eventId: string,
+): Promise<boolean> {
+  const customerId = payload.data.customerId;
+  const origin = await env.DB.prepare('SELECT user_id FROM deleted_accounts WHERE user_id=? AND polar_customer_id=?')
+    .bind(userId, customerId).first();
+  if (!origin) return false;
+  await env.DB.batch([
+    ...transferredRefundStatements(env.DB, {
+      orderId: payload.data.id, userId, customerId,
+      eventAt: payload.timestamp.getTime(), starterCredits: Number(env.STARTER_ONBOARDING_CREDITS),
+    }),
+    eventStatement(env.DB, eventId, await eventFingerprint(payload)),
+  ]);
+  return true;
 }
 
 /** Every subscription Polar holds for a user, or null when Polar has never seen them. */

@@ -9,6 +9,8 @@
     "POLAR_ENVIRONMENT": "sandbox",
     "POLAR_ACCESS_TOKEN": "test-only-polar-token",
     "POLAR_BUILDER_PRODUCT_ID": "builder-product",
+    "STARTER_ONBOARDING_CREDITS": "1000",
+    "BUILDER_MONTHLY_CREDITS": "10000",
     "POLAR_WEBHOOK_SECRET": "whsec_c2FuZGJveC1zaWduYXR1cmUtdGVzdC1rZXktMzI=",
     "APP_ORIGIN": "http://auth.test",
     "AUTH_BASE_URL": "http://auth.test",
