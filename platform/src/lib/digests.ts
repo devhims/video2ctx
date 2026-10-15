@@ -1,7 +1,12 @@
 import type { EmailMessage } from '../types';
 import { base64Url, now, sha256 } from './http';
 
-export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promise<void> {
+type DigestEnv = Pick<Env, 'DB' | 'BETTER_AUTH_SECRET'> & {
+  APP_ORIGIN: string;
+  EMAIL_TASKS: Pick<Queue<EmailMessage>, 'send'>;
+};
+
+export async function queueDigests(env: DigestEnv, cadence: 'daily' | 'weekly'): Promise<void> {
   const users = await env.DB.prepare(
     `SELECT u.id,u.email,u.name FROM user u
      JOIN notification_preferences p ON p.user_id=u.id
@@ -12,7 +17,7 @@ export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promi
   for (const user of users.results) {
     const notifications = await env.DB.prepare(
       `SELECT title,body,data_json,created_at FROM notifications
-       WHERE user_id=? AND created_at>=? ORDER BY created_at DESC LIMIT 30`
+       WHERE user_id=? AND type='monitor_match' AND created_at>=? ORDER BY created_at DESC LIMIT 30`
     ).bind(user.id, since).all<{ title: string; body: string; data_json: string; created_at: number }>();
     if (!notifications.results.length) continue;
     const token = await unsubscribeToken(env, user.id);
@@ -39,7 +44,7 @@ export async function queueDigests(env: Env, cadence: 'daily' | 'weekly'): Promi
   }
 }
 
-export async function unsubscribeToken(env: Env, userId: string): Promise<string> {
+export async function unsubscribeToken(env: Pick<Env, 'BETTER_AUTH_SECRET'>, userId: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(env.BETTER_AUTH_SECRET),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']

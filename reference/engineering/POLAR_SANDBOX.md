@@ -199,7 +199,19 @@ delivery of that event is acknowledged without another mutation. Customer
 snapshots compare active Builder subscription metadata before projecting a plan,
 so a snapshot that arrives before the paid order cannot upgrade a different
 account. An unresolved conflict also blocks later lifecycle events for that Polar
-customer, including snapshots that omit metadata.
+customer, including snapshots that omit metadata. Conflict classification is
+rechecked inside the same D1 transaction as every plan and credit write. If another
+event commits quarantine after the initial lookup, the waiting event is recorded
+as terminal without changing the account. Paid and refunded credit entries each
+have their own database guard, including when the billing row already matches the
+incoming timestamp and status.
+
+Alert eligibility is selected inside that transaction for each payer/customer pair.
+Notifications link to their conflict record. Concurrent initial conflicts therefore
+produce one alert, while unrelated payers or customers keep their own alerts. A
+new conflict after reconciliation can produce a new alert. Daily and weekly email
+digests select only monitor_match notifications before applying the 30-item limit;
+billing_attention notifications remain in the dashboard inbox.
 
 The handler emits a structured polar_billing_identity_conflict error with the
 relevant order, customer, subscription, and application user IDs. Billing alerts
@@ -210,7 +222,8 @@ this PR does not configure external alert destinations.
 
 Review unresolved records in polar_billing_conflicts and compare the Polar order,
 subscription, and checkout identities. Resolve the financial and account mismatch
-explicitly before marking the corresponding records resolved_at. A terminal
+explicitly before marking all corresponding records resolved_at in one database
+transaction. A terminal
 processed_events marker does not automatically retry credit grants after
 resolution. Reconciliation or refund requires a separate, reviewed action. Never
 silently move another customer's subscription or credits.
@@ -227,3 +240,13 @@ integration tests, 121 focused platform/media tests, and 110 web tests. Local
 unauthenticated dashboard requests still redirect to login. The existing local
 Builder account retains 20,000 credits and its configured 10,000-credit allowance.
 Production configuration and data were not changed.
+
+### Concurrent-event review follow-up
+
+All three findings in review 5527715490 were reproduced on the previous head
+using isolated D1 and a mocked email queue. The failing cases covered plan upgrades,
+refund and revocation changes after quarantine, duplicate initial payer alerts,
+and billing-only or mixed monitor digests. The fixes passed 79 auth/admin/billing/
+credit integration tests, including 14 new cases, plus platform type checking.
+These checks did not call Polar or send email, change production, or adjust the
+existing local test balance. No additional migration is required beyond 0024.
