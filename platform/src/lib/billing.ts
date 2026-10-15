@@ -62,7 +62,9 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
         AND status IN ('incomplete','past_due','unpaid')) AS needs_attention,
       EXISTS (SELECT 1 FROM credit_ledger WHERE user_id=u.id
         AND entry_type='grant' AND operation_id GLOB 'polar:order:*'
-        AND created_at >= COALESCE(b.current_period_start,0)) AS credits_ready
+        AND json_extract(metadata_json,'$.subscriptionId')=b.provider_subscription_id
+        AND json_extract(metadata_json,'$.currentPeriodStart')=b.current_period_start
+        AND json_extract(metadata_json,'$.currentPeriodEnd')=b.current_period_end) AS credits_ready
     FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
       LEFT JOIN credit_accounts c ON c.user_id=u.id WHERE u.id=?
   `).bind(userId).first<BillingAccountRow & {
@@ -119,13 +121,6 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
   const subscription = order.subscription;
   const status = subscription?.status ?? 'active';
   const allowance = Number(env.BUILDER_MONTHLY_CREDITS);
-  const metadata = JSON.stringify({
-    provider: 'polar',
-    kind: 'billing-cycle',
-    orderId: order.id,
-    billingReason: order.billingReason,
-    allowance,
-  });
   const state: BillingState = {
     userId,
     customerId: order.customerId,
@@ -138,6 +133,17 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
     currentPeriodEnd: dateMillis(subscription?.currentPeriodEnd),
     eventAt,
   };
+  // Persist the fulfilled subscription and period, not the webhook delivery time.
+  const metadata = JSON.stringify({
+    provider: 'polar',
+    kind: 'billing-cycle',
+    orderId: order.id,
+    subscriptionId: state.subscriptionId,
+    currentPeriodStart: state.currentPeriodStart,
+    currentPeriodEnd: state.currentPeriodEnd,
+    billingReason: order.billingReason,
+    allowance,
+  });
 
   await env.DB.batch([
     billingUpsert(env.DB, state),

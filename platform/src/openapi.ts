@@ -2627,7 +2627,7 @@ export const openApiDocument = {
           currentPeriodEnd: { type: ['integer', 'null'] },
           canManageBilling: { type: 'boolean', description: 'Portal access for a Builder subscription, a subscription needing payment attention, or recorded paid/refunded orders. A customer record alone is insufficient.' },
           needsBillingAttention: { type: 'boolean', description: 'An incomplete, past-due, or unpaid subscription needs management instead of another checkout.' },
-          creditsReady: { type: 'boolean', description: 'Builder has a recorded paid-order credit grant in its current billing period, including a zero-credit top-up.' },
+          creditsReady: { type: 'boolean', description: 'Builder has a recorded paid-order credit grant matching its current subscription and billing period, including a zero-credit top-up. Older grants without this identity do not confirm checkout.' },
         },
       },
     },

@@ -12149,7 +12149,7 @@
           },
           "creditsReady": {
             "type": "boolean",
-            "description": "Builder has a recorded paid-order credit grant in its current billing period, including a zero-credit top-up."
+            "description": "Builder has a recorded paid-order credit grant matching its current subscription and billing period, including a zero-credit top-up. Older grants without this identity do not confirm checkout."
           }
         }
       }

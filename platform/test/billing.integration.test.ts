@@ -41,6 +41,80 @@ describe('Polar payment queries on D1', () => {
     });
     await env.DB.prepare("UPDATE credit_ledger SET created_at=? WHERE user_id=? AND operation_id GLOB 'polar:order:*'")
       .bind(new Date('2026-07-20T00:00:00Z').getTime(), userId).run();
+    // Recording time does not change which subscription period was fulfilled.
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: true });
+    const nextPeriod = activeCustomerState(userId);
+    nextPeriod.timestamp = new Date('2026-09-01T00:00:00Z');
+    nextPeriod.data.activeSubscriptions[0]!.currentPeriodStart = new Date('2026-09-01T00:00:00Z');
+    nextPeriod.data.activeSubscriptions[0]!.currentPeriodEnd = new Date('2026-10-01T00:00:00Z');
+    await syncCustomerState(env, nextPeriod);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+  });
+
+  test.each(['renewal', 'replacement', 'replacement in the same period'] as const)(
+    'delayed paid orders do not confirm an unfulfilled %s', async (scenario) => {
+      const userId = `confirmation-${scenario.replaceAll(' ', '-')}`;
+      await createUser(userId);
+      const oldOrder = paidOrder(userId, `${userId}-old`, new Date('2026-10-02T00:00:00Z'));
+      const oldStart = scenario === 'replacement in the same period' ? '2026-10-01' : '2026-09-01';
+      const oldEnd = scenario === 'replacement in the same period' ? '2026-11-01' : '2026-10-01';
+      oldOrder.data.subscription!.currentPeriodStart = new Date(oldStart);
+      oldOrder.data.subscription!.currentPeriodEnd = new Date(oldEnd);
+      // A September order can arrive in October. Its insertion time is not its billing period.
+      await applyPaidOrder(env, oldOrder);
+      await addCredits(userId, -9500, `${userId}-consumed`);
+      await expect(balance(userId)).resolves.toBe(500);
+
+      const current = activeCustomerState(userId);
+      current.timestamp = new Date('2026-10-03T00:00:00Z');
+      const subscription = current.data.activeSubscriptions[0]!;
+      if (scenario !== 'renewal') subscription.id = `replacement-${userId}`;
+      subscription.currentPeriodStart = new Date('2026-10-01T00:00:00Z');
+      subscription.currentPeriodEnd = new Date('2026-11-01T00:00:00Z');
+      await syncCustomerState(env, current);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditsReady: false, creditBalance: 500,
+      });
+
+      const paid = paidOrder(userId, `${userId}-current`, new Date('2026-10-04T00:00:00Z'));
+      paid.data.subscriptionId = subscription.id;
+      paid.data.subscription!.currentPeriodStart = subscription.currentPeriodStart;
+      paid.data.subscription!.currentPeriodEnd = subscription.currentPeriodEnd;
+      await applyPaidOrder(env, paid);
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditsReady: true, creditBalance: 10_000,
+      });
+      await expect(operationCount(userId, `polar:order:${paid.data.id}`)).resolves.toBe(1);
+    },
+  );
+
+  test.each(['subscriptionId', 'currentPeriodStart', 'currentPeriodEnd'] as const)(
+    'legacy grants without %s cannot confirm checkout', async (field) => {
+      const userId = `confirmation-missing-${field}`;
+      await createUser(userId);
+      const paid = paidOrder(userId, `${userId}-order`);
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: true });
+      await env.DB.prepare('UPDATE credit_ledger SET metadata_json=json_remove(metadata_json,?) WHERE user_id=? AND operation_id=?')
+        .bind(`$.${field}`, userId, `polar:order:${paid.data.id}`).run();
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'builder', creditBalance: 10_000, creditsReady: false,
+      });
+      // A replay must not grant again or invent the missing historical identity.
+      await applyPaidOrder(env, paid);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
+      await expect(operationCount(userId, `polar:order:${paid.data.id}`)).resolves.toBe(1);
+    },
+  );
+
+  test('a grant cannot confirm a different period end with the same start', async () => {
+    const userId = 'confirmation-period-end';
+    await createUser(userId);
+    await applyPaidOrder(env, paidOrder(userId, `${userId}-order`));
+    const current = activeCustomerState(userId);
+    current.data.activeSubscriptions[0]!.currentPeriodEnd = new Date('2026-09-02T00:00:00Z');
+    await syncCustomerState(env, current);
     await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ creditsReady: false });
   });
 
