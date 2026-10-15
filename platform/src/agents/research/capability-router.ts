@@ -1,4 +1,4 @@
-import { hasModelFailover, modelFallbackExhaustion } from '../runtime/model-failover';
+import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard } from '../runtime/model-failover';
 import { traceToolCallRepair, type TraceToolCall } from '../runtime/tool-call-trace';
 import { z } from 'zod';
 import { ApiError } from '../../lib/http';
@@ -222,6 +222,9 @@ export interface CapabilityClassifierInput {
 export async function classifyCapabilityWithModel(
   input: CapabilityClassifierInput,
 ): Promise<CapabilityRouteDecision> {
+  const guard = () => assertModelCostAvailable(input.modelBudget);
+  setModelAttemptGuard(input.model, guard);
+  setModelAttemptGuard(input.fallbackModel, guard);
   const deadlineAt = Math.min(Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS, input.deadlineAt ?? Infinity);
   return withRunDeadline(deadlineAt, input.signal,
     signal => classifyWithinDeadline({ ...input, signal }, deadlineAt), 'Classification phase timeout.');
@@ -374,7 +377,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   };
 
   const decision = await coordinateClassification(call, input.signal, deadlineAt, callId,
-    { fallbackModel: Boolean(input.fallbackModel), managedFailover: hasModelFailover(input.model), lastResort });
+    { fallbackModel: Boolean(input.fallbackModel), managedTimeouts: hasModelTimeouts(input.model), lastResort });
   return finishClassification(decision, videoIds, channelIds, explicitVideoIds);
 }
 
@@ -431,7 +434,7 @@ const LAST_RESORT_MARGIN_MS = 250;
  */
 async function coordinateClassification(
   call: ClassifierCall, signal: AbortSignal, deadlineAt: number, callId: string,
-  options: { fallbackModel: boolean; managedFailover?: boolean; lastResort: (evaluations: Evaluation[]) => ClassifierDecision },
+  options: { fallbackModel: boolean; managedTimeouts?: boolean; lastResort: (evaluations: Evaluation[]) => ClassifierDecision },
 ): Promise<ClassifierDecision> {
   type Settled = { key: Promise<Settled>; context: AttemptContext } & (
     { ok: true; evaluation: Evaluation } | { ok: false; error: unknown });
@@ -455,7 +458,7 @@ async function coordinateClassification(
       evaluation => ({ key, context, ok: true as const, evaluation }),
       (error: unknown) => ({ key, context, ok: false as const, error }));
     pending.add(key);
-    if (options.managedFailover || hedged || deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return;
+    if (options.managedTimeouts || hedged || deadlineAt - Date.now() - CLASSIFIER_REQUEST_STALL_MS < CLASSIFIER_STALL_RETRY_MIN_MS) return;
     later(CLASSIFIER_REQUEST_STALL_MS, () => {
       if (answered.has(context) || signal.aborted) return;
       console.warn(JSON.stringify({ event: 'agent_classification_request_stalled', modelCallId: callId,
@@ -480,8 +483,8 @@ async function coordinateClassification(
   };
   try {
     launch({ attempt: 1, feedback: [], previousCandidate: undefined, reconsider: false }, false);
-    // Managed transport failover owns stall recovery. Invalid-output fallback remains independent.
-    if (!options.managedFailover) later(deadlineAt - CLASSIFIER_FALLBACK_START_MS - Date.now(), launchFallback);
+    // Managed requests own their deadlines. Invalid-output fallback remains independent.
+    if (!options.managedTimeouts) later(deadlineAt - CLASSIFIER_FALLBACK_START_MS - Date.now(), launchFallback);
     later(deadlineAt - LAST_RESORT_MARGIN_MS - Date.now(), () => { lastResortDue = true; });
     while (true) {
       if (advisory && Date.now() >= advisory.until) return keepAdvisory('timeout');
@@ -500,7 +503,7 @@ async function coordinateClassification(
         // Cancellation always propagates. Exhausted inference is terminal only
         // when no already-valid advisory decision can be retained.
         if (signal.aborted) throw next.error;
-        if (modelFallbackExhaustion(next.error)) {
+        if (modelRequestExhaustion(next.error)) {
           if (advisory) return keepAdvisory('error');
           throw next.error;
         }

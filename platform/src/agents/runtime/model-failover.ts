@@ -11,7 +11,10 @@ export interface ModelAttemptDiagnostic {
   attemptId: string;
   modelId: string;
   role: string;
-  serviceTier: 'priority';
+  videoId?: string;
+  modelCallId?: string;
+  analysisAttempt?: number;
+  serviceTier?: 'priority';
   startedAt?: number;
   outcome?: 'succeeded' | 'failed' | 'canceled';
   reason?: string;
@@ -21,6 +24,7 @@ export interface ModelAttemptDiagnostic {
   firstContentMs?: number;
   idleMs?: number;
   statusCode?: number;
+  retryable?: boolean;
   providerRequestId?: string;
   usageAvailable?: boolean;
   inputTokens?: number;
@@ -28,7 +32,6 @@ export interface ModelAttemptDiagnostic {
   outputTokens?: number;
   reasoningTokens?: number;
   firstContentTimeoutMs?: number;
-  idleTimeoutMs?: number;
   totalTimeoutMs?: number;
 }
 
@@ -40,14 +43,14 @@ const DEFAULT_ROLE_LIMITS: ModelRoleLimits = { firstContentMs: 10_000, totalMs: 
 const ROLE_LIMITS: Record<string, ModelRoleLimits> = {
   // Leave most of the 20-second classification phase for its backup and validation.
   classifier: { firstContentMs: 5_000, totalMs: 5_000 },
-  // Visual analysis and memory have an outer 20-second deadline for both attempts.
+  // Visual analysis and memory have an outer 20-second deadline for all attempts.
   visual_analyst: { firstContentMs: 8_000, totalMs: 8_000 },
   memory_updater: { firstContentMs: 8_000, totalMs: 8_000 },
 };
 
 /**
- * Every attempt streams. A silent provider fails at firstContentMs, while a call that keeps
- * producing content may continue to totalMs, clamped to the phase deadline.
+ * Every attempt streams. A silent provider fails at firstContentMs. After first content,
+ * pauses are allowed until totalMs, clamped to the phase deadline.
  */
 export function modelRoleLimits(role: string): ModelRoleLimits {
   return ROLE_LIMITS[role] ?? DEFAULT_ROLE_LIMITS;
@@ -58,32 +61,37 @@ export interface ModelFailoverState {
   fallback: boolean;
   deadlineAt?: number;
   onDiagnostic?: (event: ModelAttemptDiagnostic) => void;
+  beforeAttempt?: () => void;
 }
 
-export class ModelFallbackExhaustedError extends Error {
-  readonly code = 'MODEL_FALLBACK_EXHAUSTED';
+export class ModelRequestExhaustedError extends Error {
+  readonly code: string = 'MODEL_REQUEST_EXHAUSTED';
   constructor(readonly failures: readonly unknown[]) {
-    super('Model inference is unavailable after trying the configured fallback. Please retry.');
+    super('Model inference is unavailable after the bounded retry. Please retry.');
   }
 }
 
+export class ModelFallbackExhaustedError extends ModelRequestExhaustedError {
+  override readonly code = 'MODEL_FALLBACK_EXHAUSTED';
+}
+
 /** The SDK wraps a terminal non-retryable error if an earlier request was retried. */
-export function modelFallbackExhaustion(error: unknown): ModelFallbackExhaustedError | undefined {
+export function modelRequestExhaustion(error: unknown): ModelRequestExhaustedError | undefined {
   const seen = new Set<unknown>();
   while (RetryError.isInstance(error) && !seen.has(error)) {
     seen.add(error);
     error = error.lastError;
   }
-  return error instanceof ModelFallbackExhaustedError ? error : undefined;
+  return error instanceof ModelRequestExhaustedError ? error : undefined;
 }
 
 /** Only the owner of the displayed draft may restart a partially consumed stream. */
 export class ModelStreamRestartError extends Error {
-  constructor(readonly failure: unknown) { super('Restart the model step with DeepSeek after discarding the interrupted draft.'); }
+  constructor(readonly failure: unknown) { super('Restart the model request after discarding the interrupted draft.'); }
 }
 
 class ModelAttemptTimeout extends Error {
-  constructor(readonly reason: 'first_content_timeout' | 'stream_stall' | 'attempt_timeout' | 'phase_budget') {
+  constructor(readonly reason: 'first_content_timeout' | 'attempt_timeout' | 'phase_budget') {
     super(reason);
     this.name = 'TimeoutError';
   }
@@ -102,35 +110,45 @@ const requestObservers = new WeakMap<object, ModelRequestObserver>();
 
 /** Observe generate requests. An attempt canceled before its finish event reports no usage. */
 export function observeModelRequests(model: unknown, observer: ModelRequestObserver): boolean {
-  if (!hasModelFailover(model)) return false;
+  if (!hasModelTimeouts(model)) return false;
   requestObservers.set(model as object, observer);
   return true;
 }
 const activePrimaryAttempts = new WeakMap<ModelFailoverState, Set<AbortController>>();
-export function hasModelFailover(model: unknown): boolean {
+export function hasModelTimeouts(model: unknown): boolean {
   return typeof model === 'object' && model !== null && managedModels.has(model);
 }
 
-export function setModelFailoverDeadline(model: unknown, deadlineAt: number): void {
+export function setModelDeadline(model: unknown, deadlineAt: number): void {
   if (typeof model === 'object' && model !== null) {
     const state = managedModels.get(model);
     if (state) state.deadlineAt = deadlineAt;
   }
 }
 
-/** A stream retry is independent of schema repair, and can happen at most once. */
+/** Recheck the run's cost budget before every physical provider request. */
+export function setModelAttemptGuard(model: unknown, guard: () => void): void {
+  if (hasModelTimeouts(model)) managedModels.get(model as object)!.beforeAttempt = guard;
+}
+
+interface ModelRequestState { timeoutRetries: number; failures: unknown[] }
+// The draft owner keeps one retry allowance across stream restarts, then releases it.
+const streamRequests = new Map<string, ModelRequestState>();
+
+/** At most one model switch and one timeout retry, independent of schema repair. */
 export async function withModelStreamFallback<T>(work: (callId: string) => Promise<T>): Promise<T> {
   const callId = crypto.randomUUID();
-  try { return await work(callId); }
-  catch (error) {
-    if (!(error instanceof ModelStreamRestartError)) throw error;
-    try { return await work(callId); }
-    catch (backupError) {
-      const exhausted = modelFallbackExhaustion(backupError);
-      if (exhausted) throw new ModelFallbackExhaustedError([error.failure, ...exhausted.failures]);
-      throw backupError;
+  streamRequests.set(callId, { timeoutRetries: 0, failures: [] });
+  try {
+    for (let request = 0; request < 3; request += 1) {
+      try { return await work(callId); }
+      catch (error) {
+        if (!(error instanceof ModelStreamRestartError)) throw error;
+        if (request === 2) throw new ModelRequestExhaustedError(streamRequests.get(callId)!.failures);
+      }
     }
-  }
+    throw new Error('Model request retry exhausted.');
+  } finally { streamRequests.delete(callId); }
 }
 
 function eligible(error: unknown): boolean {
@@ -149,7 +167,7 @@ function abortable<T>(work: PromiseLike<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-/** Assemble a generate result from a provider stream, reporting each part to the attempt's stall timers. */
+/** Assemble a generate result from a provider stream, tracking first content and usage. */
 async function collectStream(model: LanguageModelV4, params: LanguageModelV4CallOptions,
   current: { signal: AbortSignal; progress: (part: LanguageModelV4StreamPart) => void }): Promise<LanguageModelV4GenerateResult> {
   const { stream, request, response: streamResponse } = await abortable(model.doStream(params), current.signal);
@@ -203,32 +221,55 @@ async function collectStream(model: LanguageModelV4, params: LanguageModelV4Call
   } finally { void reader.cancel().catch(() => {}); }
 }
 
-export function withModelFailover(options: {
+interface ModelExecutionOptions {
   primary: LanguageModelV4;
-  fallback: LanguageModelV4;
+  fallback?: LanguageModelV4;
   state: ModelFailoverState;
   role: string;
   runId?: string;
+  serviceTier?: 'priority';
+}
+
+/** Every selected model uses the same role limits, even without a backup. */
+export function withModelTimeouts(options: Omit<ModelExecutionOptions, 'primary' | 'fallback'> & {
+  model: LanguageModelV4;
 }): LanguageModelV4 {
+  const { model, ...execution } = options;
+  return withModelExecution({ ...execution, primary: model });
+}
+
+export function withModelFailover(options: Omit<ModelExecutionOptions, 'fallback'> & {
+  fallback: LanguageModelV4;
+}): LanguageModelV4 {
+  return withModelExecution({ ...options, serviceTier: 'priority' });
+}
+
+function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
   const { primary, fallback, state, role } = options;
   const limits = modelRoleLimits(role);
-  const idleTimeoutMs = 5_000;
   const fallbackReserveMs = 10_000;
   const emit = (event: ModelAttemptDiagnostic) => {
     console.log(JSON.stringify({ ...event, event: 'agent_model_failover', phase: event.event, runId: options.runId }));
     state.onDiagnostic?.(event);
   };
-  const attempt = (model: LanguageModelV4, params: LanguageModelV4CallOptions, callId: string, attemptId = crypto.randomUUID()) => {
+  const attempt = (model: LanguageModelV4, params: LanguageModelV4CallOptions, callId: string, attemptId = crypto.randomUUID(),
+    onStart?: (requestId: string) => void) => {
     params.abortSignal?.throwIfAborted();
+    if (state.deadlineAt !== undefined && Date.now() >= state.deadlineAt) throw new ModelAttemptTimeout('phase_budget');
+    state.beforeAttempt?.();
+    onStart?.(attemptId);
     const controller = new AbortController();
-    if (model === primary) {
+    if (fallback && model === primary) {
       let active = activePrimaryAttempts.get(state);
       if (!active) activePrimaryAttempts.set(state, active = new Set());
       active.add(controller);
     }
     const signal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
     const startedAt = Date.now();
-    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: 'priority' as const };
+    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: options.serviceTier,
+      videoId: params.providerOptions?.agentDiagnostics?.videoId as string | undefined,
+      modelCallId: params.providerOptions?.agentDiagnostics?.modelCallId as string | undefined,
+      analysisAttempt: params.providerOptions?.agentDiagnostics?.analysisAttempt as number | undefined };
     let firstContentAt: number | undefined;
     let lastContentAt: number | undefined;
     let usage: LanguageModelV4Usage | undefined;
@@ -236,21 +277,21 @@ export function withModelFailover(options: {
     let ended = false;
     const fail = (reason: ConstructorParameters<typeof ModelAttemptTimeout>[0]) => controller.abort(new ModelAttemptTimeout(reason));
     const remainingMs = Math.max(1, (state.deadlineAt ?? Infinity) - Date.now());
-    const budgetMs = model === primary ? Math.max(1, remainingMs - fallbackReserveMs) : remainingMs;
+    const budgetMs = fallback && model === primary ? Math.max(1, remainingMs - fallbackReserveMs) : remainingMs;
     const attemptLimitMs = Math.min(limits.totalMs, budgetMs);
     // A provider that stays silent until the overall limit is still a first-content failure.
     const total = setTimeout(() => fail(budgetMs < limits.totalMs ? 'phase_budget'
       : firstContentAt === undefined ? 'first_content_timeout' : 'attempt_timeout'), attemptLimitMs);
     const firstContentLimitMs = Math.min(limits.firstContentMs, attemptLimitMs);
-    let idle = setTimeout(() => fail('first_content_timeout'), firstContentLimitMs);
+    const firstContent = setTimeout(() => fail('first_content_timeout'), firstContentLimitMs);
     // Record the limits this attempt actually ran under, after the phase budget.
-    const timeouts = { firstContentTimeoutMs: firstContentLimitMs, idleTimeoutMs, totalTimeoutMs: attemptLimitMs };
+    const timeouts = { firstContentTimeoutMs: firstContentLimitMs, totalTimeoutMs: attemptLimitMs };
     emit({ event: 'attempt_started', ...fields, startedAt, ...timeouts });
     const finish = (error?: unknown) => {
       if (ended) return;
       ended = true;
       activePrimaryAttempts.get(state)?.delete(controller);
-      clearTimeout(total); clearTimeout(idle);
+      clearTimeout(total); clearTimeout(firstContent);
       const details = failureDetails(error);
       emit({ event: 'attempt_finished', ...fields, startedAt, ...timeouts,
         outcome: params.abortSignal?.aborted || error instanceof RunModelFallback || (error instanceof ModelAttemptTimeout && error.reason === 'phase_budget')
@@ -262,19 +303,33 @@ export function withModelFailover(options: {
         idleMs: lastContentAt === undefined ? Date.now() - startedAt : Date.now() - lastContentAt,
         usageAvailable: usage !== undefined, inputTokens: usage?.inputTokens.total, cachedInputTokens: usage?.inputTokens.cacheRead,
         outputTokens: usage?.outputTokens.total, reasoningTokens: usage?.outputTokens.reasoning,
-        statusCode: details.statusCode, providerRequestId: providerRequestId ?? details.providerRequestId });
+        statusCode: details.statusCode, retryable: details.retryable, providerRequestId: providerRequestId ?? details.providerRequestId });
     };
-    const switchModel = (error: unknown) => {
+    const nextModel = (error: unknown, request: ModelRequestState): LanguageModelV4 => {
       finish(error);
+      request.failures.push(error);
       params.abortSignal?.throwIfAborted();
       if (!eligible(error)) throw error;
-      if (model === fallback) throw new ModelFallbackExhaustedError([error]);
-      if (!state.fallback) {
-        state.fallback = true;
-        emit({ event: 'fallback', ...fields, reason: error instanceof ModelAttemptTimeout ? error.reason : 'provider_error' });
-        // Wake concurrent transcript/image calls immediately, without waiting for their own timers.
-        for (const pending of activePrimaryAttempts.get(state) ?? []) pending.abort(new RunModelFallback());
+      const timeAvailable = state.deadlineAt === undefined || Date.now() < state.deadlineAt;
+      if (fallback && model === primary && timeAvailable) {
+        if (!state.fallback) {
+          state.fallback = true;
+          emit({ event: 'fallback', ...fields, reason: error instanceof ModelAttemptTimeout ? error.reason : 'provider_error' });
+          // Wake concurrent transcript/image calls immediately, without waiting for their own timers.
+          for (const pending of activePrimaryAttempts.get(state) ?? []) pending.abort(new RunModelFallback());
+        }
+        return fallback;
       }
+      if (error instanceof ModelAttemptTimeout && error.reason !== 'phase_budget'
+        && request.timeoutRetries < 1 && timeAvailable) {
+        request.timeoutRetries += 1;
+        return model;
+      }
+      // Exhaustion is terminal to SDK retries and finalizer timeout repair alike.
+      if (fallback) throw new ModelFallbackExhaustedError(request.failures);
+      if (request.timeoutRetries > 0 || (error instanceof ModelAttemptTimeout && error.reason !== 'phase_budget'))
+        throw new ModelRequestExhaustedError(request.failures);
+      throw error;
     };
     const progress = (part: LanguageModelV4StreamPart) => {
       if (part.type === 'response-metadata' && part.id && /^[\w-]{1,128}$/.test(part.id)) providerRequestId = part.id;
@@ -282,26 +337,25 @@ export function withModelFailover(options: {
       if (!((part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-delta') && part.delta.length)
         && part.type !== 'tool-call' && part.type !== 'file') return;
       firstContentAt ??= Date.now(); lastContentAt = Date.now();
-      clearTimeout(idle);
-      idle = setTimeout(() => fail('stream_stall'), idleTimeoutMs);
+      clearTimeout(firstContent);
     };
-    return { signal, finish, switchModel, progress,
+    return { signal, finish, nextModel, progress,
       cancel: () => { activePrimaryAttempts.get(state)?.delete(controller);
-        controller.abort(new Error('Model attempt finished.')); clearTimeout(total); clearTimeout(idle); } };
+        controller.abort(new Error('Model attempt finished.')); clearTimeout(total); clearTimeout(firstContent); } };
   };
   const model: LanguageModelV4 = {
     specificationVersion: 'v4', provider: primary.provider,
-    get modelId() { return state.fallback ? fallback.modelId : primary.modelId; },
+    get modelId() { return fallback && state.fallback ? fallback.modelId : primary.modelId; },
     supportedUrls: primary.supportedUrls,
     async doGenerate(params) {
       const callId = crypto.randomUUID();
-      const failures: unknown[] = [];
+      const request: ModelRequestState = { timeoutRetries: 0, failures: [] };
       const observer = requestObservers.get(model);
-      for (const candidate of state.fallback ? [fallback] : [primary, fallback]) {
+      let candidate = fallback && state.fallback ? fallback : primary;
+      while (true) {
         params.abortSignal?.throwIfAborted();
         const requestId = crypto.randomUUID();
-        observer?.onStart(requestId);
-        const current = attempt(candidate, params, callId, requestId);
+        const current = attempt(candidate, params, callId, requestId, observer?.onStart);
         try {
           // Streaming lets a silent provider fail at its first-content limit, while a
           // call that keeps producing content is not cut off at that limit.
@@ -310,21 +364,16 @@ export function withModelFailover(options: {
           current.finish();
           return result;
         } catch (error) {
-          failures.push(error);
-          try { current.switchModel(error); }
-          catch (terminal) {
-            if (terminal instanceof ModelFallbackExhaustedError) throw new ModelFallbackExhaustedError(failures);
-            throw terminal;
-          }
+          candidate = current.nextModel(error, request);
         } finally { current.cancel(); }
       }
-      throw new ModelFallbackExhaustedError(failures);
     },
     async doStream(params) {
       const suppliedId = params.providerOptions?.agentDiagnostics?.failoverCallId;
       const callId = typeof suppliedId === 'string' && /^[\w-]{1,128}$/.test(suppliedId) ? suppliedId : crypto.randomUUID();
       // Stream errors, including failures before headers, share the draft-owner retry path.
-      const candidate = state.fallback ? fallback : primary;
+      const candidate = fallback && state.fallback ? fallback : primary;
+      const request = streamRequests.get(callId) ?? { timeoutRetries: 0, failures: [] };
       const current = attempt(candidate, params, callId);
       let reader: ReadableStreamDefaultReader<LanguageModelV4StreamPart> | undefined;
       let canceled = false;
@@ -346,7 +395,7 @@ export function withModelFailover(options: {
             }
           } catch (error) {
             if (canceled) return;
-            try { current.switchModel(error); controller.error(new ModelStreamRestartError(error)); }
+            try { current.nextModel(error, request); controller.error(new ModelStreamRestartError(error)); }
             catch (terminal) { controller.error(terminal); }
           } finally { release(); }
         },

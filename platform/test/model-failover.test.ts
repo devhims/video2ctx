@@ -2,7 +2,8 @@ import { APICallError, RetryError, generateText, streamText, tool, isStepCount }
 import { MockLanguageModelV4 } from 'ai/test';
 import type { LanguageModelV4GenerateResult, LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { ModelFallbackExhaustedError, withModelFailover, withModelStreamFallback, type ModelAttemptDiagnostic } from '../src/agents/runtime/model-failover';
+import { ModelFallbackExhaustedError, ModelRequestExhaustedError, withModelFailover, withModelTimeouts, withModelStreamFallback,
+  hasModelTimeouts, observeModelRequests, setModelAttemptGuard, setModelDeadline, type ModelAttemptDiagnostic } from '../src/agents/runtime/model-failover';
 import { streamed } from './fixtures/model-streams';
 
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
@@ -105,6 +106,185 @@ async function consume(model: ReturnType<typeof build>['model']) {
   });
 }
 
+it.each(['direct', 'new fallback', 'selected fallback'] as const)(
+  'retries one timed-out %s request with the same evidence through generate and stream', async path => {
+    for (const mode of ['generate', 'stream'] as const) {
+      let calls = 0;
+      const source = new MockLanguageModelV4({ modelId: 'selected-model', doStream: async () => {
+        if (calls++ === 0) return hanging();
+        return answerStream('recovered');
+      } });
+      const diagnostics: ModelAttemptDiagnostic[] = [];
+      const state = { fallback: path === 'selected fallback', deadlineAt: Date.now() + 60_000,
+        onDiagnostic: (event: ModelAttemptDiagnostic) => diagnostics.push(event) };
+      const primary = new MockLanguageModelV4({ doStream: hanging });
+      const model = path === 'direct' ? withModelTimeouts({ model: source, state, role: 'finalizer' })
+        : withModelFailover({ primary, fallback: source, state, role: 'finalizer' });
+      const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence', maxRetries: 0 }).then(r => r.text)
+        : consume(model)).catch(error => error);
+      await vi.advanceTimersByTimeAsync(path === 'new fallback' ? 20_001 : 10_001);
+      expect(await task).toBe('recovered');
+      expect(source.doStreamCalls).toHaveLength(2);
+      expect(source.doStreamCalls[1]!.prompt).toEqual(source.doStreamCalls[0]!.prompt);
+      expect(source.doStreamCalls[0]!.abortSignal!.aborted).toBe(true);
+      const attempts = diagnostics.filter(event => event.event === 'attempt_finished');
+      expect(new Set(attempts.map(event => event.callId)).size).toBe(1);
+      expect(new Set(attempts.map(event => event.attemptId)).size).toBe(attempts.length);
+      expect(attempts.at(-1)?.outcome).toBe('succeeded');
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
+it.each(['generate', 'stream'] as const)('bounds repeated fallback timeouts through %s without SDK amplification', async mode => {
+  const source = new MockLanguageModelV4({ doStream: hanging });
+  const { model, fallback, diagnostics } = build(source, new MockLanguageModelV4({ doStream: hanging }));
+  const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence', maxRetries: 2 }) : consume(model)).catch(error => error);
+  await vi.advanceTimersByTimeAsync(30_001);
+  expect(await task).toBeInstanceOf(ModelFallbackExhaustedError);
+  expect(source.doStreamCalls).toHaveLength(1);
+  expect(fallback.doStreamCalls).toHaveLength(2);
+  expect(diagnostics.filter(event => event.event === 'attempt_finished')).toHaveLength(3);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('does not let an SDK provider-error retry renew an exhausted timeout retry', async () => {
+  let calls = 0;
+  const source = new MockLanguageModelV4({ doStream: async () => {
+    if (calls++ === 0) return hanging();
+    throw unavailable();
+  } });
+  const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+  const task = generateText({ model, prompt: 'saved evidence', maxRetries: 2 }).catch(error => error);
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(await task).toBeInstanceOf(ModelRequestExhaustedError);
+  expect(source.doStreamCalls).toHaveLength(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['generate', 'stream'] as const)('retries an overall timeout through %s without mixing partial text', async mode => {
+  let calls = 0;
+  const source = new MockLanguageModelV4({ doStream: async () => calls++ === 0 ? chunks([
+    { type: 'text-start', id: 'draft' }, { type: 'text-delta', id: 'draft', delta: 'abandoned' },
+  ], false) : answerStream('complete') });
+  const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+  const task = mode === 'generate' ? generateText({ model, prompt: 'saved evidence' }).then(r => r.text) : consume(model);
+  await vi.advanceTimersByTimeAsync(30_001);
+  expect(await task).toBe('complete');
+  expect(source.doStreamCalls).toHaveLength(2);
+  expect(source.doStreamCalls[1]!.prompt).toEqual(source.doStreamCalls[0]!.prompt);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['generate', 'stream'] as const)('keeps a %s timeout retry within the original phase deadline', async mode => {
+  const source = new MockLanguageModelV4({ doStream: hanging });
+  const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+  setModelDeadline(model, Date.now() + 15_000);
+  const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence' }) : consume(model)).catch(error => error);
+  await vi.advanceTimersByTimeAsync(15_001);
+  expect(await task).toBeInstanceOf(ModelRequestExhaustedError);
+  expect(source.doStreamCalls).toHaveLength(2);
+  expect(source.doStreamCalls.every(call => call.abortSignal?.aborted)).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['generate', 'stream'] as const)('cancels a %s timeout retry without starting another request', async mode => {
+  const source = new MockLanguageModelV4({ doStream: hanging });
+  const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+  const parent = new AbortController();
+  const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence', abortSignal: parent.signal })
+    : withModelStreamFallback(async failoverCallId => {
+      let error: unknown;
+      const result = streamText({ model, prompt: 'saved evidence', abortSignal: parent.signal,
+        providerOptions: { agentDiagnostics: { failoverCallId } }, onError: event => { error = event.error; } });
+      await result.consumeStream();
+      if (error) throw error;
+      parent.signal.throwIfAborted();
+      return result.text;
+    })).catch(error => error);
+  await vi.advanceTimersByTimeAsync(10_001);
+  parent.abort(new Error('user canceled retry'));
+  expect((await task).message).toBe('user canceled retry');
+  expect(source.doStreamCalls).toHaveLength(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['generate', 'stream'] as const)('checks the cost budget before a %s timeout retry', async mode => {
+  const source = new MockLanguageModelV4({ doStream: hanging });
+  const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+  let admitted = false;
+  setModelAttemptGuard(model, () => { if (admitted) throw new Error('cost limit'); admitted = true; });
+  const onStart = vi.fn();
+  observeModelRequests(model, { onStart, onUsage: vi.fn() });
+  const task = (mode === 'generate' ? generateText({ model, prompt: 'saved evidence' }) : consume(model)).catch(error => error);
+  await vi.advanceTimersByTimeAsync(10_001);
+  expect((await task).message).toBe('cost limit');
+  expect(source.doStreamCalls).toHaveLength(1);
+  if (mode === 'generate') expect(onStart).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['direct', 'fallback'] as const)('executes evidence tools once when the next %s request times out and retries', async path => {
+  let calls = 0;
+  const toolReply = { ...reply(), content: [{ type: 'tool-call' as const, toolCallId: 'read-1', toolName: 'read', input: '{}' }],
+    finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' } };
+  const source = new MockLanguageModelV4({ doStream: streamed(async () => {
+    const call = calls++;
+    if (path === 'direct' && call === 0) return toolReply;
+    if (call === (path === 'direct' ? 1 : 0)) return hanging();
+    return reply('answer from saved evidence');
+  }) });
+  const primary = new MockLanguageModelV4({ doStream: streamed(async () => {
+    if (primary.doStreamCalls.length === 1) return toolReply;
+    throw unavailable();
+  }) });
+  const state = { fallback: false };
+  const model = path === 'direct' ? withModelTimeouts({ model: source, state, role: 'agent_core' })
+    : withModelFailover({ primary, fallback: source, state, role: 'agent_core' });
+  const execute = vi.fn(async () => ({ transcript: 'saved evidence' }));
+  const onStart = vi.fn();
+  const onUsage = vi.fn();
+  observeModelRequests(model, { onStart, onUsage });
+  const task = generateText({ model, prompt: 'research', tools: { read: tool({ inputSchema: z.object({}), execute }) }, stopWhen: isStepCount(3) });
+  await vi.advanceTimersByTimeAsync(10_001);
+  expect((await task).text).toBe('answer from saved evidence');
+  expect(execute).toHaveBeenCalledOnce();
+  const requests = source.doStreamCalls.slice(-2);
+  expect(requests[1]!.prompt).toEqual(requests[0]!.prompt);
+  expect(JSON.stringify(requests[1]!.prompt)).toContain('saved evidence');
+  expect(new Set(onStart.mock.calls.map(([id]) => id)).size).toBe(path === 'direct' ? 3 : 4);
+  expect(onUsage).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ['primary', 'stream'], ['primary', 'generate'], ['fallback', 'stream'], ['fallback', 'generate'],
+] as const)('preserves a paused %s answer through %s until the stream resumes', async (selected, mode) => {
+  const paused = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => ({ stream: new ReadableStream<LanguageModelV4StreamPart>({ start(c) {
+    c.enqueue({ type: 'text-start', id: 'answer' });
+    c.enqueue({ type: 'text-delta', id: 'answer', delta: 'First part. ' });
+    const timer = setTimeout(() => {
+      c.enqueue({ type: 'text-delta', id: 'answer', delta: 'Remaining answer.' });
+      c.enqueue({ type: 'text-end', id: 'answer' });
+      c.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage });
+      c.close();
+    }, 12_000);
+    abortSignal?.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  } }) }) });
+  const { model, state, diagnostics, fallback } = selected === 'primary'
+    ? build(paused) : build(new MockLanguageModelV4({ doStream: hanging }), paused);
+  state.fallback = selected === 'fallback';
+  const task = (mode === 'stream' ? consume(model) : generateText({ model, prompt: 'research' }).then(result => result.text))
+    .then(text => ({ text }), error => ({ error }));
+  await vi.advanceTimersByTimeAsync(12_001);
+  expect(await task).toEqual({ text: 'First part. Remaining answer.' });
+  expect(paused.doStreamCalls).toHaveLength(1);
+  if (selected === 'primary') expect(fallback.doStreamCalls).toHaveLength(0);
+  expect(diagnostics.filter(event => event.event === 'attempt_finished')).toEqual([
+    expect.objectContaining({ outcome: 'succeeded', elapsedMs: 12_000, firstContentMs: 0 }),
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it.each(['headers', 'silent'] as const)('detects a first-content stall with %s and completes on fallback', async mode => {
   const { model, fallback, diagnostics } = build(new MockLanguageModelV4({ doStream: mode === 'silent' ? hanging : async () => chunks([
     { type: 'stream-start', warnings: [] }, { type: 'response-metadata', id: 'request-id', modelId: 'glm' },
@@ -118,14 +298,14 @@ it.each(['headers', 'silent'] as const)('detects a first-content stall with %s a
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('discards an interrupted partial answer and starts a fresh DeepSeek stream', async () => {
+it('discards a partial answer at the overall limit and starts a fresh DeepSeek stream', async () => {
   const { model, diagnostics } = build(new MockLanguageModelV4({ doStream: async () => chunks([
     { type: 'text-start', id: 'x' }, { type: 'text-delta', id: 'x', delta: 'abandoned' },
   ], false) }));
   const task = consume(model);
-  await vi.advanceTimersByTimeAsync(5_001);
+  await vi.advanceTimersByTimeAsync(30_001);
   expect(await task).toBe('ok');
-  expect(diagnostics.find(x => x.outcome === 'failed')).toMatchObject({ reason: 'stream_stall', firstContentMs: 0 });
+  expect(diagnostics.find(x => x.outcome === 'failed')).toMatchObject({ reason: 'attempt_timeout', firstContentMs: 0, elapsedMs: 30_000 });
   expect(new Set(diagnostics.map(x => x.callId)).size).toBe(1);
   expect(vi.getTimerCount()).toBe(0);
 });
@@ -164,15 +344,15 @@ it('lets a generate call that keeps streaming finish after its first-content lim
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('fails over a generate call that stalls after it starts writing, without leaking its partial text', async () => {
+it('fails over a generate call at the overall limit, without leaking its partial text', async () => {
   const { model, fallback, diagnostics } = build(new MockLanguageModelV4({ modelId: 'glm', doStream: async () => chunks([
     { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 'x' }, { type: 'text-delta', id: 'x', delta: 'abandoned' },
   ], false) }));
   const task = generateText({ model, prompt: 'research' });
-  await vi.advanceTimersByTimeAsync(5_001);
+  await vi.advanceTimersByTimeAsync(30_001);
   expect((await task).text).toBe('ok');
   expect(fallback.doStreamCalls).toHaveLength(1);
-  expect(diagnostics.find(x => x.outcome === 'failed')).toMatchObject({ reason: 'stream_stall', firstContentMs: 0, usageAvailable: false });
+  expect(diagnostics.find(x => x.outcome === 'failed')).toMatchObject({ reason: 'attempt_timeout', firstContentMs: 0, elapsedMs: 30_000, usageAvailable: false });
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -217,12 +397,12 @@ it('assembles streamed tool calls and drops empty text blocks', async () => {
   expect(result.finishReason).toBe('tool-calls');
 });
 
-it('reports exhausted fallbacks for two silent streams', async () => {
+it('reports exhausted fallbacks after the silent backup retry', async () => {
   const { model, fallback } = build(new MockLanguageModelV4({ doStream: hanging }), new MockLanguageModelV4({ doStream: hanging }));
   const task = consume(model).catch(e => e);
-  await vi.advanceTimersByTimeAsync(20_001);
+  await vi.advanceTimersByTimeAsync(30_001);
   expect(await task).toBeInstanceOf(ModelFallbackExhaustedError);
-  expect(fallback.doStreamCalls).toHaveLength(1);
+  expect(fallback.doStreamCalls).toHaveLength(2);
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -272,6 +452,62 @@ it('reserves fallback time when tools have consumed most of the research phase',
   await vi.advanceTimersByTimeAsync(2_001);
   expect((await task).text).toBe('ok');
   expect(fallback.doStreamCalls).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([
+  ['classifier', 5_000, 5_000], ['agent_core', 10_000, 30_000], ['transcript_analyst', 10_000, 30_000],
+  ['visual_analyst', 8_000, 8_000], ['memory_updater', 8_000, 8_000], ['finalizer', 10_000, 30_000],
+] as const)('applies the %s role limits to a model without a fallback', async (role, firstContentMs, totalMs) => {
+  const source = new MockLanguageModelV4({ modelId: 'future-model', doStream: hanging });
+  const diagnostics: ModelAttemptDiagnostic[] = [];
+  const model = withModelTimeouts({ model: source, role,
+    state: { fallback: true, onDiagnostic: event => diagnostics.push(event) } });
+  expect(hasModelTimeouts(model)).toBe(true);
+  expect(model.modelId).toBe('future-model');
+  const task = generateText({ model, prompt: 'test', maxRetries: 0 }).catch(error => error);
+  await vi.advanceTimersByTimeAsync(firstContentMs * 2 + 1);
+  expect(await task).toBeInstanceOf(ModelRequestExhaustedError);
+  expect(source.doStreamCalls).toHaveLength(2);
+  expect(diagnostics.find(event => event.event === 'attempt_finished')).toMatchObject({
+    modelId: 'future-model', elapsedMs: firstContentMs, firstContentTimeoutMs: firstContentMs, totalTimeoutMs: totalMs,
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('clamps a direct model to its phase deadline without reserving time for a nonexistent fallback', async () => {
+  const diagnostics: ModelAttemptDiagnostic[] = [];
+  const model = withModelTimeouts({ model: new MockLanguageModelV4({ doStream: hanging }), role: 'finalizer',
+    state: { fallback: false, onDiagnostic: event => diagnostics.push(event) } });
+  setModelDeadline(model, Date.now() + 9_000);
+  let finished = false;
+  const task = generateText({ model, prompt: 'test', maxRetries: 0 }).catch(error => error).finally(() => { finished = true; });
+  await vi.advanceTimersByTimeAsync(8_999);
+  expect(finished).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await task).toMatchObject({ name: 'TimeoutError', reason: 'phase_budget' });
+  expect(diagnostics.find(event => event.event === 'attempt_finished')).toMatchObject({
+    elapsedMs: 9_000, firstContentTimeoutMs: 9_000, totalTimeoutMs: 9_000, outcome: 'canceled',
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('keeps a direct model running when another role switches the shared run to its fallback', async () => {
+  const { model: classifier, state } = build(new MockLanguageModelV4({ doStream: hanging }), undefined, 'classifier');
+  const source = new MockLanguageModelV4({ modelId: 'direct-deepseek', doStream: streamed(async () => {
+    await new Promise(resolve => setTimeout(resolve, 6_000));
+    return reply('direct answer');
+  }) });
+  const direct = withModelTimeouts({ model: source, state, role: 'finalizer' });
+  const classification = generateText({ model: classifier, prompt: 'classify' });
+  const answer = generateText({ model: direct, prompt: 'answer' });
+  await vi.advanceTimersByTimeAsync(5_001);
+  expect((await classification).text).toBe('ok');
+  expect(state.fallback).toBe(true);
+  expect(source.doStreamCalls[0]!.abortSignal!.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect((await answer).text).toBe('direct answer');
+  expect(source.doStreamCalls).toHaveLength(1);
   expect(vi.getTimerCount()).toBe(0);
 });
 

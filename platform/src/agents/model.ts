@@ -1,9 +1,8 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import { withModelFailover, type ModelFailoverState } from './runtime/model-failover';
+import { withModelFailover, withModelTimeouts, type ModelFailoverState } from './runtime/model-failover';
 import { createWorkersAI } from 'workers-ai-provider';
 import { createFireworks } from '@ai-sdk/fireworks';
 import { wrapLanguageModel, type LanguageModelUsage } from 'ai';
-import { observeAgentOperation } from './runtime/diagnostics';
 import { estimateModelCostMicros } from './runtime/model-budget';
 import { fireworksFinalizerProfile, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
 export { FIREWORKS_FINALIZER_MODEL_ID, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
@@ -115,20 +114,14 @@ function configuredAgentModel(
         promptCacheKey: sessionAffinity,
       } },
     } : params,
-    wrapGenerate: ({ doGenerate, params }) => observeAgentOperation({
-      stage: 'model_attempt', attemptId: crypto.randomUUID(),
-      videoId: params.providerOptions?.agentDiagnostics?.videoId as string | undefined,
-      modelCallId: params.providerOptions?.agentDiagnostics?.modelCallId as string | undefined,
-      analysisAttempt: params.providerOptions?.agentDiagnostics?.analysisAttempt as number | undefined,
-      runId: metadata?.agent_run_id as string | undefined,
-      role: metadata?.model_role as string | undefined, modelId: model.modelId,
-      serviceTier: useFireworks ? 'priority' : undefined,
-    }, params.abortSignal, doGenerate),
   } });
+  // Backups run inside the same timeout policy as their primary, without a second wrapper.
+  if (backup) return configured;
+  const execution = { state: failoverState ?? { fallback: false },
+    role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
   if (useFireworks && model.modelId === FIREWORKS_GLM_MODEL_ID) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
-    return withModelFailover({ primary: configured, fallback, state: failoverState ?? { fallback: false },
-      role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined });
+    return withModelFailover({ primary: configured, fallback, ...execution });
   }
-  return configured;
+  return withModelTimeouts({ model: configured, ...execution, serviceTier: useFireworks ? 'priority' : undefined });
 }

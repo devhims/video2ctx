@@ -1,6 +1,6 @@
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
-import { hasModelFailover, modelFallbackExhaustion, setModelFailoverDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
+import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
@@ -19,7 +19,7 @@ import { researchVideoTarget } from './research-plan';
 import { markUnitMismatches, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
 import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
-import { FinalizationStallError, withFinalizationAttempt } from './finalization-attempt';
+import { withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
@@ -153,6 +153,7 @@ export async function executeResearchRun(options: {
 }): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
   const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
+  modelFailover.beforeAttempt = () => assertModelCostAvailable(options.modelBudget);
   const runModel: typeof createAgentModel = (env, affinity, effort, metadata) =>
     createAgentModel(env, affinity, effort, metadata, modelFailover);
   options.signal.throwIfAborted();
@@ -354,6 +355,7 @@ export async function runResearchAgent(options: {
 }): Promise<void> {
   const metadata = { agent_run_id: options.context.runId, capability: options.decision.route };
   const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
+  modelFailover.beforeAttempt = () => assertModelCostAvailable(options.modelBudget);
   modelFailover.deadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(options.decision.useStoryboard);
   const runModel: typeof createAgentModel = (env, affinity, effort, metadata) =>
     createAgentModel(env, affinity, effort, metadata, modelFailover);
@@ -428,6 +430,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;
 }): Promise<{ finishReason: string; stepCount: number }> {
+  setModelAttemptGuard(options.model, () => assertModelCostAvailable(options.modelBudget));
   const capability = capabilityRegistry[options.decision.route];
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
@@ -728,7 +731,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (!finalized) throw new Error('Research phase timeout: no validated answer was produced.');
     return result;
   } catch (error) {
-    if (modelFallbackExhaustion(error) || errorMessage(error) === 'Persistence phase timeout.') throw error;
+    if (modelRequestExhaustion(error) || errorMessage(error) === 'Persistence phase timeout.') throw error;
     // The phase deadline wins its race before an aborted provider necessarily
     // rejects. Snapshot interrupted tools now so the finalizer sees every gap.
     for (const pending of pendingTools.values()) {
@@ -784,7 +787,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             : isAgentCoreTimeout(finalizationError) ? 'FINALIZATION_TIMEOUT' : 'FINALIZATION_FAILED',
           remainingMs: Math.max(0, finalizationHardDeadline(finalizationDeadlineAt ?? Date.now()) - Date.now()) }),
       );
-      if (modelFallbackExhaustion(finalizationError) || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
+      if (modelRequestExhaustion(finalizationError) || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
       const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
@@ -849,6 +852,7 @@ async function runUnifiedFinalizer(options: {
   modelCallPrefix?: string;
 }): Promise<AgentTurnResult> {
   assertModelCostAvailable(options.modelBudget);
+  setModelAttemptGuard(options.model, () => assertModelCostAvailable(options.modelBudget));
   // The model still sees every provider failure, but a completed answer should
   // not inherit warnings for candidates it successfully replaced.
   const failureWarnings = options.researchInterrupted
@@ -920,8 +924,8 @@ async function runUnifiedFinalizer(options: {
       const attemptDeadlineAt = attempt === 0 ? options.deadlineAt
         : Math.min(finalizationHardDeadline(options.deadlineAt),
           Math.max(options.deadlineAt, Date.now() + AGENT_FINALIZATION_RETRY_TIMEOUT_MS));
-      setModelFailoverDeadline(options.model, attemptDeadlineAt);
-      const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, Boolean(options.onDraft) && !hasModelFailover(options.model), async (signal, progress) => withModelStreamFallback(async failoverCallId => {
+      setModelDeadline(options.model, attemptDeadlineAt);
+      const result = await withFinalizationAttempt(attemptDeadlineAt, options.context.signal, async signal => withModelStreamFallback(async failoverCallId => {
         failoverCallIdForTrace = failoverCallId;
         requestedModelId = typeof options.model === 'string' ? options.model : options.model.modelId;
         responseModelId = undefined;
@@ -999,7 +1003,6 @@ async function runUnifiedFinalizer(options: {
         options.onDraft({ answer: '', state, activity: 'thinking' });
         const streamed = streamText({ ...generationOptions, onError: ({ error }) => { streamError = error; }, onChunk: ({ chunk }) => {
           if ((chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') || !chunk.text.length) return;
-          progress();
           firstContentAt ??= Date.now();
           lastContentAt = Date.now();
           if (chunk.type === 'reasoning-delta') reasoningCharacters += chunk.text.length;
@@ -1153,7 +1156,6 @@ async function runUnifiedFinalizer(options: {
           : finishReason === 'length' ? 'ANSWER_TOKEN_LIMIT'
           : error instanceof ZodError || generationError ? 'INVALID_ANSWER_STRUCTURE'
           : options.context.signal.aborted ? 'FINALIZATION_ABORTED'
-          : error instanceof FinalizationStallError ? 'FINALIZATION_STALLED'
           : isAgentCoreTimeout(error) ? 'FINALIZATION_ATTEMPT_TIMEOUT' : 'MODEL_GENERATION_FAILED';
       options.onFailure?.(failureCode);
       await traceFinalizationFailure(options.context.traceToolCall, {
@@ -1178,7 +1180,10 @@ async function runUnifiedFinalizer(options: {
         schemaIssues: schemaIssues?.slice(0, 20).map(({ path, code }) => ({ path, code })),
         code: failureCode }));
       const referenceError = referenceValidationError(error);
-      if (attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
+      // Managed models already used their bounded inference retry. A simultaneous
+      // phase deadline must not turn that timeout into another schema-repair call.
+      if (modelRequestExhaustion(error) || (hasModelTimeouts(options.model) && isAgentCoreTimeout(error))
+        || attempt > 0 || options.context.signal.aborted || (!referenceError && !(error instanceof ZodError) && !generationError && finishReason !== 'length' && !isAgentCoreTimeout(error))) throw error;
       feedback = { errors: finishReason === 'length'
           ? 'The previous answer exceeded the enforced output-token ceiling. Shorten wording and remove repetition while preserving requested items and evidence. Return a complete answer within the repair ceiling.'
           : isAgentCoreTimeout(error) ? 'The previous generation ran out of time. Use the partial candidate where valid, shorten the answer, and return complete JSON now.'

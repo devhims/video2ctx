@@ -1,8 +1,9 @@
-import { generateText, APICallError, Output, tool, isStepCount } from 'ai';
+import { generateText, streamText, APICallError, Output, tool, isStepCount } from 'ai';
+import { withModelStreamFallback, type ModelAttemptDiagnostic } from '../src/agents/runtime/model-failover';
 import { z } from 'zod';
 import { finalizationOutputSchema } from '../src/agents/structured-answer';
 import { fireworksFinalizerProfile, fireworksModelPricing } from '../src/agents/fireworks-finalizer';
-import { chatCompletion } from './fixtures/model-streams';
+import { chatCompletion, streamOf } from './fixtures/model-streams';
 const workersAI = vi.hoisted(() => {
   const selectedModel = { specificationVersion: 'v4', provider: 'test', modelId: 'glm', supportedUrls: {}, doGenerate: vi.fn(), doStream: vi.fn() };
   const select = vi.fn(() => selectedModel);
@@ -335,18 +336,22 @@ describe('YouTube agent model', () => {
 
  test('logs each SDK retry with run and video correlation', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    workersAI.selectedModel.doGenerate
+    workersAI.selectedModel.doStream
       .mockRejectedValueOnce(new APICallError({ message: 'private body', url: 'https://private', requestBodyValues: {}, statusCode: 503, isRetryable: true }))
-      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: 'stop' },
-        usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } }, warnings: [] });
+      .mockResolvedValueOnce(streamOf({ content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: 'stop' },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [] }));
     try {
       const model = createAgentModel({ AI: {}, AGENT_GLM_PROVIDER: 'workers-ai', AI_GATEWAY_ID: '' } as unknown as Env, 'session', 'low', { agent_run_id: 'run', model_role: 'transcript_analyst' });
       await generateText({ model, prompt: 'private prompt', maxRetries: 1,
         providerOptions: { agentDiagnostics: { videoId: 'video', modelCallId: 'call', analysisAttempt: 1 } } });
       const records = log.mock.calls.map(([entry]) => JSON.parse(entry));
-      expect(records.map(record => record.outcome)).toEqual(['started', 'failed', 'started', 'succeeded']);
+      expect(records.map(record => record.phase)).toEqual(['attempt_started', 'attempt_finished', 'attempt_started', 'attempt_finished']);
+      expect(records.filter(record => record.phase === 'attempt_finished').map(record => record.outcome)).toEqual(['failed', 'succeeded']);
       expect(records[1]).toMatchObject({ statusCode: 503, retryable: true, runId: 'run', videoId: 'video', modelCallId: 'call' });
       expect(records[0].attemptId).not.toBe(records[2].attemptId);
+      expect(records[0]).toMatchObject({ firstContentTimeoutMs: 10_000, totalTimeoutMs: 30_000 });
+      expect(records[0]).not.toHaveProperty('serviceTier');
       expect(JSON.stringify(records)).not.toContain('private');
     } finally { log.mockRestore(); }
  });
@@ -373,4 +378,62 @@ it.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'me
       expect(requests[1]?.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
     } else expect(requests[1]?.reasoning_effort).toBe('none');
   } finally { fetchMock.mockRestore(); }
+});
+
+const timeoutCases = ['glm-5p3-flash', 'deepseek-v4p1-flash', 'gpt-oss-120b', 'workers-ai'].flatMap(name =>
+  (['generate', 'stream'] as const).flatMap(mode => (['first_content', 'overall'] as const).map(limit => [name, mode, limit] as const)));
+
+it.each(timeoutCases)('enforces the same %s %s %s timeout through model selection', async (name, mode, limit) => {
+  vi.useFakeTimers();
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const signals: AbortSignal[] = [];
+  const diagnostics: ModelAttemptDiagnostic[] = [];
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    signals.push(init!.signal!);
+    if (limit === 'first_content') return new Promise(() => {});
+    const body = JSON.parse(String(init?.body));
+    const chunk = { id: 'chatcmpl-timeout-test', created: 1, model: body.model,
+      choices: [{ index: 0, delta: { content: 'Partial answer' } }] };
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`));
+    } }), { headers: { 'content-type': 'text/event-stream' } });
+  });
+  if (name === 'workers-ai') workersAI.selectedModel.doStream.mockImplementation(async (params: { abortSignal: AbortSignal }) => {
+    signals.push(params.abortSignal);
+    if (limit === 'first_content') return new Promise(() => {});
+    return { stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: 'text-start', id: 'answer' });
+      controller.enqueue({ type: 'text-delta', id: 'answer', delta: 'Partial answer' });
+    } }) };
+  });
+  try {
+    const env = { AI_GATEWAY_ID: '', AGENT_FINALIZER_PROVIDER: name === 'workers-ai' ? 'workers-ai' : 'fireworks', AGENT_FINALIZER_MODEL: name,
+      FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    const model = createAgentModel(env, 'timeout-test', 'low', { model_role: 'finalizer' }, {
+      fallback: false, deadlineAt: Date.now() + 60_000, onDiagnostic: event => diagnostics.push(event),
+    });
+    const run = async () => {
+      if (mode === 'generate') return generateText({ model, prompt: 'Test', maxRetries: 0 });
+      return withModelStreamFallback(async failoverCallId => {
+        let error: unknown;
+        const result = streamText({ model, prompt: 'Test', maxRetries: 0,
+          providerOptions: { agentDiagnostics: { failoverCallId } }, onError: event => { error = event.error; } });
+        await result.consumeStream();
+        if (error) throw error;
+        return result.text;
+      });
+    };
+    const task = run().catch(error => error);
+    const elapsedMs = limit === 'first_content' ? 10_000 : 30_000;
+    await vi.advanceTimersByTimeAsync(elapsedMs + 1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(diagnostics.find(event => event.outcome === 'failed')).toMatchObject({
+      modelId: name === 'workers-ai' ? 'glm' : `accounts/fireworks/models/${name}`, role: 'finalizer', elapsedMs,
+      reason: limit === 'first_content' ? 'first_content_timeout' : 'attempt_timeout',
+      firstContentTimeoutMs: 10_000, totalTimeoutMs: 30_000,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await task).toBeInstanceOf(Error);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { workersAI.selectedModel.doStream.mockReset(); fetchMock.mockRestore(); log.mockRestore(); vi.useRealTimers(); }
 });

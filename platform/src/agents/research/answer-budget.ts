@@ -10,5 +10,3 @@ export function finalizationOutputTokenLimit(decision: CapabilityRouteDecision, 
   const base = 'answerDetail' in decision && decision.answerDetail === 'detailed' ? 4_000 : 3_000;
   return repair ? base + 1_000 : base;
 }
-
-export const FINALIZATION_STALL_TIMEOUT_MS = 15_000;

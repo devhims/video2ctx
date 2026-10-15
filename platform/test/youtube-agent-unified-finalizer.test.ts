@@ -1,4 +1,4 @@
-import { withModelFailover } from '../src/agents/runtime/model-failover';
+import { withModelFailover, withModelTimeouts } from '../src/agents/runtime/model-failover';
 import type { TraceToolCall } from '../src/agents/runtime/tool-call-trace';
 import { simulateReadableStream, tool } from 'ai';
 import { z } from 'zod';
@@ -221,7 +221,7 @@ it.each([true, false])('skips an expired first attempt without inventing a failu
   } finally { warnings.mockRestore(); vi.useRealTimers(); }
 });
 
-it('keeps unused main time available to a progressing retry after an early stall', async () => {
+it('lets a retry finish within the repair allowance after the overall deadline', async () => {
   vi.useFakeTimers();
   try {
     const { options, output } = setup('context_answer');
@@ -230,17 +230,17 @@ it('keeps unused main time available to a progressing retry after an early stall
     let attempts = 0;
     const finalizer = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => attempts++ === 0
       ? new Promise(() => {})
-      : scheduledAnswer(output, 25_000, abortSignal) });
+      : scheduledAnswer(output, 15_000, abortSignal) });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
-    await vi.advanceTimersByTimeAsync(40_001);
+    await vi.advanceTimersByTimeAsync(75_001);
     expect(await run).toBe('completed');
     expect(finalizer.doStreamCalls).toHaveLength(2);
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
 
-it.each(['headers_only', 'no_response'] as const)('retries an idle stream after 15 seconds: %s', async mode => {
+it.each(['headers_only', 'no_response'] as const)('retries a silent stream only at the overall deadline: %s', async mode => {
   vi.useFakeTimers();
   try {
     const { options, output } = setup('context_answer');
@@ -254,14 +254,17 @@ it.each(['headers_only', 'no_response'] as const)('retries an idle stream after 
       : scheduledAnswer(output, 1_000, abortSignal) });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
-    await vi.advanceTimersByTimeAsync(16_001);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(finalizer.doStreamCalls).toHaveLength(1);
+    expect(options.finalize).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_002);
     expect(finalizer.doStreamCalls).toHaveLength(2);
     expect(await run).toBe('completed');
     expect(options.finalize).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
 
-it('keeps partial JSON for a stalled-answer repair and logs only progress metadata', async () => {
+it('keeps partial JSON for repair after the overall deadline and logs only progress metadata', async () => {
   vi.useFakeTimers();
   const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
@@ -284,12 +287,12 @@ it('keeps partial JSON for a stalled-answer repair and logs only progress metada
     } });
     models.select.mockReturnValue(finalizer);
     const run = executeResearchRun(options).then(() => 'completed', error => error.message);
-    await vi.advanceTimersByTimeAsync(16_001);
+    await vi.advanceTimersByTimeAsync(61_001);
     expect(await run).toBe('completed');
     const logged = warnings.mock.calls.map(([message]) => String(message));
     expect(logged.some(message => message.includes(partial) || message.includes('private retained draft'))).toBe(false);
     expect(logged.map(message => JSON.parse(message))).toContainEqual(expect.objectContaining({
-      code: 'FINALIZATION_STALLED', validationStage: 'generation', idleMs: 15_000,
+      code: 'FINALIZATION_ATTEMPT_TIMEOUT', validationStage: 'generation', idleMs: 60_000,
       textCharacters: partial.length, candidateCharacters: partial.length,
     }));
     expect(logged.map(message => JSON.parse(message))).toContainEqual(expect.objectContaining({
@@ -1101,7 +1104,47 @@ describe('earlier-turn source content and history-only routes', () => {
   });
 });
 
-it('restarts a stalled GLM draft on DeepSeek without consuming a schema repair or mixing text', async () => {
+it.each(['direct', 'fallback'] as const)('keeps a paused %s draft visible and saves the answer when streaming resumes', async path => {
+  vi.useFakeTimers();
+  try {
+    const { options, classifier, output } = setup('context_answer');
+    const encoded = JSON.stringify(output);
+    const partialAnswer = output.blocks[0]!.text.slice(0, 12);
+    const split = encoded.indexOf(output.blocks[0]!.text) + partialAnswer.length;
+    const primary = new MockLanguageModelV4({ modelId: 'glm', doStream: async () => new Promise(() => {}) });
+    const fallback = new MockLanguageModelV4({ modelId: 'deepseek', doStream: async ({ abortSignal }) => ({
+      stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+        controller.enqueue({ type: 'text-start', id: 'answer' });
+        controller.enqueue({ type: 'text-delta', id: 'answer', delta: encoded.slice(0, split) });
+        const timer = setTimeout(() => {
+          controller.enqueue({ type: 'text-delta', id: 'answer', delta: encoded.slice(split) });
+          controller.enqueue({ type: 'text-end', id: 'answer' });
+          controller.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage });
+          controller.close();
+        }, 20_000);
+        abortSignal?.addEventListener('abort', () => clearTimeout(timer), { once: true });
+      } }),
+    }) });
+    const model = path === 'direct' ? fallback : withModelFailover({ primary, fallback, state: { fallback: true }, role: 'finalizer' });
+    models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
+    const drafts: { answer: string; state: string }[] = [];
+    options.onDraft = draft => drafts.push(draft);
+    const task = executeResearchRun(options).then(() => 'completed', error => error);
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(drafts.at(-1)).toEqual({ answer: partialAnswer, state: 'streaming', activity: 'writing' });
+    expect(options.finalize).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_001);
+    expect(await task).toBe('completed');
+    expect(primary.doStreamCalls).toHaveLength(0);
+    expect(fallback.doStreamCalls).toHaveLength(1);
+    expect(options.finalize).toHaveBeenCalledOnce();
+    expect(drafts.at(-1)?.answer).toBe(output.blocks[0]!.text);
+    expect(drafts.filter(draft => draft.answer === '')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
+it('restarts a GLM draft at the overall limit without consuming a schema repair or mixing text', async () => {
   vi.useFakeTimers();
   try {
     const { withModelFailover } = await import('../src/agents/runtime/model-failover');
@@ -1123,7 +1166,7 @@ it('restarts a stalled GLM draft on DeepSeek without consuming a schema repair o
     const drafts: { answer: string; state: string }[] = [];
     options.onDraft = draft => drafts.push(draft);
     const task = executeResearchRun(options);
-    await vi.advanceTimersByTimeAsync(5_100);
+    await vi.advanceTimersByTimeAsync(30_100);
     await task;
     expect(primary.doStreamCalls).toHaveLength(1);
     expect(fallback.doStreamCalls).toHaveLength(1);
@@ -1152,6 +1195,84 @@ it.each([false, true])('does not save an answer after both finalizer models fail
   expect(primary.doStreamCalls).toHaveLength(1);
   expect(fallback.doStreamCalls).toHaveLength(1);
   expect(options.finalize).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['direct', 'first content'], ['fallback', 'first content'], ['direct', 'overall'], ['fallback', 'overall'],
+] as const)('retries a timed-out %s finalizer at its %s limit using existing evidence', async (path, limit) => {
+  vi.useFakeTimers();
+  try {
+    for (const streaming of [false, true]) {
+      const { options, classifier, output } = setup('context_answer', true);
+      let calls = 0;
+      const source = new MockLanguageModelV4({ modelId: 'selected-model', doStream: async () => {
+        if (calls++ === 0) {
+          if (limit === 'first content') return new Promise(() => {});
+          return { stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+            controller.enqueue({ type: 'text-start', id: 'answer' });
+            controller.enqueue({ type: 'text-delta', id: 'answer', delta: '{"confidence":"medium","warnings":[],"blocks":[{"text":"Abandoned answer' });
+          } }) };
+        }
+        return { stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+          controller.enqueue({ type: 'text-start', id: 'answer' });
+          controller.enqueue({ type: 'text-delta', id: 'answer', delta: JSON.stringify(output) });
+          controller.enqueue({ type: 'text-end', id: 'answer' });
+          controller.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage });
+          controller.close();
+        } }) };
+      } });
+      const primary = new MockLanguageModelV4({ doStream: async () => new Promise(() => {}) });
+      const model = path === 'direct' ? withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' })
+        : withModelFailover({ primary, fallback: source, state: { fallback: false }, role: 'finalizer' });
+      models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
+      if (streaming) options.onDraft = vi.fn();
+      const task = executeResearchRun(options).then(() => 'completed', error => error);
+      await vi.advanceTimersByTimeAsync((limit === 'overall' ? 30_000 : 10_000) + (path === 'fallback' ? 10_000 : 0) + 1);
+      expect(await task).toBe('completed');
+      expect(source.doStreamCalls).toHaveLength(2);
+      expect(source.doStreamCalls[1]!.prompt).toEqual(source.doStreamCalls[0]!.prompt);
+      expect(JSON.stringify(source.doStreamCalls[1]!.prompt)).toContain(evidence.excerpts[0]!.text);
+      expect(options.executeEvidenceTool).not.toHaveBeenCalled();
+      expect(options.onCapabilityLoaded).not.toHaveBeenCalled();
+      expect(options.finalize).toHaveBeenCalledOnce();
+      expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: 'The woman holds the microphone. [cite:frame-observation]' }));
+      if (streaming && limit === 'overall') {
+        const drafts = vi.mocked(options.onDraft!).mock.calls.map(([draft]) => draft);
+        const abandoned = drafts.findIndex(draft => draft.answer.includes('Abandoned'));
+        expect(abandoned).toBeGreaterThanOrEqual(0);
+        expect(drafts.slice(abandoned + 1)).toContainEqual(expect.objectContaining({ answer: '', state: 'streaming' }));
+        expect(drafts.at(-1)?.answer).not.toContain('Abandoned');
+      }
+      expect(vi.mocked(options.modelBudget!.recordUsage)).toHaveBeenCalledTimes(2); // Classifier and successful answer only.
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(['first content', 'overall'] as const)('does not amplify exhausted %s finalizer retries through schema repair', async limit => {
+  vi.useFakeTimers();
+  try {
+    for (const streaming of [false, true]) {
+      const { options, classifier } = setup('context_answer');
+      const source = new MockLanguageModelV4({ doStream: async () => ({
+        stream: new ReadableStream<LanguageModelV4StreamPart>({ start(controller) {
+          if (limit === 'overall') {
+            controller.enqueue({ type: 'text-start', id: 'answer' });
+            controller.enqueue({ type: 'text-delta', id: 'answer', delta: '{"blocks":[{"text":"unfinished' });
+          }
+        } }),
+      }) });
+      const model = withModelTimeouts({ model: source, state: { fallback: false }, role: 'finalizer' });
+      models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : model);
+      if (streaming) options.onDraft = vi.fn();
+      const task = executeResearchRun(options).catch(error => error);
+      await vi.advanceTimersByTimeAsync(80_001);
+      expect(await task).toBeInstanceOf(Error);
+      expect(source.doStreamCalls).toHaveLength(2);
+      expect(options.finalize).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  } finally { vi.useRealTimers(); }
 });
 
 
