@@ -34,7 +34,10 @@ export function BuilderConfirmation({ billing, onClose }: { billing: DashboardBi
 
   return <dialog ref={ref} className={styles.dialog} data-builder-confirmation
     aria-labelledby='builder-confirmation-title' aria-describedby='builder-confirmation-description'
-    onClose={onClose} onKeyDown={event => {
+    onClose={event => {
+      // Strict Mode can queue a cleanup close event before reopening the dialog.
+      if (!event.currentTarget.open) onClose();
+    }} onKeyDown={event => {
       if (event.key !== 'Tab') return;
       const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button');
       const first = buttons[0], last = buttons[buttons.length - 1];
