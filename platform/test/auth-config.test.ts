@@ -63,7 +63,7 @@ vi.mock('@polar-sh/better-auth', () => ({
 }));
 
 vi.mock('../src/lib/polar-checkout', () => ({
-  checkout: vi.fn((options: Record<string, any>) => {
+  checkout: vi.fn((_env: Env, options: Record<string, any>) => {
     captured.checkout = options;
     return () => ({ id: 'polar-checkout' });
   }),
@@ -238,10 +238,10 @@ test('queues the sign-in link through the branded template', async () => {
   const send = vi.fn(async () => undefined);
   createAuth({ ...welcomeAuthEnv(), EMAIL_TASKS: { send } } as unknown as Env, { waitUntil: vi.fn() });
 
-  await captured.magicLink!.sendMagicLink({ email: 'ari@customer.test', url: 'https://x.test/verify?token=abc' });
+  await captured.magicLink!.sendMagicLink({ email: 'ari@customer.test', token: 'abc', url: 'https://x.test/verify?token=abc' }, { context: { internalAdapter: { findVerificationValue: async () => ({ id: 'verification-1' }) } } });
 
   const [message] = send.mock.calls[0] as unknown as [Record<string, any>];
-  expect(message).toMatchObject({ type: 'magic-link', to: 'ari@customer.test', subject: 'Sign in to video2ctx' });
+  expect(message).toMatchObject({ type: 'magic-link', verificationId: 'verification-1', to: 'ari@customer.test', subject: 'Sign in to video2ctx' });
   expect(message.idempotencyKey).toMatch(/^magic:[0-9a-f]{64}$/);
   expect(message.html).toContain('href="https://x.test/verify?token=abc"');
   expect(message.html).toContain('src="cid:video2ctx-logo"');

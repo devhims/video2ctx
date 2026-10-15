@@ -8,6 +8,7 @@ export default defineConfig({
     exclude: ['test/landing-samples.integration.test.ts', 'test/session-catalog.integration.test.ts', 'test/session-owners.integration.test.ts', 'test/video-catalog.integration.test.ts', 'test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts',
       'test/auth-worker.integration.test.ts',
       'test/account-record-deletion.integration.test.ts',
+      'test/admin-user-deletion.integration.test.ts',
       'test/admin-access.integration.test.ts',
       'test/billing.integration.test.ts',
       'test/credits.integration.test.ts',

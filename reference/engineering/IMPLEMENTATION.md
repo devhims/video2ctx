@@ -78,7 +78,7 @@ Long-running imports return `202` with a stable job ID. Reusing an idempotency k
 
 ## Account deletion
 
-The application removes private account data. Polar owns subscription renewal and customer anonymization. Deletion first checks all Polar subscription pages. Active, trialing and past-due subscriptions must be cancelled before deletion; a cancellation scheduled for period end permits deletion immediately, forfeiting the remaining paid period. Settings shows `SUBSCRIPTION_ACTIVE` as an error toast. The Polar token needs `subscriptions:read` and the existing customer write permissions. Missing credentials or failed Polar calls stop deletion before local data changes.
+The application removes private account data. Polar owns subscription renewal and customer anonymization. Deletion first blocks overlapping checkout and checks all Polar subscription pages. Active, trialing and past-due subscriptions must be cancelled before deletion; a cancellation scheduled for period end permits deletion immediately, forfeiting the remaining paid period. Settings shows `SUBSCRIPTION_ACTIVE` as an error toast. The Polar token needs `subscriptions:read` and the existing customer write permissions. Missing credentials or failed Polar calls stop deletion before private cleanup.
 
 For example, a user with two sessions and a renewing Builder plan receives the cancellation toast with both sessions intact. After cancelling in Polar, retrying deletion anonymizes the customer, fences the account against new sessions, and clears both session runtimes. Runtime cleanup initializes the current schema first, including for sessions created before memory tables existed or sessions that never started.
 
@@ -92,6 +92,7 @@ sequenceDiagram
     participant Private as Private storage
     participant D1
     User->>App: Delete account
+    App->>App: Block checkout; reject if one is in flight
     App->>Polar: Check subscriptions
     alt Subscription still renews
         Polar-->>App: Renewal active
@@ -106,6 +107,14 @@ sequenceDiagram
 ```
 
 Shared transcripts, storyboards and other video catalog assets remain available. Private cleanup failures return `503 ACCOUNT_DELETION_INCOMPLETE` while retaining the D1 user so deletion can be retried. Successful deletion clears the current browser's token and cached-session cookies. D1 foreign-key cascades revoke stored login sessions and remove related account records. Private search deletion remains asynchronous; failures retry through the task queue, while an already absent index counts as success. Emails queued for a deleted user cannot recreate delivery records.
+
+### Admin account deletion
+
+The admin Users panel searches exact user IDs or email fragments, with 25 results per page. Selecting Delete account shows the target identity and requires typing its email. The backend checks a live verified admin browser session and dashboard Origin, and compares the selected email with the current user record. Admins use their own account settings for self-deletion. Other account deletions share the self-service cleanup service; the admin stays signed in and the target's stored sessions are revoked.
+
+Checkout and deletion share durable claims in the user's account Durable Object. A checkout already in flight prevents deletion from starting. A deletion claim blocks new checkouts before checking subscriptions or closing Polar. If the cancellation check fails, that claim is released. Once Polar customer deletion may have started, the checkout fence persists through cleanup failures and completed deletion. Claims do not expire automatically, because a provider request may still be running. A Worker termination before releasing a claim fails closed; inspect the account's billing claims and Polar state before operator recovery. No network call runs inside `blockConcurrencyWhile`.
+
+Queued magic-link emails reference the exact Better Auth verification row. The delivery insert checks that row, its recipient and expiry atomically. Deleting or consuming the token suppresses the queued email without recreating delivery metadata. A fresh signup link works without an existing user row. Old queued messages without a verification reference are suppressed; request a new sign-in link after deployment if necessary.
 
 ## Postman quick start
 

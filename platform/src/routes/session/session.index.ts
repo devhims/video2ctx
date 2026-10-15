@@ -1,14 +1,12 @@
 import { commentPageReceiptSchema, verifyCommentPageReceipt } from '../../lib/comment-page-receipt';
 import { videoResourceKey } from '../../lib/video-resources';
 import { listProjectItems, type ProjectItemRecord } from '../../lib/project-items';
-import { framePreviewPrefix } from '../../agents/runtime/frame-previews';
 import { userAccountInstanceName } from '../../agents/runtime/identity';
 import { MAX_SOURCE_SNAPSHOT_BYTES, saveSourceSchema, sourceIdentity, sourceIdSchema, sourceRevision, sourceRevisionSchema, type SaveSourceInput } from '../../lib/source-history';
 import { referenceSource, restoreSource, sourceThumbnail, appendSourceComments } from '../../lib/source-history-storage';
 import { entitlementEvidence, projectItemInput, recoverProjectItem, restoreProjectReference } from '../../lib/project-item-restore';
 import type { PinResult, SourceCondition } from '../../durable-objects/user-account';
 import { z } from 'zod';
-import { deleteAgentAccountData } from '../../agents/runtime/account-deletion';
 import { Hono, type Context } from 'hono';
 import type { App, ImportPayload } from '../../types';
 import {
@@ -17,13 +15,13 @@ import {
   requireSessionPrincipal,
   requireUser,
 } from '../../middlewares/authentication';
-import { deleteAccountRecords } from '../../lib/account-deletion';
-import { ApiError, asId, body, now, safeErrorLog, sha256, text } from '../../lib/http';
+import { deleteAccount } from '../../lib/account-deletion';
+import { ApiError, asId, body, now, sha256, text } from '../../lib/http';
 import { enforceCount, enforceImportLimit, entitlements } from '../../lib/entitlements';
 import { assertFormat, createProjectExport } from '../../lib/exports';
 import { disconnectYoutube, youtubeConnectUrl } from '../../lib/oauth';
-import { closeBillingAccount, getBillingSummary, requireNoRenewingSubscription } from '../../lib/billing';
-import { deleteProjectAssets, deleteR2Prefix, userSearchInstanceId } from '../../lib/research-storage';
+import { getBillingSummary } from '../../lib/billing';
+import { deleteProjectAssets } from '../../lib/research-storage';
 import { getProvider } from '../../providers';
 import {
   DEFAULT_MONITOR_INTERVAL_MINUTES,
@@ -644,25 +642,7 @@ sessionRoutes.get('/billing', async (c) => {
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
   const user = requireUser(c);
-  // Resolve external billing failures before fencing or removing local data.
-  await requireNoRenewingSubscription(c.env, user.id);
-  await closeBillingAccount(c.env, user.id);
-  try {
-    await deleteAgentAccountData(c.env, user.id);
-    await disconnectYoutube(c.env, user.id);
-    await deleteR2Prefix(c.env.RESEARCH, `private/${user.id}/`);
-    await deleteR2Prefix(c.env.RESEARCH, await framePreviewPrefix(user.id));
-    const instanceId = userSearchInstanceId(user.id);
-    await c.env.TASKS.send({
-      type: 'delete-user-search',
-      idempotencyKey: `delete-search:${user.id}`,
-      payload: { instanceId },
-    }, { contentType: 'json' });
-    await deleteAccountRecords(c.env.DB, user);
-  } catch (cause) {
-    console.error({ event: 'account_cleanup_failed', ...safeErrorLog(cause) });
-    throw new ApiError(503, 'ACCOUNT_DELETION_INCOMPLETE', 'Account deletion could not finish. Please retry.');
-  }
+  await deleteAccount(c.env, user);
   // D1 revokes every login session. Clear this browser's cached session as well.
   const auth = c.get('auth');
   if (auth) {

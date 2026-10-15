@@ -1,0 +1,21 @@
+.panel h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.035em; }
+.panel header p, .hint { color: var(--color-dashboard-ink-soft); font-size: 13px; line-height: 1.7; }
+.search { margin: 28px 0; }
+.panel label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 10px; }
+.search > div { display: flex; gap: 10px; }
+.search input { flex: 1; min-width: 0; }
+.search button { white-space: nowrap; }
+.user { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 24px 0; border-top: 1px solid var(--color-dashboard-rule-strong); }
+.user > div { min-width: 0; }
+.user h3 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.user p { margin: 8px 0; font-size: 12px; color: var(--color-dashboard-ink-soft); overflow-wrap: anywhere; line-height: 1.7; }
+.user code { font-size: 11px; overflow-wrap: anywhere; color: var(--color-dashboard-ink-soft); }
+.panel .danger { color: var(--color-dashboard-danger); border-color: var(--color-dashboard-danger); white-space: nowrap; }
+.confirm { max-width: 440px; padding: 20px; border: 1px solid var(--color-dashboard-rule-strong); border-radius: var(--radius-dashboard-md); background: var(--color-dashboard-surface); }
+.confirm h4 { font-size: 14px; margin: 0 0 10px; }
+.confirm input { width: 100%; }
+.confirm > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.error { padding: 14px; border: 1px solid var(--color-dashboard-danger); border-radius: var(--radius-dashboard-sm); color: var(--color-dashboard-danger); font-size: 13px; line-height: 1.7; }
+.notice { font-size: 13px; color: var(--color-dashboard-ink-soft); }
+.pages { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+@media (max-width: 700px) { .search > div, .user { flex-direction: column; } .confirm { width: 100%; max-width: none; } }

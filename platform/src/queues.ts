@@ -46,9 +46,11 @@ async function sendEmail(input: EmailMessage, env: Env): Promise<void> {
     `INSERT INTO email_deliveries
      (idempotency_key,user_id,recipient_hash,template,status,attempt_count,updated_at)
      SELECT ?,?,?,?, 'sending',1,?
-     WHERE ? IS NULL OR EXISTS (SELECT 1 FROM user WHERE id=?)
+     WHERE (? IS NULL OR EXISTS (SELECT 1 FROM user WHERE id=?))
+       AND (? != 'magic-link' OR EXISTS (SELECT 1 FROM verification WHERE id=? AND expiresAt>?
+         AND CASE WHEN json_valid(value) THEN lower(json_extract(value, '$.email')) END=?))
      ON CONFLICT(idempotency_key) DO UPDATE SET attempt_count=attempt_count+1,status='sending',updated_at=excluded.updated_at`
-  ).bind(input.idempotencyKey, input.userId ?? null, recipientHash, input.type, now(), input.userId ?? null, input.userId ?? null).run();
+  ).bind(input.idempotencyKey, input.userId ?? null, recipientHash, input.type, now(), input.userId ?? null, input.userId ?? null, input.type, input.verificationId ?? null, now(), input.to.trim().toLowerCase()).run();
   // An email queued before account deletion must not recreate its delivery log.
   if (recorded.meta?.changes === 0) return;
   try {

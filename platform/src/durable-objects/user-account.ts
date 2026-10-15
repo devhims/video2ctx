@@ -1,3 +1,4 @@
+import { BillingGate } from './billing-gate';
 import { AgentAdmissionQueue } from '../agents/runtime/admission-queue';
 import type { AgentRequest, AgentAdmission } from '../agents/contracts';
 import { DurableObject } from 'cloudflare:workers';
@@ -114,12 +115,14 @@ interface SessionRunRow extends Record<string, SqlStorageValue> {
 
 export class UserAccountDO extends DurableObject<Env> {
   readonly #admissions: AgentAdmissionQueue;
+  #billing!: BillingGate;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#admissions = new AgentAdmissionQueue(ctx, env, { assertActive: () => this.assertActive(),
       register: id => this.registerConversation(id), record: input => this.recordSession(input) });
     ctx.blockConcurrencyWhile(async () => {
       this.ensureSchema();
+      this.#billing = new BillingGate(ctx.storage.sql);
       this.#admissions.initialize();
     });
   }
@@ -137,6 +140,15 @@ export class UserAccountDO extends DurableObject<Env> {
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO agent_conversations (conversation_id) VALUES (?)',
       z.string().uuid().parse(conversationId));
   }
+
+  beginBillingCheckout(id: string): boolean {
+    if (this.ctx.storage.sql.exec('SELECT id FROM account_deletion LIMIT 1').toArray().length) return false;
+    return this.#billing.beginCheckout(id);
+  }
+  endBillingCheckout(id: string): void { this.#billing.endCheckout(id); }
+  beginBillingDeletion(id: string): boolean { return this.#billing.beginDeletion(id); }
+  commitBillingDeletion(id: string): void { this.#billing.commitDeletion(id); }
+  endBillingDeletion(id: string): void { this.#billing.endDeletion(id); }
 
   beginDeletion(): string[] {
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO account_deletion (id) VALUES (1)');

@@ -69,7 +69,7 @@ test('successful account deletion clears Better Auth session and cached-session 
   app.route('/', sessionRoutes); app.onError((error, c) => jsonError(c, error));
   const response = await app.request('/account', { method: 'DELETE', headers: { cookie: session.cookie } }, {
     ...env,
-    USER_ACCOUNT: { getByName: () => ({ beginDeletion: async () => [], finishDeletion: vi.fn() }) },
+    USER_ACCOUNT: env.USER_ACCOUNT,
     TASKS: { send: vi.fn() },
   });
   fetchSpy.mockRestore();
@@ -80,4 +80,43 @@ test('successful account deletion clears Better Auth session and cached-session 
   expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(session.user.id).first()).toBeNull();
   expect(await auth.api.getSession({ headers: new Headers({ cookie: session.cookie }), query: { disableCookieCache: true } })).toBeNull();
   await Promise.all(pending);
+});
+
+
+test('a real queued magic link cannot recreate metadata after account deletion', async () => {
+  const email = 'deleted-magic-link@example.test';
+  await user('deleted-magic-link', email);
+  const queued: import('../src/types').EmailMessage[] = [];
+  const auth = createAuth({ ...env, EMAIL_TASKS: { send: async (message: import('../src/types').EmailMessage) => { queued.push(message); } } } as unknown as Env, { waitUntil: () => {} });
+  await auth.api.signInMagicLink({ body: { email }, headers: new Headers({ origin: 'http://auth.test' }) });
+  expect(queued).toHaveLength(1);
+  expect(await env.DB.prepare("SELECT id FROM verification WHERE json_extract(value,'$.email')=?").bind(email).first()).not.toBeNull();
+  await deleteAccountRecords(env.DB, { id: 'deleted-magic-link', email });
+  const send = vi.fn(), ack = vi.fn();
+  await handleQueue({ queue: 'video2ctx-email', messages: [{ attempts: 1, ack, retry: vi.fn(), body: queued[0] }] } as unknown as MessageBatch<unknown>, { ...env, EMAIL: { send } } as unknown as Env);
+  expect(send).not.toHaveBeenCalled();
+  expect(ack).toHaveBeenCalledOnce();
+  expect(await env.DB.prepare('SELECT * FROM email_deliveries WHERE recipient_hash=?').bind(await sha256(email)).first()).toBeNull();
+});
+
+
+test('a valid signup magic link sends without a user row and old links stay suppressed after re-registration', async () => {
+  const email = 'fresh-magic-signup@example.test';
+  const queued: import('../src/types').EmailMessage[] = [];
+  const auth = createAuth({ ...env, EMAIL_TASKS: { send: async (message: import('../src/types').EmailMessage) => { queued.push(message); } } } as unknown as Env, { waitUntil: () => {} });
+  const enqueue = () => auth.api.signInMagicLink({ body: { email }, headers: new Headers({ origin: 'http://auth.test' }) });
+  await enqueue();
+  const send = vi.fn(async () => ({ messageId: 'sent' }));
+  const deliver = (body: import('../src/types').EmailMessage) => handleQueue({ queue: 'video2ctx-email', messages: [{ attempts: 1, ack: vi.fn(), retry: vi.fn(), body }] } as unknown as MessageBatch<unknown>, { ...env, EMAIL: { send } } as unknown as Env);
+  expect(queued[0]!.verificationId).toBeTruthy();
+  await deliver(queued[0]!); expect(send.mock.calls.length).toBe(1);
+  await user('fresh-magic-old-user', email);
+  await enqueue(); const obsolete = queued[1]!;
+  await deleteAccountRecords(env.DB, { id: 'fresh-magic-old-user', email });
+  await user('fresh-magic-new-user', email);
+  await enqueue();
+  await deliver(obsolete); expect(send.mock.calls.length).toBe(1);
+  await deliver(queued[2]!); expect(send.mock.calls.length).toBe(2);
+  await deliver({ ...queued[2]!, verificationId: undefined, idempotencyKey: 'legacy-magic' });
+  expect(send.mock.calls.length).toBe(2);
 });

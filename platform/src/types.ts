@@ -56,6 +56,8 @@ export interface TaskMessage {
 }
 
 export interface EmailMessage {
+  /** Exact sign-in token record, so deletion or consumption suppresses queued delivery. */
+  verificationId?: string;
   type: 'magic-link' | 'notification-opt-in' | 'monitor-alert' | 'daily-digest' | 'weekly-digest' | 'scale-inquiry' | 'welcome';
   idempotencyKey: string;
   userId?: string;

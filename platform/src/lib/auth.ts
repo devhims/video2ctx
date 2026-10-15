@@ -122,11 +122,17 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
       magicLink({
         expiresIn: 900,
         storeToken: 'hashed',
-        sendMagicLink: async ({ email, url }) => {
+        sendMagicLink: async ({ email, url, token }, ctx) => {
+          // The plugin hashes tokens with SHA-256/base64url before adapter lookup.
+          const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
+          const identifier = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+          const verification = await ctx?.context.internalAdapter.findVerificationValue(identifier);
+          if (!verification) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Could not prepare sign-in email.' });
           const { renderMagicLinkEmail } = await import('./email-templates');
           const content = await renderMagicLinkEmail({ url });
           const message: EmailMessage = {
             type: 'magic-link',
+            verificationId: verification.id,
             idempotencyKey: `magic:${await digest(url)}`,
             to: email,
             subject: 'Sign in to video2ctx',
@@ -138,7 +144,7 @@ export function createAuthOptions(env: Env, executionCtx: { waitUntil(promise: P
       }),
       {
         id: 'polar-authenticated-checkout',
-        endpoints: checkout({
+        endpoints: checkout(env, {
           products: [{ productId: env.POLAR_BUILDER_PRODUCT_ID, slug: 'builder' }],
           successUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=success`,
           returnUrl: `${env.APP_ORIGIN}/dashboard?section=settings&checkout=cancelled`,

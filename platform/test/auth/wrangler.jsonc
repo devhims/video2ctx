@@ -31,6 +31,8 @@
       "migrations_dir": "../../migrations"
     }
   ],
+  "durable_objects": { "bindings": [{ "name": "USER_ACCOUNT", "class_name": "UserAccountDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserAccountDO"] }],
   "r2_buckets": [{"binding":"RESEARCH","bucket_name":"agent-trace-auth-test"}],
   "queues": {
     "producers": [

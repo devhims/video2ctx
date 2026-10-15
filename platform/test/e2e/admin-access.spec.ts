@@ -437,3 +437,80 @@ test('export HTTP errors remain visible instead of downloading error JSON',async
   await expect(page.getByRole('button',{name:'Download timeline JSONL'})).toBeEnabled();
   expect(downloads).toEqual([]);
 });
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`admin searches users and confirms deletion, including cancellation blocking, at ${viewport.width}px`, async ({ page, context }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await context.addCookies([
+      { name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+      { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' },
+    ]);
+    const user = { id: '10495ef1-84c9-4a12-89ea-964e95ebe050', name: 'Atlas', email: 'atlas@example.test', plan: 'builder' };
+    const self = { id: 'fixture-user', name: 'Admin', email: 'fixture@example.test', plan: 'starter' };
+    const queries: string[] = [];
+    let renewing = true, removed = false, deletes = 0;
+    await page.route('**/api/platform/v1/admin/users?*', route => {
+      queries.push(new URL(route.request().url()).searchParams.get('q')!);
+      return route.fulfill({ json: { users: removed ? [self] : [user, self], nextOffset: null } });
+    });
+    await page.route(`**/api/platform/v1/admin/users/${user.id}`, route => {
+      expect(route.request().method()).toBe('DELETE'); expect(route.request().postDataJSON()).toEqual({ email: user.email });
+      deletes++;
+      if (renewing) return route.fulfill({ status: 409, json: { error: { code: 'SUBSCRIPTION_ACTIVE', message: 'Cancel your Builder plan before deleting your account.' } } });
+      removed = true; return route.fulfill({ status: 204 });
+    });
+    await page.goto('/dashboard/admin');
+    await page.getByRole('button', { name: 'Users', exact: true }).click();
+    await page.getByLabel('User ID or email', { exact: true }).fill(user.email);
+    await page.getByRole('button', { name: 'Search users', exact: true }).click();
+    const row = page.getByRole('article', { name: user.email, exact: true });
+    await expect(row.getByText(user.id)).toBeVisible();
+    await expect(page.getByRole('article', { name: self.email, exact: true }).getByRole('button', { name: 'Delete account', exact: true })).toHaveCount(0);
+    await row.getByRole('button', { name: 'Delete account', exact: true }).click();
+    const confirm = row.getByRole('button', { name: 'Delete permanently', exact: true });
+    await expect(confirm).toBeDisabled();
+    await row.getByLabel(`Type ${user.email} to confirm`, { exact: true }).fill('wrong@example.test');
+    await expect(confirm).toBeDisabled();
+    await row.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(deletes).toBe(0);
+    await page.getByLabel('User ID or email', { exact: true }).fill(user.id);
+    await page.getByRole('button', { name: 'Search users', exact: true }).click();
+    await row.getByRole('button', { name: 'Delete account', exact: true }).click();
+    await row.getByLabel(`Type ${user.email} to confirm`, { exact: true }).fill(user.email);
+    await page.screenshot({ path: testInfo.outputPath('admin-user-confirmation.png'), fullPage: true, animations: 'disabled' });
+    await confirm.click();
+    await expect(page.locator('[data-sonner-toast][data-type="error"]')).toContainText('Cancel your Builder plan before deleting your account.');
+    await expect(row).toBeVisible(); await expect(confirm).toBeEnabled();
+    renewing = false;
+    await confirm.click();
+    await expect(row).toHaveCount(0);
+    await expect(page.getByRole('status').filter({ hasText: `Account deleted for ${user.email}` })).toBeVisible();
+    await expect(page).toHaveURL(/dashboard\/admin/);
+    expect(queries).toEqual([user.email, user.id]); expect(deletes).toBe(2);
+    await page.screenshot({ path: testInfo.outputPath('admin-user-deleted.png'), fullPage: true, animations: 'disabled' });
+  });
+}
+
+test('admin account cleanup errors preserve the selected identity for a single retry', async ({ page, context }) => {
+  await context.addCookies([{ name: 'agent-ui', value: 'allowed', url: 'http://127.0.0.1:3021' }, { name: 'admin-ui', value: 'allowed', url: 'http://127.0.0.1:3021' }]);
+  const user = { id: '10495ef1-84c9-4a12-89ea-964e95ebe050', name: 'Atlas', email: 'atlas@example.test', plan: 'starter' };
+  let deletes = 0;
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/admin/users?*', route => route.fulfill({ json: { users: [user], nextOffset: null } }));
+  await page.route(`**/api/platform/v1/admin/users/${user.id}`, async route => {
+    deletes++;
+    if (deletes === 1) { await held; await route.fulfill({ status: 503, json: { error: { code: 'ACCOUNT_DELETION_INCOMPLETE', message: 'Account deletion could not finish. Please retry.' } } }); }
+    else await route.fulfill({ status: 204 });
+  });
+  await page.goto('/dashboard/admin'); await page.getByRole('button', { name: 'Users', exact: true }).click();
+  await page.getByLabel('User ID or email', { exact: true }).fill(user.email); await page.getByRole('button', { name: 'Search users', exact: true }).click();
+  const row = page.getByRole('article', { name: user.email, exact: true });
+  await row.getByRole('button', { name: 'Delete account', exact: true }).click(); await row.getByLabel(`Type ${user.email} to confirm`, { exact: true }).fill(user.email);
+  await row.getByRole('button', { name: 'Delete permanently', exact: true }).evaluate(button => { (button as unknown as { click(): void }).click(); (button as unknown as { click(): void }).click(); });
+  await expect.poll(() => deletes).toBe(1); await expect(row.getByRole('button', { name: 'Deleting…', exact: true })).toBeDisabled();
+  release();
+  await expect(page.getByRole('alert').filter({ hasText: 'Account deletion could not finish.' })).toContainText('Account deletion could not finish. Please retry.');
+  await expect(row.getByText(user.id)).toBeVisible();
+  await row.getByRole('button', { name: 'Delete permanently', exact: true }).click();
+  await expect(row).toHaveCount(0); expect(deletes).toBe(2);
+});

@@ -5,6 +5,7 @@ import { framePreviewPrefix } from '../src/agents/runtime/frame-previews';
 
 const closeBillingAccount = vi.hoisted(() => vi.fn());
 const requireNoRenewingSubscription = vi.hoisted(() => vi.fn());
+vi.mock('../src/lib/billing-coordination', () => ({ billingAccount: async () => ({ beginBillingDeletion: async () => true, commitBillingDeletion: vi.fn(), endBillingDeletion: vi.fn() }) }));
 vi.mock('../src/lib/billing', () => ({ closeBillingAccount, requireNoRenewingSubscription }));
 vi.mock('../src/lib/oauth', () => ({ disconnectYoutube: vi.fn() }));
 import { sessionRoutes } from '../src/routes/session/session.index';

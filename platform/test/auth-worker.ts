@@ -1,3 +1,4 @@
+export { UserAccountDO } from '../src/durable-objects/user-account';
 import { betterAuth } from 'better-auth';
 import { testUtils } from 'better-auth/plugins';
 import app from '../src/app';
