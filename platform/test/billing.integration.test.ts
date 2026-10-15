@@ -70,6 +70,55 @@ describe('Polar payment queries on D1', () => {
     });
   });
 
+  test.each(['paid', 'refund', 'paid and refund'])('preserves history when a newer customer snapshot arrives before %s', async (kind) => {
+    const userId = `portal-out-of-order-${kind.replaceAll(' ', '-')}`;
+    await createUser(userId);
+    const customer = activeCustomerState(userId);
+    customer.timestamp = new Date('2026-08-26T00:00:00Z');
+    customer.data.activeSubscriptions = [];
+    await syncCustomerState(env, customer);
+    const orderId = `${userId}-order`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (kind.includes('paid')) await applyPaidOrder(env, paidOrder(userId, orderId));
+      if (kind.includes('refund')) await applyRefundedOrder(env, refundedOrder(userId, orderId));
+      await expect(operationCount(userId, `polar:order:${orderId}`)).resolves.toBe(0);
+      await expect(operationCount(userId, `polar:refund:${orderId}`)).resolves.toBe(0);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'starter', status: 'inactive', creditBalance: 1000,
+        canManageBilling: true, needsBillingAttention: false,
+      });
+    }
+    customer.timestamp = new Date('2026-08-27T00:00:00Z');
+    await syncCustomerState(env, customer);
+    await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({ canManageBilling: true });
+  });
+
+  for (const kind of ['paid', 'refund'] as const) test.each(['valid', 'ownership mismatch', 'different customer'])(
+    `repairs only history on an already acknowledged ${kind} replay: %s`, async (scenario) => {
+      const userId = `portal-replay-${kind}-${scenario.replaceAll(' ', '-')}`;
+      await createUser(userId);
+      const customer = activeCustomerState(userId);
+      customer.timestamp = new Date('2026-08-26T00:00:00Z');
+      customer.data.activeSubscriptions = [];
+      await syncCustomerState(env, customer);
+      const orderId = `${userId}-order`;
+      const event = kind === 'paid' ? paidOrder(userId, orderId) : refundedOrder(userId, orderId);
+      if (scenario === 'ownership mismatch') event.data.metadata = { app_user_id: 'another-user' };
+      if (scenario === 'different customer') event.data.customerId = 'another-customer';
+      // An older deployment acknowledged the event without creating a ledger entry.
+      await env.DB.prepare('INSERT INTO processed_events(source,event_id,processed_at,payload_hash) VALUES (\'polar\',?,?,?)')
+        .bind(`order.${kind === 'paid' ? 'paid' : 'refunded'}:${orderId}`, Date.now(), 'legacy-fingerprint').run();
+      if (event.type === 'order.paid') await applyPaidOrder(env, event);
+      else await applyRefundedOrder(env, event);
+      await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
+        plan: 'starter', status: 'inactive', creditBalance: 1000,
+        canManageBilling: scenario === 'valid', needsBillingAttention: false,
+      });
+      await expect(operationCount(userId, `polar:order:${orderId}`)).resolves.toBe(0);
+      await expect(operationCount(userId, `polar:refund:${orderId}`)).resolves.toBe(0);
+    },
+  );
+
   test.each(['incomplete', 'past_due', 'unpaid'] as const)('preserves %s through empty customer snapshots and clears it on resolution', async (status) => {
     const userId = `portal-${status}`;
     await createUser(userId);

@@ -9,6 +9,7 @@ import { ApiError, now, sha256 } from './http';
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
+  has_payment_history: number;
   status: string;
   provider_customer_id: string | null;
   provider_subscription_id: string | null;
@@ -52,19 +53,16 @@ export interface PaymentWebhookEnv {
 export async function getBillingSummary(env: CreditEnv, userId: string): Promise<BillingSummary> {
   const [row, balance, navigation] = await Promise.all([
     env.DB.prepare(
-      `SELECT plan,status,provider_customer_id,provider_subscription_id,cancel_at_period_end,
+      `SELECT plan,status,has_payment_history,provider_customer_id,provider_subscription_id,cancel_at_period_end,
         current_period_start,current_period_end FROM billing_accounts WHERE user_id=?`
     ).bind(userId).first<BillingAccountRow>(),
     creditBalance(env, userId),
     env.DB.prepare(
       `SELECT EXISTS (
-        SELECT 1 FROM credit_ledger WHERE user_id=?
-          AND (operation_id GLOB 'polar:order:*' OR operation_id GLOB 'polar:refund:*')
-      ) AS has_history, EXISTS (
         SELECT 1 FROM billing_subscription_states WHERE user_id=?
           AND status IN ('incomplete','past_due','unpaid')
       ) AS needs_attention`
-    ).bind(userId, userId).first<{ has_history: number; needs_attention: number }>(),
+    ).bind(userId).first<{ needs_attention: number }>(),
   ]);
   const plan = row?.plan === 'builder' ? 'builder' : 'starter';
   const needsBillingAttention = navigation?.needs_attention === 1;
@@ -78,7 +76,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     currentPeriodEnd: row?.current_period_end ?? null,
     // Customer creation alone does not imply a subscription or billing history.
     canManageBilling: needsBillingAttention || Boolean(row?.provider_customer_id
-      && (plan === 'builder' || navigation?.has_history)),
+      && (plan === 'builder' || row.has_payment_history === 1)),
     needsBillingAttention,
   };
 }
@@ -94,12 +92,15 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
   if (!order.paid) throw new ApiError(422, 'POLAR_ORDER_NOT_PAID', `Polar order ${order.id} was not paid.`);
 
   const eventId = `order.paid:${order.id}`;
-  if (await processed(env.DB, eventId)) return;
   const userId = order.customer.externalId;
   const identity: BillingIdentity = {
     customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
   };
+  if (await processed(env.DB, eventId)) {
+    await repairPaymentHistory(env.DB, identity);
+    return;
+  }
   if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar order ${order.id} is missing the Better Auth external ID.`);
 
@@ -135,6 +136,7 @@ export async function applyPaidOrder(env: PaymentWebhookEnv, payload: WebhookOrd
 
   await env.DB.batch([
     billingUpsert(env.DB, state),
+    paymentHistoryStatement(env.DB, userId, order.customerId),
     ...(order.subscriptionId ? [subscriptionStateStatement(env.DB, {
       userId, customerId: order.customerId, subscriptionId: order.subscriptionId, status, eventAt,
     })] : []),
@@ -273,13 +275,16 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   const order = payload.data;
   if (order.productId !== env.POLAR_BUILDER_PRODUCT_ID) return;
   const eventId = `order.refunded:${order.id}`;
-  if (await processed(env.DB, eventId)) return;
 
   const userId = order.customer.externalId;
   const identity: BillingIdentity = {
     customerId: order.customerId, subscriptionId: order.subscriptionId, orderId: order.id,
     customerUserId: userId ?? null, checkoutUserId: checkoutIdentity(userId, order.metadata?.app_user_id, order.subscription?.metadata?.app_user_id),
   };
+  if (await processed(env.DB, eventId)) {
+    await repairPaymentHistory(env.DB, identity);
+    return;
+  }
   if (await rejectMismatchedIdentity(env, payload, eventId, identity)) return;
   if (!userId) throw new ApiError(422, 'POLAR_MISSING_CUSTOMER_EXTERNAL_ID', `Polar refund ${order.id} is missing the Better Auth external ID.`);
   if (!await userExists(env.DB, userId)) {
@@ -305,6 +310,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
   };
   await env.DB.batch([
     billingUpsert(env.DB, state),
+    paymentHistoryStatement(env.DB, userId, order.customerId),
     env.DB.prepare(
       `INSERT OR IGNORE INTO credit_ledger
        (id,user_id,operation_id,entry_type,credits,metadata_json,created_at)
@@ -368,6 +374,22 @@ async function rejectMismatchedIdentity(
     orderId: identity.orderId, customerId: identity.customerId, subscriptionId: identity.subscriptionId,
     checkoutUserId: typeof expected === 'string' ? expected : null, customerUserId: identity.customerUserId });
   return true;
+}
+
+function paymentHistoryStatement(db: D1Database, userId: string, customerId: string): D1PreparedStatement {
+  return db.prepare(
+    `UPDATE billing_accounts SET has_payment_history=1
+     WHERE user_id=? AND provider_customer_id=? AND has_payment_history=0`
+  ).bind(userId, customerId);
+}
+
+/** Older deployments acknowledged some payments without a ledger entry. */
+async function repairPaymentHistory(db: D1Database, identity: BillingIdentity): Promise<void> {
+  if (!identity.customerUserId || (identity.checkoutUserId !== undefined
+    && identity.checkoutUserId !== identity.customerUserId)) return;
+  // Replay repairs only history for the same existing customer. Never reapply
+  // credits, resurrect a deleted account, or accept a rejected ownership claim.
+  await paymentHistoryStatement(db, identity.customerUserId, identity.customerId).run();
 }
 
 function subscriptionStateStatement(db: D1Database, state: {

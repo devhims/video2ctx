@@ -67,8 +67,9 @@ unchanged credit balance. Creating a customer is not a checkout or payment.
 Settings shows Upgrade to Builder for Starter accounts that have no subscription
 needing payment attention. A Polar customer created during abandoned checkout does
 not expose the portal. Former paying customers retain a secondary Billing history
-button, backed by paid-order or refund entries in the credit ledger. Zero-credit
-top-ups still count as billing history. Active Builder accounts and subscriptions
+button, backed by a permanent payment-history flag set by verified paid/refunded
+orders. Events older than the current billing snapshot still set this flag even
+when they cannot change credits. Active Builder accounts and subscriptions
 with incomplete, past_due, or unpaid status use Manage billing.
 
 Migration 0024 creates `billing_subscription_states` and seeds it from existing
@@ -78,7 +79,13 @@ active customer snapshots, and revocations update it too. Empty customer snapsho
 cannot erase payment problems. The projection never grants credits or product
 access, and deleting the user cascades to its subscription rows.
 
-For deployment, apply migration 0024 before the Worker, then deploy the dashboard.
+Migration 0025 adds the payment-history flag and backfills it from existing payment
+ledger entries, including zero-credit top-ups. Previously acknowledged events that
+produced no ledger entry cannot be recovered from the stored payload hash. Replay
+those paid/refunded events after deployment to repair history only. A replay still
+checks ownership and the existing customer, and never reapplies credits or plans.
+
+For deployment, apply migrations 0024 and 0025 before the Worker, then deploy the dashboard.
 Keep Raw format and API version 2026-04. Enable the two additional subscription
 events alongside the four existing events. Token permissions do not change.
 Deliveries acknowledged by the old Worker do not populate the new projection.
