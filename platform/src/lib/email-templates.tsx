@@ -18,6 +18,7 @@ import {
   toPlainText,
 } from 'react-email';
 import { EMAIL_LOGO } from './email-logo';
+import { PaddedCell } from './email-padded-cell';
 import { WelcomeEmail, type WelcomeEmailData } from './welcome-email';
 
 export type { WelcomeEmailData };
@@ -162,22 +163,28 @@ export function ScaleInquiryEmail({
 
 function EmailShell({ preview, children }: { preview: string; children: ReactNode }) {
   return <Html lang='en'>
-    <Head />
+    <Head>
+      <style>{mobileStyles}</style>
+    </Head>
     <Preview>{preview}</Preview>
     <Body style={page}>
-      <Container style={container}>
-        {/* The logo is an inline attachment the email queue adds for this cid. Its alt
-            text is empty because the wordmark beside it already names the product. */}
-        <Row style={{ marginBottom: '36px' }}>
-          <Column style={{ width: '44px', verticalAlign: 'middle' }}>
-            <Img src={`cid:${EMAIL_LOGO.contentId}`} width='32' height='32' alt='' style={{ display: 'block' }} />
-          </Column>
-          <Column style={{ verticalAlign: 'middle' }}>
-            <Text style={brand}>video2<span style={brandAccent}>ctx</span></Text>
-          </Column>
-        </Row>
-        {children}
-      </Container>
+      <PaddedCell className='e-wrap' style={pagePadding}>
+        <Container className='e-card' style={container}>
+          <PaddedCell className='e-pad' style={containerPadding}>
+            {/* The logo is an inline attachment the email queue adds for this cid. Its alt
+                text is empty because the wordmark beside it already names the product. */}
+            <Row className='e-brand' style={{ marginBottom: '36px' }}>
+              <Column style={{ width: '44px', verticalAlign: 'middle' }}>
+                <Img src={`cid:${EMAIL_LOGO.contentId}`} width='32' height='32' alt='' style={{ display: 'block' }} />
+              </Column>
+              <Column style={{ verticalAlign: 'middle' }}>
+                <Text style={brand}>video2<span style={brandAccent}>ctx</span></Text>
+              </Column>
+            </Row>
+            {children}
+          </PaddedCell>
+        </Container>
+      </PaddedCell>
     </Body>
   </Html>;
 }
@@ -187,8 +194,15 @@ async function renderEmail(component: ReactElement): Promise<{ html: string; tex
   return { html, text: toPlainText(html) };
 }
 
-const page: CSSProperties = { margin: 0, padding: '36px 12px', backgroundColor: '#f1efe9', color: '#171714', fontFamily: 'Arial, Helvetica, sans-serif' };
-const container: CSSProperties = { maxWidth: '560px', margin: '0 auto', padding: '34px', border: '1px solid #dedbd2', borderRadius: '12px', backgroundColor: '#fffefb' };
+/* On phones the card fills the width, dropping the page inset and card border
+ * that would otherwise nest a second frame around the text. Class selectors
+ * only, because Gmail drops a whole <style> block over one unsupported rule. */
+const mobileStyles = '@media only screen and (max-width:620px){.e-wrap{padding:0!important}.e-card{border:none!important;border-radius:0!important}.e-pad{padding:24px 18px!important}.e-brand{margin-bottom:28px!important}}';
+
+const page: CSSProperties = { margin: 0, backgroundColor: '#f1efe9', color: '#171714', fontFamily: 'Arial, Helvetica, sans-serif' };
+const pagePadding: CSSProperties = { padding: '36px 12px' };
+const container: CSSProperties = { maxWidth: '560px', margin: '0 auto', border: '1px solid #dedbd2', borderRadius: '12px', backgroundColor: '#fffefb' };
+const containerPadding: CSSProperties = { padding: '34px' };
 const brand: CSSProperties = { margin: 0, color: '#171714', fontSize: '18px', fontWeight: 700, letterSpacing: '-0.6px' };
 const brandAccent: CSSProperties = { color: '#d84c3f' };
 const eyebrow: CSSProperties = { margin: '0 0 10px', color: '#a53d33', fontSize: '11px', fontWeight: 700, letterSpacing: '1.2px' };
