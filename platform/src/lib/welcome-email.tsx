@@ -89,11 +89,13 @@ const darkRules = `
  * rules are split by who reads them. The mobile block uses only class selectors,
  * which Gmail keeps, and sets type a step smaller: at desktop sizes Gmail on
  * Android rendered the body noticeably larger than comparable product emails.
+ * On phones the card also fills the width, dropping the page inset and card
+ * border that would otherwise nest a second frame around the text.
  * Apple Mail, iOS Mail and Outlook for Mac honour the colour scheme query;
  * Outlook.com marks its dark mode with data-ogsc (text) and data-ogsb
  * (backgrounds). Gmail applies its own inversion to the light default. */
 const prefixRules = (prefix: string) => darkRules.trim().split('\n').map((rule) => `${prefix} ${rule}`).join('\n');
-const mobileStyles = '@media only screen and (max-width:620px){.v-wrap{padding:16px 6px!important}.v-pad{padding:28px 20px!important}.v-hero{font-size:30px!important;line-height:34px!important}.v-lede{font-size:16px!important;line-height:24px!important}.v-body{font-size:14px!important;line-height:23px!important}.v-small{font-size:13px!important;line-height:20px!important}}';
+const mobileStyles = '@media only screen and (max-width:620px){.v-wrap{padding:0!important}.v-card{border:none!important;border-radius:0!important}.v-pad{padding:24px 18px!important}.v-brand{margin-bottom:28px!important}.v-hero{margin-bottom:24px!important;font-size:30px!important;line-height:34px!important}.v-body{font-size:14px!important;line-height:23px!important}.v-small{font-size:13px!important;line-height:20px!important}}';
 const schemeStyles = `:root{color-scheme:light dark;supported-color-schemes:light dark}
 @media (prefers-color-scheme:dark){${darkRules}}`;
 const outlookStyles = `${prefixRules('[data-ogsc]')}
@@ -119,7 +121,7 @@ export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agen
         <Container className='v-card' style={card}>
           <PaddedCell className='v-pad' style={cardPadding}>
             {/* Empty alt text: the wordmark beside the logo already names the product. */}
-          <Row style={{ marginBottom: '40px' }}>
+            <Row className='v-brand' style={{ marginBottom: '40px' }}>
               <Column style={{ width: '48px', verticalAlign: 'middle' }}>
                 <Img src={`cid:${EMAIL_LOGO.contentId}`} width='36' height='36' alt='' style={logo} />
               </Column>
@@ -132,14 +134,13 @@ export function WelcomeEmail({ recipientName, starterCredits, dashboardUrl, agen
               {/* Keeps "Context out." together, so narrow screens break after "Video in." */}
             Video in. Context{'\u00a0'}out.
             </Heading>
-            <Text className='v-soft v-lede' style={lede}>{firstName ? `Welcome to video2ctx, ${firstName}.` : 'Welcome to video2ctx.'}</Text>
 
             <Text className='v-ink v-body' style={body}>{firstName ? `Hi ${firstName},` : 'Hi there,'}</Text>
             <Text className='v-ink v-body' style={body}>
               I'm Himanshu, the developer behind video2ctx. Thank you for signing up. It genuinely means a lot that you're giving it a try!
             </Text>
             <Text className='v-ink v-body' style={body}>
-              I built video2ctx because agents are still bad at video. They either can't watch it, or burn minutes and a pile of tokens to answer one question. video2ctx gives your agent exactly what it needs to understand and answer questions from a video, using about 95% fewer tokens.
+              I built video2ctx because agents are still bad at video, especially long ones. They either can't watch it, or burn minutes and a pile of tokens to answer one question. video2ctx gives your agent exactly what it needs to understand and answer questions from a video, using about 95% fewer tokens.
             </Text>
 
             {/* Parked with BENEFITS above; may return in a later version.
@@ -240,8 +241,7 @@ const card: CSSProperties = { maxWidth: '600px', margin: '0 auto', border: `1px 
 const logo: CSSProperties = { display: 'block' };
 const wordmark: CSSProperties = { margin: 0, color: light.ink, fontSize: '18px', fontWeight: 700, letterSpacing: '-0.6px', lineHeight: '28px' };
 const wordmarkCtx: CSSProperties = { marginLeft: '1px', color: light.soft, fontFamily: mono, fontWeight: 500, letterSpacing: 0 };
-const hero: CSSProperties = { margin: '0 0 10px', color: light.ink, fontSize: '42px', fontWeight: 700, lineHeight: '46px', letterSpacing: '-1.8px' };
-const lede: CSSProperties = { margin: '0 0 36px', color: light.soft, fontSize: '17px', lineHeight: '26px' };
+const hero: CSSProperties = { margin: '0 0 36px', color: light.ink, fontSize: '42px', fontWeight: 700, lineHeight: '46px', letterSpacing: '-1.8px' };
 const body: CSSProperties = { margin: '0 0 18px', color: light.ink, fontSize: '15px', lineHeight: '25px' };
 const eyebrow: CSSProperties = { margin: '0 0 8px', color: light.accentText, fontFamily: mono, fontSize: '11px', fontWeight: 500, letterSpacing: '1.2px', lineHeight: '16px', textTransform: 'uppercase' };
 // Parked with the "Context you can check" section.

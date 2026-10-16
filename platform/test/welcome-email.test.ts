@@ -25,7 +25,6 @@ describe('welcome email', () => {
     const message = await renderWelcomeEmail({ recipientName: '  ', starterCredits: 1000, ...urls });
 
     expect(message.text).toContain('Hi there,');
-    expect(message.text).toContain('Welcome to video2ctx.');
   });
 
   test('ships a dark scheme alongside the light default', async () => {
