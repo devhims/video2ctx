@@ -73,7 +73,16 @@ function SessionRoute() {
     const adopted = started.current?.path === pathname && started.current.key === view.key;
     setView({ key: adopted ? view.key : view.key + 1, pathname });
   }
+  const live = useRef({ mounted: false, key: view.key });
+  useEffect(() => {
+    live.current.mounted = true;
+    return () => { live.current.mounted = false; };
+  }, []);
+  useEffect(() => { live.current.key = view.key; }, [view.key]);
   const onStarted = (sessionId: string) => {
+    // A late admission must not move someone who already left this view or started over;
+    // the new session still appears in the session list.
+    if (!live.current.mounted || live.current.key !== view.key || window.location.pathname !== sessionsPath) return;
     const path = `${sessionsPath}/${sessionId}`;
     started.current = { path, key: view.key };
     window.history.pushState(null, '', path);

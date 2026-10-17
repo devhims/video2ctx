@@ -491,6 +491,34 @@ test('a session started in place follows browser history and New session', async
   await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
 });
 
+test('a late admission after leaving Agent keeps the user where they went', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sources');
+  await page.getByRole('link', { name: 'Agent', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Start a new session' });
+  await expect(composer).toBeVisible();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent?*', async route => { await held; await route.continue(); });
+  const text = 'Leave before this session is admitted.';
+  await composer.fill(text);
+  await composer.press('Enter');
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+  const sources = page.locator('[data-research-panel="sources"]:visible');
+  await expect(sources).toBeVisible();
+  const admitted = page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/v1/agent?'));
+  release();
+  await admitted;
+  // Give the late admission time to run; it must not rewrite the URL under the Sources view.
+  await page.waitForTimeout(1_000);
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+  await expect(sources).toBeVisible();
+  await page.getByRole('link', { name: 'Agent', exact: true }).click();
+  await expect(page.getByRole('link', { name: new RegExp(text) })).toBeVisible();
+});
+
 test('failed delivery removes the optimistic message, announces the error and restores the exact draft', async ({ page, context }) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sessions');
