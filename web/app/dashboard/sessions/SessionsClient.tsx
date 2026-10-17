@@ -164,6 +164,10 @@ function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
   // Admitted user messages keep their optimistic key so React reuses the element already on screen.
   const [clientKeys, setClientKeys] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(!!initialSessionId && !seeded);
+  // Only the server read that came with this document is current. Back, Forward and client
+  // navigation can restore an older copy of it, so those mounts still fetch the session.
+  const hydrating = useHydrating();
+  const [seededByDocument] = useState(hydrating && !!seeded);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useLoadErrorToast(error, 'Reload session', () => setRevision(value => value + 1));
@@ -193,8 +197,8 @@ function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
   };
   useEffect(() => {
     if (!sessionId) return;
-    // The server already read the first page; reloads and sessions started here fetch it.
-    if (seeded && revision === 0 && sessionId === initialSessionId) return;
+    // The document's server read is current; reloads, restored pages and sessions started here fetch.
+    if (seededByDocument && revision === 0 && sessionId === initialSessionId) return;
     const controller = new AbortController();
     setLoading(true); setError('');
     // Merge so messages already on screen (admitted, streamed or paged in) are never dropped by a reload.
@@ -203,7 +207,7 @@ function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [sessionId, revision, seeded, initialSessionId]);
+  }, [sessionId, revision, seededByDocument, initialSessionId]);
 
   const pendingKey = messages.find(message => message.messageId.startsWith(clientMessagePrefix))?.messageId;
   useEffect(() => {
@@ -358,10 +362,11 @@ function MessageComposer({ sessionId, processing, onAdmitted, onSending, onSendA
   };
   // Delivery and the run read as one working state, so there is no separate "sending" phase.
   const working = sending || processing;
+  const hydrating = useHydrating();
   return <><AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
     label={sessionId ? 'Follow-up message' : 'Start a new session'}
     sendLabel={working ? 'Agent is working…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
-    disabled={working} sending={sending} processing={working} uncertain={uncertain} error={error} />
+    disabled={working} sending={sending} processing={working} uncertain={uncertain} error={error} inactive={hydrating} />
     {uncertain && <Link href='/dashboard/sessions'>Check Sessions for the submitted run</Link>}
   </>;
 }
@@ -451,9 +456,11 @@ function CopyAnswer({ answer }: { answer: string }) {
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }
 const subscribeNever = () => () => {};
+/** True while rendering on the server or hydrating its HTML; false for any later client render. */
+function useHydrating() { return useSyncExternalStore(subscribeNever, () => false, () => true); }
 // Server HTML has no viewer timezone, so times fill in once the browser takes over.
 function LocalTime({ timestamp }: { timestamp: number }) {
-  const local = useSyncExternalStore(subscribeNever, () => true, () => false);
-  return <time dateTime={new Date(timestamp).toISOString()}>{local ? formatTime(timestamp) : ''}</time>;
+  const hydrating = useHydrating();
+  return <time dateTime={new Date(timestamp).toISOString()}>{hydrating ? '' : formatTime(timestamp)}</time>;
 }
 function formatTime(timestamp: number) { return new Date(timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); }

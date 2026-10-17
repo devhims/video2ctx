@@ -503,6 +503,26 @@ test('a session started in place follows browser history and New session', async
   await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
 });
 
+test('Back to a server-rendered session revalidates it instead of showing the original page', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  const text = 'Back must keep this completed follow-up.';
+  await composer.fill(text);
+  await composer.press('Enter');
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-status')).toHaveText('completed');
+  await page.getByRole('link', { name: 'All sessions', exact: true }).click();
+  await expect(page).toHaveURL('/dashboard/sessions');
+  const reads: string[] = [];
+  page.on('request', request => { if (request.url().includes(`/v1/agent/sessions/${sessionId}?`)) reads.push(request.url()); });
+  await page.goBack();
+  await expect(page).toHaveURL(`/dashboard/sessions/${sessionId}`);
+  // The restored page may briefly show the server's original read; the browser read brings it current.
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-status')).toHaveText('completed');
+  expect(reads.length).toBeGreaterThan(0);
+});
+
 test('a late admission after leaving Agent keeps the user where they went', async ({ page, context }) => {
   await login(context, 'allowed');
   await page.goto('/dashboard/sources');

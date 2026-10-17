@@ -90,7 +90,9 @@ test('mobile preserves page scrolling while the drawer isolates its own scrollin
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   await page.mouse.move(300, 400);
   await page.mouse.wheel(0, 600);
   await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
@@ -214,7 +216,9 @@ test('mobile touch swipes use the document at both scroll boundaries', async ({ 
     await context.addCookies([{ name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' }]);
     const page = await context.newPage();
     await page.goto('/dashboard/settings');
+    await waitForHydration(page);
     const root = await expectPageScrolling(page);
+    await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
     const input = await context.newCDPSession(page);
     const swipe = async (down: boolean) => {
       const start = down ? 650 : 250;
