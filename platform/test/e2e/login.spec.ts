@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { TRENDS_ENABLED } from '../../../web/lib/features';
 import { waitForHydration } from './support/hydration';
 
 const signedIn = { name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' };
@@ -21,7 +22,7 @@ test('signed-out dashboard visits redirect to login and preserve the destination
   await page.goto('/dashboard');
   await expect(page).toHaveURL('/dashboard/sources');
   await page.goto('/dashboard?section=trends');
-  await expect(page).toHaveURL('/dashboard/sources');
+  await expect(page).toHaveURL(TRENDS_ENABLED ? '/dashboard/trends' : '/dashboard/sources');
 });
 
 test('social sign-in sits on the right and fits mobile without email signup', async ({ page }, testInfo) => {
