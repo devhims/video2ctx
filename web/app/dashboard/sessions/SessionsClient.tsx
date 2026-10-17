@@ -242,7 +242,7 @@ function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
       <p className='agent-id' style={sessionId ? undefined : { visibility: 'hidden' }}>Session ID: {sessionId}</p>
       {session?.readOnly && <p role='status'>Admin debugging view. This session is read-only.</p>}</div></header>}
     {started && (session || !sessionId) && <SessionAssets sessionId={sessionId} readOnly={session?.readOnly} revision={`${revision}:${messages.map(message => message.status).join(',')}`} onDeleted={() => setRevision(value => value + 1)} />}
-    {sessionId && loading && !session && <SessionLoading />}
+    {sessionId && loading && !session && <SessionLoading navigation={false} />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
     {started && <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
       {messages.map(message => message.role === 'user'
