@@ -409,25 +409,87 @@ for (const newSession of [true, false]) {
     const text = `Immediate ${newSession ? 'new session' : 'follow-up'} message`;
     await composer.fill(text);
     await expect(page.getByRole('button', { name: newSession ? 'Start session' : 'Send follow-up', exact: true })).toBeEnabled();
+    await page.evaluate(() => {
+      const seen = new Set<string>();
+      Object.assign(window, { agentPlaceholders: seen });
+      // Record only placeholders that appear on screen after sending; streamed fallbacks stay hidden in the DOM.
+      new MutationObserver(records => {
+        for (const node of records.flatMap(record => [...record.addedNodes])) {
+          if (!(node instanceof Element)) continue;
+          for (const element of [node, ...node.querySelectorAll('*')]) {
+            if (element.matches('.agent-session-loading, .source-skeleton[aria-label="Getting started"], .agent-delivery-status') && element.checkVisibility()) seen.add(element.className);
+          }
+        }
+      }).observe(document.body, { subtree: true, childList: true });
+    });
     await composer.press('Enter');
+    const bubble = page.locator('.agent-user-message').filter({ hasText: text });
     try {
-      const bubble = page.locator('.agent-user-message').filter({ hasText: text });
       await expect(bubble).toBeVisible({ timeout: 1500 });
       await expect(bubble).toBeFocused();
       await expect(bubble).toHaveCSS('outline-style', 'none');
-      await expect(bubble.getByRole('status')).toHaveText('Sending…');
+      await expect(bubble.getByRole('status')).toHaveCount(0);
+      await expect(bubble).not.toContainText('Sending');
       await expect(composer).toHaveValue('');
-      await expect(page.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Agent is working…' })).toBeDisabled();
       await composer.press('Enter');
       expect(posts).toBe(1);
+      if (newSession) await expect(page.locator('.agent-welcome')).toHaveCount(0);
+      await bubble.evaluate(element => { element.setAttribute('data-probe', 'optimistic'); });
       await page.screenshot({ path: testInfo.outputPath('optimistic-message.png') });
     } finally { release(); }
+    if (newSession) await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
     await expect(page.locator('.agent-pending-message')).toHaveCount(0);
-    await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+    await expect(bubble).toHaveCount(1);
+    // The admitted message is the same element that appeared optimistically.
+    await expect(bubble).toHaveAttribute('data-probe', 'optimistic');
     await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
     expect(posts).toBe(1);
+    expect(await page.evaluate(() => [...(window as unknown as { agentPlaceholders: Set<string> }).agentPlaceholders])).toEqual([]);
   });
 }
+
+test('admitted runs show live progress instead of a placeholder before the first update', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', async route => { await held; await route.continue(); });
+  await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Show progress while the first update is delayed.');
+  await page.getByRole('button', { name: 'Send follow-up' }).click();
+  const latest = page.locator('.agent-assistant-message').last();
+  try {
+    await expect(latest.getByRole('status')).toHaveText('Waiting for the run to start.');
+    await expect(latest.locator('.source-skeleton')).toHaveCount(0);
+  } finally { release(); }
+  await expect(latest.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+});
+
+test('a session started in place follows browser history and New session', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const text = 'Start in place, then move through history.';
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill(text);
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
+  const threadUrl = page.url();
+  await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page.locator('.agent-user-message')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Start a new session' })).toHaveValue('');
+  await page.goForward();
+  await expect(page).toHaveURL(threadUrl);
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+  await page.getByRole('link', { name: 'New session' }).click();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page.locator('.agent-user-message')).toHaveCount(0);
+  await page.goto(threadUrl);
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+});
 
 test('failed delivery removes the optimistic message, announces the error and restores the exact draft', async ({ page, context }) => {
   await login(context, 'allowed');
@@ -443,6 +505,8 @@ test('failed delivery removes the optimistic message, announces the error and re
   finally { release(); }
   await expect(page.locator('.agent-composer').getByRole('alert')).toContainText('The API rejected this message.');
   await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
   await expect(composer).toHaveValue(draft);
   await expect(composer).toBeEditable();
   await expect(composer).toBeFocused();

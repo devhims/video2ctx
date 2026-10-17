@@ -52,7 +52,7 @@ function timestamp(value: number) {
 }
 
 export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false }: {
-  sessionId: string; revision: string; onDeleted: () => void; readOnly?: boolean;
+  sessionId?: string; revision: string; onDeleted: () => void; readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<Inventory>();
@@ -66,7 +66,8 @@ export function SessionAssets({ sessionId, revision, onDeleted, readOnly = false
   const viewRequest = useRef<AbortController | null>(null);
   useEffect(() => () => { viewRequest.current?.abort(); }, []);
   useEffect(() => {
-    if (!open) return;
+    // A session started in place renders this panel before its ID is admitted.
+    if (!open || !sessionId) return;
     const controller = new AbortController();
     setError(''); setLoading(true);
     void fetchAgentData(`/sessions/${sessionId}/assets`, inventorySchema, controller.signal)

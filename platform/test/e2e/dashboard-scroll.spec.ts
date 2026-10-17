@@ -190,7 +190,8 @@ for (const newSession of [true, false]) {
       await expect(message.locator('time')).toBeInViewport();
     };
     try {
-      await expect(message.getByRole('status')).toHaveText('Sending…');
+      await expect(message).toBeVisible();
+      await expect(message.getByRole('status')).toHaveCount(0);
       await page.screenshot({ path: testInfo.outputPath('mobile-pending-long-message-focus.png') });
       await expectClearOfNavigation();
     } finally { release(); }

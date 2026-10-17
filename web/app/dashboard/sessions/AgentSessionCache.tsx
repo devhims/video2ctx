@@ -7,7 +7,6 @@ import { agentSessionListSchema, fetchAgentData, type AgentSessionList, type Age
 function createSessionCache() {
   const lists = new Map<string, { page: AgentSessionList; savedAt: number }>();
   const requests = new Map<string, Promise<AgentSessionList>>();
-  const focus = new Map<string, string>();
   const previews = new Map<string, AgentSessionDetail>();
   let generation = 0;
   const saveList = (query: string, page: AgentSessionList) => {
@@ -31,9 +30,8 @@ function createSessionCache() {
       requests.set(query, request);
       return request;
     },
-    recordAdmission(receipt: AgentAdmission, message: string) {
+    recordAdmission(receipt: AgentAdmission, message: string, sentAt = Date.now()) {
       generation++;
-      focus.set(receipt.sessionId, receipt.diagnostics.userMessageId);
       // Keep the default list useful immediately; other searches are refreshed on return.
       const previous = lists.get('')?.page;
       lists.clear();
@@ -42,10 +40,10 @@ function createSessionCache() {
       const row = { sessionId: receipt.sessionId, title: existing?.title || message.slice(0, 160), latestMessagePreview: message,
         lastRunId: receipt.runId, runCount: (existing?.runCount ?? 0) + 1, createdAt: existing?.createdAt ?? now, updatedAt: now };
       const shared = { runId: receipt.runId, conversationTurn: receipt.diagnostics.conversationTurn, createdAt: now, updatedAt: now };
-      // Carry the admitted message across navigation while full history loads.
+      // Seed the thread with the admitted messages while full history loads.
       previews.delete(receipt.sessionId);
       previews.set(receipt.sessionId, { ...row, nextCursor: null, messages: [
-        { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: message },
+        { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: message, createdAt: sentAt },
         { ...shared, messageId: receipt.agentMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
       ] });
       if (previews.size > 10) previews.delete(previews.keys().next().value!);
@@ -54,8 +52,6 @@ function createSessionCache() {
       // Refresh the server-generated title next time while still showing the cached rows.
       lists.get('')!.savedAt = 0;
     },
-    pendingFocus: (sessionId: string) => focus.get(sessionId),
-    clearFocus: (sessionId: string) => { focus.delete(sessionId); },
   };
 }
 

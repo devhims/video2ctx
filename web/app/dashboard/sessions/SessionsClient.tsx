@@ -17,7 +17,7 @@ import { DashboardSkeleton } from '../DashboardSkeleton';
 import { HistoryEmptyState } from '../HistoryEmptyState';
 import { FramePreviews } from './FramePreviews';
 import { useAccountResource } from '../DashboardDataProvider';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { DashboardHeader } from '../DashboardHeader';
 import { DashboardSidebar } from '../DashboardSidebar';
 import { useDashboardSession } from '../DashboardSessionProvider';
@@ -54,30 +54,43 @@ export function AgentShell({ children }: { children: ReactNode }) {
 
 export default function SessionsClient({ sessionId }: { sessionId?: string }) {
   const { agentAccess, adminAccess, accessReady } = useDashboardSession();
+  if (accessReady && (agentAccess || (sessionId && adminAccess))) return <SessionRoute />;
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
-    {!accessReady ? <SessionLoading /> : !(agentAccess || (sessionId && adminAccess)) ? <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>
-      : sessionId ? <SessionHistory key={sessionId} sessionId={sessionId} /> : <SessionList />}
+    {!accessReady ? <SessionLoading /> : <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>}
   </section>;
 }
 
-function SessionList() {
-  const router = useRouter();
-  const [pendingMessage, showPendingMessage] = useOptimistic<PendingMessage | null>(null);
+const sessionsPath = '/dashboard/sessions';
+function sessionIdFromPath(pathname: string) { return pathname.match(/^\/dashboard\/sessions\/([^/]+)$/)?.[1]; }
+
+// A session started from the home view keeps its thread mounted while only the URL changes,
+// so the first message never waits on a route render. Any other URL change starts a fresh thread.
+function SessionRoute() {
+  const pathname = usePathname();
+  const started = useRef<{ path: string; key: number }>(null);
+  const [view, setView] = useState({ key: 0, pathname });
+  if (pathname !== view.pathname && (pathname === sessionsPath || sessionIdFromPath(pathname))) {
+    const adopted = started.current?.path === pathname && started.current.key === view.key;
+    setView({ key: adopted ? view.key : view.key + 1, pathname });
+  }
+  const onStarted = (sessionId: string) => {
+    const path = `${sessionsPath}/${sessionId}`;
+    started.current = { path, key: view.key };
+    window.history.pushState(null, '', path);
+  };
+  return <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted} />;
+}
+
+function SessionSearch() {
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState('');
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
-  return <>
-    {!pendingMessage && <header className='agent-welcome'><h2>Ask about a video or topic</h2></header>}
-    {pendingMessage && <div className='agent-messages'><PendingUserMessage message={pendingMessage} /></div>}
-    <MessageComposer onSendAction={showPendingMessage} onAdmitted={receipt => router.push(`/dashboard/sessions/${receipt.sessionId}`)} />
-    <div className='agent-history' hidden={!!pendingMessage}><SessionResults key={`${search}:${revision}`} search={search} searchForm={<form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
-      <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
-      <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
-    </form>} /></div>
-  </>;
+  return <SessionResults key={`${search}:${revision}`} search={search} searchForm={<form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
+    <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
+    <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
+  </form>} />;
 }
-
 function SessionResults({ search, searchForm }: { search: string; searchForm: ReactNode }) {
   const cache = useAgentSessionCache();
   const [page, setPage] = useState<AgentSessionList>(() => cache.readList(search) ?? { sessions: [], nextCursor: null });
@@ -120,13 +133,16 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   </>;
 }
 
-function SessionHistory({ sessionId }: { sessionId: string }) {
+function SessionThread({ initialSessionId, onStarted }: { initialSessionId?: string; onStarted: (sessionId: string) => void }) {
   const cache = useAgentSessionCache();
   const { agentAccess } = useDashboardSession();
   const messagesRef = useRef<HTMLDivElement>(null);
-  const [pendingMessage, showPendingMessage] = useOptimistic<PendingMessage | null>(null);
-  const [session, setSession] = useState<AgentSessionDetail | undefined>(() => cache.readSessionPreview(sessionId));
-  const [loading, setLoading] = useState(true);
+  const [sessionId, setSessionId] = useState(initialSessionId);
+  const [session, setSession] = useState<AgentSessionDetail | undefined>(() => initialSessionId ? cache.readSessionPreview(initialSessionId) : undefined);
+  const [messages, addOptimisticMessage] = useOptimistic(session?.messages ?? [], (current, message: AgentMessage) => [...current, message]);
+  // Admitted user messages keep their optimistic key so React reuses the element already on screen.
+  const [clientKeys, setClientKeys] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(!!initialSessionId);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useLoadErrorToast(error, 'Reload session', () => setRevision(value => value + 1));
@@ -137,40 +153,45 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
       message.role === 'assistant' && message.runId === progress.run.runId
         ? { ...message, status: progress.run.status, content: progress.run.result?.answer ?? message.content } : message) } : current);
   }, []);
-  const onAdmitted = (receipt: AgentAdmission, content: string) => {
+  const onAdmitted = (receipt: AgentAdmission, request: PendingMessage) => {
+    cache.recordAdmission(receipt, request.message, request.createdAt);
+    setClientKeys(current => ({ ...current, [receipt.diagnostics.userMessageId]: request.key }));
+    if (!sessionId) {
+      setSessionId(receipt.sessionId);
+      setSession(cache.readSessionPreview(receipt.sessionId));
+      onStarted(receipt.sessionId);
+      return;
+    }
     const now = Date.now();
-    const shared = { runId: receipt.runId, conversationTurn: receipt.diagnostics.conversationTurn, createdAt: now, updatedAt: now };
+    const shared = { runId: receipt.runId, conversationTurn: receipt.diagnostics.conversationTurn, updatedAt: now };
     setSession(current => current ? { ...current, lastRunId: receipt.runId, updatedAt: now, runCount: current.runCount + 1,
       messages: mergeAgentMessages(current.messages, [
-        { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content },
-        { ...shared, messageId: receipt.agentMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '' },
+        { ...shared, messageId: receipt.diagnostics.userMessageId, parentMessageId: null, role: 'user', status: 'completed', content: request.message, createdAt: request.createdAt },
+        { ...shared, messageId: receipt.agentMessageId, parentMessageId: receipt.diagnostics.userMessageId, role: 'assistant', status: receipt.status, content: '', createdAt: now },
       ]) } : current);
   };
   useEffect(() => {
+    if (!sessionId) return;
     const controller = new AbortController();
     setLoading(true); setError('');
+    // Merge so messages already on screen (admitted, streamed or paged in) are never dropped by a reload.
     void fetchAgentData(`/sessions/${sessionId}?limit=10`, agentSessionDetailSchema, controller.signal)
-      .then(setSession).catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
+      .then(loaded => setSession(current => current ? { ...loaded, messages: mergeAgentMessages(current.messages, loaded.messages) } : loaded))
+      .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [sessionId, revision]);
 
+  const pendingKey = messages.find(message => message.messageId.startsWith(clientMessagePrefix))?.messageId;
   useEffect(() => {
-    const messageId = cache.pendingFocus(sessionId);
-    if (!messageId) return;
-    const element = messagesRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-    if (!element) return;
-    const frame = requestAnimationFrame(() => {
-      // Scroll synchronously with focus so incoming snapshots cannot restart an animation.
-      element.scrollIntoView({ block: 'start', behavior: 'instant' });
-      element.focus({ preventScroll: true });
-      cache.clearFocus(sessionId);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [cache, sessionId, session?.messages]);
+    if (!pendingKey) return;
+    const element = messagesRef.current?.querySelector<HTMLElement>(`[data-message-key="${pendingKey}"]`);
+    element?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    element?.focus({ preventScroll: true });
+  }, [pendingKey]);
 
   const loadOlder = async () => {
-    if (!session?.nextCursor || olderLoading) return;
+    if (!sessionId || !session?.nextCursor || olderLoading) return;
     setOlderLoading(true); setError('');
     try {
       const older = await fetchAgentData(`/sessions/${sessionId}?${new URLSearchParams({ limit: '10', cursor: session.nextCursor })}`, agentSessionDetailSchema);
@@ -178,27 +199,38 @@ function SessionHistory({ sessionId }: { sessionId: string }) {
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setOlderLoading(false); }
   };
-  return <>
-    <div className='agent-thread-nav'>{agentAccess
+  const started = !!sessionId || messages.length > 0;
+  // Before admission the heading uses the same provisional title the session cache records.
+  const title = session?.title ?? (sessionId ? undefined : messages[0]?.content.slice(0, 160));
+  const processing = messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status));
+  // Slots keep fixed positions so the composer stays mounted when a new session becomes a thread.
+  return <section className={`agent-sessions ${started ? 'agent-thread' : 'agent-home'}`}>
+    {started && <div className='agent-thread-nav'>{agentAccess
       ? <Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
       : <Link className='agent-back' href='/dashboard/admin'><ArrowLeftIcon size={14} aria-hidden='true' />Back to admin</Link>}
-      <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>
-    {session && <header className='agent-heading'><div><h2>{session.title}</h2>
-      <p className='agent-id'>Session ID: {sessionId}</p>
-      {session.readOnly && <p role='status'>Admin debugging view. This session is read-only.</p>}</div></header>}
-    {session && <SessionAssets sessionId={sessionId} readOnly={session.readOnly} revision={`${revision}:${session.messages.map(message=>message.status).join(',')}`} onDeleted={()=>setRevision(value=>value+1)} />}
-    {loading && !session && <SessionLoading />}
+      <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={!sessionId || loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>}
+    {!started && <header className='agent-welcome'><h2>Ask about a video or topic</h2></header>}
+    {started && title !== undefined && <header className='agent-heading'><div><h2>{title}</h2>
+      {/* Reserve the line until admission so the messages below do not shift. */}
+      <p className='agent-id' style={sessionId ? undefined : { visibility: 'hidden' }}>Session ID: {sessionId}</p>
+      {session?.readOnly && <p role='status'>Admin debugging view. This session is read-only.</p>}</div></header>}
+    {started && (session || !sessionId) && <SessionAssets sessionId={sessionId} readOnly={session?.readOnly} revision={`${revision}:${messages.map(message => message.status).join(',')}`} onDeleted={() => setRevision(value => value + 1)} />}
+    {sessionId && loading && !session && <SessionLoading />}
     {session?.nextCursor && <button className='agent-load-more' disabled={olderLoading || loading} aria-busy={olderLoading} onClick={() => void loadOlder()}>Load older messages</button>}
-    <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
-      {session?.messages.map(message => message.role === 'user'
-        ? <article className='agent-message agent-user-message' key={message.messageId} data-message-id={message.messageId} tabIndex={-1} aria-label={session.readOnly ? 'User message' : 'Your message'}><UserMessageContent content={message.content} createdAt={message.createdAt} /></article>
-        : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId} message={message} onProgress={onProgress} />)}
-      {pendingMessage && <PendingUserMessage message={pendingMessage} />}
-    </div>
+    {started && <div ref={messagesRef} className='agent-messages' aria-busy={loading}>
+      {messages.map(message => message.role === 'user'
+        ? <article key={clientKeys[message.messageId] ?? message.messageId} data-message-key={clientKeys[message.messageId] ?? message.messageId} data-message-id={message.messageId}
+          className={`agent-message agent-user-message${message.messageId.startsWith(clientMessagePrefix) ? ' agent-pending-message' : ''}`}
+          tabIndex={-1} aria-label={session?.readOnly ? 'User message' : 'Your message'}><UserMessageContent content={message.content} createdAt={message.createdAt} /></article>
+        : <RunAnswer key={`${message.messageId}:${revision}`} sessionId={sessionId!} message={message} onProgress={onProgress} />)}
+    </div>}
     {session && !session.messages.length && !loading && <p>No messages are available for this session yet.</p>}
-    {session && !session.readOnly && <div className='agent-composer-dock'><MessageComposer sessionId={sessionId} onAdmitted={onAdmitted} onSending={setSubmitting} onSendAction={showPendingMessage}
-      disabled={loading} processing={session.messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status))} /></div>}
-  </>;
+    {(!sessionId || (session && !session.readOnly)) && <div className={started ? 'agent-composer-dock' : undefined}>
+      <MessageComposer sessionId={sessionId} processing={processing} onSending={setSubmitting}
+        onSendAction={request => addOptimisticMessage(optimisticMessage(request))} onAdmitted={onAdmitted} />
+    </div>}
+    {!sessionId && <div className='agent-history' hidden={started}><SessionSearch /></div>}
+  </section>;
 }
 
 function RunAnswer({ sessionId, message, onProgress }: {
@@ -226,8 +258,9 @@ function RunAnswer({ sessionId, message, onProgress }: {
     <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <><AgentMarkdown>{message.content}</AgentMarkdown><AnswerActions answer={message.content} /></>}
-      {!run && !error && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
-      {run && !error && isActiveAgentRun(run.status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{agentProgressLabel(progress)}</p>}
+      {!run && !error && !isActiveAgentRun(status) && <DashboardSkeleton label={message.content ? 'Loading source details' : 'Getting started'} />}
+      {/* Active runs show the progress row from admission, so the first snapshot only updates its label. */}
+      {!error && isActiveAgentRun(status) && <p className='agent-progress-label' role='status'><CircleNotchIcon className='agent-spin' size={15} aria-hidden='true' />{agentProgressLabel(progress)}</p>}
       {progress?.draft?.answer && !result && <StreamingAgentMarkdown text={progress.draft.answer} />}
       {progress && <ToolTrace tools={progress.tools} status={status} />}
       {run?.error && <div role='alert' className='alert error agent-run-error'><p className='agent-answer'><span className='sr-only'>Run failed. </span>{run.error}</p></div>}
@@ -252,35 +285,28 @@ function RunAnswer({ sessionId, message, onProgress }: {
   </article>;
 }
 
-function UserMessageContent({ content, createdAt, pending = false }: { content: string; createdAt: number; pending?: boolean }) {
+function UserMessageContent({ content, createdAt }: { content: string; createdAt: number }) {
   return <>
     <span className='agent-avatar' aria-hidden='true'><UserIcon size={14} /></span>
     <div className='agent-message-body'>
       <header className='agent-message-header'><strong>You</strong><time dateTime={new Date(createdAt).toISOString()}>{formatTime(createdAt)}</time></header>
       <div className='agent-user-bubble agent-answer'>{content}</div>
-      {pending && <span className='agent-delivery-status' role='status'>Sending…</span>}
     </div>
   </>;
 }
 
 interface PendingMessage { key: string; message: string; createdAt: number }
 
-function PendingUserMessage({ message }: { message: PendingMessage }) {
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    ref.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
-    ref.current?.focus({ preventScroll: true });
-  }, [message.key]);
-  return <article ref={ref} className='agent-message agent-user-message agent-pending-message' tabIndex={-1} aria-label='Your message'>
-    <UserMessageContent content={message.message} createdAt={message.createdAt} pending />
-  </article>;
+const clientMessagePrefix = 'client:';
+function optimisticMessage(request: PendingMessage): AgentMessage {
+  return { messageId: request.key, runId: '', parentMessageId: null, conversationTurn: Number.MAX_SAFE_INTEGER, role: 'user', status: 'completed',
+    content: request.message, createdAt: request.createdAt, updatedAt: request.createdAt };
 }
 
-function MessageComposer({ sessionId, disabled = false, processing = false, onAdmitted, onSending, onSendAction }: {
-  sessionId?: string; disabled?: boolean; processing?: boolean; onSending?: (sending: boolean) => void;
-  onSendAction: (message: PendingMessage) => void; onAdmitted: (receipt: AgentAdmission, message: string) => void;
+function MessageComposer({ sessionId, processing, onAdmitted, onSending, onSendAction }: {
+  sessionId?: string; processing: boolean; onSending: (sending: boolean) => void;
+  onSendAction: (message: PendingMessage) => void; onAdmitted: (receipt: AgentAdmission, message: PendingMessage) => void;
 }) {
-  const cache = useAgentSessionCache();
   const [draft, setDraft] = useState('');
   const [sending, startTransition] = useTransition();
   const [error, setError] = useState('');
@@ -289,31 +315,30 @@ function MessageComposer({ sessionId, disabled = false, processing = false, onAd
   const submissionCount = useRef(0);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (disabled || processing || inFlight.current || sending || !draft.trim()) return;
-    const request = { message: draft.trim(), draft, key: String(++submissionCount.current), createdAt: Date.now() };
+    if (processing || inFlight.current || sending || !draft.trim()) return;
+    const request = { message: draft.trim(), draft, key: `${clientMessagePrefix}${++submissionCount.current}`, createdAt: Date.now() };
     inFlight.current = true;
-    setDraft(''); setError(''); onSending?.(true);
+    setDraft(''); setError(''); onSending(true);
     startTransition(async () => {
       onSendAction(request);
       try {
         const receipt = await sendAgentMessage(request.message, sessionId);
-        // Commit the server messages and remove the optimistic message together.
-        startTransition(() => {
-          cache.recordAdmission(receipt, request.message);
-          onAdmitted(receipt, request.message);
-        });
+        // Commit the server messages in this transition so they replace the optimistic message in place.
+        startTransition(() => onAdmitted(receipt, request));
         setUncertain(false);
       } catch (cause) {
-        const unconfirmed = cause instanceof AgentSendError && cause.unconfirmed;
+        // The optimistic message is withdrawn when the transition ends; the draft comes back for editing.
         setDraft(request.draft);
-        setError(errorMessage(cause)); setUncertain(unconfirmed);
-      } finally { inFlight.current = false; onSending?.(false); }
+        setError(errorMessage(cause)); setUncertain(cause instanceof AgentSendError && cause.unconfirmed);
+      } finally { inFlight.current = false; onSending(false); }
     });
   };
+  // Delivery and the run read as one working state, so there is no separate "sending" phase.
+  const working = sending || processing;
   return <><AgentPromptBar value={draft} onChange={setDraft} onSubmit={submit}
     label={sessionId ? 'Follow-up message' : 'Start a new session'}
-    sendLabel={sending ? 'Sending…' : processing ? 'Agent is working…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
-    disabled={disabled || processing} sending={sending} processing={processing} uncertain={uncertain} error={error} />
+    sendLabel={working ? 'Agent is working…' : uncertain ? 'Send as new run' : sessionId ? 'Send follow-up' : 'Start session'}
+    disabled={working} sending={sending} processing={working} uncertain={uncertain} error={error} />
     {uncertain && <Link href='/dashboard/sessions'>Check Sessions for the submitted run</Link>}
   </>;
 }
