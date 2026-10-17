@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { WorkspaceShell } from './WorkspaceShell';
+import { TRENDS_ENABLED } from '../../lib/features';
 
 const Sources = dynamic(() => import('./SourcesClient'), { loading: () => <ResearchSkeleton /> });
 const Trends = dynamic(() => import('./TrendLabClient'), { loading: () => <ResearchSkeleton /> });
@@ -30,7 +31,7 @@ export function ResearchSkeleton() {
 export function ResearchHost() {
   const path = usePathname();
   const source = path === '/dashboard/sources',
-    trend = path === '/dashboard/trends';
+    trend = TRENDS_ENABLED && path === '/dashboard/trends';
   const [visited, setVisited] = useState({ source, trend });
   if ((source && !visited.source) || (trend && !visited.trend)) {
     setVisited({ source: visited.source || source, trend: visited.trend || trend });

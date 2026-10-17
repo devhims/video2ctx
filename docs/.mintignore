@@ -1,3 +1,6 @@
 node_modules
 package-lock.json
 .DS_Store
+
+# Trends is disabled; keep its page for the rollout but do not publish it.
+dashboard/trends.mdx

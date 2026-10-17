@@ -11,7 +11,7 @@ Dashboard sessions, CLI sessions, and API keys draw from one credit balance. Eve
 
 Before an operation runs, the API holds its reserve amount from your balance. When the operation finishes, the API charges the final amount and returns the rest of the hold. A failed operation returns the whole hold.
 
-If your balance is below the reserve, the request fails with `402` and `X-Credits-Charged: 0`, even when the balance would cover the final charge. A trend plan reserves 32 credits and charges 26, so a balance of 30 is not enough to start one.
+If your balance is below the reserve, the request fails with `402` and `X-Credits-Charged: 0`, even when the balance would cover the final charge.
 
 ## Provider data
 
@@ -40,9 +40,6 @@ These operations charge a fixed amount whether or not the underlying data was ca
 | Endpoint | Charge | Reserve |
 | --- | --- | --- |
 | `GET /v1/projects/{projectId}/search` | 3 | 3 |
-| `GET /v1/trends?provider={provider}` | 25 | 25 |
-| `GET /v1/trends?provider={provider}&insights=deterministic` | 15 | 25 |
-| `POST /v1/trends/plan` | 26 | 32 |
 | `GET /v1/providers` | 0 | 0 |
 | `GET /v1/usage` | 0 | 0 |
 

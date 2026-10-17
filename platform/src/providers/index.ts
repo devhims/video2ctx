@@ -2,7 +2,7 @@ import * as youtube from '../lib/youtube';
 import { researchTrendTopic } from '../lib/trends';
 import { ApiError } from '../lib/http';
 import {
-  PROVIDER_CAPABILITIES,
+  PUBLIC_PROVIDER_CAPABILITIES,
   PROVIDER_IDS,
   type ProviderDescriptor,
   type ProviderId,
@@ -13,7 +13,7 @@ export * from './contract';
 const youtubeDescriptor = {
   id: 'youtube',
   name: 'YouTube',
-  capabilities: PROVIDER_CAPABILITIES,
+  capabilities: PUBLIC_PROVIDER_CAPABILITIES,
 } as const satisfies ProviderDescriptor;
 
 export interface ProviderAdapter {

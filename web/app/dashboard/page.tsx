@@ -2,6 +2,7 @@ import { requireDashboardSession } from '../../lib/dashboard-auth';
 import { redirect } from 'next/navigation';
 import { dashboardPath } from './dashboard-routes';
 import type { DashboardSection } from './DashboardSidebar';
+import { TRENDS_ENABLED } from '../../lib/features';
 export default async function Page({
   searchParams,
 }: {
@@ -9,7 +10,7 @@ export default async function Page({
 }) {
   await requireDashboardSession();
   const params = await searchParams;
-  const valid = ['trends', 'discover', 'projects', 'monitors', 'settings'];
+  const valid = [...(TRENDS_ENABLED ? ['trends'] : []), 'discover', 'projects', 'monitors', 'settings'];
   const section =
     typeof params.section === 'string' && valid.includes(params.section)
       ? (params.section as DashboardSection)

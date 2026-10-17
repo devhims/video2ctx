@@ -20,6 +20,7 @@ import { parseTranscriptFormat, projectTranscript } from '../../lib/transcript-p
 import { generateTrendPlan, normalizeTrendPlanSignals } from '../../lib/trend-plan';
 import { creditBalance, entitlements } from '../../lib/entitlements';
 import { getProvider, providerDescriptors, type ProviderAdapter } from '../../providers';
+import { TRENDS_ENABLED } from '../../features';
 
 export const dataRoutes = new Hono<App>();
 
@@ -28,7 +29,6 @@ export const DATA_ROUTE_PATTERNS = [
   '/search',
   '/providers',
   '/browse',
-  '/trends',
   '/videos/*',
   '/channels/*',
   '/playlists/*',
@@ -36,9 +36,10 @@ export const DATA_ROUTE_PATTERNS = [
   '/projects/:projectId/answers',
   '/projects/:projectId/comparisons',
   '/projects/:projectId/reports',
-  '/trends/*',
   '/usage',
-] as const;
+  // Trends routes exist only while the feature is enabled; otherwise they are not found.
+  ...(TRENDS_ENABLED ? ['/trends', '/trends/*'] as const : []),
+];
 
 for (const path of DATA_ROUTE_PATTERNS) dataRoutes.use(path, requireDataPrincipal);
 
@@ -127,39 +128,41 @@ dataRoutes.get('/browse', async (c) => {
   }));
 });
 
-dataRoutes.get('/trends', async (c) => {
-  const provider = providerFor(c);
-  await enforceTrafficRate(c);
-  const query = text(c.req.query('q'), 200);
-  if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A topic is required.');
-  const requestedLimit = Number(c.req.query('limit') ?? 20);
-  const includeAiInsights = c.req.query('insights') !== 'deterministic';
-  return c.json(await meterOperation(c, {
-    operation: includeAiInsights ? 'trends-with-ai' : 'trends-deterministic',
-    reservedCredits: CREDIT_RESERVES.trends,
-    metadata: { query, provider: provider.descriptor.id },
-  }, async () => ({
-    value: {
-      ...await provider.trends(c.env, query, Number.isFinite(requestedLimit) ? requestedLimit : 20, includeAiInsights),
-      provider: provider.descriptor.id,
-    },
-    actualCredits: includeAiInsights ? CREDIT_COSTS.aiTrends : CREDIT_COSTS.deterministicTrends,
-  })));
-});
+if (TRENDS_ENABLED) {
+  dataRoutes.get('/trends', async (c) => {
+    const provider = providerFor(c);
+    await enforceTrafficRate(c);
+    const query = text(c.req.query('q'), 200);
+    if (!query) throw new ApiError(422, 'QUERY_REQUIRED', 'A topic is required.');
+    const requestedLimit = Number(c.req.query('limit') ?? 20);
+    const includeAiInsights = c.req.query('insights') !== 'deterministic';
+    return c.json(await meterOperation(c, {
+      operation: includeAiInsights ? 'trends-with-ai' : 'trends-deterministic',
+      reservedCredits: CREDIT_RESERVES.trends,
+      metadata: { query, provider: provider.descriptor.id },
+    }, async () => ({
+      value: {
+        ...await provider.trends(c.env, query, Number.isFinite(requestedLimit) ? requestedLimit : 20, includeAiInsights),
+        provider: provider.descriptor.id,
+      },
+      actualCredits: includeAiInsights ? CREDIT_COSTS.aiTrends : CREDIT_COSTS.deterministicTrends,
+    })));
+  });
 
-dataRoutes.post('/trends/plan', async (c) => {
-  const payload = await body<{ report?: unknown }>(c.req.raw);
-  const signals = normalizeTrendPlanSignals(payload.report);
-  return c.json(await meterOperation(c, {
-    operation: 'trend-plan',
-    reservedCredits: CREDIT_RESERVES.trendPlan,
-    metadata: { topic: signals.query },
-  }, async () => {
-    const operationId = crypto.randomUUID();
-    const plan = await generateTrendPlan(c.env, signals, operationId);
-    return { value: { ...plan, operationId }, actualCredits: CREDIT_COSTS.trendPlan };
-  }));
-});
+  dataRoutes.post('/trends/plan', async (c) => {
+    const payload = await body<{ report?: unknown }>(c.req.raw);
+    const signals = normalizeTrendPlanSignals(payload.report);
+    return c.json(await meterOperation(c, {
+      operation: 'trend-plan',
+      reservedCredits: CREDIT_RESERVES.trendPlan,
+      metadata: { topic: signals.query },
+    }, async () => {
+      const operationId = crypto.randomUUID();
+      const plan = await generateTrendPlan(c.env, signals, operationId);
+      return { value: { ...plan, operationId }, actualCredits: CREDIT_COSTS.trendPlan };
+    }));
+  });
+}
 
 dataRoutes.get('/videos/:id', async (c) => {
   const provider = providerFor(c);

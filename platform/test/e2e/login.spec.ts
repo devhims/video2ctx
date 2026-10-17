@@ -20,7 +20,7 @@ test('signed-out dashboard visits redirect to login and preserve the destination
   await page.goto('/dashboard');
   await expect(page).toHaveURL('/dashboard/sources');
   await page.goto('/dashboard?section=trends');
-  await expect(page).toHaveURL('/dashboard/trends');
+  await expect(page).toHaveURL('/dashboard/sources');
 });
 
 test('social sign-in sits on the right and fits mobile without email signup', async ({ page }, testInfo) => {

@@ -39,7 +39,7 @@ Example body:
 
 Read `https://docs.video2ctx.dev/api/monitoring.md` when the task raises an unresolved monitoring question.
 
-Projects, trends, research, and other composite workflows remain outside this workflow. Account deletion, billing, API-key management, connected-account changes, and administration require the browser application.
+Projects, research, and other composite workflows remain outside this workflow. Account deletion, billing, API-key management, connected-account changes, and administration require the browser application.
 
 ## Completion criteria
 

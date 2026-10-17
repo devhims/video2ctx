@@ -11,7 +11,8 @@ import {
   BROWSE_LANGUAGES,
   BROWSE_REGIONS,
 } from './lib/browse-contract';
-import { PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
+import { PUBLIC_PROVIDER_CAPABILITIES, PROVIDER_IDS } from './providers/contract';
+import { TRENDS_ENABLED } from './features';
 
 type Schema = Record<string, unknown>;
 
@@ -357,7 +358,7 @@ export const openApiDocument = {
     { name: 'Authentication', description: 'Better Auth entry points used by the web application.' },
     { name: 'UI Helpers', description: 'Internal routing helpers used by the first-party web interface.' },
     { name: 'Providers', description: 'Supported external video providers and their capabilities.' },
-    { name: 'Discovery', description: 'Search, browse, and trend research.' },
+    { name: 'Discovery', description: TRENDS_ENABLED ? 'Search, browse, and trend research.' : 'Search and browse.' },
     { name: 'Videos', description: 'Video metadata and evidence.' },
     { name: 'Channels', description: 'Channel inspection.' },
     { name: 'Playlists', description: 'Playlist inspection.' },
@@ -880,43 +881,46 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/trends': {
-      get: {
-        tags: ['Discovery'],
-        operationId: 'researchTrends',
-        summary: 'Calculate public trend signals for a topic',
-        description: 'Builds a diversified topic sample, persists public metric snapshots, calculates observed acceleration when history exists, and optionally adds GLM-generated evidence-grounded themes and content gaps.',
-        security: dataSecurity,
-        parameters: [
-          providerParameter,
-          queryParameter('q', 'Topic to research.', { type: 'string', maxLength: 200, example: 'AI agents' }, true),
-          queryParameter('limit', 'Number of diversified videos to enrich; clamped to 8–30.', { type: 'integer', minimum: 8, maximum: 30, default: 20 }),
-          queryParameter('insights', 'AI insight mode. Use deterministic to skip GLM analysis.', { type: 'string', enum: ['ai', 'deterministic'], default: 'ai' }),
-        ],
-        responses: {
-          '200': meteredJsonResponse('Topic trend report.', schemaRef('TrendReport')),
-          ...dataErrors,
+    // Trends operations are published only once the feature is enabled.
+    ...(TRENDS_ENABLED ? {
+      '/v1/trends': {
+        get: {
+          tags: ['Discovery'],
+          operationId: 'researchTrends',
+          summary: 'Calculate public trend signals for a topic',
+          description: 'Builds a diversified topic sample, persists public metric snapshots, calculates observed acceleration when history exists, and optionally adds GLM-generated evidence-grounded themes and content gaps.',
+          security: dataSecurity,
+          parameters: [
+            providerParameter,
+            queryParameter('q', 'Topic to research.', { type: 'string', maxLength: 200, example: 'AI agents' }, true),
+            queryParameter('limit', 'Number of diversified videos to enrich; clamped to 8–30.', { type: 'integer', minimum: 8, maximum: 30, default: 20 }),
+            queryParameter('insights', 'AI insight mode. Use deterministic to skip GLM analysis.', { type: 'string', enum: ['ai', 'deterministic'], default: 'ai' }),
+          ],
+          responses: {
+            '200': meteredJsonResponse('Topic trend report.', schemaRef('TrendReport')),
+            ...dataErrors,
+          },
         },
       },
-    },
-    '/v1/trends/plan': {
-      post: {
-        tags: ['Discovery'],
-        operationId: 'generateTrendPlan',
-        summary: 'Generate an AI video plan from trend signals',
-        description: 'Uses Kimi K2.6 for strategic synthesis and automatically falls back to GPT-OSS 120B when Kimi is unavailable. The response identifies the model that produced it.',
-        security: dataSecurity,
-        requestBody: jsonBody({
-          type: 'object',
-          required: ['report'],
-          properties: { report: schemaRef('TrendReport') },
-        }),
-        responses: {
-          '200': meteredJsonResponse('Evidence-grounded video plan.', schemaRef('AiTrendPlan')),
-          ...dataErrors,
+      '/v1/trends/plan': {
+        post: {
+          tags: ['Discovery'],
+          operationId: 'generateTrendPlan',
+          summary: 'Generate an AI video plan from trend signals',
+          description: 'Uses Kimi K2.6 for strategic synthesis and automatically falls back to GPT-OSS 120B when Kimi is unavailable. The response identifies the model that produced it.',
+          security: dataSecurity,
+          requestBody: jsonBody({
+            type: 'object',
+            required: ['report'],
+            properties: { report: schemaRef('TrendReport') },
+          }),
+          responses: {
+            '200': meteredJsonResponse('Evidence-grounded video plan.', schemaRef('AiTrendPlan')),
+            ...dataErrors,
+          },
         },
       },
-    },
+    } : {}),
     '/v1/videos/{id}': {
       get: {
         tags: ['Videos'],
@@ -2142,7 +2146,7 @@ export const openApiDocument = {
         properties: {
           id: schemaRef('ProviderId'),
           name: { type: 'string', example: 'YouTube' },
-          capabilities: { type: 'array', items: { type: 'string', enum: PROVIDER_CAPABILITIES } },
+          capabilities: { type: 'array', items: { type: 'string', enum: PUBLIC_PROVIDER_CAPABILITIES } },
         },
       },
       ProviderList: {
@@ -2386,21 +2390,23 @@ export const openApiDocument = {
           },
         }],
       },
-      TrendVideo: trendVideo,
-      TrendReport: trendReport,
-      AiTrendPlan: {
-        type: 'object',
-        required: ['provider', 'model', 'generatedAt', 'angle', 'audience', 'hook', 'recommendedDurationSeconds', 'outline', 'titleIdeas', 'hashtags', 'differentiation', 'evidence', 'caveats', 'operationId'],
-        properties: {
-          provider: schemaRef('ProviderId'), model: { type: 'string', enum: ['@cf/moonshotai/kimi-k2.6', '@cf/openai/gpt-oss-120b'] }, generatedAt: { type: 'string', format: 'date-time' }, angle: { type: 'string' },
-          audience: { type: 'string' }, hook: { type: 'string' }, recommendedDurationSeconds: { type: 'integer' },
-          outline: { type: 'array', items: { type: 'object', required: ['section', 'goal'], properties: { section: { type: 'string' }, goal: { type: 'string' } } } },
-          titleIdeas: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } },
-          differentiation: { type: 'array', items: { type: 'string' } },
-          evidence: { type: 'array', items: { type: 'object', required: ['claim', 'videoIds'], properties: { claim: { type: 'string' }, videoIds: { type: 'array', items: { type: 'string' } } } } },
-          caveats: { type: 'array', items: { type: 'string' } }, operationId: { type: 'string', format: 'uuid' },
+      ...(TRENDS_ENABLED ? {
+        TrendVideo: trendVideo,
+        TrendReport: trendReport,
+        AiTrendPlan: {
+          type: 'object',
+          required: ['provider', 'model', 'generatedAt', 'angle', 'audience', 'hook', 'recommendedDurationSeconds', 'outline', 'titleIdeas', 'hashtags', 'differentiation', 'evidence', 'caveats', 'operationId'],
+          properties: {
+            provider: schemaRef('ProviderId'), model: { type: 'string', enum: ['@cf/moonshotai/kimi-k2.6', '@cf/openai/gpt-oss-120b'] }, generatedAt: { type: 'string', format: 'date-time' }, angle: { type: 'string' },
+            audience: { type: 'string' }, hook: { type: 'string' }, recommendedDurationSeconds: { type: 'integer' },
+            outline: { type: 'array', items: { type: 'object', required: ['section', 'goal'], properties: { section: { type: 'string' }, goal: { type: 'string' } } } },
+            titleIdeas: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } },
+            differentiation: { type: 'array', items: { type: 'string' } },
+            evidence: { type: 'array', items: { type: 'object', required: ['claim', 'videoIds'], properties: { claim: { type: 'string' }, videoIds: { type: 'array', items: { type: 'string' } } } } },
+            caveats: { type: 'array', items: { type: 'string' } }, operationId: { type: 'string', format: 'uuid' },
+          },
         },
-      },
+      } : {}),
       Project: { allOf: [storedRecord, { properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, item_count: { type: 'integer' } } }] },
       ProjectDetail: { allOf: [schemaRef('Project'), { type: 'object', required: ['items'], properties: { items: { type: 'array', items: schemaRef('ProjectItem') } } }] },
       ProjectItem: storedRecord,

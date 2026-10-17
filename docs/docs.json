@@ -34,7 +34,6 @@
           "dashboard/projects",
           "dashboard/monitoring",
           "dashboard/notifications",
-          "dashboard/trends",
           "dashboard/account"
         ]
       },

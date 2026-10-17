@@ -1194,10 +1194,10 @@ test('settings renders while navigation access checks are pending', async ({page
   const navigation = page.getByRole('navigation', { name: 'Dashboard navigation' });
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
   await expect(page.getByRole('link',{name:'Admin',exact:true})).toHaveCount(0);
-  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
+  await expect.poll(async () => navigation.locator('a').evaluateAll(links => links.slice(0, 3).map(link => link.getAttribute('aria-label')))).toEqual(['Sources', 'Agent', 'Projects']);
   await scenario.release();
   await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
-  await expect.poll(async () => (await navigation.locator('a').allTextContents()).slice(0, 3).map(label => label.trim())).toEqual(['Sources', 'Agent', 'Trends']);
+  await expect.poll(async () => navigation.locator('a').evaluateAll(links => links.slice(0, 3).map(link => link.getAttribute('aria-label')))).toEqual(['Sources', 'Agent', 'Projects']);
  }finally{await scenario.clear();}
 });
 
@@ -1220,7 +1220,16 @@ test('an active transcript finishes in the background and the Sources sidebar re
  expect(reads).toBe(1);
 });
 
-test('an active trend request survives projects navigation without restarting',async({page})=>{
+test('disabled Trends has no navigation entry and its page is not found',async({page})=>{
+ await page.goto('/dashboard/settings');
+ await expect(page.getByRole('link',{name:'Agent',exact:true})).toBeVisible();
+ await expect(page.getByRole('link',{name:'Trends',exact:true})).toHaveCount(0);
+ const response=await page.goto('/dashboard/trends');
+ expect(response?.status()).toBe(404);
+});
+
+// Trends is disabled (TRENDS_ENABLED in web/lib/features.ts); re-enable this test with the feature.
+test.skip('an active trend request survives projects navigation without restarting',async({page})=>{
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let reads=0;
  await page.route('**/v1/trends?**',async route=>{reads++;await gate;await route.fulfill({status:503,json:{error:{message:'Retained scan completed with a provider error.'}}});});
  await page.goto('/dashboard/trends');

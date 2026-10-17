@@ -1,3 +1,5 @@
+import { TRENDS_ENABLED } from './features';
+
 export const OPENAPI_AUDIENCES = ['consumer', 'first-party', 'callback', 'operator'] as const;
 
 export type OpenApiAudience = typeof OPENAPI_AUDIENCES[number];
@@ -57,8 +59,8 @@ export const OPENAPI_OPERATION_AUDIENCE: Readonly<Record<string, OpenApiAudience
   listProviders: 'consumer',
   searchProvider: 'consumer',
   browseProvider: 'consumer',
-  researchTrends: 'consumer',
-  generateTrendPlan: 'consumer',
+  // Present only while Trends is published; see features.ts.
+  ...(TRENDS_ENABLED ? { researchTrends: 'consumer', generateTrendPlan: 'consumer' } as const : {}),
   getVideo: 'consumer',
   getVideoTracks: 'consumer',
   getVideoTranscript: 'consumer',

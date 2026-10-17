@@ -6,7 +6,7 @@ const legacy = process.env.LEGACY === '1';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const results = [];
 try {
-  for (const section of (process.env.SECTIONS ?? 'settings,projects,monitors,sources,trends').split(',')) {
+  for (const section of (process.env.SECTIONS ?? 'settings,projects,monitors,sources').split(',')) {
     for (let run = 0; run < 3; run++) {
       const context = await browser.newContext();
       await context.addCookies([{ name: 'agent-ui', value: 'allowed', url: base }]);

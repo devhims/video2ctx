@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { documentationApp } from '../src/docs';
 import { openApiDocument } from '../src/openapi';
 import { OPENAPI_OPERATION_AUDIENCE } from '../src/openapi-audience';
+import { TRENDS_ENABLED } from '../src/features';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head']);
 const mountedApp = new Hono().route('/', documentationApp);
@@ -13,7 +14,7 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(operations.some(([path]) => path.startsWith('/v1/providers/'))).toBe(false);
     for (const [path, item] of operations) {
       const operation = 'get' in item ? item.get : undefined;
-      if (operation && /^\/v1\/(search|browse|trends|videos|channels|playlists)(\/|$)/.test(path)) {
+      if (operation && /^\/v1\/(search|browse|videos|channels|playlists)(\/|$)/.test(path)) {
         expect(operation).toHaveProperty('parameters', expect.arrayContaining([
           expect.objectContaining({ name: 'provider', in: 'query', required: true }),
         ]));
@@ -104,6 +105,11 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(source).toContain("app.route('/', documentationApp)");
     expect(declared.length).toBeGreaterThan(35);
     for (const route of declared) {
+      // Trends handlers stay in the source but are neither registered nor published while disabled.
+      if (!TRENDS_ENABLED && route.path.startsWith('/v1/trends')) {
+        expect(paths[route.path], route.path).toBeUndefined();
+        continue;
+      }
       expect(paths[route.path]?.[route.method], `${route.method.toUpperCase()} ${route.path}`).toBeDefined();
     }
   });

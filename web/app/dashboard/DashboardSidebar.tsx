@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SidebarSimpleIcon, KeyIcon, BookOpenIcon, CoinsIcon, SignOutIcon, CaretDownIcon, ListIcon, XIcon, FolderIcon, FolderOpenIcon } from '@phosphor-icons/react';
 import type { ProjectItem } from './research-types';
 import styles from './DashboardSidebar.module.css';
+import { TRENDS_ENABLED } from '../../lib/features';
 
 export type DashboardSection = 'trends' | 'discover' | 'projects' | 'monitors' | 'settings';
 export type DashboardSidebarSection = DashboardSection | 'developer' | 'sessions' | 'admin';
@@ -102,7 +103,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         <div className={styles.group}>
           {navButton('discover', 'Sources', 'search')}
           {user && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
-          {navButton('trends', 'Trends', 'trend')}
+          {TRENDS_ENABLED && navButton('trends', 'Trends', 'trend')}
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Workspace</p>

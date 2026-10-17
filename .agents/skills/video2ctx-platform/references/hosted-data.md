@@ -42,7 +42,7 @@ Every provider read requires `provider=youtube` in the query; do not spend a req
 
 Read `https://docs.video2ctx.dev/api/discovery.md` or the relevant data guide only when a requested route or parameter is not covered here.
 
-Stay within stateless hosted data, account identity, and usage. Projects, trends, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration are outside this workflow. Direct the user to `https://video2ctx.dev` for browser-only account actions.
+Stay within stateless hosted data, account identity, and usage. Projects, research, imports, exports, billing, API-key management, connected-account changes, account deletion, and administration are outside this workflow. Direct the user to `https://video2ctx.dev` for browser-only account actions.
 
 ## Completion criteria
 

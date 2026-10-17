@@ -20,7 +20,8 @@ vi.mock('../src/lib/metering', async (importOriginal) => ({
   meterOperation: vi.fn(async (_c, _options, work) => (await work()).value),
 }));
 
-import { getProvider } from '../src/providers';
+import { getProvider, providerDescriptors } from '../src/providers';
+import { TRENDS_ENABLED } from '../src/features';
 import { meterOperation } from '../src/lib/metering';
 import { app } from '../src/index';
 
@@ -49,7 +50,7 @@ describe('provider routing', () => {
   });
 
   test.each([
-    '/search', '/browse', '/trends', '/videos/video-1', '/videos/video-1/tracks',
+    '/search', '/browse', ...(TRENDS_ENABLED ? ['/trends'] : []), '/videos/video-1', '/videos/video-1/tracks',
     '/videos/video-1/transcript', '/videos/video-1/comments', '/videos/video-1/endscreen',
     '/channels/channel-1', '/channels/channel-1/videos', '/channels/channel-1/playlists', '/playlists/playlist-1',
   ])('requires exactly one provider before billing for %s', async (path) => {
@@ -63,6 +64,14 @@ describe('provider routing', () => {
       expect(meterOperation).not.toHaveBeenCalled();
     }
   });
+
+  test.skipIf(TRENDS_ENABLED).each([['GET', '/trends'], ['POST', '/trends/plan']])(
+    'does not serve %s %s while Trends is disabled', async (method, path) => {
+      const response = await app.request(`/v1${path}`, { method }, {} as Env, executionContext);
+      expect(response.status).toBe(404);
+      expect(providerDescriptors.every((provider) => !provider.capabilities.includes('trends'))).toBe(true);
+    },
+  );
 
   test.each(['/providers/youtube/search', '/providers/youtube/videos/video-1', '/answers', '/comparisons', '/reports'])(
     'removes the old route %s', async (path) => {
